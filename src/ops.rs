@@ -11,6 +11,7 @@ use crate::anim;
 use crate::color::{self, Rgba};
 use crate::image::Image;
 use crate::media;
+use crate::shape::{self, FillRule, Pt};
 use anyhow::{anyhow, bail, Context, Result};
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -37,6 +38,7 @@ pub enum Category {
     Color,
     Channel,
     Merge,
+    Shape,
     Transform,
     Filter,
     Output,
@@ -53,11 +55,15 @@ pub enum ParamKind {
     Choice(&'static [&'static str]),
     /// A file path. `save` picks a save dialog rather than an open dialog.
     Path { save: bool },
+    Bool,
+    /// A flat array of point data, `stride` numbers per point (x, y first).
+    /// Animates as a whole: one key holds every point.
+    Points { stride: usize },
 }
 
 impl ParamKind {
     const fn is_numeric(self) -> bool {
-        matches!(self, ParamKind::Float { .. } | ParamKind::Int { .. } | ParamKind::Vec2 | ParamKind::Vec3 | ParamKind::Color)
+        matches!(self, ParamKind::Float { .. } | ParamKind::Int { .. } | ParamKind::Vec2 | ParamKind::Vec3 | ParamKind::Color | ParamKind::Points { .. })
     }
 }
 
@@ -83,6 +89,10 @@ pub enum Overlay {
     Transform { translate: &'static str, rotate: &'static str, scale: &'static str },
     /// A box inset from the image edges by four Int params.
     Insets { left: &'static str, top: &'static str, right: &'static str, bottom: &'static str },
+    /// A box (or the ellipse inside it) with center, size and rotation params.
+    Box { center: &'static str, size: &'static str, rotate: &'static str, ellipse: bool },
+    /// Editable vertices of a `Points` param.
+    Points(&'static str),
 }
 
 /// An input port.
@@ -145,6 +155,21 @@ const CHANNEL_SOURCES: &[&str] = &[
 const SWITCH_PORTS: usize = 5;
 
 const SIZE: ParamKind = ParamKind::Int { min: 1, max: 16384 };
+const FEATHER: ParamKind = ParamKind::Float { min: 0.0, max: 200.0 };
+const OPACITY: ParamKind = ParamKind::Float { min: 0.0, max: 1.0 };
+const SHAPE_OPS: &[&str] = &["over", "subtract"];
+const FILL_RULES: &[&str] = &["non-zero", "even-odd"];
+/// Help text for shape ops: their own sentence plus what they share.
+macro_rules! shape_help {
+    ($s:literal) => {
+        concat!(
+            $s,
+            " Without a background the canvas is Width × Height; with one, the shape \
+             is drawn over it (or, with Subtract, cut out of its alpha). Feather is the \
+             width of the soft edge, centered on the outline. The alpha feeds mask inputs directly."
+        )
+    };
+}
 const FRAME: ParamKind = ParamKind::Int { min: -100_000, max: 1_000_000 };
 
 pub static OPS: &[OpInfo] = &[
@@ -408,6 +433,69 @@ pub static OPS: &[OpInfo] = &[
                the frame (with transparent bars); fill covers it and crops.",
     },
     OpInfo {
+        name: "rectangle",
+        label: "Rectangle",
+        category: Category::Shape,
+        inputs: &[opt("background")],
+        params: &[
+            p!("width", "Width", SIZE, 512),
+            p!("height", "Height", SIZE, 512),
+            p!("center", "Center", ParamKind::Vec2, [256.0, 256.0]),
+            p!("size", "Size", ParamKind::Vec2, [256.0, 256.0]),
+            p!("rotate", "Rotate", ParamKind::Float { min: -360.0, max: 360.0 }, 0.0),
+            p!("color", "Color", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]),
+            p!("opacity", "Opacity", OPACITY, 1.0),
+            p!("feather", "Feather", FEATHER, 0.0),
+            fixed!("invert", "Invert", ParamKind::Bool, false),
+            fixed!("operation", "Operation", ParamKind::Choice(SHAPE_OPS), "over"),
+        ],
+        overlay: Overlay::Box { center: "center", size: "size", rotate: "rotate", ellipse: false },
+        mask_base: None,
+        help: shape_help!("A filled, optionally rotated rectangle."),
+    },
+    OpInfo {
+        name: "ellipse",
+        label: "Ellipse",
+        category: Category::Shape,
+        inputs: &[opt("background")],
+        params: &[
+            p!("width", "Width", SIZE, 512),
+            p!("height", "Height", SIZE, 512),
+            p!("center", "Center", ParamKind::Vec2, [256.0, 256.0]),
+            p!("size", "Size", ParamKind::Vec2, [256.0, 256.0]),
+            p!("rotate", "Rotate", ParamKind::Float { min: -360.0, max: 360.0 }, 0.0),
+            p!("color", "Color", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]),
+            p!("opacity", "Opacity", OPACITY, 1.0),
+            p!("feather", "Feather", FEATHER, 0.0),
+            fixed!("invert", "Invert", ParamKind::Bool, false),
+            fixed!("operation", "Operation", ParamKind::Choice(SHAPE_OPS), "over"),
+        ],
+        overlay: Overlay::Box { center: "center", size: "size", rotate: "rotate", ellipse: true },
+        mask_base: None,
+        help: shape_help!("A filled, optionally rotated ellipse."),
+    },
+    OpInfo {
+        name: "polygon",
+        label: "Polygon",
+        category: Category::Shape,
+        inputs: &[opt("background")],
+        params: &[
+            p!("width", "Width", SIZE, 512),
+            p!("height", "Height", SIZE, 512),
+            p!("points", "Points", ParamKind::Points { stride: 2 }, [156.0, 356.0, 256.0, 156.0, 356.0, 356.0]),
+            fixed!("fill_rule", "Fill rule", ParamKind::Choice(FILL_RULES), "non-zero"),
+            p!("color", "Color", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]),
+            p!("opacity", "Opacity", OPACITY, 1.0),
+            p!("feather", "Feather", FEATHER, 0.0),
+            fixed!("invert", "Invert", ParamKind::Bool, false),
+            fixed!("operation", "Operation", ParamKind::Choice(SHAPE_OPS), "over"),
+        ],
+        overlay: Overlay::Points("points"),
+        mask_base: None,
+        help: shape_help!("A filled polygon. In the viewer, drag points, click an edge to add one, \
+               Ctrl+click to add after the selected point, Shift+click to select several, ⌫ to delete."),
+    },
+    OpInfo {
         name: "media_out",
         label: "Media Out",
         category: Category::Output,
@@ -584,6 +672,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "keymix" => keymix(inputs),
         "crop" => crop(params, inputs),
         "resize" => resize(params, inputs),
+        "rectangle" | "ellipse" | "polygon" => shape_op(op, params, inputs),
         "write" => write(params, inputs, ctx),
         // Rendering to disk is driven by `render`; in the graph these pass through.
         "media_out" | "viewer" => Ok(input(inputs, 0, op)?.clone()),
@@ -1208,6 +1297,77 @@ fn resize(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
 }
 
 // ---------------------------------------------------------------------------
+// Shapes
+// ---------------------------------------------------------------------------
+
+/// Params every shape op shares.
+#[derive(Deserialize)]
+struct ShapeStyle {
+    width: usize,
+    height: usize,
+    /// Straight (unassociated) RGBA.
+    color: [f32; 4],
+    opacity: f32,
+    feather: f32,
+    invert: bool,
+    operation: String,
+}
+
+#[derive(Deserialize)]
+struct BoxShape {
+    center: Pt,
+    size: Pt,
+    rotate: f32,
+}
+
+#[derive(Deserialize)]
+struct Polygon {
+    points: Vec<f32>,
+    fill_rule: String,
+}
+
+fn shape_op(op: &str, params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
+    let style: ShapeStyle = parse(params, op)?;
+    let bg = inputs.first().copied().flatten();
+    let (w, h) = bg.map_or((style.width, style.height), |b| (b.width, b.height));
+    let (outline, rule) = match op {
+        "rectangle" | "ellipse" => {
+            let b: BoxShape = parse(params, op)?;
+            let f = if op == "rectangle" { shape::rectangle } else { shape::ellipse };
+            (f(b.center, b.size, b.rotate), FillRule::NonZero)
+        }
+        _ => {
+            let p: Polygon = parse(params, op)?;
+            let rule = if p.fill_rule == "even-odd" { FillRule::EvenOdd } else { FillRule::NonZero };
+            (p.points.as_chunks::<2>().0.to_vec(), rule)
+        }
+    };
+    let cov = shape::coverage(&[outline], w, h, style.feather, rule);
+    shade(&cov, w, h, &style, bg)
+}
+
+/// Turn shape coverage into an image: the shape's color over `bg`, or with
+/// the Subtract operation, `bg` held out by the shape.
+fn shade(cov: &[f32], w: usize, h: usize, style: &ShapeStyle, bg: Option<&Image>) -> Result<Image> {
+    let subtract = match style.operation.as_str() {
+        "over" => false,
+        "subtract" => true,
+        other => bail!("unknown shape operation '{other}'"),
+    };
+    let color = color::premultiply(style.color);
+    let opacity = style.opacity.clamp(0.0, 1.0);
+    let mut img = Image::new(w, h);
+    img.pixels.par_iter_mut().enumerate().for_each(|(i, px)| {
+        let c = if style.invert { 1.0 - cov[i] } else { cov[i] } * opacity;
+        let b = bg.map_or(color::TRANSPARENT, |b| b.pixels[i]);
+        for k in 0..4 {
+            px[k] = if subtract { b[k] * (1.0 - c) } else { color[k] * c + b[k] * (1.0 - color[3] * c) };
+        }
+    });
+    Ok(img)
+}
+
+// ---------------------------------------------------------------------------
 // Output
 // ---------------------------------------------------------------------------
 
@@ -1279,6 +1439,42 @@ mod tests {
         let out = eval("merge", &json!({}), &[Some(&a), Some(&b), Some(&mask)], &CTX).unwrap();
         assert_eq!(out.get(0, 0), [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(out.get(1, 0), [0.0, 0.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn shapes_draw_on_their_own_canvas_or_over_a_background() {
+        let params = json!({ "width": 20, "height": 10, "center": [10, 5], "size": [4, 4], "color": [1, 0, 0, 0.5] });
+        let out = eval("rectangle", &params, &[None], &CTX).unwrap();
+        assert_eq!((out.width, out.height), (20, 10));
+        assert_eq!(out.get(10, 5), [0.5, 0.0, 0.0, 0.5], "premultiplied color");
+        assert_eq!(out.get(0, 0), color::TRANSPARENT);
+
+        let bg = solid(8, 8, [0.0, 0.0, 1.0, 1.0]);
+        let params = json!({ "center": [4, 4], "size": [4, 4], "color": [1, 0, 0, 0.5] });
+        let out = eval("ellipse", &params, &[Some(&bg)], &CTX).unwrap();
+        assert_eq!((out.width, out.height), (8, 8), "background sets the canvas");
+        assert_eq!(out.get(0, 0), [0.0, 0.0, 1.0, 1.0]);
+        let c = out.get(4, 4);
+        assert!(approx(c[0], 0.5) && approx(c[2], 0.5) && approx(c[3], 1.0), "{c:?}");
+
+        let cut = eval("rectangle", &json!({ "center": [4, 4], "size": [2, 2], "operation": "subtract" }), &[Some(&bg)], &CTX).unwrap();
+        assert_eq!(cut.get(4, 4), color::TRANSPARENT);
+        assert_eq!(cut.get(0, 0), [0.0, 0.0, 1.0, 1.0]);
+
+        let inv = eval("rectangle", &json!({ "width": 8, "height": 8, "center": [4, 4], "size": [2, 2], "invert": true }), &[None], &CTX).unwrap();
+        assert_eq!((inv.get(4, 4)[3], inv.get(0, 0)[3]), (0.0, 1.0));
+    }
+
+    #[test]
+    fn polygon_points_animate_as_one_value() {
+        let params = json!({
+            "width": 10, "height": 10,
+            "points": { "keys": [[1, [0, 0, 4, 0, 4, 4, 0, 4]], [11, [6, 6, 10, 6, 10, 10, 6, 10]]], "interp": "linear" },
+        });
+        let first = eval("polygon", &resolve_params("polygon", &params, 1), &[None], &CTX).unwrap();
+        let last = eval("polygon", &resolve_params("polygon", &params, 11), &[None], &CTX).unwrap();
+        assert_eq!((first.get(2, 2)[3], first.get(8, 8)[3]), (1.0, 0.0));
+        assert_eq!((last.get(2, 2)[3], last.get(8, 8)[3]), (0.0, 1.0));
     }
 
     #[test]

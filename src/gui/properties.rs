@@ -217,6 +217,16 @@ impl Properties {
                 });
                 changed.then(|| json!(c))
             }
+            ParamKind::Bool => {
+                let mut b = value.as_bool().unwrap_or(false);
+                ui.checkbox(&mut b, "").changed().then(|| json!(b))
+            }
+            ParamKind::Points { stride } => {
+                // Points are edited in the viewer; show how many there are.
+                let n = value.as_array().map_or(0, |a| a.len() / stride.max(1));
+                ui.weak(format!("{n} points · edit in the viewer"));
+                None
+            }
             ParamKind::Choice(options) => {
                 let current = value.as_str().unwrap_or("").to_string();
                 let mut chosen = current.clone();

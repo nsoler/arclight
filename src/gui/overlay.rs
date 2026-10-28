@@ -9,6 +9,7 @@
 
 use crate::doc::Doc;
 use arclight::ops::{self, Overlay};
+use arclight::{anim, shape};
 use eframe::egui::{self, Color32, CursorIcon, Pos2, Rect, Response, Shape, Stroke, Vec2};
 use serde_json::{json, Value};
 
@@ -20,6 +21,10 @@ const GRAB: f32 = 7.0;
 const AXIS: f32 = 70.0;
 /// Radius of the transform gizmo's rotation ring, in screen points.
 const RING: f32 = 50.0;
+/// Distance of a box's rotation handle beyond its top edge, in screen points.
+const STEM: f32 = 24.0;
+/// Fewest vertices a point list keeps when deleting.
+const MIN_POINTS: usize = 3;
 
 const HANDLE: Color32 = Color32::from_rgb(240, 200, 80);
 const HOT: Color32 = Color32::WHITE;
@@ -53,9 +58,16 @@ enum Part {
     ScaleY,
     /// Crop edges: left, top, right, bottom.
     Edges([bool; 4]),
+    /// Box size along its own x and/or y axis.
+    Size { x: bool, y: bool },
+    /// A vertex of a point list; a drag moves every selected vertex.
+    Vertex(usize),
+    /// The edge from vertex `i` to the next, at fraction `t` along it.
+    Edge(usize, f32),
 }
 
 /// The selected node's overlay, resolved at the current frame.
+#[derive(Clone)]
 enum Geo {
     Point { param: &'static str, value: Vec2 },
     Transform {
@@ -67,6 +79,20 @@ enum Geo {
         scale: Vec2,
     },
     Insets { names: [&'static str; 4], values: [f32; 4], size: Vec2 },
+    Box { names: [&'static str; 3], center: Vec2, size: Vec2, rotate: f32, ellipse: bool },
+    /// Vertices of a point list (`stride` numbers each, x and y first).
+    Points { param: &'static str, stride: usize, pts: Vec<Vec2> },
+}
+
+impl Geo {
+    /// What rotation handles turn about.
+    fn pivot(&self) -> Vec2 {
+        match *self {
+            Geo::Transform { center, translate, .. } => center + translate,
+            Geo::Box { center, .. } => center,
+            _ => Vec2::ZERO,
+        }
+    }
 }
 
 struct Drag {
@@ -85,6 +111,9 @@ struct Drag {
 #[derive(Default)]
 pub struct Overlays {
     drag: Option<Drag>,
+    /// Selected vertices of the selected node's point list, and that node.
+    points: Vec<usize>,
+    points_node: Option<String>,
 }
 
 fn vec2(v: &Value) -> Vec2 {
@@ -120,7 +149,71 @@ fn geo(doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
             values: [left, top, right, bottom].map(|n| num(&at(n))),
             size,
         },
+        Overlay::Box { center, size, rotate, ellipse } => Geo::Box {
+            names: [center, size, rotate],
+            center: vec2(&at(center)),
+            size: vec2(&at(size)),
+            rotate: num(&at(rotate)),
+            ellipse,
+        },
+        Overlay::Points(param) => {
+            let stride = points_stride(op, param);
+            let flat: Vec<f32> = at(param).as_array().map(|a| a.iter().map(num).collect()).unwrap_or_default();
+            let pts = flat.chunks_exact(stride).map(|c| Vec2::new(c[0], c[1])).collect();
+            Geo::Points { param, stride, pts }
+        }
     })
+}
+
+fn points_stride(op: &str, param: &str) -> usize {
+    let spec = ops::info(op).and_then(|i| i.params.iter().find(|s| s.name == param));
+    match spec.map(|s| s.kind) {
+        Some(ops::ParamKind::Points { stride }) => stride.max(2),
+        _ => 2,
+    }
+}
+
+/// Screen positions of a box's handles: corners and edge midpoints (with the
+/// axes each one sizes), then the rotation handle.
+fn box_handles(xf: &Xf, center: Vec2, size: Vec2, rotate: f32) -> (Vec<(Pos2, Part)>, Pos2) {
+    let h = size / 2.0;
+    let at = |x: f32, y: f32| xf.screen(center + rot(Vec2::new(x * h.x, y * h.y), rotate));
+    let mut handles = Vec::new();
+    for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        handles.push((at(x, y), Part::Size { x: true, y: true }));
+    }
+    for (x, y) in [(0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)] {
+        handles.push((at(x, y), Part::Size { x: x != 0.0, y: y != 0.0 }));
+    }
+    // Above the top edge, so it stays put however the size changes sign.
+    let up = rot(Vec2::new(0.0, -1.0), rotate) * if size.y < 0.0 { -1.0 } else { 1.0 };
+    (handles, at(0.0, -1.0) + up * STEM)
+}
+
+/// The outline of a box or ellipse, in screen space.
+fn box_outline(xf: &Xf, center: Vec2, size: Vec2, rotate: f32, ellipse: bool) -> Vec<Pos2> {
+    let c = [center.x, center.y];
+    let s = [size.x, size.y];
+    let pts = if ellipse {
+        let h = size.abs() / 2.0;
+        (0..72)
+            .map(|i| {
+                let a = std::f32::consts::TAU * i as f32 / 72.0;
+                let r = shape::rotate([h.x * a.cos(), h.y * a.sin()], rotate);
+                [c[0] + r[0], c[1] + r[1]]
+            })
+            .collect()
+    } else {
+        shape::rectangle(c, s, rotate)
+    };
+    pts.into_iter().map(|p| xf.screen(Vec2::new(p[0], p[1]))).collect()
+}
+
+/// The nearest point on segment `a`–`b` to `p`, as a fraction along it.
+fn along(p: Pos2, a: Pos2, b: Pos2) -> f32 {
+    let d = b - a;
+    let len2 = d.length_sq();
+    if len2 > 0.0 { ((p - a).dot(d) / len2).clamp(0.0, 1.0) } else { 0.0 }
 }
 
 /// Screen positions of the transform gizmo: pivot, x-axis handle, y-axis handle.
@@ -168,7 +261,43 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2) -> Option<Part> {
             let e = [left, top, right, bottom];
             e.contains(&true).then_some(Part::Edges(e))
         }
+        Geo::Box { center, size, rotate, .. } => {
+            let (handles, spin) = box_handles(xf, center, size, rotate);
+            if spin.distance(p) < GRAB {
+                return Some(Part::Rotate);
+            }
+            if let Some(&(_, part)) = handles.iter().find(|(h, _)| h.distance(p) < GRAB) {
+                return Some(part);
+            }
+            (xf.screen(center).distance(p) < GRAB * 1.5).then_some(Part::Move)
+        }
+        Geo::Points { ref pts, .. } => {
+            let s: Vec<Pos2> = pts.iter().map(|&v| xf.screen(v)).collect();
+            let nearest = (0..s.len()).min_by(|&a, &b| s[a].distance(p).total_cmp(&s[b].distance(p)));
+            if let Some(i) = nearest.filter(|&i| s[i].distance(p) < GRAB) {
+                return Some(Part::Vertex(i));
+            }
+            (0..s.len())
+                .filter(|_| s.len() >= 2)
+                .map(|i| {
+                    let (a, b) = (s[i], s[(i + 1) % s.len()]);
+                    let t = along(p, a, b);
+                    (i, t, a.lerp(b, t).distance(p))
+                })
+                .filter(|&(.., d)| d < GRAB * 0.8)
+                .min_by(|a, b| a.2.total_cmp(&b.2))
+                .map(|(i, t, _)| Part::Edge(i, t))
+        }
     }
+}
+
+/// Modifier keys held when a handle is pressed.
+#[derive(Clone, Copy, Default)]
+pub struct Mods {
+    /// Add to / toggle the vertex selection.
+    pub shift: bool,
+    /// Ctrl (⌘ on macOS): add a vertex at the pointer.
+    pub command: bool,
 }
 
 impl Overlays {
@@ -177,38 +306,125 @@ impl Overlays {
         self.drag.is_some()
     }
 
+    /// Forget the vertex selection when another node is selected.
+    fn sync_selection(&mut self, doc: &Doc) {
+        if self.points_node != doc.selected {
+            self.points.clear();
+            self.points_node = doc.selected.clone();
+        }
+    }
+
     /// Start, continue or finish a handle drag. `resp` is the viewer canvas.
     pub fn interact(&mut self, ui: &egui::Ui, resp: &Response, xf: &Xf, size: Vec2, doc: &mut Doc, frame: i64) {
-        let Some(id) = doc.selected.clone() else {
+        self.sync_selection(doc);
+        if doc.selected.is_none() {
             self.drag = None;
             return;
-        };
-        if resp.drag_started() {
-            // Hit-test where the press began, not where the drag threshold was crossed.
-            let origin = ui.input(|i| i.pointer.press_origin());
-            if let (Some(o), Some(g)) = (origin, geo(doc, &id, frame, size)) {
-                if let Some(part) = hit(&g, xf, o) {
-                    let angle = match g {
-                        Geo::Transform { center, translate, .. } => {
-                            let d = xf.image(o) - (center + translate);
-                            d.y.atan2(d.x)
-                        }
-                        _ => 0.0,
-                    };
-                    self.drag = Some(Drag { node: id.clone(), part, start: xf.image(o), geo: g, angle, turned: 0.0 });
+        }
+        let (pressed, released, mods) = ui.input(|i| {
+            (i.pointer.primary_pressed(), i.pointer.primary_released(), Mods { shift: i.modifiers.shift, command: i.modifiers.command })
+        });
+        if pressed {
+            if let Some(o) = ui.input(|i| i.pointer.press_origin()).filter(|o| resp.rect.contains(*o)) {
+                self.press(doc, frame, size, xf, o, mods);
+            }
+        }
+        if let (Some(ptr), true) = (resp.interact_pointer_pos(), resp.dragged()) {
+            self.drag_to(doc, frame, xf.image(ptr), mods.shift);
+        }
+        if released || resp.drag_stopped() {
+            self.drag = None;
+        }
+    }
+
+    /// The pointer went down at screen position `o`: grab the handle there,
+    /// or, on a point list, select / insert vertices.
+    fn press(&mut self, doc: &mut Doc, frame: i64, size: Vec2, xf: &Xf, o: Pos2, mods: Mods) {
+        self.drag = None;
+        let Some(id) = doc.selected.clone() else { return };
+        let Some(g) = geo(doc, &id, frame, size) else { return };
+        let mut part = hit(&g, xf, o);
+        if let Geo::Points { param, stride, ref pts } = g {
+            self.points.retain(|&i| i < pts.len());
+            match part {
+                Some(Part::Vertex(i)) if mods.shift => {
+                    // Shift toggles; a vertex shift-clicked off isn't dragged.
+                    if let Some(k) = self.points.iter().position(|&j| j == i) {
+                        self.points.remove(k);
+                        return;
+                    }
+                    self.points.push(i);
                 }
+                Some(Part::Vertex(i)) => {
+                    if !self.points.contains(&i) {
+                        self.points = vec![i];
+                    }
+                }
+                Some(Part::Edge(i, t)) => {
+                    // Each key gets the vertex at the same fraction of its own edge.
+                    let n = pts.len();
+                    doc.set_param(&id, param, anim::edit_all(&doc.param(&id, param), |v| {
+                        let at = |k: usize, c: usize| v.get((k % n) * stride + c).copied().unwrap_or(0.0);
+                        let mut vertex = vec![0.0; stride];
+                        for (c, x) in vertex.iter_mut().enumerate().take(2) {
+                            *x = at(i, c) + (at(i + 1, c) - at(i, c)) * t as f64;
+                        }
+                        insert_vertex(v, stride, i + 1, &vertex)
+                    }));
+                    self.points = vec![i + 1];
+                    part = Some(Part::Vertex(i + 1));
+                }
+                None if mods.command => {
+                    // Add after the last selected vertex, or at the end.
+                    let i = self.points.last().map_or(pts.len(), |&i| i + 1);
+                    let p = xf.image(o);
+                    let mut vertex = vec![0.0; stride];
+                    vertex[0] = p.x as f64;
+                    vertex[1] = p.y as f64;
+                    doc.set_param(&id, param, anim::edit_all(&doc.param(&id, param), |v| insert_vertex(v, stride, i, &vertex)));
+                    self.points = vec![i];
+                    part = Some(Part::Vertex(i));
+                }
+                None if !mods.shift => self.points.clear(),
+                _ => {}
             }
         }
-        if resp.drag_stopped() || self.drag.as_ref().is_some_and(|d| d.node != id) {
-            self.drag = None;
-            return;
+        let Some(part) = part else { return };
+        // Inserting changed the geometry: start from the new one.
+        let Some(g) = geo(doc, &id, frame, size) else { return };
+        let start = xf.image(o);
+        let d = start - g.pivot();
+        self.drag = Some(Drag { node: id, part, start, geo: g, angle: d.y.atan2(d.x), turned: 0.0 });
+    }
+
+    fn drag_to(&mut self, doc: &mut Doc, frame: i64, p: Vec2, shift: bool) {
+        if let Some(drag) = &mut self.drag {
+            apply(drag, &self.points, p, shift, doc, frame);
         }
-        if let (Some(drag), Some(ptr)) = (&mut self.drag, resp.interact_pointer_pos()) {
-            if resp.dragged() {
-                let shift = ui.input(|i| i.modifiers.shift);
-                apply(drag, xf.image(ptr), shift, doc, frame);
-            }
+    }
+
+    /// Delete the selected vertices of the selected node's point list.
+    /// Returns false (doing nothing) when no vertices are selected, so the
+    /// caller can delete the node instead.
+    pub fn delete_points(&mut self, doc: &mut Doc) -> bool {
+        self.sync_selection(doc);
+        let Some(id) = doc.selected.clone() else { return false };
+        let Some(Overlay::Points(param)) = doc.node(&id).and_then(|n| ops::info(&n.op)).map(|i| i.overlay) else {
+            return false;
+        };
+        if self.points.is_empty() {
+            return false;
         }
+        let stride = points_stride(&doc.node(&id).unwrap().op, param);
+        let gone = std::mem::take(&mut self.points);
+        let raw = doc.param(&id, param);
+        let n = anim::sample(&raw, 0.0).len() / stride;
+        if n.saturating_sub(gone.len()) >= MIN_POINTS {
+            doc.set_param(&id, param, anim::edit_all(&raw, |v| {
+                v.chunks(stride).enumerate().filter(|(i, _)| !gone.contains(i)).flat_map(|(_, c)| c.to_vec()).collect()
+            }));
+        }
+        true
     }
 
     pub fn draw(&self, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, size: Vec2, doc: &Doc, frame: i64) {
@@ -280,15 +496,74 @@ impl Overlays {
                     painter.rect(Rect::from_center_size(p, Vec2::splat(7.0)), 1.0, HANDLE, outline, egui::StrokeKind::Middle);
                 }
             }
+            Geo::Box { center, size, rotate, ellipse, .. } => {
+                let (handles, spin) = box_handles(xf, center, size, rotate);
+                let top = handles[4].0;
+                outline_path(painter, box_outline(xf, center, size, rotate, ellipse), HANDLE);
+                if ellipse {
+                    // The bounding box the handles sit on.
+                    let frame = box_outline(xf, center, size, rotate, false);
+                    painter.add(Shape::closed_line(frame, Stroke::new(1.0, Color32::from_white_alpha(60))));
+                }
+                let ring = color(Part::Rotate, HANDLE);
+                painter.line_segment([top, spin], Stroke::new(1.5, ring));
+                painter.circle(spin, 4.5, ring, outline);
+                for (p, part) in handles {
+                    painter.rect(Rect::from_center_size(p, Vec2::splat(8.0)), 1.0, color(part, HANDLE), outline, egui::StrokeKind::Middle);
+                }
+                let c = xf.screen(center);
+                painter.circle(c, 5.0, color(Part::Move, HANDLE), outline);
+            }
+            Geo::Points { pts, .. } => {
+                let s: Vec<Pos2> = pts.iter().map(|&v| xf.screen(v)).collect();
+                outline_path(painter, s.clone(), HANDLE);
+                // Where a click would insert a vertex.
+                if let (Some(Part::Edge(i, t)), None) = (hot, &self.drag) {
+                    let p = s[i].lerp(s[(i + 1) % s.len()], t);
+                    painter.circle(p, 3.5, HOT, outline);
+                }
+                for (i, &p) in s.iter().enumerate() {
+                    let selected = self.points_node == doc.selected && self.points.contains(&i);
+                    let fill = if selected { HOT } else if hot == Some(Part::Vertex(i)) { HANDLE } else { Color32::from_black_alpha(160) };
+                    painter.rect(Rect::from_center_size(p, Vec2::splat(7.0)), 1.0, fill, Stroke::new(1.5, HANDLE), egui::StrokeKind::Middle);
+                }
+            }
         }
     }
 }
 
+/// `v` with `vertex` inserted as vertex `i`.
+fn insert_vertex(v: &[f64], stride: usize, i: usize, vertex: &[f64]) -> Vec<f64> {
+    let at = (i * stride).min(v.len());
+    let mut out = v[..at].to_vec();
+    out.extend_from_slice(vertex);
+    out.extend_from_slice(&v[at..]);
+    out
+}
+
+/// Rotation accumulated over `drag` with the pointer at `p`, in degrees.
+/// Wrapped steps are summed so crossing ±180° doesn't jump.
+fn turn(drag: &mut Drag, p: Vec2) -> f32 {
+    let d = p - drag.geo.pivot();
+    let a = d.y.atan2(d.x);
+    let mut step = a - drag.angle;
+    step -= std::f32::consts::TAU * (step / std::f32::consts::TAU).round();
+    drag.angle = a;
+    drag.turned += step.to_degrees();
+    drag.turned
+}
+
+/// `delta` limited to its dominant axis.
+fn constrain(delta: Vec2) -> Vec2 {
+    if delta.x.abs() > delta.y.abs() { Vec2::new(delta.x, 0.0) } else { Vec2::new(0.0, delta.y) }
+}
+
 /// Write the params for `drag` with the pointer at image position `p`.
-fn apply(drag: &mut Drag, p: Vec2, shift: bool, doc: &mut Doc, frame: i64) {
+/// `selected` are the selected vertices, for point lists.
+fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, shift: bool, doc: &mut Doc, frame: i64) {
     let id = drag.node.clone();
     let delta = p - drag.start;
-    match drag.geo {
+    match drag.geo.clone() {
         Geo::Point { param, value } => {
             let v = value + delta;
             doc.edit_param(&id, param, frame, json!([v.x, v.y]));
@@ -298,19 +573,11 @@ fn apply(drag: &mut Drag, p: Vec2, shift: bool, doc: &mut Doc, frame: i64) {
             match drag.part {
                 Part::Move => {
                     // Shift constrains the move to the dominant axis.
-                    let d = if shift { if delta.x.abs() > delta.y.abs() { Vec2::new(delta.x, 0.0) } else { Vec2::new(0.0, delta.y) } } else { delta };
-                    let t = translate + d;
+                    let t = translate + if shift { constrain(delta) } else { delta };
                     doc.edit_param(&id, names[0], frame, json!([t.x, t.y]));
                 }
                 Part::Rotate => {
-                    let d = p - pivot;
-                    let a = d.y.atan2(d.x);
-                    // Accumulate wrapped steps so crossing ±180° doesn't jump.
-                    let mut step = a - drag.angle;
-                    step -= std::f32::consts::TAU * (step / std::f32::consts::TAU).round();
-                    drag.angle = a;
-                    drag.turned += step.to_degrees();
-                    let mut deg = rotate + drag.turned;
+                    let mut deg = rotate + turn(drag, p);
                     if shift {
                         // Shift snaps to 15° steps.
                         deg = (deg / 15.0).round() * 15.0;
@@ -349,12 +616,52 @@ fn apply(drag: &mut Drag, p: Vec2, shift: bool, doc: &mut Doc, frame: i64) {
                 }
             }
         }
+        Geo::Box { names, center, size, rotate, .. } => match drag.part {
+            Part::Move => {
+                let c = center + if shift { constrain(delta) } else { delta };
+                doc.edit_param(&id, names[0], frame, json!([c.x, c.y]));
+            }
+            Part::Size { x, y } => {
+                // Symmetric about the center: the handle follows the pointer.
+                let local = rot(p - center, -rotate).abs() * 2.0;
+                let mut s = Vec2::new(if x { local.x } else { size.x }, if y { local.y } else { size.y });
+                if shift && x && y {
+                    // Shift keeps the aspect ratio.
+                    let k = (s.x / size.x.abs().max(1e-3)).max(s.y / size.y.abs().max(1e-3));
+                    s = size.abs() * k;
+                }
+                doc.edit_param(&id, names[1], frame, json!([s.x.max(1.0), s.y.max(1.0)]));
+            }
+            Part::Rotate => {
+                let mut deg = rotate + turn(drag, p);
+                if shift {
+                    deg = (deg / 15.0).round() * 15.0;
+                }
+                doc.edit_param(&id, names[2], frame, json!(deg));
+            }
+            _ => {}
+        },
+        Geo::Points { param, stride, pts } => {
+            let d = if shift { constrain(delta) } else { delta };
+            let mut v: Vec<f64> = anim::sample(&doc.param(&id, param), frame as f64);
+            for &i in selected.iter().filter(|&&i| i < pts.len()) {
+                let q = pts[i] + d;
+                if let Some(c) = v.get_mut(i * stride..i * stride + 2) {
+                    c.copy_from_slice(&[q.x as f64, q.y as f64]);
+                }
+            }
+            doc.edit_param(&id, param, frame, json!(v));
+        }
     }
 }
 
 fn cursor(part: Part) -> CursorIcon {
     match part {
-        Part::Point | Part::Move => CursorIcon::Move,
+        Part::Point | Part::Move | Part::Vertex(_) => CursorIcon::Move,
+        Part::Edge(..) => CursorIcon::Crosshair,
+        Part::Size { x: true, y: true } => CursorIcon::ResizeNwSe,
+        Part::Size { x: true, .. } => CursorIcon::ResizeHorizontal,
+        Part::Size { .. } => CursorIcon::ResizeVertical,
         Part::Rotate => CursorIcon::Alias,
         Part::ScaleX | Part::ScaleY => CursorIcon::ResizeNeSw,
         Part::Edges([l, t, r, b]) => match (l || r, t || b) {
@@ -369,6 +676,12 @@ fn cursor(part: Part) -> CursorIcon {
             _ => CursorIcon::ResizeVertical,
         },
     }
+}
+
+/// A closed path drawn over a dark under-stroke, readable on any image.
+fn outline_path(painter: &egui::Painter, pts: Vec<Pos2>, col: Color32) {
+    painter.add(Shape::closed_line(pts.clone(), Stroke::new(3.0, Color32::from_black_alpha(140))));
+    painter.add(Shape::closed_line(pts, Stroke::new(1.5, col)));
 }
 
 fn crosshair(painter: &egui::Painter, c: Pos2, r: f32, stroke: Stroke) {
@@ -394,18 +707,28 @@ mod tests {
         d
     }
 
-    /// Press at `from`, drag to `to`, as `interact` would.
-    fn drag(d: &mut Doc, from: Pos2, to: Pos2, frame: i64) -> Part {
-        let g = geo(d, "n", frame, SIZE).unwrap();
-        let part = hit(&g, &XF, from).expect("press should hit a handle");
-        let pivot = match g { Geo::Transform { center, translate, .. } => center + translate, _ => Vec2::ZERO };
-        let a = (XF.image(from) - pivot).y.atan2((XF.image(from) - pivot).x);
-        let mut dr = Drag { node: "n".into(), part, start: XF.image(from), geo: g, angle: a, turned: 0.0 };
+    /// Press at `from`, drag to `to` and release, as `interact` would.
+    /// Returns the part grabbed, if any.
+    fn gesture(ov: &mut Overlays, d: &mut Doc, from: Pos2, to: Pos2, frame: i64, mods: Mods) -> Option<Part> {
+        ov.sync_selection(d);
+        ov.press(d, frame, SIZE, &XF, from, mods);
+        let part = ov.drag.as_ref().map(|dr| dr.part);
         // Two steps, as a real drag arrives over several frames.
-        apply(&mut dr, XF.image(from.lerp(to, 0.5)), false, d, frame);
-        apply(&mut dr, XF.image(to), false, d, frame);
+        ov.drag_to(d, frame, XF.image(from.lerp(to, 0.5)), false);
+        ov.drag_to(d, frame, XF.image(to), false);
+        ov.drag = None;
         part
     }
+
+    fn drag(d: &mut Doc, from: Pos2, to: Pos2, frame: i64) -> Part {
+        gesture(&mut Overlays::default(), d, from, to, frame, Mods::default()).expect("press should hit a handle")
+    }
+
+    fn points(d: &Doc, frame: i64) -> Vec<f32> {
+        d.param_at("n", "points", frame).as_array().unwrap().iter().map(num).collect()
+    }
+
+    const SQUARE: [f32; 8] = [50.0, 25.0, 150.0, 25.0, 150.0, 75.0, 50.0, 75.0];
 
     #[test]
     fn transform_gizmo_moves_rotates_and_scales() {
@@ -457,5 +780,70 @@ mod tests {
         drag(&mut d, c, c + Vec2::new(20.0, 0.0), 5);
         assert_eq!(vec2(&d.param_at("n", "translate", 5)), Vec2::new(20.0, 0.0));
         assert_eq!(vec2(&d.param_at("n", "translate", 1)), Vec2::ZERO);
+    }
+
+    #[test]
+    fn box_handles_move_size_and_rotate() {
+        let mut d = doc("rectangle", json!({ "center": [100, 50], "size": [40, 20] }));
+        assert_eq!(drag(&mut d, Pos2::new(120.0, 60.0), Pos2::new(130.0, 70.0), 1), Part::Size { x: true, y: true });
+        assert_eq!(vec2(&d.param("n", "size")), Vec2::new(60.0, 40.0));
+        // An edge handle sizes one axis only.
+        assert_eq!(drag(&mut d, Pos2::new(130.0, 50.0), Pos2::new(110.0, 0.0), 1), Part::Size { x: true, y: false });
+        assert_eq!(vec2(&d.param("n", "size")), Vec2::new(20.0, 40.0));
+        // The rotation handle sits above the top edge (y = 30).
+        let spin = Pos2::new(100.0, 30.0 - STEM);
+        assert_eq!(drag(&mut d, spin, Pos2::new(150.0, 50.0), 1), Part::Rotate);
+        assert!((num(&d.param("n", "rotate")) - 90.0).abs() < 1e-3);
+        assert_eq!(drag(&mut d, Pos2::new(100.0, 50.0), Pos2::new(90.0, 45.0), 1), Part::Move);
+        assert_eq!(vec2(&d.param("n", "center")), Vec2::new(90.0, 45.0));
+    }
+
+    #[test]
+    fn clicking_an_edge_inserts_a_vertex_in_every_key() {
+        let moved: Vec<f32> = SQUARE.iter().map(|v| v + 10.0).collect();
+        let mut d = doc("polygon", json!({ "points": { "keys": [[1, SQUARE], [10, moved]] } }));
+        let mut ov = Overlays::default();
+        // Press on the top edge's midpoint and pull it up.
+        let part = gesture(&mut ov, &mut d, Pos2::new(100.0, 25.0), Pos2::new(100.0, 5.0), 1, Mods::default());
+        assert_eq!(part, Some(Part::Vertex(1)));
+        assert_eq!(points(&d, 1), [50.0, 25.0, 100.0, 5.0, 150.0, 25.0, 150.0, 75.0, 50.0, 75.0]);
+        // The other key gets the vertex on its own edge, at the same fraction.
+        assert_eq!(points(&d, 10)[2..4], [110.0, 35.0]);
+        assert_eq!(ov.points, vec![1]);
+    }
+
+    #[test]
+    fn shift_selects_several_vertices_that_move_together() {
+        let mut d = doc("polygon", json!({ "points": SQUARE }));
+        let mut ov = Overlays::default();
+        gesture(&mut ov, &mut d, Pos2::new(50.0, 25.0), Pos2::new(50.0, 25.0), 1, Mods::default());
+        let shift = Mods { shift: true, ..Default::default() };
+        gesture(&mut ov, &mut d, Pos2::new(150.0, 25.0), Pos2::new(150.0, 25.0), 1, shift);
+        assert_eq!(ov.points, vec![0, 1]);
+        // Dragging either selected vertex moves both.
+        gesture(&mut ov, &mut d, Pos2::new(150.0, 25.0), Pos2::new(150.0, 15.0), 1, Mods::default());
+        assert_eq!(points(&d, 1), [50.0, 15.0, 150.0, 15.0, 150.0, 75.0, 50.0, 75.0]);
+        // Shift-clicking a selected vertex deselects it; clicking empty space clears.
+        gesture(&mut ov, &mut d, Pos2::new(50.0, 15.0), Pos2::new(50.0, 15.0), 1, shift);
+        assert_eq!(ov.points, vec![1]);
+        assert_eq!(gesture(&mut ov, &mut d, Pos2::new(5.0, 95.0), Pos2::new(5.0, 95.0), 1, Mods::default()), None);
+        assert!(ov.points.is_empty());
+    }
+
+    #[test]
+    fn ctrl_click_adds_and_delete_removes_vertices() {
+        let mut d = doc("polygon", json!({ "points": SQUARE }));
+        let mut ov = Overlays::default();
+        let ctrl = Mods { command: true, ..Default::default() };
+        // Nothing selected: the new vertex goes at the end.
+        assert_eq!(gesture(&mut ov, &mut d, Pos2::new(20.0, 50.0), Pos2::new(20.0, 50.0), 1, ctrl), Some(Part::Vertex(4)));
+        assert_eq!(points(&d, 1)[8..], [20.0, 50.0]);
+        assert!(ov.delete_points(&mut d));
+        assert_eq!(points(&d, 1), SQUARE);
+        // Never below three vertices; with nothing selected, delete passes.
+        ov.points = vec![0, 1];
+        assert!(ov.delete_points(&mut d));
+        assert_eq!(points(&d, 1), SQUARE);
+        assert!(!ov.delete_points(&mut d));
     }
 }

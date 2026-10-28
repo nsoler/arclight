@@ -164,7 +164,8 @@ impl CurveEditor {
         let Some(info) = ops::info(&node.op) else { return Vec::new() };
         let mut out = Vec::new();
         for (pi, spec) in info.params.iter().filter(|s| s.animatable).enumerate() {
-            if !anim::is_animated(&doc.param(&node.id, spec.name)) {
+            // Point lists have a channel per coordinate; they're keyed in the viewer.
+            if matches!(spec.kind, ParamKind::Points { .. }) || !anim::is_animated(&doc.param(&node.id, spec.name)) {
                 continue;
             }
             for (ci, name) in channel_names(spec.kind).iter().enumerate() {

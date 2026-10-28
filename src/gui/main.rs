@@ -286,9 +286,11 @@ impl App {
             t.seek(project.last_frame, &project);
         }
         if pressed(Key::Delete) || pressed(Key::Backspace) {
-            // In the curve editor, delete selected keys rather than the node.
+            // Selected keys in the curve editor, or selected shape points in
+            // the viewer, are deleted rather than the node.
             if self.tab == BottomTab::Curves && self.curves.has_selection() {
                 self.curves.delete_selected(&mut self.doc);
+            } else if self.viewer.delete_points(&mut self.doc) {
             } else if let Some(id) = self.doc.selected.clone() {
                 self.doc.delete_node(&id);
             }

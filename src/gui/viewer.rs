@@ -79,6 +79,11 @@ impl Viewer {
         self.fit_pending = true;
     }
 
+    /// Delete the selected overlay vertices, if any (see [`Overlays::delete_points`]).
+    pub fn delete_points(&mut self, doc: &mut Doc) -> bool {
+        self.overlays.delete_points(doc)
+    }
+
     /// `doc` and `frame` drive the selected node's overlay handles; edits
     /// key animated params at `frame`.
     pub fn ui(&mut self, ui: &mut egui::Ui, d: Display<'_>, doc: &mut Doc, frame: i64) {

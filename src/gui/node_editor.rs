@@ -63,17 +63,19 @@ pub fn category_color(c: Category) -> Color32 {
         Category::Color => Color32::from_rgb(104, 76, 136),
         Category::Channel => Color32::from_rgb(52, 118, 124),
         Category::Merge => Color32::from_rgb(56, 86, 136),
+        Category::Shape => Color32::from_rgb(140, 70, 108),
         Category::Transform => Color32::from_rgb(140, 104, 48),
         Category::Filter => Color32::from_rgb(132, 74, 58),
         Category::Output => Color32::from_rgb(84, 86, 92),
     }
 }
 
-const CATEGORIES: [(Category, &str); 7] = [
+const CATEGORIES: [(Category, &str); 8] = [
     (Category::Source, "Source"),
     (Category::Color, "Color"),
     (Category::Channel, "Channel"),
     (Category::Merge, "Merge"),
+    (Category::Shape, "Shape"),
     (Category::Transform, "Transform"),
     (Category::Filter, "Filter"),
     (Category::Output, "Output"),

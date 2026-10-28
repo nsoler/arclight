@@ -1,6 +1,6 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-27 (end of session 2). Read this, then `README.md`
+Last updated 2026-10-27 (session 3, after the shape generators). Read this, then `README.md`
 (user-facing features, file format, shortcuts).
 
 ## Where things stand
@@ -8,14 +8,20 @@ Last updated 2026-10-27 (end of session 2). Read this, then `README.md`
 - Repo: `github.com/nsoler/arclight` (private). Local:
   `~/Projects/arclight-compound/arclight/`.
 - **Active branch: `wip-ns-effects`** (tracks `origin/wip-ns-effects`). All
-  session-2 work is there; `main` is still at `3dc833a` (session 1). Merge
+  session-2 and session-3 work is there; `main` is still at `3dc833a` (session 1). Merge
   to `main` only when the user asks.
 - Done: Phase 0.1–0.5 (Shift+E browser, optional inputs, generic mask/mix,
-  Switch ports, viewer overlays) and all of Phase 1. Not done: Phase 0.6
-  (bounding boxes / format), Phases 2–4.
-- ~7,300 lines of Rust, 38 tests passing, clippy clean apart from two old
+  Switch ports, viewer overlays), all of Phase 1, and the Phase 2 shape
+  generators (Rectangle, Ellipse, Polygon). Not done: Roto (rest of Phase 2),
+  Phase 0.6 (bounding boxes / format), Phases 3–4.
+- ~8,100 lines of Rust, 50 tests passing, clippy clean apart from two old
   style lints (`Graph::from_str` name, `chunks_exact_mut(4)` in media.rs).
-- **Next:** Phase 2 shapes and roto (below).
+- **Next:** Roto (Phase 2, below).
+- Development moved from macOS to Linux (Omarchy/Hyprland) in session 3:
+  use `sed -i` (not `sed -i ''`); ffmpeg is in `/usr/bin`. Hyprland tiles the
+  window narrower than its 1600 px default, so screenshots come out ~1030 px
+  wide, and at that width the viewer toolbar text overlaps (layout issue, not
+  yet fixed).
 
 ## Progress log
 
@@ -39,6 +45,25 @@ Last updated 2026-10-27 (end of session 2). Read this, then `README.md`
   wired; `Point` is ready for shapes. Fixed the Transform doc comment:
   positive `rotate` is **clockwise** on screen (y down). Behaviour unchanged;
   flipping it would alter existing projects, so ask the user first.
+
+- **Session 3, part 1** (commit "Add Rectangle, Ellipse and Polygon shape nodes" on `wip-ns-effects`): shape generators.
+  `src/shape.rs` rasterizes any polygon list to coverage from the *signed
+  distance to the outline* (smoothstep ramp, 1 px = anti-aliasing, wider =
+  feather centered on the edge) with scanline crossings for inside/outside
+  (non-zero / even-odd). Ellipses are flattened to ~4 px segments. Ops
+  `rectangle`, `ellipse`, `polygon` (new `Category::Shape`) share
+  `ShapeStyle` + `shade()` in ops.rs: optional `background` input sets the
+  canvas, `operation` over/subtract (chain shapes to build holes), `invert`,
+  `opacity`, `feather`. New `ParamKind::Bool` (checkbox, not animatable) and
+  `ParamKind::Points { stride }` (flat array, animates as one value; the
+  properties panel shows a count, the curve editor skips it). New overlays
+  `Overlay::Box` (center/size/rotate, ellipse flag) and `Overlay::Points`.
+  The overlay now grabs on *press* (not drag start) so clicks can select or
+  insert vertices; `Overlays::press/drag_to` are what the tests drive.
+  Vertex insert/delete goes through `anim::edit_all`, which applies a
+  structural edit to every key (resetting their tangents to auto), so all
+  keys keep the same point count. ⌫ deletes selected vertices before it
+  would delete the node (`Viewer::delete_points`).
 
 ```sh
 cargo run --release --bin arclight-gui        # GUI with the animated starter project
@@ -166,12 +191,16 @@ Several of these need engine or GUI infrastructure first. Suggested order:
   blend mode (add/subtract), motion blur later.
 - Outputs alpha (and RGB = colour × alpha), so a Roto feeds mask inputs
   directly.
-- **Overlay hookup (from 0.5):** Rectangle/Ellipse can reuse the existing
-  `Overlay::Point` (center) plus a size handle; Polygon/Roto need a new
-  `Overlay` variant (e.g. `Points(param)`) in `ops.rs` and a matching `Geo`
-  arm in `gui/overlay.rs`: hit-test points/tangents, click on an edge to
-  insert, ⌫ to delete selected points, box-select. `Drag` already snapshots
-  the start values, so multi-point moves are start + delta.
+- **Shapes are done** (see session 3 above). Box-select of vertices isn't.
+- **Roto plan:** one closed bezier per Roto node (chain Roto nodes through
+  `background` with over/subtract for several shapes and holes). Store it as
+  `ParamKind::Points { stride: 6 }`: x, y, then in- and out-handle offsets
+  relative to the vertex, so moving a vertex carries its handles. Flatten
+  each cubic segment adaptively and reuse `shape::coverage` + `shade()`.
+  In `gui/overlay.rs`, `Geo::Points` already handles stride > 2 for
+  select/insert/delete/move; Roto needs handle parts (draw + drag the
+  selected vertices' tangents, ⌥ to break symmetry) and, on edge insert,
+  a de Casteljau split instead of a straight lerp.
 
 ### Phase 3: 2D tracking (needs overlays + a background job like `render.rs`)
 

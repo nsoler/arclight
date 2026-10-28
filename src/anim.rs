@@ -301,6 +301,24 @@ pub fn replace_keys(v: &Value, mut keys: Vec<Key>) -> Value {
     c.to_value()
 }
 
+/// Apply a structural edit (e.g. inserting or removing points) to a static
+/// array value, or to every key of an animated one, so all keys keep the
+/// same layout. Edited keys go back to auto tangents.
+pub fn edit_all(v: &Value, f: impl Fn(&[f64]) -> Vec<f64>) -> Value {
+    match Curve::parse(v) {
+        Some(mut c) => {
+            for k in &mut c.keys {
+                *k = Key::new(k.frame, f(&k.value));
+            }
+            c.to_value()
+        }
+        None => match flatten(v) {
+            Some((x, false)) => json!(f(&x)),
+            _ => v.clone(),
+        },
+    }
+}
+
 /// Set a key at `frame`. A static parameter becomes animated, keyed at this
 /// frame only. Re-keying an existing frame keeps that key's tangents.
 pub fn set_key(v: &Value, frame: i64, value: &Value) -> Value {
