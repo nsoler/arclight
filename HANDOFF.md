@@ -7,9 +7,10 @@ Last updated 2026-10-27 (session 3, after Roto). Read this, then `README.md`
 
 - Repo: `github.com/nsoler/arclight` (private). Local:
   `~/Projects/arclight-compound/arclight/`.
-- **Active branch: `wip-ns-effects`** (tracks `origin/wip-ns-effects`). All
-  session-2 and session-3 work is there; `main` is still at `3dc833a` (session 1). Merge
-  to `main` only when the user asks.
+- **Branches:** work happens on `wip-ns-effects` (tracks
+  `origin/wip-ns-effects`). At the end of session 3 the user had it merged
+  into `main` (fast-forward to `264df6f`), so both match. Merge to `main`
+  again only when the user asks.
 - Done: Phase 0.1–0.5 (Shift+E browser, optional inputs, generic mask/mix,
   Switch ports, viewer overlays), all of Phase 1, and the Phase 2 shape
   generators (Rectangle, Ellipse, Polygon) and Roto. Not done: Phase 0.6
