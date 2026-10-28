@@ -15,7 +15,7 @@ Last updated 2026-10-27 (session 3, after Roto). Read this, then `README.md`
   generators (Rectangle, Ellipse, Polygon) and Roto. Not done: Phase 0.6
   (bounding boxes / format), Phases 3–4, and Phase 2 extras (box select,
   select-all / move whole shape, motion blur).
-- ~8,500 lines of Rust, 57 tests passing, clippy clean apart from two old
+- ~8,450 lines of Rust, 57 tests passing, clippy clean apart from two old
   style lints (`Graph::from_str` name, `chunks_exact_mut(4)` in media.rs).
 - **Next:** Phase 3 (2D tracker), or the Phase 2 extras first if the user
   wants roto to feel complete (box select, select all, move whole shape).
