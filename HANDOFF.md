@@ -9,11 +9,10 @@ Last updated 2026-10-27 (end of session 3). Read this, then `README.md`
   `~/Projects/arclight-compund/arclight/` (the parent folder name really is
   spelled `compund`).
 - **Branches:** work happens on `wip-ns-effects` (tracks
-  `origin/wip-ns-effects`). `main` and `origin/main` are at `9b0a0ad` "Add 2D
-  Tracker node". `wip-ns-effects` is ahead of that by "Track rotating and
-  scaling features" (`58386cd`) and the commit with these notes; **neither is
-  pushed yet**. Push and fast-forward `main` only when the user asks (they
-  have asked after each milestone so far).
+  `origin/wip-ns-effects`). At the end of session 3 everything was pushed
+  and `main` fast-forwarded to match it, so `main`, `wip-ns-effects` and
+  both remotes are at the same commit. Push and fast-forward `main` only
+  when the user asks (they have asked after each milestone so far).
 - ~9,600 lines of Rust, 69 tests passing (`cargo test`), clippy clean apart
   from two old style lints (`Graph::from_str` name, `chunks_exact_mut(4)` in
   media.rs).
