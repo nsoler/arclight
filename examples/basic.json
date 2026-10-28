@@ -1,0 +1,24 @@
+{
+  "nodes": [
+    { "id": "bg", "op": "checkerboard",
+      "params": { "width": 640, "height": 480, "size": 40 } },
+
+    { "id": "fill", "op": "constant",
+      "params": { "width": 640, "height": 480, "color": [0.9, 0.25, 0.1, 1.0] } },
+
+    { "id": "card", "op": "transform", "inputs": ["fill"],
+      "params": { "scale": [0.4, 0.5], "rotate": 12.0 } },
+
+    { "id": "soft", "op": "blur", "inputs": ["card"],
+      "params": { "radius": 16, "passes": 3 } },
+
+    { "id": "warm", "op": "grade", "inputs": ["soft"],
+      "params": { "multiply": [1.1, 1.0, 0.9], "gamma": [1.0, 1.0, 1.1] } },
+
+    { "id": "comp", "op": "merge", "inputs": ["warm", "bg"],
+      "params": { "operation": "over" } },
+
+    { "id": "out", "op": "write", "inputs": ["comp"],
+      "params": { "path": "basic_out.png" } }
+  ]
+}

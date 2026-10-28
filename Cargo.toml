@@ -1,0 +1,39 @@
+[package]
+name = "arclight"
+version = "0.1.0"
+edition = "2021"
+description = "Arclight — an original node-graph image compositor"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "arclight"
+path = "src/lib.rs"
+
+[[bin]]
+name = "arclight"
+path = "src/main.rs"
+
+[[bin]]
+name = "arclight-gui"
+path = "src/gui/main.rs"
+required-features = ["gui"]
+
+[features]
+default = ["gui"]
+gui = ["dep:eframe", "dep:rfd"]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+image = "0.25"
+exr = "1.73"
+rayon = "1"
+eframe = { version = "0.37.0", optional = true }
+rfd = { version = "0.17.2", optional = true }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+

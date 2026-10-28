@@ -1,0 +1,228 @@
+//! The image viewer: shows the rendered frame with pan/zoom, channel isolation,
+//! exposure, and a float pixel readout under the cursor.
+
+use arclight::color;
+use arclight::image::Image;
+use eframe::egui::{
+    self, Align2, Color32, ColorImage, FontId, Pos2, Rect, Sense, TextureHandle, TextureOptions,
+    Vec2,
+};
+use rayon::prelude::*;
+use std::sync::Arc;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Channel {
+    Rgb,
+    Red,
+    Green,
+    Blue,
+    Alpha,
+}
+
+impl Channel {
+    const ALL: [(Channel, &'static str); 5] = [
+        (Channel::Rgb, "RGB"),
+        (Channel::Red, "R"),
+        (Channel::Green, "G"),
+        (Channel::Blue, "B"),
+        (Channel::Alpha, "A"),
+    ];
+}
+
+pub struct Viewer {
+    texture: Option<TextureHandle>,
+    /// The image currently uploaded, and the display settings it used.
+    shown: Option<(Arc<Image>, Channel, f32)>,
+    nearest: bool,
+    pub channel: Channel,
+    /// Exposure in stops.
+    pub exposure: f32,
+    /// Image pixels per screen point.
+    zoom: f32,
+    /// Offset of the image center from the canvas center, in points.
+    pan: Vec2,
+    fit_pending: bool,
+    pub rect: Rect,
+}
+
+impl Default for Viewer {
+    fn default() -> Self {
+        Viewer {
+            texture: None,
+            shown: None,
+            nearest: false,
+            channel: Channel::Rgb,
+            exposure: 0.0,
+            zoom: 1.0,
+            pan: Vec2::ZERO,
+            fit_pending: true,
+            rect: Rect::NOTHING,
+        }
+    }
+}
+
+/// What the viewer should display this frame.
+pub struct Display<'a> {
+    pub image: Option<&'a Arc<Image>>,
+    pub error: Option<&'a str>,
+    pub target: Option<&'a str>,
+    pub frame: i64,
+    pub millis: f32,
+}
+
+impl Viewer {
+    pub fn fit(&mut self) {
+        self.fit_pending = true;
+    }
+
+    pub fn ui(&mut self, ui: &mut egui::Ui, d: Display<'_>) {
+        self.toolbar(ui, &d);
+        let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        self.rect = rect;
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 0.0, Color32::from_gray(24));
+
+        let Some(img) = d.image else {
+            let msg = d.error.unwrap_or("Nothing to view — connect a node to a Viewer, or select one.");
+            painter.text(rect.center(), Align2::CENTER_CENTER, msg, FontId::proportional(14.0), Color32::GRAY);
+            return;
+        };
+        self.upload(ui.ctx(), img);
+        let size = Vec2::new(img.width as f32, img.height as f32);
+
+        if self.fit_pending {
+            let s = (rect.width() / size.x).min(rect.height() / size.y) * 0.95;
+            self.zoom = s.max(1e-3);
+            self.pan = Vec2::ZERO;
+            self.fit_pending = false;
+        }
+
+        // Interaction: drag to pan, scroll / pinch to zoom about the cursor.
+        if resp.dragged() {
+            self.pan += resp.drag_delta();
+        }
+        if resp.double_clicked() {
+            self.fit();
+        }
+        if let Some(hover) = resp.hover_pos() {
+            let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+            let factor = pinch * (scroll * 0.002).exp();
+            if factor != 1.0 {
+                let new_zoom = (self.zoom * factor).clamp(0.02, 64.0);
+                let c = rect.center() + self.pan;
+                self.pan += (hover - c) * (1.0 - new_zoom / self.zoom);
+                self.zoom = new_zoom;
+            }
+        }
+
+        let img_rect = Rect::from_center_size(rect.center() + self.pan, size * self.zoom);
+        // Nearest-neighbour when zoomed in, so individual pixels are visible.
+        let nearest = self.zoom >= 2.0;
+        if nearest != self.nearest {
+            self.nearest = nearest;
+            self.shown = None;
+            self.upload(ui.ctx(), img);
+        }
+        if let Some(tex) = &self.texture {
+            painter.image(tex.id(), img_rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+        }
+        painter.rect_stroke(img_rect, 0.0, (1.0, Color32::from_gray(70)), egui::StrokeKind::Outside);
+
+        // Pixel readout.
+        if let Some(hover) = resp.hover_pos() {
+            let p = (hover - img_rect.min) / self.zoom;
+            let (x, y) = (p.x.floor(), p.y.floor());
+            if x >= 0.0 && y >= 0.0 && (x as usize) < img.width && (y as usize) < img.height {
+                let px = img.get(x as usize, y as usize);
+                let text = format!(
+                    "x {:<5} y {:<5}   R {:.4}  G {:.4}  B {:.4}  A {:.4}",
+                    x as usize, y as usize, px[0], px[1], px[2], px[3]
+                );
+                let pos = rect.left_bottom() + Vec2::new(8.0, -8.0);
+                let galley = painter.layout_no_wrap(text, FontId::monospace(12.0), Color32::from_gray(220));
+                let r = Align2::LEFT_BOTTOM.anchor_size(pos, galley.size());
+                painter.rect_filled(r.expand(4.0), 3.0, Color32::from_black_alpha(160));
+                painter.galley(r.min, galley, Color32::from_gray(220));
+            }
+        }
+        if let Some(err) = d.error {
+            let pos = rect.left_top() + Vec2::new(8.0, 8.0);
+            painter.text(pos, Align2::LEFT_TOP, err, FontId::proportional(13.0), Color32::from_rgb(255, 110, 100));
+        }
+    }
+
+    fn toolbar(&mut self, ui: &mut egui::Ui, d: &Display<'_>) {
+        ui.horizontal(|ui| {
+            for (ch, label) in Channel::ALL {
+                ui.selectable_value(&mut self.channel, ch, label);
+            }
+            ui.separator();
+            ui.label("Exposure");
+            ui.add(egui::DragValue::new(&mut self.exposure).speed(0.05).range(-12.0..=12.0).suffix(" stops"));
+            if ui.small_button("0").on_hover_text("Reset exposure").clicked() {
+                self.exposure = 0.0;
+            }
+            ui.separator();
+            if ui.button("Fit").on_hover_text("Fit image (F, or double-click)").clicked() {
+                self.fit();
+            }
+            if ui.button("1:1").clicked() {
+                self.zoom = 1.0;
+                self.pan = Vec2::ZERO;
+            }
+            ui.label(format!("{:.0}%", self.zoom * 100.0));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(img) = d.image {
+                    ui.label(format!("{}x{}  ·  frame {}  ·  {:.1} ms", img.width, img.height, d.frame, d.millis));
+                }
+                if let Some(t) = d.target {
+                    ui.strong(t);
+                    ui.label("Viewing");
+                }
+            });
+        });
+    }
+
+    fn upload(&mut self, ctx: &egui::Context, img: &Arc<Image>) {
+        let up_to_date = self.shown.as_ref().is_some_and(|(shown, ch, ex)| {
+            Arc::ptr_eq(shown, img) && *ch == self.channel && *ex == self.exposure
+        });
+        if up_to_date {
+            return;
+        }
+        // A resolution change (e.g. a new clip) re-fits the view.
+        if self.shown.as_ref().is_none_or(|(s, ..)| (s.width, s.height) != (img.width, img.height)) {
+            self.fit_pending = true;
+        }
+        let ci = to_color_image(img, self.channel, self.exposure);
+        let filter = if self.nearest { TextureOptions::NEAREST } else { TextureOptions::LINEAR };
+        match &mut self.texture {
+            Some(t) => t.set(ci, filter),
+            None => self.texture = Some(ctx.load_texture("viewer", ci, filter)),
+        }
+        self.shown = Some((img.clone(), self.channel, self.exposure));
+    }
+}
+
+/// Linear premultiplied float -> 8-bit sRGB for display, with exposure and
+/// channel isolation applied. Color is shown premultiplied, i.e. over black.
+fn to_color_image(img: &Image, channel: Channel, exposure: f32) -> ColorImage {
+    let gain = 2f32.powf(exposure);
+    let mut bytes = vec![0u8; img.pixels.len() * 4];
+    bytes
+        .par_chunks_exact_mut(4)
+        .zip(img.pixels.par_iter())
+        .for_each(|(out, px)| {
+            let enc = |v: f32| (color::linear_to_srgb(v * gain) * 255.0 + 0.5) as u8;
+            let rgb = match channel {
+                Channel::Rgb => [enc(px[0]), enc(px[1]), enc(px[2])],
+                Channel::Red => [enc(px[0]); 3],
+                Channel::Green => [enc(px[1]); 3],
+                Channel::Blue => [enc(px[2]); 3],
+                // Alpha is coverage, not light: show it without the sRGB curve.
+                Channel::Alpha => [(px[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8; 3],
+            };
+            out.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+        });
+    ColorImage::from_rgba_unmultiplied([img.width, img.height], &bytes)
+}
