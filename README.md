@@ -42,6 +42,7 @@ cargo run --release --bin arclight-gui -- comp.json    # open a graph
 |------|--------------|
 | **Viewer** (center) | Shows the input of the first `viewer` node (or the selected node). Drag to pan, scroll/pinch to zoom, double-click or **F** to fit. RGB/R/G/B/A channel isolation, exposure in stops, float pixel readout under the cursor. |
 | **Player** (under the viewer) | Go to start, step back, play backward, pause, play forward, step forward, go to end. Scrubbable timeline (green strip = frames already cached), in/out, FPS, loop. Plays in real time and shows the achieved fps. |
+| **Curve editor** (bottom, second tab) | The selected node's keyframed params as value-over-time curves, one per channel (x/y, r/g/b/a), with a toggle per channel. Click / Shift-click / box-drag to select keys, drag to move them in time and value, double-click a curve to add a key, **⌫** to delete. Smooth/Linear/Step buttons set interpolation. Scroll to pan, ⌘-scroll or pinch to zoom (⌥ value only, ⇧ time only), middle-drag to pan, **F** to frame. The ruler scrubs the playhead. |
 | **Node graph** (bottom) | Right-click to add nodes. Drag from an output to an input (or back) to connect; drag a connected input away to reroute or disconnect. Double-click a node or press **V** to view it. **⌫** deletes (the chain is reconnected). Drop image/video files onto the window to create Media In nodes. |
 | **Properties** (right) | One panel per opened node, newest first, generated from each op's parameter specs. Media In: browse, auto-detected frame range, clip info. Media Out: browse, render the frame range with progress and cancel. |
 
@@ -55,7 +56,8 @@ a key at the current frame. Once a parameter is animated, editing it sets a key
 at the current frame automatically. Right-click the ◇ for interpolation
 (smooth / linear / step), previous/next key, and *Delete animation*. The
 selected node's keys are marked on the timeline, and animated nodes show a
-small diamond in the graph. Frame ranges and rates are not animatable.
+small diamond in the graph. Use the Curve Editor tab to retime keys and shape
+curves visually. Frame ranges and rates are not animatable.
 
 **Undo/redo** covers every graph edit: nodes, connections, parameters, keys,
 moves, renames and the timeline range. A whole gesture (a slider drag, a node
@@ -140,6 +142,7 @@ src/
     main.rs        app shell: layout, menus, shortcuts, file drop
     doc.rs         document model, graph edits, undo/redo history
     node_editor.rs node graph canvas
+    curve_editor.rs keyframe curve editor
     viewer.rs      image viewer
     transport.rs   player controls + timeline
     properties.rs  per-node property panels, render jobs
@@ -154,7 +157,7 @@ examples/
 - Bounding-box / region-of-interest propagation so ops only touch covered pixels
 - Tiled, cached evaluation for large plates
 - More ops: crop/reformat, color-space nodes, keyer, defocus, time/sequence I/O
-- Multi-select, a curve editor for keyframes
+- Multi-select of nodes; tangent handles and a normalized view in the curve editor
 - GPU display transform / OCIO in the viewer
 
 ## License

@@ -4,6 +4,7 @@
 //! Layout: viewer + transport in the center, node graph along the bottom,
 //! properties on the right.
 
+mod curve_editor;
 mod doc;
 mod node_editor;
 mod properties;
@@ -13,6 +14,7 @@ mod worker;
 
 use arclight::graph::{Graph, NodeError};
 use arclight::image::Image;
+use curve_editor::CurveEditor;
 use doc::Doc;
 use eframe::egui::{self, Key, KeyboardShortcut, Modifiers};
 use node_editor::NodeEditor;
@@ -58,9 +60,17 @@ fn main() -> eframe::Result {
     )
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BottomTab {
+    Graph,
+    Curves,
+}
+
 struct App {
     doc: Doc,
     editor: NodeEditor,
+    curves: CurveEditor,
+    tab: BottomTab,
     viewer: Viewer,
     transport: Transport,
     props: Properties,
@@ -86,6 +96,8 @@ impl App {
         App {
             doc,
             editor: NodeEditor::default(),
+            curves: CurveEditor::default(),
+            tab: BottomTab::Graph,
             viewer: Viewer::default(),
             transport,
             props: Properties::default(),
@@ -129,6 +141,7 @@ impl App {
         self.transport.frame = doc.graph.project.first_frame;
         self.doc = doc;
         self.editor.fit();
+        self.curves = CurveEditor::default();
         self.viewer.fit();
         self.props = Properties::default();
         self.requested = None;
@@ -266,7 +279,10 @@ impl App {
             t.seek(project.last_frame, &project);
         }
         if pressed(Key::Delete) || pressed(Key::Backspace) {
-            if let Some(id) = self.doc.selected.clone() {
+            // In the curve editor, delete selected keys rather than the node.
+            if self.tab == BottomTab::Curves && self.curves.has_selection() {
+                self.curves.delete_selected(&mut self.doc);
+            } else if let Some(id) = self.doc.selected.clone() {
                 self.doc.delete_node(&id);
             }
         }
@@ -279,6 +295,8 @@ impl App {
             let ptr = ctx.input(|i| i.pointer.hover_pos());
             if ptr.is_some_and(|p| self.viewer.rect.contains(p)) {
                 self.viewer.fit();
+            } else if self.tab == BottomTab::Curves {
+                self.curves.fit();
             } else {
                 self.editor.fit();
             }
@@ -443,6 +461,9 @@ impl App {
                      Keyframes: click a parameter's ◇ to set or remove a key at the current frame; \
                      editing an animated parameter keys it automatically; right-click ◇ for \
                      interpolation and key navigation\n\
+                     Curve editor: click / Shift-click / box-drag to select keys · drag to move · \
+                     double-click a curve to add a key · ⌫ delete · scroll pan · ⌘-scroll or \
+                     pinch zoom (⌥ value only, ⇧ time only) · middle-drag pan · F frame all\n\
                      Undo / redo: ⌘Z / ⇧⌘Z",
                 );
             });
@@ -490,8 +511,26 @@ impl eframe::App for App {
             .resizable(true)
             .default_size(340.0)
             .min_size(140.0)
-            .frame(egui::Frame::NONE)
-            .show(ui, |ui| self.editor.ui(ui, &mut self.doc, error_node.as_deref()));
+            .frame(egui::Frame::NONE.fill(ui.visuals().panel_fill))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(6.0);
+                    ui.selectable_value(&mut self.tab, BottomTab::Graph, "Node Graph");
+                    let animated = self.doc.selected.as_ref().is_some_and(|id| self.doc.is_node_animated(id));
+                    let label = if animated { "Curve Editor ◆" } else { "Curve Editor" };
+                    ui.selectable_value(&mut self.tab, BottomTab::Curves, label)
+                        .on_hover_text("Keyframe curves of the selected node");
+                });
+                match self.tab {
+                    BottomTab::Graph => self.editor.ui(ui, &mut self.doc, error_node.as_deref()),
+                    BottomTab::Curves => {
+                        if let Some(f) = self.curves.ui(ui, &mut self.doc, self.transport.frame) {
+                            self.transport.set_play(Play::Stopped);
+                            self.transport.seek(f, &self.doc.graph.project);
+                        }
+                    }
+                }
+            });
         egui::CentralPanel::default_margins().show(ui, |ui| {
             egui::Panel::bottom("transport").show(ui, |ui| {
                 ui.add_space(4.0);

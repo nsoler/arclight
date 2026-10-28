@@ -179,6 +179,44 @@ pub fn remove_key(v: &Value, frame: i64) -> Value {
     }
 }
 
+/// One key with its value flattened to numbers (one per channel).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Key {
+    pub frame: i64,
+    pub value: Vec<f64>,
+}
+
+/// The keys of an animated value, in frame order. Empty for static values.
+pub fn keys(v: &Value) -> Vec<Key> {
+    Curve::parse(v)
+        .map(|c| c.keys.into_iter().map(|(frame, value)| Key { frame, value }).collect())
+        .unwrap_or_default()
+}
+
+/// Replace an animated value's keys, keeping its interpolation and shape.
+/// Keys are sorted; on duplicate frames the later one in `keys` wins. Static
+/// values, or an empty `keys`, are returned unchanged.
+pub fn replace_keys(v: &Value, keys: Vec<Key>) -> Value {
+    let Some(mut c) = Curve::parse(v) else { return v.clone() };
+    if keys.is_empty() {
+        return v.clone();
+    }
+    let mut ks: Vec<(i64, Vec<f64>)> = keys.into_iter().map(|k| (k.frame, k.value)).collect();
+    ks.reverse();
+    ks.sort_by_key(|k| k.0); // stable: for equal frames the later input stays first
+    ks.dedup_by_key(|k| k.0);
+    c.keys = ks;
+    c.to_value()
+}
+
+/// The value at `frame`, flattened to one number per channel.
+pub fn sample(v: &Value, frame: f64) -> Vec<f64> {
+    match Curve::parse(v) {
+        Some(c) => c.sample(frame),
+        None => flatten(v).map(|(x, _)| x).unwrap_or_default(),
+    }
+}
+
 pub fn interp(v: &Value) -> Option<Interp> {
     Curve::parse(v).map(|c| c.interp)
 }
@@ -227,6 +265,18 @@ mod tests {
         assert!(approx(mid[0].as_f64().unwrap(), 5.0));
         // Flat ends: early motion is slower than linear.
         assert!(evaluate(&c, 1.0)[0].as_f64().unwrap() < 1.0);
+    }
+
+    #[test]
+    fn replace_keys_sorts_and_later_wins() {
+        let c = json!({ "keys": [[1, 0.0], [10, 1.0]], "interp": "linear" });
+        let mut ks = keys(&c);
+        ks[0].frame = 20; // move frame 1 past frame 10
+        ks.push(Key { frame: 10, value: vec![5.0] }); // collides with the existing key 10
+        let v = replace_keys(&c, ks);
+        assert_eq!(key_frames(&v), vec![10, 20]);
+        assert_eq!(sample(&v, 10.0), vec![5.0]);
+        assert_eq!(interp(&v), Some(Interp::Linear));
     }
 
     #[test]
