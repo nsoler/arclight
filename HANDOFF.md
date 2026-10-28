@@ -1,31 +1,44 @@
 # Arclight — handoff notes
 
-Written 2026-10-27 to pick up the next session. Read this, then `README.md`
+Last updated 2026-10-27 (end of session 2). Read this, then `README.md`
 (user-facing features, file format, shortcuts).
+
+## Where things stand
+
+- Repo: `github.com/nsoler/arclight` (private). Local:
+  `~/Projects/arclight-compound/arclight/`.
+- **Active branch: `wip-ns-effects`** (tracks `origin/wip-ns-effects`). All
+  session-2 work is there; `main` is still at `3dc833a` (session 1). Merge
+  to `main` only when the user asks.
+- Done: Phase 0.1–0.5 (Shift+E browser, optional inputs, generic mask/mix,
+  Switch ports, viewer overlays) and all of Phase 1. Not done: Phase 0.6
+  (bounding boxes / format), Phases 2–4.
+- ~7,300 lines of Rust, 38 tests passing, clippy clean apart from two old
+  style lints (`Graph::from_str` name, `chunks_exact_mut(4)` in media.rs).
+- **Next:** Phase 2 shapes and roto (below).
 
 ## Progress log
 
-- **2026-10-27 (session 2):** Phase 0.1–0.4 and Phase 1 done (not yet
-  committed — check `git status`). Engine: `Port { label, optional }` replaces
-  `&str` port labels; ops get `&[Option<&Image>]`; `OpInfo::mask_base` + the
-  shared `MASK` port / `MIX` param give any op a generic mask/mix applied in
+- **Session 1:** engine, GUI, undo/redo, keyframes (`04a2f3a`), curve editor
+  (`9f121e9`), tangent handles (`d4f7e45`), these notes (`3dc833a`), on `main`.
+- **Session 2, part 1** (`8892866`, branch `wip-ns-effects`): Phase 0.1–0.4
+  and Phase 1. Engine: `Port { label, optional }` replaces `&str` port
+  labels; ops get `&[Option<&Image>]`; `OpInfo::mask_base` + the shared
+  `MASK` port / `MIX` param give any op a generic mask/mix applied in
   `ops::eval` (ops never handle masks themselves). New `Category::Channel`.
   New ops: exposure, saturation, invert, clamp, premult, unpremult,
   channel_select, switch (5 optional ports), dissolve, keymix, crop, resize.
   GUI: Shift+E node browser (`NodeEditor::open_browser` / `browse()`),
-  hollow optional ports, port labels drawn outside the node. 34 tests.
-  **Next:** Phase 0.5 viewer overlays, then Phase 2 shapes/roto.
-
-## Where things stand
-
-- Repo: `github.com/nsoler/arclight` (private), branch `main`.
-  Local: `~/Projects/arclight-compound/arclight/`.
-- Pushed: `04a2f3a` (engine + GUI + undo/redo + keyframes), `9f121e9` (curve editor).
-- **Tangent handles** (curve editor) were finished after the last push —
-  check `git status`; if `src/anim.rs`, `src/gui/curve_editor.rs` and
-  `README.md` are still modified, commit and push them first.
-- ~5,900 lines of Rust, 23 tests passing, clippy clean apart from two old
-  style lints (`Graph::from_str` name, `chunks_exact_mut(4)` in media.rs).
+  hollow optional ports, port labels drawn outside the node.
+- **Session 2, part 2** (next commit on `wip-ns-effects`): Phase 0.5 viewer
+  overlays. `ops::Overlay` kind per op (`Point`, `Transform`, `Insets`) names
+  the params its handles edit; `gui/overlay.rs` draws, hit-tests and writes
+  via `Doc::edit_param` (auto-key); the viewer calls `Overlays::interact`
+  before panning and `Overlays::draw` after the image. Transform gizmo
+  (fixed-length handles, ratio-based scale, wrap-free rotation) and Crop box
+  wired; `Point` is ready for shapes. Fixed the Transform doc comment:
+  positive `rotate` is **clockwise** on screen (y down). Behaviour unchanged;
+  flipping it would alter existing projects, so ask the user first.
 
 ```sh
 cargo run --release --bin arclight-gui        # GUI with the animated starter project
@@ -48,7 +61,7 @@ Engine (`src/`, library crate `arclight`):
 
 | File | Role |
 |------|------|
-| `ops.rs` | **Op registry** `OPS: &[OpInfo]` (name, label, `Category`, input port labels, `ParamSpec`s with defaults, help) + every op's implementation. `eval(op, params, inputs, ctx)` dispatches. `resolve_params` evaluates keyframes before an op runs; `is_time_varying` marks ops whose output depends on the frame by itself. |
+| `ops.rs` | **Op registry** `OPS: &[OpInfo]` (name, label, `Category`, input `Port`s (label, optional), `ParamSpec`s with defaults, `mask_base`, viewer `Overlay` kind, help) + every op's implementation. `eval(op, params, inputs, ctx)` dispatches (inputs are `Option<&Image>` per port) and then applies the generic mask/mix. `resolve_params` evaluates keyframes before an op runs; `is_time_varying` marks ops whose output depends on the frame by itself. |
 | `graph.rs` | `Graph { nodes: Vec<NodeSpec>, project }`. `Evaluator` caches each node's result under a hash of (op, *resolved* params, input keys, frame if time-varying). An edit re-renders only that node and what's downstream. `Evaluator::key` predicts a cache key without rendering (the GUI's frame cache uses it). Errors are `NodeError { node, message }` (the GUI outlines the failing node in red). |
 | `anim.rs` | Keyframe curves stored inline in params: `{"keys": [[f, v], [f, v, {in,out,broken}]], "interp": ...}`. Cubic Hermite with auto/user tangents. Key-level API (`keys`, `replace_keys`, `set_tangent`, ...). Any numeric array param can be animated, which matters for shapes (below). |
 | `image.rs`, `color.rs` | `Image { width, height, pixels: Vec<[f32;4]> }`: **RGBA only, linear, premultiplied, no bounding box / offset**. sRGB conversion only at 8-bit file I/O. |
@@ -61,9 +74,10 @@ GUI (`src/gui/`, binary `arclight-gui`, eframe/egui 0.37):
 |------|------|
 | `main.rs` | App shell: panel layout, menus, keyboard shortcuts (`shortcuts()`), file drop, starter graph, `ARCLIGHT_SCREENSHOT` hook. |
 | `doc.rs` | `Doc`: the graph plus every edit (`add_node`, `connect`, `set_param`, `edit_param` with auto-key, ...). **Undo** is whole-graph snapshots, committed once per finished gesture (`commit(gesture_in_progress)`). Mutate the graph only through `Doc` methods that call `changed()` (re-render) or `touched()` (no re-render). |
-| `node_editor.rs` | Canvas: nodes, ports, bezier wires, pan/zoom, right-click add menu (`add_menu`). |
+| `node_editor.rs` | Canvas: nodes, ports (hollow = optional), bezier wires, pan/zoom, right-click add menu (`add_menu`), Shift+E browser (`open_browser`, `browse`); both place nodes via `place`. |
 | `properties.rs` | Property panels generated from `ParamSpec`s; keyframe diamonds; media extras; render jobs. |
-| `viewer.rs` | Shows the image; pan/zoom; channels; exposure; pixel readout. **No overlay/interaction layer yet.** |
+| `viewer.rs` | Shows the image; pan/zoom; channels; exposure; pixel readout. Hosts the overlays. |
+| `overlay.rs` | Handles for the selected node's `Overlay` kind: `Xf` (image↔screen), `geo` (resolve params at the frame), `hit`, `apply` (drag → `edit_param`), `draw`. Add new handle kinds here. Positions use the viewed image's size (no bbox yet). |
 | `transport.rs`, `curve_editor.rs`, `worker.rs` | Player + timeline; keyframe curves with tangent handles; background eval thread + 1.5 GB frame LRU. |
 
 ### Adding a node today (checklist)
@@ -71,6 +85,8 @@ GUI (`src/gui/`, binary `arclight-gui`, eframe/egui 0.37):
 1. `ops.rs`: add an `OpInfo` to `OPS` (ports via `IN` / `req()` / `opt()`,
    params via `p!` / `fixed!`). For mask support, end the ports with `MASK`,
    the params with `MIX`, and set `mask_base: Some(<input to mix back to>)`.
+   For viewer handles, set `overlay` to an `Overlay` kind naming its params
+   (`Overlay::None` otherwise).
 2. `ops.rs`: add a `#[derive(Deserialize)]` params struct and a function; add a
    match arm in `eval`. Defaults come from the spec, so the struct needs none.
 3. If it depends on the frame by itself, add it to `is_time_varying`.
@@ -86,7 +102,7 @@ to open a node list for placing nodes in the node editor.
 
 Several of these need engine or GUI infrastructure first. Suggested order:
 
-### Phase 0: infrastructure (do first)
+### Phase 0: infrastructure — 0.1–0.5 done, 0.6 open
 
 1. **Shift+E node browser.** A popup at the mouse position in the node editor:
    a search field (focused immediately), filtered list of `OPS` grouped by
@@ -117,7 +133,7 @@ Several of these need engine or GUI infrastructure first. Suggested order:
    frame from origin 0,0. Shapes and trackers are fine without it. It matters
    later for performance and for Crop/Reformat semantics.
 
-### Phase 1: simple nodes (no infrastructure beyond phase 0.2)
+### Phase 1: simple nodes — done
 
 - **Premult / Unpremult.** The pipeline is premultiplied internally, so
   Unpremult outputs straight colour (mark it in help: following ops then see
@@ -150,6 +166,12 @@ Several of these need engine or GUI infrastructure first. Suggested order:
   blend mode (add/subtract), motion blur later.
 - Outputs alpha (and RGB = colour × alpha), so a Roto feeds mask inputs
   directly.
+- **Overlay hookup (from 0.5):** Rectangle/Ellipse can reuse the existing
+  `Overlay::Point` (center) plus a size handle; Polygon/Roto need a new
+  `Overlay` variant (e.g. `Points(param)`) in `ops.rs` and a matching `Geo`
+  arm in `gui/overlay.rs`: hit-test points/tangents, click on an edge to
+  insert, ⌫ to delete selected points, box-select. `Drag` already snapshots
+  the start values, so multi-point moves are start + delta.
 
 ### Phase 3: 2D tracking (needs overlays + a background job like `render.rs`)
 

@@ -1,6 +1,8 @@
 //! The image viewer: shows the rendered frame with pan/zoom, channel isolation,
 //! exposure, and a float pixel readout under the cursor.
 
+use crate::doc::Doc;
+use crate::overlay::{Overlays, Xf};
 use arclight::color;
 use arclight::image::Image;
 use eframe::egui::{
@@ -42,6 +44,7 @@ pub struct Viewer {
     /// Offset of the image center from the canvas center, in points.
     pan: Vec2,
     fit_pending: bool,
+    overlays: Overlays,
     pub rect: Rect,
 }
 
@@ -56,6 +59,7 @@ impl Default for Viewer {
             zoom: 1.0,
             pan: Vec2::ZERO,
             fit_pending: true,
+            overlays: Overlays::default(),
             rect: Rect::NOTHING,
         }
     }
@@ -75,7 +79,9 @@ impl Viewer {
         self.fit_pending = true;
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, d: Display<'_>) {
+    /// `doc` and `frame` drive the selected node's overlay handles; edits
+    /// key animated params at `frame`.
+    pub fn ui(&mut self, ui: &mut egui::Ui, d: Display<'_>, doc: &mut Doc, frame: i64) {
         self.toolbar(ui, &d);
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         self.rect = rect;
@@ -97,8 +103,12 @@ impl Viewer {
             self.fit_pending = false;
         }
 
+        // Overlay handles take a drag before panning does.
+        let xf = |v: &Viewer| Xf { img_rect: Rect::from_center_size(rect.center() + v.pan, size * v.zoom), zoom: v.zoom };
+        self.overlays.interact(ui, &resp, &xf(self), size, doc, frame);
+
         // Interaction: drag to pan, scroll / pinch to zoom about the cursor.
-        if resp.dragged() {
+        if resp.dragged() && !self.overlays.dragging() {
             self.pan += resp.drag_delta();
         }
         if resp.double_clicked() {
@@ -127,6 +137,7 @@ impl Viewer {
             painter.image(tex.id(), img_rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
         }
         painter.rect_stroke(img_rect, 0.0, (1.0, Color32::from_gray(70)), egui::StrokeKind::Outside);
+        self.overlays.draw(ui, &painter, &xf(self), size, doc, frame);
 
         // Pixel readout.
         if let Some(hover) = resp.hover_pos() {

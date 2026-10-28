@@ -71,6 +71,20 @@ pub struct ParamSpec {
     pub animatable: bool,
 }
 
+/// Viewer handles for editing an op's params directly on the image. Each
+/// variant names the params it edits; positions are in image pixels with
+/// y down, matching the ops' own coordinates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Overlay {
+    None,
+    /// A draggable point bound to a Vec2 param.
+    Point(&'static str),
+    /// Move/rotate/scale gizmo about the image center, plus `translate`.
+    Transform { translate: &'static str, rotate: &'static str, scale: &'static str },
+    /// A box inset from the image edges by four Int params.
+    Insets { left: &'static str, top: &'static str, right: &'static str, bottom: &'static str },
+}
+
 /// An input port.
 #[derive(Clone, Copy, Debug)]
 pub struct Port {
@@ -100,6 +114,8 @@ pub struct OpInfo {
     /// params with [`MIX`], and [`eval`] blends the result back toward this
     /// input by `mix × mask alpha`. Ops don't handle masking themselves.
     pub mask_base: Option<usize>,
+    /// Handles the viewer shows while this op's node is selected.
+    pub overlay: Overlay,
     pub help: &'static str,
 }
 
@@ -142,6 +158,7 @@ pub static OPS: &[OpInfo] = &[
             fixed!("first_frame", "First frame", FRAME, 1),
             fixed!("last_frame", "Last frame", FRAME, 1),
         ],
+        overlay: Overlay::None,
         mask_base: None,
         help: "Reads a still, an image sequence (shot.####.exr) or a video file. \
                Frames outside the range hold the first/last frame.",
@@ -156,6 +173,7 @@ pub static OPS: &[OpInfo] = &[
             p!("height", "Height", SIZE, 512),
             p!("color", "Color", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]),
         ],
+        overlay: Overlay::None,
         mask_base: None,
         help: "A solid color fill.",
     },
@@ -171,6 +189,7 @@ pub static OPS: &[OpInfo] = &[
             p!("color_a", "Color A", ParamKind::Color, [0.18, 0.18, 0.18, 1.0]),
             p!("color_b", "Color B", ParamKind::Color, [0.5, 0.5, 0.5, 1.0]),
         ],
+        overlay: Overlay::None,
         mask_base: None,
         help: "A test pattern.",
     },
@@ -180,6 +199,7 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Source,
         inputs: &[],
         params: &[p!("path", "File", ParamKind::Path { save: false }, "")],
+        overlay: Overlay::None,
         mask_base: None,
         help: "Reads a single image file. Prefer Media In for sequences and video.",
     },
@@ -194,6 +214,7 @@ pub static OPS: &[OpInfo] = &[
             p!("gamma", "Gamma", ParamKind::Vec3, [1.0, 1.0, 1.0]),
             MIX,
         ],
+        overlay: Overlay::None,
         mask_base: Some(0),
         help: "Per-channel gain, offset and gamma on unpremultiplied color.",
     },
@@ -203,6 +224,7 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Merge,
         inputs: &[req("A"), req("B"), MASK],
         params: &[p!("operation", "Operation", ParamKind::Choice(MERGE_OPS), "over"), MIX],
+        overlay: Overlay::None,
         mask_base: Some(1),
         help: "Combines A (foreground) with B (background). The mask limits \
                where A is combined; outside it the output is B.",
@@ -218,6 +240,7 @@ pub static OPS: &[OpInfo] = &[
             p!("rotate", "Rotate", ParamKind::Float { min: -360.0, max: 360.0 }, 0.0),
             MIX,
         ],
+        overlay: Overlay::Transform { translate: "translate", rotate: "rotate", scale: "scale" },
         mask_base: Some(0),
         help: "Translate, scale and rotate about the image center.",
     },
@@ -231,6 +254,7 @@ pub static OPS: &[OpInfo] = &[
             p!("passes", "Passes", ParamKind::Int { min: 1, max: 6 }, 3),
             MIX,
         ],
+        overlay: Overlay::None,
         mask_base: Some(0),
         help: "Repeated box blur; 3 passes approximate a gaussian.",
     },
@@ -240,6 +264,7 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Color,
         inputs: &[IN, MASK],
         params: &[p!("stops", "Stops", ParamKind::Float { min: -10.0, max: 10.0 }, 0.0), MIX],
+        overlay: Overlay::None,
         mask_base: Some(0),
         help: "Brightens or darkens color by photographic stops (×2 per stop).",
     },
@@ -249,6 +274,7 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Color,
         inputs: &[IN, MASK],
         params: &[p!("saturation", "Saturation", ParamKind::Float { min: 0.0, max: 4.0 }, 1.0), MIX],
+        overlay: Overlay::None,
         mask_base: Some(0),
         help: "Scales color away from (or toward) its Rec. 709 luminance. 0 is grayscale.",
     },
@@ -258,6 +284,7 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Color,
         inputs: &[IN, MASK],
         params: &[p!("channels", "Channels", ParamKind::Choice(&["rgb", "alpha", "rgba"]), "rgb"), MIX],
+        overlay: Overlay::None,
         mask_base: Some(0),
         help: "1 − value on unpremultiplied color and/or alpha. Inverting alpha \
                keeps the color, so an inverted matte stays a usable mask.",
@@ -273,6 +300,7 @@ pub static OPS: &[OpInfo] = &[
             p!("channels", "Channels", ParamKind::Choice(&["rgb", "rgba"]), "rgba"),
             MIX,
         ],
+        overlay: Overlay::None,
         mask_base: Some(0),
         help: "Limits channel values to [min, max]. Alpha is always kept within 0–1.",
     },
@@ -282,6 +310,7 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Channel,
         inputs: &[IN],
         params: &[],
+        overlay: Overlay::None,
         mask_base: None,
         help: "Multiplies color by alpha. Use after Unpremultiply, or on images \
                whose color is straight (unassociated).",
@@ -292,6 +321,7 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Channel,
         inputs: &[IN],
         params: &[],
+        overlay: Overlay::None,
         mask_base: None,
         help: "Divides color by alpha. Nodes after it see straight color, so \
                follow them with Premultiply. (Grade already does this internally.)",
@@ -307,6 +337,7 @@ pub static OPS: &[OpInfo] = &[
             fixed!("blue", "Blue from", ParamKind::Choice(CHANNEL_SOURCES), "A blue"),
             fixed!("alpha", "Alpha from", ParamKind::Choice(CHANNEL_SOURCES), "A alpha"),
         ],
+        overlay: Overlay::None,
         mask_base: None,
         help: "Builds each output channel from any channel of A or B, or a \
                constant. Copies values as stored (premultiplied). Alpha from B \
@@ -318,6 +349,7 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Merge,
         inputs: &[opt("0"), opt("1"), opt("2"), opt("3"), opt("4")],
         params: &[p!("which", "Which", ParamKind::Int { min: 0, max: SWITCH_PORTS as i64 - 1 }, 0)],
+        overlay: Overlay::None,
         mask_base: None,
         help: "Passes one of its inputs through. Keyframe Which to cut between \
                inputs over time.",
@@ -328,6 +360,7 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Merge,
         inputs: &[req("A"), req("B")],
         params: &[p!("amount", "Amount", ParamKind::Float { min: 0.0, max: 1.0 }, 0.5)],
+        overlay: Overlay::None,
         mask_base: None,
         help: "Cross-fades from A (0) to B (1).",
     },
@@ -337,6 +370,7 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Merge,
         inputs: &[req("A"), req("B"), MASK],
         params: &[MIX],
+        overlay: Overlay::None,
         mask_base: Some(1),
         help: "A where the mask's alpha is 1, B where it is 0. Unlike Merge \
                over, A's own alpha is ignored. Without a mask the output is A.",
@@ -353,6 +387,7 @@ pub static OPS: &[OpInfo] = &[
             p!("bottom", "Bottom", ParamKind::Int { min: 0, max: 16384 }, 0),
             fixed!("mode", "Mode", ParamKind::Choice(&["clear outside", "shrink canvas"]), "clear outside"),
         ],
+        overlay: Overlay::Insets { left: "left", top: "top", right: "right", bottom: "bottom" },
         mask_base: None,
         help: "Removes pixels from each edge: either makes them transparent \
                (keeping the frame size) or shrinks the image.",
@@ -367,6 +402,7 @@ pub static OPS: &[OpInfo] = &[
             p!("height", "Height", SIZE, 1080),
             fixed!("fit", "Fit", ParamKind::Choice(&["stretch", "fit", "fill"]), "fit"),
         ],
+        overlay: Overlay::None,
         mask_base: None,
         help: "Resamples to a new frame size. Fit keeps the aspect ratio inside \
                the frame (with transparent bars); fill covers it and crops.",
@@ -382,6 +418,7 @@ pub static OPS: &[OpInfo] = &[
             fixed!("last_frame", "Last frame", FRAME, 100),
             fixed!("fps", "FPS (video)", ParamKind::Float { min: 1.0, max: 240.0 }, 24.0),
         ],
+        overlay: Overlay::None,
         mask_base: None,
         help: "Renders a frame range to an image sequence (shot.####.exr) or a \
                video (.mp4 = H.264, .mov = ProRes 422 HQ).",
@@ -392,6 +429,7 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Output,
         inputs: &[IN],
         params: &[],
+        overlay: Overlay::None,
         mask_base: None,
         help: "Shows its input in the viewer panel.",
     },
@@ -401,6 +439,7 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Output,
         inputs: &[IN],
         params: &[p!("path", "File", ParamKind::Path { save: true }, "")],
+        overlay: Overlay::None,
         mask_base: None,
         help: "Writes its input when the graph is rendered from the command line.",
     },
@@ -784,7 +823,8 @@ fn blend(op: &str, f: Rgba, b: Rgba) -> Result<Rgba> {
 struct Transform {
     translate: [f32; 2],
     scale: [f32; 2],
-    /// Rotation in degrees, counter-clockwise, about the image center.
+    /// Rotation in degrees about the image center; positive turns clockwise
+    /// on screen (image y points down).
     rotate: f32,
 }
 

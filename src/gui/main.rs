@@ -7,6 +7,7 @@
 mod curve_editor;
 mod doc;
 mod node_editor;
+mod overlay;
 mod properties;
 mod transport;
 mod viewer;
@@ -558,6 +559,8 @@ impl eframe::App for App {
                         frame: self.shown_frame,
                         millis: self.millis,
                     },
+                    &mut self.doc,
+                    self.transport.frame,
                 );
             });
         });
