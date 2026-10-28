@@ -3,6 +3,19 @@
 Written 2026-10-27 to pick up the next session. Read this, then `README.md`
 (user-facing features, file format, shortcuts).
 
+## Progress log
+
+- **2026-10-27 (session 2):** Phase 0.1–0.4 and Phase 1 done (not yet
+  committed — check `git status`). Engine: `Port { label, optional }` replaces
+  `&str` port labels; ops get `&[Option<&Image>]`; `OpInfo::mask_base` + the
+  shared `MASK` port / `MIX` param give any op a generic mask/mix applied in
+  `ops::eval` (ops never handle masks themselves). New `Category::Channel`.
+  New ops: exposure, saturation, invert, clamp, premult, unpremult,
+  channel_select, switch (5 optional ports), dissolve, keymix, crop, resize.
+  GUI: Shift+E node browser (`NodeEditor::open_browser` / `browse()`),
+  hollow optional ports, port labels drawn outside the node. 34 tests.
+  **Next:** Phase 0.5 viewer overlays, then Phase 2 shapes/roto.
+
 ## Where things stand
 
 - Repo: `github.com/nsoler/arclight` (private), branch `main`.
@@ -55,7 +68,9 @@ GUI (`src/gui/`, binary `arclight-gui`, eframe/egui 0.37):
 
 ### Adding a node today (checklist)
 
-1. `ops.rs`: add an `OpInfo` to `OPS` (inputs, params via `p!` / `fixed!`).
+1. `ops.rs`: add an `OpInfo` to `OPS` (ports via `IN` / `req()` / `opt()`,
+   params via `p!` / `fixed!`). For mask support, end the ports with `MASK`,
+   the params with `MIX`, and set `mask_base: Some(<input to mix back to>)`.
 2. `ops.rs`: add a `#[derive(Deserialize)]` params struct and a function; add a
    match arm in `eval`. Defaults come from the spec, so the struct needs none.
 3. If it depends on the frame by itself, add it to `is_time_varying`.

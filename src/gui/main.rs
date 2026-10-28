@@ -34,6 +34,7 @@ const NEW: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
 const UNDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
 const REDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Z);
 const REDO_ALT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Y);
+const NODE_BROWSER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::SHIFT, Key::E);
 
 fn main() -> eframe::Result {
     let doc = match std::env::args_os().nth(1).map(PathBuf::from) {
@@ -231,6 +232,11 @@ impl App {
             self.redo();
         } else if ctx.input_mut(|i| i.consume_shortcut(&UNDO)) {
             self.undo();
+        }
+        // Shift+E before any plain-E binding: shortcut matching ignores Shift.
+        if ctx.input_mut(|i| i.consume_shortcut(&NODE_BROWSER)) {
+            self.tab = BottomTab::Graph;
+            self.editor.open_browser(ctx.input(|i| i.pointer.hover_pos()));
         }
         let project = self.doc.graph.project.clone();
         let pressed = |k: Key| ctx.input(|i| i.key_pressed(k) && !i.modifiers.command);

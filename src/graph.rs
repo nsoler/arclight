@@ -239,13 +239,18 @@ impl Evaluator {
             }
 
             let ports = ops::info(&node.op).map(|i| i.inputs).unwrap_or(&[]);
-            let mut inputs: Vec<&Image> = Vec::with_capacity(node.inputs.len());
-            for (i, dep) in node.inputs.iter().enumerate() {
+            let n_ports = ports.len().max(node.inputs.len());
+            let mut inputs: Vec<Option<&Image>> = Vec::with_capacity(n_ports);
+            for i in 0..n_ports {
+                let dep = node.inputs.get(i).map_or("", String::as_str);
                 if dep.is_empty() {
-                    let port = ports.get(i).copied().unwrap_or("input");
-                    return Err(node_err(id, format!("input '{port}' is not connected")));
+                    if let Some(port) = ports.get(i).filter(|p| !p.optional) {
+                        return Err(node_err(id, format!("input '{}' is not connected", port.label)));
+                    }
+                    inputs.push(None);
+                } else {
+                    inputs.push(Some(self.cache[dep].1.as_ref()));
                 }
-                inputs.push(self.cache[dep.as_str()].1.as_ref());
             }
             let out = ops::eval(&node.op, &params, &inputs, ctx)
                 .map_err(|e| node_err(id, format!("{e:#}")))?;

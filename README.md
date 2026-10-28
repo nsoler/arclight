@@ -43,12 +43,12 @@ cargo run --release --bin arclight-gui -- comp.json    # open a graph
 | **Viewer** (center) | Shows the input of the first `viewer` node (or the selected node). Drag to pan, scroll/pinch to zoom, double-click or **F** to fit. RGB/R/G/B/A channel isolation, exposure in stops, float pixel readout under the cursor. |
 | **Player** (under the viewer) | Go to start, step back, play backward, pause, play forward, step forward, go to end. Scrubbable timeline (green strip = frames already cached), in/out, FPS, loop. Plays in real time and shows the achieved fps. |
 | **Curve editor** (bottom, second tab) | The selected node's keyframed params as value-over-time curves, one per channel (x/y, r/g/b/a), with a toggle per channel. Click / Shift-click / box-drag to select keys, drag to move them in time and value, double-click a curve to add a key, **⌫** to delete. Smooth/Linear/Step buttons set interpolation. Selected keys on smooth curves show tangent handles: drag one to set the slope (in and out move together), **⌥**-drag to break the key so each side moves on its own; hollow handles are automatic, filled are user-set. Tangents Auto/Flat/Break-Unify buttons act on the selected keys. Scroll to pan, ⌘-scroll or pinch to zoom (⌥ value only, ⇧ time only), middle-drag to pan, **F** to frame. The ruler scrubs the playhead. |
-| **Node graph** (bottom) | Right-click to add nodes. Drag from an output to an input (or back) to connect; drag a connected input away to reroute or disconnect. Double-click a node or press **V** to view it. **⌫** deletes (the chain is reconnected). Drop image/video files onto the window to create Media In nodes. |
+| **Node graph** (bottom) | Right-click, or press **⇧E** for a searchable node browser (type to filter, ↑/↓ and Enter to place, Esc to close), to add nodes. With a node selected, the new node is wired after it. Hollow ports are optional (e.g. `mask`). Drag from an output to an input (or back) to connect; drag a connected input away to reroute or disconnect. Double-click a node or press **V** to view it. **⌫** deletes (the chain is reconnected). Drop image/video files onto the window to create Media In nodes. |
 | **Properties** (right) | One panel per opened node, newest first, generated from each op's parameter specs. Media In: browse, auto-detected frame range, clip info. Media Out: browse, render the frame range with progress and cancel. |
 
 Shortcuts: **Space** play/pause · **J/K/L** back/stop/forward · **←/→** step ·
 **⌥←/⌥→** previous/next keyframe · **Home/End** · **⌘Z/⇧⌘Z** undo/redo ·
-**⌘O/⌘S/⇧⌘S/⌘N** open/save/save as/new.
+**⌘O/⌘S/⇧⌘S/⌘N** open/save/save as/new · **⇧E** node browser.
 
 **Keyframes.** Every numeric parameter has a ◇ next to its name: grey = static,
 orange outline = animated, filled = key on this frame. Click it to set or remove
@@ -108,16 +108,31 @@ anywhere in the graph. The GUI also stores a `pos` per node and a top-level
 
 ## Operators
 
+Ops marked "+ mask" have an optional `mask` input and a `mix` param: the
+result is blended back toward the main input (B for merge/keymix) by
+`mix × mask alpha`. With no mask, `mix` applies everywhere.
+
 | op | inputs | key params | notes |
 |----|--------|-----------|-------|
 | `media_in` | 0 | `path`, `first_frame`, `last_frame` | still, sequence (`shot.####.exr` / `shot.%04d.exr`) or video (via ffmpeg); holds outside the range |
 | `read` | 0 | `path` | `.exr` = linear float; others decoded from sRGB 8-bit |
 | `constant` | 0 | `width`, `height`, `color` [r,g,b,a] | solid fill (color is straight/unassociated) |
 | `checkerboard` | 0 | `width`, `height`, `size`, `color_a`, `color_b` | test pattern |
-| `grade` | 1 | `multiply` [3], `offset` [3], `gamma` [3] | lift/gain/gamma on unassociated color |
-| `merge` | 2 (fg, bg) | `operation` | `over`, `under`, `add`, `multiply`, `screen`, `min`, `max` |
-| `transform` | 1 | `translate` [2], `scale` [2], `rotate` (deg) | affine, bilinear resample, about center |
-| `blur` | 1 | `radius`, `passes` | separable box blur; 3 passes ≈ gaussian |
+| `grade` | 1 + mask | `multiply` [3], `offset` [3], `gamma` [3] | lift/gain/gamma on unassociated color |
+| `exposure` | 1 + mask | `stops` | ×2 per stop |
+| `saturation` | 1 + mask | `saturation` | about Rec. 709 luminance; 0 = grayscale |
+| `invert` | 1 + mask | `channels` (`rgb`/`alpha`/`rgba`) | on unpremultiplied values |
+| `clamp` | 1 + mask | `min`, `max`, `channels` | alpha always kept in 0–1 |
+| `premult` / `unpremult` | 1 | — | color × alpha / color ÷ alpha |
+| `channel_select` | A, B (optional) | `red`, `green`, `blue`, `alpha` | each from `A red` … `B alpha`, `zero`, `one` |
+| `merge` | A, B + mask | `operation` | `over`, `under`, `add`, `multiply`, `screen`, `min`, `max`; outside the mask = B |
+| `keymix` | A, B + mask | — | A where mask alpha is 1, B where 0 |
+| `dissolve` | A, B | `amount` | cross-fade A → B |
+| `switch` | 5 (optional) | `which` | passes input `which` through; keyframe it to cut |
+| `transform` | 1 + mask | `translate` [2], `scale` [2], `rotate` (deg) | affine, bilinear resample, about center |
+| `crop` | 1 | `left`, `top`, `right`, `bottom`, `mode` | `clear outside` or `shrink canvas` |
+| `resize` | 1 | `width`, `height`, `fit` (`stretch`/`fit`/`fill`) | box-filtered down, bilinear up |
+| `blur` | 1 + mask | `radius`, `passes` | separable box blur; 3 passes ≈ gaussian |
 | `write` | 1 | `path` | `.exr` = float; others = 8-bit sRGB |
 | `media_out` | 1 | `path`, `first_frame`, `last_frame`, `fps` | renders a range to a sequence, `.mp4` (H.264) or `.mov` (ProRes 422 HQ) |
 | `viewer` | 1 | — | pass-through; marks what the GUI viewer shows |
@@ -159,7 +174,7 @@ examples/
 
 - Bounding-box / region-of-interest propagation so ops only touch covered pixels
 - Tiled, cached evaluation for large plates
-- More ops: crop/reformat, color-space nodes, keyer, defocus, time/sequence I/O
+- More ops: color-space nodes, keyer, defocus, time/sequence I/O
 - Multi-select of nodes; a normalized view and key copy/paste in the curve editor
 - GPU display transform / OCIO in the viewer
 
