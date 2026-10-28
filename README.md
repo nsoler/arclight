@@ -40,7 +40,7 @@ cargo run --release --bin arclight-gui -- comp.json    # open a graph
 
 | Area | What it does |
 |------|--------------|
-| **Viewer** (center) | Shows the input of the first `viewer` node (or the selected node). Drag to pan, scroll/pinch to zoom, double-click or **F** to fit. RGB/R/G/B/A channel isolation, exposure in stops, float pixel readout under the cursor. The selected node's handles draw over the image: **Transform** shows a gizmo (drag the center to move, ⇧ for one axis; the ring to rotate, ⇧ snaps to 15°; the red/green handles to scale x/y, ⇧ for uniform), **Crop** shows its box (drag edges or corners), **Rectangle**/**Ellipse** show a box (drag the center to move, corners/edges to size about the center, ⇧ keeps the aspect; the stem above the top edge rotates), **Polygon** shows its vertices (drag to move, ⇧-click to select several and drag them together, click an edge to insert a vertex, ⌘/Ctrl-click to add one after the selected vertex, **⌫** deletes selected vertices). Handle drags key animated params at the current frame; inserting or deleting vertices applies to every key. |
+| **Viewer** (center) | Shows the input of the first `viewer` node (or the selected node). Drag to pan, scroll/pinch to zoom, double-click or **F** to fit. RGB/R/G/B/A channel isolation, exposure in stops, float pixel readout under the cursor. The selected node's handles draw over the image: **Transform** shows a gizmo (drag the center to move, ⇧ for one axis; the ring to rotate, ⇧ snaps to 15°; the red/green handles to scale x/y, ⇧ for uniform), **Crop** shows its box (drag edges or corners), **Rectangle**/**Ellipse** show a box (drag the center to move, corners/edges to size about the center, ⇧ keeps the aspect; the stem above the top edge rotates), **Polygon** shows its vertices (drag to move, ⇧-click to select several and drag them together, click an edge to insert a vertex, ⌘/Ctrl-click to add one after the selected vertex, **⌫** deletes selected vertices), **Roto** works the same on its curve and also shows the selected vertices' tangent handles (drag one to reshape the curve smoothly, ⌥/Alt-drag to break the tangent; Alt-drag a vertex to pull out new tangents; ⌘/Ctrl-click-drag adds a vertex and pulls out its tangents; clicking the curve splits it without changing its shape). Handle drags key animated params at the current frame; inserting or deleting vertices applies to every key. |
 | **Player** (under the viewer) | Go to start, step back, play backward, pause, play forward, step forward, go to end. Scrubbable timeline (green strip = frames already cached), in/out, FPS, loop. Plays in real time and shows the achieved fps. |
 | **Curve editor** (bottom, second tab) | The selected node's keyframed params as value-over-time curves, one per channel (x/y, r/g/b/a), with a toggle per channel. Click / Shift-click / box-drag to select keys, drag to move them in time and value, double-click a curve to add a key, **⌫** to delete. Smooth/Linear/Step buttons set interpolation. Selected keys on smooth curves show tangent handles: drag one to set the slope (in and out move together), **⌥**-drag to break the key so each side moves on its own; hollow handles are automatic, filled are user-set. Tangents Auto/Flat/Break-Unify buttons act on the selected keys. Scroll to pan, ⌘-scroll or pinch to zoom (⌥ value only, ⇧ time only), middle-drag to pan, **F** to frame. The ruler scrubs the playhead. |
 | **Node graph** (bottom) | Right-click, or press **⇧E** for a searchable node browser (type to filter, ↑/↓ and Enter to place, Esc to close), to add nodes. With a node selected, the new node is wired after it. Hollow ports are optional (e.g. `mask`). Drag from an output to an input (or back) to connect; drag a connected input away to reroute or disconnect. Double-click a node or press **V** to view it. **⌫** deletes (the chain is reconnected). Drop image/video files onto the window to create Media In nodes. |
@@ -135,11 +135,12 @@ result is blended back toward the main input (B for merge/keymix) by
 | `blur` | 1 + mask | `radius`, `passes` | separable box blur; 3 passes ≈ gaussian |
 | `rectangle` / `ellipse` | background (optional) | `center` [2], `size` [2], `rotate`, + shape params | rotate is clockwise on screen |
 | `polygon` | background (optional) | `points` [x0,y0, x1,y1, …], `fill_rule` (`non-zero`/`even-odd`), + shape params | the whole point list animates as one value |
+| `roto` | background (optional) | `points` [x, y, in dx, in dy, out dx, out dy, …], `fill_rule`, + shape params | one closed bezier; handles are offsets from their vertex, so moving a vertex carries them; the whole list animates as one value |
 | `write` | 1 | `path` | `.exr` = float; others = 8-bit sRGB |
 | `media_out` | 1 | `path`, `first_frame`, `last_frame`, `fps` | renders a range to a sequence, `.mp4` (H.264) or `.mov` (ProRes 422 HQ) |
 | `viewer` | 1 | — | pass-through; marks what the GUI viewer shows |
 
-Shape params, shared by `rectangle`, `ellipse` and `polygon`: `width`,
+Shape params, shared by `rectangle`, `ellipse`, `polygon` and `roto`: `width`,
 `height` (the canvas when there's no background; with one, its size is
 used), `color` (straight), `opacity`, `feather` (soft-edge width in pixels,
 centered on the outline), `invert`, `operation` (`over` draws the shape over
@@ -164,7 +165,7 @@ src/
   ops.rs           operator registry (inputs, params, defaults) + implementations
   media.rs         image sequences, ffmpeg video decode/encode
   render.rs        frame-range rendering for media_out
-  shape.rs         polygon coverage (anti-aliasing, feather, fill rules), shape outlines
+  shape.rs         polygon coverage (anti-aliasing, feather, fill rules), shape outlines, bezier flattening/splitting
   image.rs         Image raster type, bilinear sampling, file I/O
   color.rs         Rgba pixel, sRGB and premultiply conversions
   gui/

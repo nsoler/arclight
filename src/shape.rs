@@ -138,6 +138,66 @@ pub fn ellipse(center: Pt, size: Pt, deg: f32) -> Vec<Pt> {
         .collect()
 }
 
+/// A cubic bezier segment: start, two control points, end.
+pub type Cubic = [Pt; 4];
+
+/// The bezier segments of a closed spline stored as flat roto points:
+/// per vertex x, y, then the in- and out-handle offsets relative to it.
+/// Segment `i` runs from vertex `i` to the next, wrapping around.
+pub fn spline_segments(points: &[f32]) -> Vec<Cubic> {
+    let v = points.as_chunks::<6>().0;
+    let n = v.len();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (v[i], v[(i + 1) % n]);
+            [[a[0], a[1]], [a[0] + a[4], a[1] + a[5]], [b[0] + b[2], b[1] + b[3]], [b[0], b[1]]]
+        })
+        .collect()
+}
+
+/// The point at `t` along a cubic.
+pub fn cubic_at(c: &Cubic, t: f32) -> Pt {
+    let u = 1.0 - t;
+    let (a, b, cc, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+    [0, 1].map(|k| a * c[0][k] + b * c[1][k] + cc * c[2][k] + d * c[3][k])
+}
+
+/// Split a cubic at `t` (de Casteljau): the two halves, which meet at the
+/// point at `t` and together trace the same curve.
+pub fn split_cubic(c: &Cubic, t: f32) -> (Cubic, Cubic) {
+    let mix = |a: Pt, b: Pt| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    let (p01, p12, p23) = (mix(c[0], c[1]), mix(c[1], c[2]), mix(c[2], c[3]));
+    let (p012, p123) = (mix(p01, p12), mix(p12, p23));
+    let m = mix(p012, p123);
+    ([c[0], p01, p012, m], [m, p123, p23, c[3]])
+}
+
+/// How many straight pieces keep a cubic within `tol` pixels of its chords.
+/// One when the control points lie on the chord (the curve is that line);
+/// otherwise chord error is at most 3/4 · L / n² for L the largest second
+/// difference of the control points.
+fn pieces(c: &Cubic, tol: f32) -> usize {
+    if segment_distance(c[1], c[0], c[3]).max(segment_distance(c[2], c[0], c[3])) <= tol {
+        return 1;
+    }
+    let dd = |a: Pt, b: Pt, d: Pt| ((a[0] - 2.0 * b[0] + d[0]).powi(2) + (a[1] - 2.0 * b[1] + d[1]).powi(2)).sqrt();
+    let l = dd(c[0], c[1], c[2]).max(dd(c[1], c[2], c[3]));
+    let n = (0.75 * l / tol).sqrt().ceil();
+    if n.is_finite() { (n as usize).clamp(1, 1024) } else { 1 }
+}
+
+/// A closed spline (see [`spline_segments`]) flattened to a polygon within
+/// a twentieth of a pixel of the curve.
+pub fn spline(points: &[f32]) -> Vec<Pt> {
+    spline_segments(points)
+        .iter()
+        .flat_map(|c| {
+            let n = pieces(c, 0.05);
+            (0..n).map(move |i| cubic_at(c, i as f32 / n as f32))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,6 +255,48 @@ mod tests {
         let area: f32 = c.iter().sum();
         let exact = std::f32::consts::PI * 30.0 * 20.0;
         assert!((area - exact).abs() / exact < 0.005, "{area} vs {exact}");
+    }
+
+    /// A circle of radius `r` as four roto vertices with the usual
+    /// handle length (0.5523 r), clockwise on screen.
+    fn roto_circle(c: Pt, r: f32) -> Vec<f32> {
+        let k = 0.5523 * r;
+        [[0.0, -1.0], [1.0, 0.0], [0.0, 1.0], [-1.0, 0.0]]
+            .iter()
+            .flat_map(|&[x, y]| {
+                // The tangent runs clockwise: (−y, x).
+                let (tx, ty) = (-y * k, x * k);
+                [c[0] + x * r, c[1] + y * r, -tx, -ty, tx, ty]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn spline_circle_area_matches() {
+        let poly = spline(&roto_circle([50.0, 50.0], 30.0));
+        let c = coverage(&[poly], 100, 100, 0.0, FillRule::NonZero);
+        let area: f32 = c.iter().sum();
+        let exact = std::f32::consts::PI * 900.0;
+        assert!((area - exact).abs() / exact < 0.003, "{area} vs {exact}");
+    }
+
+    #[test]
+    fn zero_handles_give_a_polygon() {
+        let square = [10.0, 10.0, 0.0, 0.0, 0.0, 0.0, 20.0, 10.0, 0.0, 0.0, 0.0, 0.0, 20.0, 20.0, 0.0, 0.0, 0.0, 0.0];
+        assert_eq!(spline(&square), vec![[10.0, 10.0], [20.0, 10.0], [20.0, 20.0]]);
+    }
+
+    #[test]
+    fn split_halves_trace_the_same_curve() {
+        let c: Cubic = [[0.0, 0.0], [10.0, 30.0], [40.0, -10.0], [50.0, 20.0]];
+        let (a, b) = split_cubic(&c, 0.3);
+        assert_eq!(a[3], b[0]);
+        for s in [0.0, 0.25, 0.5, 1.0] {
+            let (pa, pb) = (cubic_at(&a, s), cubic_at(&c, 0.3 * s));
+            assert!((pa[0] - pb[0]).abs() < 1e-4 && (pa[1] - pb[1]).abs() < 1e-4);
+            let (pa, pb) = (cubic_at(&b, s), cubic_at(&c, 0.3 + 0.7 * s));
+            assert!((pa[0] - pb[0]).abs() < 1e-4 && (pa[1] - pb[1]).abs() < 1e-4);
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-27 (session 3, after the shape generators). Read this, then `README.md`
+Last updated 2026-10-27 (session 3, after Roto). Read this, then `README.md`
 (user-facing features, file format, shortcuts).
 
 ## Where things stand
@@ -12,11 +12,13 @@ Last updated 2026-10-27 (session 3, after the shape generators). Read this, then
   to `main` only when the user asks.
 - Done: Phase 0.1–0.5 (Shift+E browser, optional inputs, generic mask/mix,
   Switch ports, viewer overlays), all of Phase 1, and the Phase 2 shape
-  generators (Rectangle, Ellipse, Polygon). Not done: Roto (rest of Phase 2),
-  Phase 0.6 (bounding boxes / format), Phases 3–4.
-- ~8,100 lines of Rust, 50 tests passing, clippy clean apart from two old
+  generators (Rectangle, Ellipse, Polygon) and Roto. Not done: Phase 0.6
+  (bounding boxes / format), Phases 3–4, and Phase 2 extras (box select,
+  select-all / move whole shape, motion blur).
+- ~8,500 lines of Rust, 57 tests passing, clippy clean apart from two old
   style lints (`Graph::from_str` name, `chunks_exact_mut(4)` in media.rs).
-- **Next:** Roto (Phase 2, below).
+- **Next:** Phase 3 (2D tracker), or the Phase 2 extras first if the user
+  wants roto to feel complete (box select, select all, move whole shape).
 - Development moved from macOS to Linux (Omarchy/Hyprland) in session 3:
   use `sed -i` (not `sed -i ''`); ffmpeg is in `/usr/bin`. Hyprland tiles the
   window narrower than its 1600 px default, so screenshots come out ~1030 px
@@ -64,6 +66,21 @@ Last updated 2026-10-27 (session 3, after the shape generators). Read this, then
   structural edit to every key (resetting their tangents to auto), so all
   keys keep the same point count. ⌫ deletes selected vertices before it
   would delete the node (`Viewer::delete_points`).
+
+- **Session 3, part 2** (commit "Add Roto node" on `wip-ns-effects`): op
+  `roto`, one closed bezier as `ParamKind::Points { stride: 6 }` (x, y, in
+  dx/dy, out dx/dy; handles relative to the vertex). `shape::spline` flattens
+  adaptively (one piece when the control points lie on the chord, otherwise
+  n from the second-difference bound, ≤ 0.05 px error) and feeds the existing
+  `coverage` + `shade()`. `shape::split_cubic` is de Casteljau. Overlay:
+  `Geo::Points` gains `tan` (empty unless stride 6); new parts
+  `Part::Tangent { i, out }` (smooth: opposite handle keeps its length and
+  turns to stay opposite; Alt moves one) and `Part::Pull(i)` (Alt-drag a
+  vertex, or Ctrl-click-drag to add one: symmetric new tangents). Tangent
+  tips are only live for selected vertices (`hit` takes the selection).
+  Curve hit-testing samples each segment 48× in screen space; an edge click
+  splits the curve in every key without changing its shape. `Mods` gained
+  `alt`, and `drag_to`/`apply` take `Mods`.
 
 ```sh
 cargo run --release --bin arclight-gui        # GUI with the animated starter project
@@ -191,8 +208,9 @@ Several of these need engine or GUI infrastructure first. Suggested order:
   blend mode (add/subtract), motion blur later.
 - Outputs alpha (and RGB = colour × alpha), so a Roto feeds mask inputs
   directly.
-- **Shapes are done** (see session 3 above). Box-select of vertices isn't.
-- **Roto plan:** one closed bezier per Roto node (chain Roto nodes through
+- **Shapes and Roto are done** (see session 3 above). Box-select of
+  vertices, select-all and motion blur aren't.
+- **Roto as built** (the plan, followed): one closed bezier per Roto node (chain Roto nodes through
   `background` with over/subtract for several shapes and holes). Store it as
   `ParamKind::Points { stride: 6 }`: x, y, then in- and out-handle offsets
   relative to the vertex, so moving a vertex carries its handles. Flatten
@@ -256,7 +274,7 @@ Several of these need engine or GUI infrastructure first. Suggested order:
   `ARCLIGHT_SCREENSHOT=/path/out.png ARCLIGHT_SCREENSHOT_DELAY=3 ./target/release/arclight-gui`
   saves the window and quits. For a specific UI state, add temporary
   env-var hooks (selection, frame, tab) marked `// TEMPHOOK`, then remove them
-  with `sed -i '' '/TEMPHOOK/d'` and confirm `grep -rn TEMPHOOK src` is empty.
+  with `sed -i '/TEMPHOOK/d'` and confirm `grep -rn TEMPHOOK src` is empty.
 - egui 0.37 differs from older docs: `Panel::left/right/top/bottom`,
   `App::ui(&mut self, ui, frame)`, `Id::unique`, `ui.close()`,
   `MenuBar::new().ui(...)`. When unsure, read the source under

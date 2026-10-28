@@ -496,6 +496,37 @@ pub static OPS: &[OpInfo] = &[
                Ctrl+click to add after the selected point, Shift+click to select several, ⌫ to delete."),
     },
     OpInfo {
+        name: "roto",
+        label: "Roto",
+        category: Category::Shape,
+        inputs: &[opt("background")],
+        params: &[
+            p!("width", "Width", SIZE, 512),
+            p!("height", "Height", SIZE, 512),
+            // A circle: per vertex x, y, in-handle and out-handle offsets.
+            p!("points", "Points", ParamKind::Points { stride: 6 }, [
+                256.0, 136.0, -66.3, 0.0, 66.3, 0.0,
+                376.0, 256.0, 0.0, -66.3, 0.0, 66.3,
+                256.0, 376.0, 66.3, 0.0, -66.3, 0.0,
+                136.0, 256.0, 0.0, 66.3, 0.0, -66.3,
+            ]),
+            fixed!("fill_rule", "Fill rule", ParamKind::Choice(FILL_RULES), "non-zero"),
+            p!("color", "Color", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]),
+            p!("opacity", "Opacity", OPACITY, 1.0),
+            p!("feather", "Feather", FEATHER, 0.0),
+            fixed!("invert", "Invert", ParamKind::Bool, false),
+            fixed!("operation", "Operation", ParamKind::Choice(SHAPE_OPS), "over"),
+        ],
+        overlay: Overlay::Points("points"),
+        mask_base: None,
+        help: shape_help!("A closed bezier shape for rotoscoping; chain Roto nodes through the \
+               background for several shapes or holes. In the viewer, drag points, click the \
+               curve to add one, Ctrl+click to add after the selected point (drag to pull out \
+               its tangents), Shift+click to select several, ⌫ to delete. Selected points show \
+               their tangent handles: dragging one keeps the curve smooth, Alt breaks it; \
+               Alt+drag a point to pull new tangents out of it."),
+    },
+    OpInfo {
         name: "media_out",
         label: "Media Out",
         category: Category::Output,
@@ -672,7 +703,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "keymix" => keymix(inputs),
         "crop" => crop(params, inputs),
         "resize" => resize(params, inputs),
-        "rectangle" | "ellipse" | "polygon" => shape_op(op, params, inputs),
+        "rectangle" | "ellipse" | "polygon" | "roto" => shape_op(op, params, inputs),
         "write" => write(params, inputs, ctx),
         // Rendering to disk is driven by `render`; in the graph these pass through.
         "media_out" | "viewer" => Ok(input(inputs, 0, op)?.clone()),
@@ -1339,7 +1370,8 @@ fn shape_op(op: &str, params: &Value, inputs: &[Option<&Image>]) -> Result<Image
         _ => {
             let p: Polygon = parse(params, op)?;
             let rule = if p.fill_rule == "even-odd" { FillRule::EvenOdd } else { FillRule::NonZero };
-            (p.points.as_chunks::<2>().0.to_vec(), rule)
+            let outline = if op == "roto" { shape::spline(&p.points) } else { p.points.as_chunks::<2>().0.to_vec() };
+            (outline, rule)
         }
     };
     let cov = shape::coverage(&[outline], w, h, style.feather, rule);
@@ -1475,6 +1507,19 @@ mod tests {
         let last = eval("polygon", &resolve_params("polygon", &params, 11), &[None], &CTX).unwrap();
         assert_eq!((first.get(2, 2)[3], first.get(8, 8)[3]), (1.0, 0.0));
         assert_eq!((last.get(2, 2)[3], last.get(8, 8)[3]), (0.0, 1.0));
+    }
+
+    #[test]
+    fn roto_draws_a_smooth_closed_curve() {
+        let out = eval("roto", &json!({}), &[None], &CTX).unwrap();
+        assert_eq!((out.width, out.height), (512, 512));
+        assert_eq!(out.get(256, 256)[3], 1.0);
+        // The default circle has radius 120: a square's corner at 45° would be inside, the circle's isn't.
+        assert_eq!(out.get(256 + 100, 256 + 100)[3], 0.0);
+        assert_eq!(out.get(256 + 80, 256 + 80)[3], 1.0);
+        let area: f32 = out.pixels.iter().map(|p| p[3]).sum();
+        let exact = std::f32::consts::PI * 120.0 * 120.0;
+        assert!((area - exact).abs() / exact < 0.003, "{area} vs {exact}");
     }
 
     #[test]

@@ -25,6 +25,10 @@ const RING: f32 = 50.0;
 const STEM: f32 = 24.0;
 /// Fewest vertices a point list keeps when deleting.
 const MIN_POINTS: usize = 3;
+/// Stride of a spline's points: x, y, in-handle and out-handle offsets.
+const SPLINE: usize = 6;
+/// Samples per spline segment when hit-testing and drawing it.
+const SAMPLES: usize = 48;
 
 const HANDLE: Color32 = Color32::from_rgb(240, 200, 80);
 const HOT: Color32 = Color32::WHITE;
@@ -62,8 +66,13 @@ enum Part {
     Size { x: bool, y: bool },
     /// A vertex of a point list; a drag moves every selected vertex.
     Vertex(usize),
-    /// The edge from vertex `i` to the next, at fraction `t` along it.
+    /// The edge from vertex `i` to the next, at fraction `t` along it (the
+    /// curve parameter, on a spline).
     Edge(usize, f32),
+    /// A spline vertex's in (`out: false`) or out tangent handle.
+    Tangent { i: usize, out: bool },
+    /// New symmetric tangents pulled out of spline vertex `i`.
+    Pull(usize),
 }
 
 /// The selected node's overlay, resolved at the current frame.
@@ -80,8 +89,10 @@ enum Geo {
     },
     Insets { names: [&'static str; 4], values: [f32; 4], size: Vec2 },
     Box { names: [&'static str; 3], center: Vec2, size: Vec2, rotate: f32, ellipse: bool },
-    /// Vertices of a point list (`stride` numbers each, x and y first).
-    Points { param: &'static str, stride: usize, pts: Vec<Vec2> },
+    /// Vertices of a point list (`stride` numbers each, x and y first). A
+    /// spline (stride 6) also has each vertex's in and out handle offsets
+    /// in `tan`; other point lists leave it empty.
+    Points { param: &'static str, stride: usize, pts: Vec<Vec2>, tan: Vec<[Vec2; 2]> },
 }
 
 impl Geo {
@@ -160,7 +171,12 @@ fn geo(doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
             let stride = points_stride(op, param);
             let flat: Vec<f32> = at(param).as_array().map(|a| a.iter().map(num).collect()).unwrap_or_default();
             let pts = flat.chunks_exact(stride).map(|c| Vec2::new(c[0], c[1])).collect();
-            Geo::Points { param, stride, pts }
+            let tan = if stride == SPLINE {
+                flat.chunks_exact(stride).map(|c| [Vec2::new(c[2], c[3]), Vec2::new(c[4], c[5])]).collect()
+            } else {
+                Vec::new()
+            };
+            Geo::Points { param, stride, pts, tan }
         }
     })
 }
@@ -216,6 +232,29 @@ fn along(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     if len2 > 0.0 { ((p - a).dot(d) / len2).clamp(0.0, 1.0) } else { 0.0 }
 }
 
+/// The bezier segments through `pts` with handle offsets `tan`, in image pixels.
+fn segments(pts: &[Vec2], tan: &[[Vec2; 2]]) -> Vec<shape::Cubic> {
+    let flat: Vec<f32> = pts.iter().zip(tan).flat_map(|(p, [i, o])| [p.x, p.y, i.x, i.y, o.x, o.y]).collect();
+    shape::spline_segments(&flat)
+}
+
+/// The outline of a point list in screen space: its polygon, or its curve.
+fn points_outline(xf: &Xf, pts: &[Vec2], tan: &[[Vec2; 2]]) -> Vec<Pos2> {
+    if tan.is_empty() {
+        return pts.iter().map(|&v| xf.screen(v)).collect();
+    }
+    segments(pts, tan)
+        .iter()
+        .flat_map(|c| (0..SAMPLES).map(move |j| shape::cubic_at(c, j as f32 / SAMPLES as f32)))
+        .map(|p| xf.screen(Vec2::new(p[0], p[1])))
+        .collect()
+}
+
+/// Screen positions of a spline vertex's in and out handles.
+fn tangent_tips(xf: &Xf, p: Vec2, t: [Vec2; 2]) -> [Pos2; 2] {
+    t.map(|o| xf.screen(p + o))
+}
+
 /// Screen positions of the transform gizmo: pivot, x-axis handle, y-axis handle.
 fn gizmo(xf: &Xf, center: Vec2, translate: Vec2, rotate: f32) -> (Pos2, Pos2, Pos2) {
     let c = xf.screen(center + translate);
@@ -230,7 +269,9 @@ fn inset_rect(xf: &Xf, v: [f32; 4], size: Vec2) -> Rect {
     Rect::from_min_max(xf.screen(Vec2::new(v[0], v[1])), xf.screen(Vec2::new(size.x - v[2], size.y - v[3])))
 }
 
-fn hit(g: &Geo, xf: &Xf, p: Pos2) -> Option<Part> {
+/// The handle at screen position `p`. `sel` are the selected vertices of a
+/// point list, whose tangent handles are live.
+fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
     match *g {
         Geo::Point { value, .. } => (xf.screen(value).distance(p) < GRAB * 1.5).then_some(Part::Point),
         Geo::Transform { center, translate, rotate, .. } => {
@@ -271,18 +312,32 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2) -> Option<Part> {
             }
             (xf.screen(center).distance(p) < GRAB * 1.5).then_some(Part::Move)
         }
-        Geo::Points { ref pts, .. } => {
+        Geo::Points { ref pts, ref tan, .. } => {
             let s: Vec<Pos2> = pts.iter().map(|&v| xf.screen(v)).collect();
+            // Tangent tips first, so one lying over another vertex stays
+            // grabbable; a collapsed handle leaves the vertex to its own hit.
+            for &i in sel.iter().filter(|&&i| i < tan.len()) {
+                for (k, tip) in tangent_tips(xf, pts[i], tan[i]).into_iter().enumerate() {
+                    if tip.distance(s[i]) > GRAB * 0.5 && tip.distance(p) < GRAB {
+                        return Some(Part::Tangent { i, out: k == 1 });
+                    }
+                }
+            }
             let nearest = (0..s.len()).min_by(|&a, &b| s[a].distance(p).total_cmp(&s[b].distance(p)));
             if let Some(i) = nearest.filter(|&i| s[i].distance(p) < GRAB) {
                 return Some(Part::Vertex(i));
             }
-            (0..s.len())
-                .filter(|_| s.len() >= 2)
-                .map(|i| {
-                    let (a, b) = (s[i], s[(i + 1) % s.len()]);
+            if s.len() < 2 {
+                return None;
+            }
+            // Each edge as chords: a straight line, or the sampled curve.
+            let line = points_outline(xf, pts, tan);
+            let per = if tan.is_empty() { 1 } else { SAMPLES };
+            (0..line.len())
+                .map(|j| {
+                    let (a, b) = (line[j], line[(j + 1) % line.len()]);
                     let t = along(p, a, b);
-                    (i, t, a.lerp(b, t).distance(p))
+                    (j / per, ((j % per) as f32 + t) / per as f32, a.lerp(b, t).distance(p))
                 })
                 .filter(|&(.., d)| d < GRAB * 0.8)
                 .min_by(|a, b| a.2.total_cmp(&b.2))
@@ -298,6 +353,9 @@ pub struct Mods {
     pub shift: bool,
     /// Ctrl (⌘ on macOS): add a vertex at the pointer.
     pub command: bool,
+    /// Alt (⌥): on a spline, pull tangents out of a vertex, or move one
+    /// tangent handle without its opposite.
+    pub alt: bool,
 }
 
 impl Overlays {
@@ -322,7 +380,8 @@ impl Overlays {
             return;
         }
         let (pressed, released, mods) = ui.input(|i| {
-            (i.pointer.primary_pressed(), i.pointer.primary_released(), Mods { shift: i.modifiers.shift, command: i.modifiers.command })
+            let m = i.modifiers;
+            (i.pointer.primary_pressed(), i.pointer.primary_released(), Mods { shift: m.shift, command: m.command, alt: m.alt })
         });
         if pressed {
             if let Some(o) = ui.input(|i| i.pointer.press_origin()).filter(|o| resp.rect.contains(*o)) {
@@ -330,7 +389,7 @@ impl Overlays {
             }
         }
         if let (Some(ptr), true) = (resp.interact_pointer_pos(), resp.dragged()) {
-            self.drag_to(doc, frame, xf.image(ptr), mods.shift);
+            self.drag_to(doc, frame, xf.image(ptr), mods);
         }
         if released || resp.drag_stopped() {
             self.drag = None;
@@ -343,10 +402,15 @@ impl Overlays {
         self.drag = None;
         let Some(id) = doc.selected.clone() else { return };
         let Some(g) = geo(doc, &id, frame, size) else { return };
-        let mut part = hit(&g, xf, o);
-        if let Geo::Points { param, stride, ref pts } = g {
-            self.points.retain(|&i| i < pts.len());
+        self.points.retain(|&i| matches!(&g, Geo::Points { pts, .. } if i < pts.len()));
+        let mut part = hit(&g, xf, o, &self.points);
+        if let Geo::Points { param, stride, ref pts, .. } = g {
+            let spline = stride == SPLINE;
             match part {
+                Some(Part::Vertex(i)) if spline && mods.alt => {
+                    self.points = vec![i];
+                    part = Some(Part::Pull(i));
+                }
                 Some(Part::Vertex(i)) if mods.shift => {
                     // Shift toggles; a vertex shift-clicked off isn't dragged.
                     if let Some(k) = self.points.iter().position(|&j| j == i) {
@@ -364,6 +428,9 @@ impl Overlays {
                     // Each key gets the vertex at the same fraction of its own edge.
                     let n = pts.len();
                     doc.set_param(&id, param, anim::edit_all(&doc.param(&id, param), |v| {
+                        if spline {
+                            return split_spline(v, i, t);
+                        }
                         let at = |k: usize, c: usize| v.get((k % n) * stride + c).copied().unwrap_or(0.0);
                         let mut vertex = vec![0.0; stride];
                         for (c, x) in vertex.iter_mut().enumerate().take(2) {
@@ -383,7 +450,8 @@ impl Overlays {
                     vertex[1] = p.y as f64;
                     doc.set_param(&id, param, anim::edit_all(&doc.param(&id, param), |v| insert_vertex(v, stride, i, &vertex)));
                     self.points = vec![i];
-                    part = Some(Part::Vertex(i));
+                    // On a spline, dragging on pulls out the new vertex's tangents.
+                    part = Some(if spline { Part::Pull(i) } else { Part::Vertex(i) });
                 }
                 None if !mods.shift => self.points.clear(),
                 _ => {}
@@ -397,9 +465,9 @@ impl Overlays {
         self.drag = Some(Drag { node: id, part, start, geo: g, angle: d.y.atan2(d.x), turned: 0.0 });
     }
 
-    fn drag_to(&mut self, doc: &mut Doc, frame: i64, p: Vec2, shift: bool) {
+    fn drag_to(&mut self, doc: &mut Doc, frame: i64, p: Vec2, mods: Mods) {
         if let Some(drag) = &mut self.drag {
-            apply(drag, &self.points, p, shift, doc, frame);
+            apply(drag, &self.points, p, mods, doc, frame);
         }
     }
 
@@ -427,13 +495,18 @@ impl Overlays {
         true
     }
 
+    /// The vertex selection, if it belongs to the selected node.
+    fn selection(&self, doc: &Doc) -> &[usize] {
+        if self.points_node == doc.selected { &self.points } else { &[] }
+    }
+
     pub fn draw(&self, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, size: Vec2, doc: &Doc, frame: i64) {
         let Some(id) = doc.selected.as_deref() else { return };
         let Some(g) = geo(doc, id, frame, size) else { return };
         let hover = ui.input(|i| i.pointer.hover_pos()).filter(|p| painter.clip_rect().contains(*p));
         let hot = match &self.drag {
             Some(d) => Some(d.part),
-            None => hover.and_then(|p| hit(&g, xf, p)),
+            None => hover.and_then(|p| hit(&g, xf, p, self.selection(doc))),
         };
         if let Some(part) = hot {
             ui.ctx().set_cursor_icon(cursor(part));
@@ -514,13 +587,28 @@ impl Overlays {
                 let c = xf.screen(center);
                 painter.circle(c, 5.0, color(Part::Move, HANDLE), outline);
             }
-            Geo::Points { pts, .. } => {
+            Geo::Points { pts, tan, .. } => {
                 let s: Vec<Pos2> = pts.iter().map(|&v| xf.screen(v)).collect();
-                outline_path(painter, s.clone(), HANDLE);
+                outline_path(painter, points_outline(xf, &pts, &tan), HANDLE);
                 // Where a click would insert a vertex.
                 if let (Some(Part::Edge(i, t)), None) = (hot, &self.drag) {
-                    let p = s[i].lerp(s[(i + 1) % s.len()], t);
+                    let p = if tan.is_empty() {
+                        s[i].lerp(s[(i + 1) % s.len()], t)
+                    } else {
+                        let q = shape::cubic_at(&segments(&pts, &tan)[i], t);
+                        xf.screen(Vec2::new(q[0], q[1]))
+                    };
                     painter.circle(p, 3.5, HOT, outline);
+                }
+                // The selected vertices' tangent handles.
+                for &i in self.selection(doc).iter().filter(|&&i| i < tan.len()) {
+                    for (k, tip) in tangent_tips(xf, pts[i], tan[i]).into_iter().enumerate() {
+                        let part = Part::Tangent { i, out: k == 1 };
+                        let col = if hot == Some(part) || hot == Some(Part::Pull(i)) { HOT } else { HANDLE };
+                        painter.line_segment([s[i], tip], Stroke::new(3.0, Color32::from_black_alpha(140)));
+                        painter.line_segment([s[i], tip], Stroke::new(1.0, col));
+                        painter.circle(tip, 3.5, col, outline);
+                    }
                 }
                 for (i, &p) in s.iter().enumerate() {
                     let selected = self.points_node == doc.selected && self.points.contains(&i);
@@ -539,6 +627,25 @@ fn insert_vertex(v: &[f64], stride: usize, i: usize, vertex: &[f64]) -> Vec<f64>
     out.extend_from_slice(vertex);
     out.extend_from_slice(&v[at..]);
     out
+}
+
+/// Spline points `v` with a vertex inserted at `t` along segment `i`,
+/// splitting the curve there (de Casteljau) so its shape doesn't change.
+fn split_spline(v: &[f64], i: usize, t: f32) -> Vec<f64> {
+    let n = v.len() / SPLINE;
+    let flat: Vec<f32> = v.iter().map(|&x| x as f32).collect();
+    let Some(seg) = shape::spline_segments(&flat).get(i).copied() else { return v.to_vec() };
+    let (a, b) = shape::split_cubic(&seg, t);
+    let m = a[3];
+    let mut out = v.to_vec();
+    let (j, k) = (i * SPLINE, ((i + 1) % n) * SPLINE);
+    // Vertex i's out handle and the next vertex's in handle shorten to fit.
+    out[j + 4] = (a[1][0] - a[0][0]) as f64;
+    out[j + 5] = (a[1][1] - a[0][1]) as f64;
+    out[k + 2] = (b[2][0] - b[3][0]) as f64;
+    out[k + 3] = (b[2][1] - b[3][1]) as f64;
+    let vertex = [m[0], m[1], a[2][0] - m[0], a[2][1] - m[1], b[1][0] - m[0], b[1][1] - m[1]].map(|x| x as f64);
+    insert_vertex(&out, SPLINE, i + 1, &vertex)
 }
 
 /// Rotation accumulated over `drag` with the pointer at `p`, in degrees.
@@ -560,7 +667,8 @@ fn constrain(delta: Vec2) -> Vec2 {
 
 /// Write the params for `drag` with the pointer at image position `p`.
 /// `selected` are the selected vertices, for point lists.
-fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, shift: bool, doc: &mut Doc, frame: i64) {
+fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc, frame: i64) {
+    let shift = mods.shift;
     let id = drag.node.clone();
     let delta = p - drag.start;
     match drag.geo.clone() {
@@ -641,9 +749,36 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, shift: bool, doc: &mut Do
             }
             _ => {}
         },
-        Geo::Points { param, stride, pts } => {
-            let d = if shift { constrain(delta) } else { delta };
+        Geo::Points { param, stride, pts, tan } => {
             let mut v: Vec<f64> = anim::sample(&doc.param(&id, param), frame as f64);
+            let handles = match drag.part {
+                Part::Tangent { i, out } if i < tan.len() => {
+                    let (this, other) = if out { (1, 0) } else { (0, 1) };
+                    let new = tan[i][this] + delta;
+                    let mut h = tan[i];
+                    h[this] = new;
+                    if !mods.alt {
+                        // Keep the curve smooth: the opposite handle turns to
+                        // stay opposite, keeping its length (or matching, if it had none).
+                        let len = tan[i][other].length();
+                        h[other] = if len > 1e-3 { -new.normalized() * len } else { -new };
+                    }
+                    Some((i, h))
+                }
+                Part::Pull(i) if i < pts.len() => {
+                    let out = p - pts[i];
+                    Some((i, [-out, out]))
+                }
+                _ => None,
+            };
+            if let Some((i, [hi, ho])) = handles {
+                if let Some(c) = v.get_mut(i * stride + 2..i * stride + 6) {
+                    c.copy_from_slice(&[hi.x, hi.y, ho.x, ho.y].map(|x| x as f64));
+                }
+                doc.edit_param(&id, param, frame, json!(v));
+                return;
+            }
+            let d = if shift { constrain(delta) } else { delta };
             for &i in selected.iter().filter(|&&i| i < pts.len()) {
                 let q = pts[i] + d;
                 if let Some(c) = v.get_mut(i * stride..i * stride + 2) {
@@ -657,7 +792,7 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, shift: bool, doc: &mut Do
 
 fn cursor(part: Part) -> CursorIcon {
     match part {
-        Part::Point | Part::Move | Part::Vertex(_) => CursorIcon::Move,
+        Part::Point | Part::Move | Part::Vertex(_) | Part::Tangent { .. } | Part::Pull(_) => CursorIcon::Move,
         Part::Edge(..) => CursorIcon::Crosshair,
         Part::Size { x: true, y: true } => CursorIcon::ResizeNwSe,
         Part::Size { x: true, .. } => CursorIcon::ResizeHorizontal,
@@ -714,8 +849,8 @@ mod tests {
         ov.press(d, frame, SIZE, &XF, from, mods);
         let part = ov.drag.as_ref().map(|dr| dr.part);
         // Two steps, as a real drag arrives over several frames.
-        ov.drag_to(d, frame, XF.image(from.lerp(to, 0.5)), false);
-        ov.drag_to(d, frame, XF.image(to), false);
+        ov.drag_to(d, frame, XF.image(from.lerp(to, 0.5)), mods);
+        ov.drag_to(d, frame, XF.image(to), mods);
         ov.drag = None;
         part
     }
@@ -845,5 +980,75 @@ mod tests {
         assert!(ov.delete_points(&mut d));
         assert_eq!(points(&d, 1), SQUARE);
         assert!(!ov.delete_points(&mut d));
+    }
+
+    /// SQUARE as a spline: corners with horizontal handles 20 px long, so
+    /// the top and bottom edges stay straight and the sides bulge out.
+    fn spline_square() -> Vec<f32> {
+        SQUARE.as_chunks::<2>().0.iter().enumerate().flat_map(|(i, &[x, y])| {
+            // Clockwise: the top edge runs right, the bottom edge runs left.
+            let h = if i < 2 { 20.0 } else { -20.0 };
+            [x, y, -h, 0.0, h, 0.0]
+        }).collect()
+    }
+
+    fn select(ov: &mut Overlays, d: &mut Doc, at: Pos2) {
+        gesture(ov, d, at, at, 1, Mods::default());
+    }
+
+    #[test]
+    fn inserting_on_a_spline_keeps_its_shape() {
+        let mut d = doc("roto", json!({ "points": spline_square() }));
+        let before = shape::spline(&points(&d, 1));
+        let mut ov = Overlays::default();
+        // The right side bulges: its midpoint is at t = 0.5 on segment 1,
+        // 3/4 · 20 = 15 px right of the straight line.
+        let mid = Pos2::new(165.0, 50.0);
+        assert_eq!(gesture(&mut ov, &mut d, mid, mid, 1, Mods::default()), Some(Part::Vertex(2)));
+        let v = points(&d, 1);
+        assert_eq!(v.len(), 5 * SPLINE);
+        assert!((v[12] - 165.0).abs() < 0.5 && (v[13] - 50.0).abs() < 0.5, "{:?}", &v[12..18]);
+        // Every point of the old outline is still on the new one.
+        let after: Vec<[f32; 2]> = shape::spline_segments(&v)
+            .iter()
+            .flat_map(|c| (0..2000).map(move |j| shape::cubic_at(c, j as f32 / 2000.0)))
+            .collect();
+        for p in before.iter().step_by(7) {
+            let d = after.iter().map(|q| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt()).fold(f32::MAX, f32::min);
+            assert!(d < 0.05, "{p:?} is {d} px off");
+        }
+    }
+
+    #[test]
+    fn tangent_drags_stay_smooth_unless_alt_is_held() {
+        let mut d = doc("roto", json!({ "points": spline_square() }));
+        let mut ov = Overlays::default();
+        select(&mut ov, &mut d, Pos2::new(150.0, 25.0));
+        // Vertex 1's out handle tip is 20 px right of it; pull it straight down.
+        let tip = Pos2::new(170.0, 25.0);
+        let part = gesture(&mut ov, &mut d, tip, Pos2::new(150.0, 45.0), 1, Mods::default());
+        assert_eq!(part, Some(Part::Tangent { i: 1, out: true }));
+        assert_eq!(points(&d, 1)[6..12], [150.0, 25.0, 0.0, -20.0, 0.0, 20.0]);
+        // With Alt, only the dragged handle moves.
+        let alt = Mods { alt: true, ..Default::default() };
+        gesture(&mut ov, &mut d, Pos2::new(150.0, 45.0), Pos2::new(160.0, 45.0), 1, alt);
+        assert_eq!(points(&d, 1)[6..12], [150.0, 25.0, 0.0, -20.0, 10.0, 20.0]);
+    }
+
+    #[test]
+    fn new_spline_vertices_pull_out_tangents() {
+        let mut d = doc("roto", json!({ "points": spline_square() }));
+        let mut ov = Overlays::default();
+        let ctrl = Mods { command: true, ..Default::default() };
+        let part = gesture(&mut ov, &mut d, Pos2::new(20.0, 50.0), Pos2::new(20.0, 40.0), 1, ctrl);
+        assert_eq!(part, Some(Part::Pull(4)));
+        assert_eq!(points(&d, 1)[24..], [20.0, 50.0, 0.0, 10.0, 0.0, -10.0]);
+        // Alt-drag on an existing vertex replaces its tangents.
+        let alt = Mods { alt: true, ..Default::default() };
+        gesture(&mut ov, &mut d, Pos2::new(50.0, 75.0), Pos2::new(40.0, 75.0), 1, alt);
+        assert_eq!(points(&d, 1)[18..24], [50.0, 75.0, 10.0, 0.0, -10.0, 0.0]);
+        // Moving a vertex carries its handles.
+        gesture(&mut ov, &mut d, Pos2::new(50.0, 75.0), Pos2::new(55.0, 80.0), 1, Mods::default());
+        assert_eq!(points(&d, 1)[18..24], [55.0, 80.0, 10.0, 0.0, -10.0, 0.0]);
     }
 }
