@@ -42,7 +42,7 @@ cargo run --release --bin arclight-gui -- comp.json    # open a graph
 |------|--------------|
 | **Viewer** (center) | Shows the input of the first `viewer` node (or the selected node). Drag to pan, scroll/pinch to zoom, double-click or **F** to fit. RGB/R/G/B/A channel isolation, exposure in stops, float pixel readout under the cursor. |
 | **Player** (under the viewer) | Go to start, step back, play backward, pause, play forward, step forward, go to end. Scrubbable timeline (green strip = frames already cached), in/out, FPS, loop. Plays in real time and shows the achieved fps. |
-| **Curve editor** (bottom, second tab) | The selected node's keyframed params as value-over-time curves, one per channel (x/y, r/g/b/a), with a toggle per channel. Click / Shift-click / box-drag to select keys, drag to move them in time and value, double-click a curve to add a key, **⌫** to delete. Smooth/Linear/Step buttons set interpolation. Scroll to pan, ⌘-scroll or pinch to zoom (⌥ value only, ⇧ time only), middle-drag to pan, **F** to frame. The ruler scrubs the playhead. |
+| **Curve editor** (bottom, second tab) | The selected node's keyframed params as value-over-time curves, one per channel (x/y, r/g/b/a), with a toggle per channel. Click / Shift-click / box-drag to select keys, drag to move them in time and value, double-click a curve to add a key, **⌫** to delete. Smooth/Linear/Step buttons set interpolation. Selected keys on smooth curves show tangent handles: drag one to set the slope (in and out move together), **⌥**-drag to break the key so each side moves on its own; hollow handles are automatic, filled are user-set. Tangents Auto/Flat/Break-Unify buttons act on the selected keys. Scroll to pan, ⌘-scroll or pinch to zoom (⌥ value only, ⇧ time only), middle-drag to pan, **F** to frame. The ruler scrubs the playhead. |
 | **Node graph** (bottom) | Right-click to add nodes. Drag from an output to an input (or back) to connect; drag a connected input away to reroute or disconnect. Double-click a node or press **V** to view it. **⌫** deletes (the chain is reconnected). Drop image/video files onto the window to create Media In nodes. |
 | **Properties** (right) | One panel per opened node, newest first, generated from each op's parameter specs. Media In: browse, auto-detected frame range, clip info. Media Out: browse, render the frame range with progress and cancel. |
 
@@ -96,7 +96,10 @@ arclight demo ./out
 Any numeric param can be keyframed by replacing its value with a curve —
 `{ "keys": [[frame, value], ...], "interp": "smooth" | "linear" | "step" }` —
 where each value has the param's normal shape. Curves hold before the first
-and after the last key; `smooth` is a cubic with flat ends.
+and after the last key; `smooth` is a cubic Hermite with automatic tangents
+(slope across the neighbouring keys, flat at the ends). A key may carry a third
+element with user tangents — `[frame, value, { "in": s, "out": s, "broken": true }]`
+— slopes in value units per frame, shaped like the value, `null` = automatic.
 
 A node's `inputs` are the ids of upstream nodes, one per input port (`""` =
 unconnected). `write` passes its input through unchanged, so it can sit
@@ -157,7 +160,7 @@ examples/
 - Bounding-box / region-of-interest propagation so ops only touch covered pixels
 - Tiled, cached evaluation for large plates
 - More ops: crop/reformat, color-space nodes, keyer, defocus, time/sequence I/O
-- Multi-select of nodes; tangent handles and a normalized view in the curve editor
+- Multi-select of nodes; a normalized view and key copy/paste in the curve editor
 - GPU display transform / OCIO in the viewer
 
 ## License

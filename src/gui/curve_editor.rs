@@ -6,10 +6,15 @@
 //! every channel of that param, since a key holds the whole value. Double-click
 //! a curve to add a key; ⌫ deletes selected keys. Scroll to pan, pinch or
 //! ⌘-scroll to zoom (⌥ zooms value only, ⇧ time only), F to frame all.
+//!
+//! Selected keys on smooth curves show tangent handles. Dragging a handle sets
+//! that channel's slope (both sides, unless the key is broken); ⌥-dragging
+//! breaks the key first so the sides move independently. Hollow handles are
+//! automatic tangents, filled ones are user-set.
 
 use crate::doc::Doc;
 use crate::properties::KEY_COLOR;
-use arclight::anim::{self, Interp, Key};
+use arclight::anim::{self, Interp, Key, Side};
 use arclight::ops::{self, ParamKind};
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke, Vec2};
 use serde_json::Value;
@@ -19,6 +24,19 @@ const KEY_R: f32 = 4.5;
 const HIT_R: f32 = 7.0;
 const RULER_H: f32 = 20.0;
 const LIST_W: f32 = 170.0;
+/// On-screen length of a tangent handle.
+const HANDLE_LEN: f32 = 48.0;
+const HANDLE_COLOR: Color32 = Color32::from_gray(185);
+
+/// A tangent handle of a selected key, in screen space.
+struct Handle {
+    key: KeyRef,
+    side: Side,
+    key_pos: Pos2,
+    pos: Pos2,
+    /// A user slope (vs. automatic).
+    user: bool,
+}
 
 /// A selected key: (param name, frame, channel).
 type KeyRef = (String, i64, usize);
@@ -37,6 +55,15 @@ enum Drag {
     /// depends only on the total offset.
     Move { origin: HashMap<String, Value>, start: Pos2 },
     Box { start: Pos2 },
+    /// Dragging a tangent handle; re-applied from `origin` each frame.
+    Tangent { key: KeyRef, side: Side, origin: Value },
+}
+
+#[derive(Clone, Copy)]
+enum TangentAction {
+    Auto,
+    Flat,
+    Broken(bool),
 }
 
 pub struct CurveEditor {
@@ -201,6 +228,25 @@ impl CurveEditor {
                 }
             });
             ui.separator();
+            ui.add_enabled_ui(self.has_selection(), |ui| {
+                ui.label("Tangents");
+                if ui.button("Auto").on_hover_text("Automatic slopes for the selected keys").clicked() {
+                    self.tangent_action(doc, TangentAction::Auto);
+                }
+                if ui.button("Flat").on_hover_text("Zero slope: the curve levels out at the selected keys").clicked() {
+                    self.tangent_action(doc, TangentAction::Flat);
+                }
+                let broken = self.selection_broken(doc);
+                let (label, tip) = if broken {
+                    ("Unify", "Make in and out tangents move together again")
+                } else {
+                    ("Break", "Let in and out tangents move independently (or ⌥-drag a handle)")
+                };
+                if ui.button(label).on_hover_text(tip).clicked() {
+                    self.tangent_action(doc, TangentAction::Broken(!broken));
+                }
+            });
+            ui.separator();
             if ui.add_enabled(self.has_selection(), egui::Button::new("Delete keys")).on_hover_text("⌫").clicked() {
                 self.delete_selected(doc);
             }
@@ -345,30 +391,41 @@ impl CurveEditor {
         };
         let hovered_key = near(hover);
 
+        // Tangent handles of selected keys on smooth curves (hidden while moving keys).
+        let handles: Vec<Handle> = if matches!(self.drag, Some(Drag::Move { .. })) {
+            Vec::new()
+        } else {
+            self.handles(doc, &id, &visible)
+        };
+        let near_handle = |at: Option<Pos2>| -> Option<usize> {
+            let at = at?;
+            handles
+                .iter()
+                .enumerate()
+                .filter(|(_, h)| h.pos.distance(at) <= HIT_R)
+                .min_by(|a, b| a.1.pos.distance(at).total_cmp(&b.1.pos.distance(at)))
+                .map(|(i, _)| i)
+        };
+        let hovered_handle = near_handle(hover);
+
         // --- Interaction ---
         let shift = ui.input(|i| i.modifiers.shift);
+        let alt = ui.input(|i| i.modifiers.alt);
         if resp.drag_started() {
-            match &near(press) {
-                Some(k) => {
-                    if !self.selection.contains(k) {
-                        if !shift {
-                            self.selection.clear();
-                        }
-                        self.selection.insert(k.clone());
-                    }
-                    let origin = self
-                        .selection
-                        .iter()
-                        .map(|(p, ..)| (p.clone(), doc.param(&id, p)))
-                        .collect();
-                    self.drag = Some(Drag::Move { origin, start: press.unwrap_or_default() });
-                    self.drag_offset = (0, 0.0);
+            if let Some(h) = near_handle(press).map(|i| &handles[i]) {
+                let (param, frame, _) = &h.key;
+                let mut origin = doc.param(&id, param);
+                if alt {
+                    origin = anim::set_broken(&origin, *frame, true);
                 }
-                None => self.drag = Some(Drag::Box { start: press.unwrap_or_default() }),
+                self.drag = Some(Drag::Tangent { key: h.key.clone(), side: h.side, origin });
+            } else {
+                self.start_key_drag(doc, &id, near(press), press, shift);
             }
         }
-        if resp.clicked() {
+        if resp.clicked() && near_handle(resp.interact_pointer_pos()).is_none() {
             match near(resp.interact_pointer_pos()) {
+
                 Some(k) if shift => {
                     if !self.selection.remove(&k) {
                         self.selection.insert(k);
@@ -407,6 +464,18 @@ impl CurveEditor {
                     self.apply_move(doc, &id, &origin, df, dv);
                 }
             }
+            (Some(Drag::Tangent { key: (param, f, c), side, origin }), Some(ptr)) if resp.dragged() => {
+                let key_v = anim::keys(origin).into_iter().find(|k| k.frame == *f).and_then(|k| k.value.get(*c).copied());
+                if let Some(key_v) = key_v {
+                    // Slope from the key to the pointer, kept on the handle's side.
+                    let min_df = 1.0 / self.sx;
+                    let df = self.frame_at(ptr.x) - *f as f64;
+                    let df = if *side == Side::Out { df.max(min_df) } else { df.min(-min_df) };
+                    let slope = (self.value_at(ptr.y) - key_v) / df;
+                    let v = anim::set_tangent(origin, *f, *c, *side, slope);
+                    doc.set_param(&id, param, v);
+                }
+            }
             (Some(Drag::Box { start }), Some(ptr)) if resp.dragged() => {
                 let r = Rect::from_two_pos(*start, ptr);
                 painter.rect(r, 0.0, Color32::from_rgba_unmultiplied(240, 175, 50, 20), Stroke::new(1.0, KEY_COLOR), egui::StrokeKind::Inside);
@@ -428,9 +497,28 @@ impl CurveEditor {
                         self.selection.extend(key_points.iter().filter(|(_, p, _)| r.contains(*p)).map(|(k, ..)| k.clone()));
                     }
                 }
-                None => {}
+                Some(Drag::Tangent { .. }) | None => {}
             }
             self.drag_offset = (0, 0.0);
+        }
+
+        // Handles, beneath the keys. Recomputed so they follow a drag in progress.
+        let dragging_tangent = match &self.drag {
+            Some(Drag::Tangent { key, side, .. }) => Some((key.clone(), *side)),
+            _ => None,
+        };
+        let live = if matches!(self.drag, Some(Drag::Move { .. })) { Vec::new() } else { self.handles(doc, &id, &visible) };
+        for (i, h) in live.iter().enumerate() {
+            let hot = dragging_tangent.as_ref().is_some_and(|(k, s)| *k == h.key && *s == h.side)
+                || (dragging_tangent.is_none() && hovered_handle == Some(i));
+            let color = if hot { KEY_COLOR } else { HANDLE_COLOR };
+            painter.line_segment([h.key_pos, h.pos], Stroke::new(1.0, color));
+            let r = if hot { 4.5 } else { 3.5 };
+            if h.user {
+                painter.circle_filled(h.pos, r, color);
+            } else {
+                painter.circle_stroke(h.pos, r, Stroke::new(1.5, color));
+            }
         }
 
         // Draw keys (after the move so they show their new positions).
@@ -457,8 +545,22 @@ impl CurveEditor {
         let x = self.x(frame as f64);
         painter.line_segment([Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())], Stroke::new(1.5, Color32::from_rgba_unmultiplied(240, 160, 40, 160)));
 
-        // Readout for the key being moved or hovered.
-        let readout = if moving {
+        // Readout for the handle being dragged, or the key being moved or hovered.
+        if let (Some(((p, f, c), side)), Some(ptr)) = (&dragging_tangent, pointer) {
+            if let Some((tin, tout)) = anim::slopes(&doc.param(&id, p), *f) {
+                let slope = if *side == Side::In { tin[*c] } else { tout[*c] };
+                let label = channels.iter().find(|ch| &ch.param == p && ch.index == *c).map_or(p.clone(), |ch| ch.label.clone());
+                let which = if *side == Side::In { "in" } else { "out" };
+                let text = format!("{label}   frame {f}   {which} slope {slope:.4}/frame");
+                let galley = painter.layout_no_wrap(text, FontId::monospace(11.0), Color32::from_gray(230));
+                let r = Align2::LEFT_BOTTOM.anchor_size(ptr + Vec2::new(12.0, -10.0), galley.size());
+                painter.rect_filled(r.expand(3.0), 3.0, Color32::from_black_alpha(190));
+                painter.galley(r.min, galley, Color32::WHITE);
+            }
+        }
+        let readout = if dragging_tangent.is_some() {
+            None
+        } else if moving {
             self.selection.iter().next().cloned().map(|(p, f, c)| (p, f + df, c))
         } else {
             hovered_key.clone()
@@ -491,6 +593,23 @@ impl CurveEditor {
                 }
             });
             ui.separator();
+            ui.add_enabled_ui(self.has_selection(), |ui| {
+                ui.label("Tangents");
+                if ui.button("Auto").clicked() {
+                    self.tangent_action(doc, TangentAction::Auto);
+                    ui.close();
+                }
+                if ui.button("Flat").clicked() {
+                    self.tangent_action(doc, TangentAction::Flat);
+                    ui.close();
+                }
+                let broken = self.selection_broken(doc);
+                if ui.button(if broken { "Unify" } else { "Break" }).clicked() {
+                    self.tangent_action(doc, TangentAction::Broken(!broken));
+                    ui.close();
+                }
+            });
+            ui.separator();
             if ui.add_enabled(self.has_selection(), egui::Button::new("Delete keys")).clicked() {
                 self.delete_selected(doc);
                 ui.close();
@@ -502,6 +621,78 @@ impl CurveEditor {
         });
         if self.drag.is_some() {
             ui.ctx().request_repaint();
+        }
+    }
+
+    fn start_key_drag(&mut self, doc: &Doc, id: &str, hit: Option<KeyRef>, press: Option<Pos2>, shift: bool) {
+        let start = press.unwrap_or_default();
+        let Some(k) = hit else {
+            self.drag = Some(Drag::Box { start });
+            return;
+        };
+        if !self.selection.contains(&k) {
+            if !shift {
+                self.selection.clear();
+            }
+            self.selection.insert(k);
+        }
+        let origin = self.selection.iter().map(|(p, ..)| (p.clone(), doc.param(id, p))).collect();
+        self.drag = Some(Drag::Move { origin, start });
+        self.drag_offset = (0, 0.0);
+    }
+
+    /// In/out handles for every selected key whose curve is smooth.
+    fn handles(&self, doc: &Doc, id: &str, visible: &[&Channel]) -> Vec<Handle> {
+        let mut out = Vec::new();
+        for (param, frame, c) in &self.selection {
+            if !visible.iter().any(|ch| &ch.param == param && ch.index == *c) {
+                continue;
+            }
+            let raw = doc.param(id, param);
+            if anim::interp(&raw) != Some(Interp::Smooth) {
+                continue;
+            }
+            let (Some((tin, tout)), Some(key)) =
+                (anim::slopes(&raw, *frame), anim::keys(&raw).into_iter().find(|k| k.frame == *frame))
+            else {
+                continue;
+            };
+            let Some(&v) = key.value.get(*c) else { continue };
+            let key_pos = Pos2::new(self.x(*frame as f64), self.y(v));
+            for (side, slope, user) in [
+                (Side::In, tin[*c], key.tan_in.get(*c).copied().flatten().is_some()),
+                (Side::Out, tout[*c], key.tan_out.get(*c).copied().flatten().is_some()),
+            ] {
+                // Direction of (1 frame, slope) on screen, at a fixed length.
+                let dir = Vec2::new(self.sx as f32, -(slope * self.sy) as f32).normalized();
+                let dir = if side == Side::In { -dir } else { dir };
+                out.push(Handle { key: (param.clone(), *frame, *c), side, key_pos, pos: key_pos + dir * HANDLE_LEN, user });
+            }
+        }
+        out
+    }
+
+    /// True if every selected key is broken.
+    fn selection_broken(&self, doc: &Doc) -> bool {
+        let Some(id) = &self.node else { return false };
+        !self.selection.is_empty() && self.selection.iter().all(|(p, f, _)| anim::is_broken(&doc.param(id, p), *f))
+    }
+
+    /// Apply a tangent change to the selected keys. Tangents only shape smooth
+    /// curves, so affected curves are switched to smooth.
+    fn tangent_action(&self, doc: &mut Doc, action: TangentAction) {
+        let Some(id) = self.node.clone() else { return };
+        for (p, f, c) in &self.selection {
+            let raw = doc.param(&id, p);
+            let v = match action {
+                TangentAction::Auto => anim::set_auto_tangent(&raw, *f, *c),
+                TangentAction::Flat => {
+                    let v = anim::set_tangent(&raw, *f, *c, Side::In, 0.0);
+                    anim::set_tangent(&v, *f, *c, Side::Out, 0.0)
+                }
+                TangentAction::Broken(b) => anim::set_broken(&raw, *f, b),
+            };
+            doc.set_param(&id, p, anim::set_interp(&v, Interp::Smooth));
         }
     }
 
@@ -679,5 +870,41 @@ mod tests {
         let ks = anim::keys(&doc.param(&id, "translate"));
         assert_eq!(ks.iter().map(|k| k.frame).collect::<Vec<_>>(), vec![10, 20]);
         assert_eq!(ks[0].value, vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn tangent_actions_and_handles() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let id = doc.add_node("blur", [0.0, 0.0]);
+        doc.set_param(&id, "radius", json!({ "keys": [[0, 0.0], [10, 10.0], [20, 0.0]], "interp": "linear" }));
+        let mut ed = CurveEditor { node: Some(id.clone()), ..Default::default() };
+        ed.rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 200.0));
+        ed.selection.insert(("radius".into(), 0, 0));
+        let ch = Channel { param: "radius".into(), index: 0, label: String::new(), color: Color32::WHITE };
+
+        // Linear curves have no handles; a tangent action switches to smooth.
+        assert!(ed.handles(&doc, &id, &[&ch]).is_empty());
+        ed.tangent_action(&mut doc, TangentAction::Flat);
+        assert_eq!(anim::interp(&doc.param(&id, "radius")), Some(Interp::Smooth));
+        let hs = ed.handles(&doc, &id, &[&ch]);
+        assert_eq!(hs.len(), 2);
+        // Flat: handles are horizontal, out to the right, in to the left, user-set.
+        let out = hs.iter().find(|h| h.side == Side::Out).unwrap();
+        let inn = hs.iter().find(|h| h.side == Side::In).unwrap();
+        assert!((out.pos.y - out.key_pos.y).abs() < 1e-3 && out.pos.x > out.key_pos.x && out.user);
+        assert!(inn.pos.x < inn.key_pos.x);
+
+        // A rising slope points the out handle up (smaller screen y).
+        let v = anim::set_tangent(&doc.param(&id, "radius"), 0, 0, Side::Out, 2.0);
+        doc.set_param(&id, "radius", v);
+        let hs = ed.handles(&doc, &id, &[&ch]);
+        let out = hs.iter().find(|h| h.side == Side::Out).unwrap();
+        assert!(out.pos.y < out.key_pos.y);
+
+        ed.tangent_action(&mut doc, TangentAction::Broken(true));
+        assert!(ed.selection_broken(&doc));
+        ed.tangent_action(&mut doc, TangentAction::Auto);
+        let hs = ed.handles(&doc, &id, &[&ch]);
+        assert!(hs.iter().all(|h| !h.user));
     }
 }
