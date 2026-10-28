@@ -1,6 +1,6 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-27 (session 3, after Roto). Read this, then `README.md`
+Last updated 2026-10-27 (session 3, after starting the 2D tracker). Read this, then `README.md`
 (user-facing features, file format, shortcuts).
 
 ## Where things stand
@@ -16,10 +16,11 @@ Last updated 2026-10-27 (session 3, after Roto). Read this, then `README.md`
   generators (Rectangle, Ellipse, Polygon) and Roto. Not done: Phase 0.6
   (bounding boxes / format), Phases 3–4, and Phase 2 extras (box select,
   select-all / move whole shape, motion blur).
-- ~8,550 lines of Rust, 58 tests passing, clippy clean apart from two old
+- ~9,400 lines of Rust, 67 tests passing, clippy clean apart from two old
   style lints (`Graph::from_str` name, `chunks_exact_mut(4)` in media.rs).
-- **Next:** Phase 3 (2D tracker), or the Phase 2 extras first if the user
-  wants roto to feel complete (box select, select all, move whole shape).
+- **Phase 3 started:** Tracker node works end to end (see session 3 part 4).
+  **Next:** the tracker follow-ups listed under Phase 3, or the Phase 2
+  extras (box select, select all, move whole shape).
 - Development moved from macOS to Linux (Omarchy/Hyprland) in session 3:
   use `sed -i` (not `sed -i ''`); ffmpeg is in `/usr/bin`. Hyprland tiles the
   window narrower than its 1600 px default, so screenshots come out ~1030 px
@@ -91,6 +92,27 @@ Last updated 2026-10-27 (session 3, after Roto). Read this, then `README.md`
   (`Part::Size` reused). Hit order: axis handles, center, frame handles,
   ring, inside. Selecting a Transform means a left-drag over the layer moves
   it instead of panning; middle-drag or dragging outside the layer still pans.
+
+- **Session 3, part 4** (commit "Add 2D Tracker node"): `src/track.rs`.
+  `Luma` (Rec. 709, clamped bilinear, pixel centers at i + 0.5), `Pattern`
+  (zero mean, unit length; flat windows refused), `find` = integer NCC
+  search (summed-area tables for window mean/variance, rayon over offsets)
+  + parabola fit, then three refinement passes with ½, ¼, ⅛ px steps (a
+  whole-pixel parabola alone was biased ~0.06 px on asymmetric peaks).
+  Windows with std dev below `FLAT` score 0: without that, rounding noise in
+  flat areas produced scores > 1 and false matches. `track()` runs either
+  direction with constant-velocity prediction and loses a track below
+  `min_score` or off-image; `input_frames` renders the tracker's input per
+  frame. `solve` is a least-squares similarity (centroids + dot/cross
+  sums). Op `tracker`: 4 fixed tracks (`track<i>_on` Bool + `track<i>`
+  Vec2), shared `pattern`/`search` sizes; `resolve_params` adds `ref<i>`
+  (positions at `reference_frame`) so the output's cache key is right;
+  `warp` resamples by an affine. GUI: `Overlay::Tracker` / `Geo::Tracker`
+  (`Part::Track`, `Part::TrackBox`), path drawn from the key frames;
+  properties `tracker_extras` + `TrackJob` (thread, `Found` queue drained
+  every UI frame by `collect_tracks`, which keys positions and seeks the
+  playhead to follow). `main.rs` treats an active run as a gesture, so a
+  whole run is one undo step.
 
 ```sh
 cargo run --release --bin arclight-gui        # GUI with the animated starter project
@@ -244,6 +266,19 @@ Several of these need engine or GUI infrastructure first. Suggested order:
   apply them in the Tracker node itself or export to a Transform node by
   copying/linking keys. Linking needs expressions, a separate feature.
 - Corner-pin from 4 tracks is a natural follow-on (needs a perspective warp op).
+- **Built (session 3):** everything above except corner-pin and exporting
+  to a Transform node. Follow-ups, roughly in order:
+  - Rotating/scaling features drift: translation-only NCC with
+    "every frame" updates drifted ~6 px over 48 frames on a corner
+    rotating 25°; "first frame" loses it after ~8°. Options: match an
+    affine-warped pattern (rotate/scale search around the NCC peak, or
+    Lucas–Kanade affine refinement), or keep the first-frame pattern and
+    re-anchor to it whenever it still correlates well.
+  - The overlay draws tracks in input coordinates, also when the output
+    is match-moved/stabilized (it then looks offset).
+  - Per-track box sizes; per-track score shown on the curve; "clear keys
+    after/before"; an offset point for tracking near an occluded spot.
+  - Export to a Transform node (copy keys) and corner pin.
 
 ### Phase 4: 3D (large; plan it separately)
 

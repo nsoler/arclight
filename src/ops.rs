@@ -12,6 +12,7 @@ use crate::color::{self, Rgba};
 use crate::image::Image;
 use crate::media;
 use crate::shape::{self, FillRule, Pt};
+use crate::track::{self, Solve};
 use anyhow::{anyhow, bail, Context, Result};
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -93,6 +94,9 @@ pub enum Overlay {
     Box { center: &'static str, size: &'static str, rotate: &'static str, ellipse: bool },
     /// Editable vertices of a `Points` param.
     Points(&'static str),
+    /// Tracker boxes: each enabled `track<i>` position with the shared
+    /// pattern and search box sizes.
+    Tracker { pattern: &'static str, search: &'static str },
 }
 
 /// An input port.
@@ -170,6 +174,7 @@ macro_rules! shape_help {
         )
     };
 }
+const SOLVES: &[&str] = &["translate", "translate, rotate", "translate, rotate, scale"];
 const FRAME: ParamKind = ParamKind::Int { min: -100_000, max: 1_000_000 };
 
 pub static OPS: &[OpInfo] = &[
@@ -527,6 +532,38 @@ pub static OPS: &[OpInfo] = &[
                Alt+drag a point to pull new tangents out of it."),
     },
     OpInfo {
+        name: "tracker",
+        label: "Tracker",
+        category: Category::Transform,
+        inputs: &[IN],
+        params: &[
+            fixed!("track1_on", "Track 1", ParamKind::Bool, true),
+            p!("track1", "Position 1", ParamKind::Vec2, [256.0, 256.0]),
+            fixed!("track2_on", "Track 2", ParamKind::Bool, false),
+            p!("track2", "Position 2", ParamKind::Vec2, [356.0, 256.0]),
+            fixed!("track3_on", "Track 3", ParamKind::Bool, false),
+            p!("track3", "Position 3", ParamKind::Vec2, [256.0, 356.0]),
+            fixed!("track4_on", "Track 4", ParamKind::Bool, false),
+            p!("track4", "Position 4", ParamKind::Vec2, [356.0, 356.0]),
+            fixed!("pattern", "Pattern size", ParamKind::Int { min: 5, max: 255 }, 31),
+            fixed!("search", "Search size", ParamKind::Int { min: 7, max: 511 }, 91),
+            fixed!("min_score", "Min. correlation", ParamKind::Float { min: 0.0, max: 1.0 }, 0.7),
+            fixed!("update", "Pattern from", ParamKind::Choice(&["first frame", "every frame"]), "first frame"),
+            fixed!("output", "Output", ParamKind::Choice(&["input", "match-move", "stabilize"]), "input"),
+            fixed!("solve", "Solve", ParamKind::Choice(SOLVES), "translate, rotate, scale"),
+            fixed!("reference_frame", "Reference frame", FRAME, 1),
+        ],
+        overlay: Overlay::Tracker { pattern: "pattern", search: "search" },
+        mask_base: None,
+        help: "Tracks up to four points through the shot. Place each track's box on a \
+               distinct feature in the viewer, then Track forward or backward: each tracked \
+               frame keys the track's position (correct bad frames by dragging the box). \
+               A track stops when its best match falls below Min. correlation. Output: the \
+               input unchanged, or the solved motion relative to the reference frame applied \
+               to it (match-move) or removed from it (stabilize). One track solves translation; \
+               two or more can also solve rotation and scale.",
+    },
+    OpInfo {
         name: "media_out",
         label: "Media Out",
         category: Category::Output,
@@ -587,7 +624,11 @@ pub fn params_with_defaults(op: &str, params: &Value) -> Value {
 pub fn resolve_params(op: &str, params: &Value, frame: i64) -> Value {
     let Value::Object(map) = params else { return params.clone() };
     if !map.values().any(anim::is_animated) {
-        return params.clone();
+        let mut out = params.clone();
+        if op == "tracker" {
+            add_reference_tracks(params, &mut out);
+        }
+        return out;
     }
     let specs = info(op).map(|i| i.params).unwrap_or(&[]);
     let resolved = map
@@ -602,7 +643,20 @@ pub fn resolve_params(op: &str, params: &Value, frame: i64) -> Value {
             (k.clone(), v)
         })
         .collect();
-    Value::Object(resolved)
+    let mut resolved = Value::Object(resolved);
+    if op == "tracker" {
+        add_reference_tracks(params, &mut resolved);
+    }
+    resolved
+}
+
+/// Give a Tracker's resolved params its tracks' positions at the reference
+/// frame too (`ref1` …), which its output transform is relative to.
+fn add_reference_tracks(params: &Value, resolved: &mut Value) {
+    let reference = params.get("reference_frame").and_then(Value::as_i64).unwrap_or(1);
+    for (i, p) in track::positions(params, reference).into_iter().enumerate() {
+        resolved[format!("ref{}", i + 1)] = json!(p);
+    }
 }
 
 /// True when the op's output can differ from frame to frame on its own,
@@ -703,6 +757,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "keymix" => keymix(inputs),
         "crop" => crop(params, inputs),
         "resize" => resize(params, inputs),
+        "tracker" => tracker(params, inputs),
         "rectangle" | "ellipse" | "polygon" | "roto" => shape_op(op, params, inputs),
         "write" => write(params, inputs, ctx),
         // Rendering to disk is driven by `render`; in the graph these pass through.
@@ -976,6 +1031,61 @@ fn transform(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
             *px = src.sample_bilinear(rx, ry);
         });
     Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Tracker
+// ---------------------------------------------------------------------------
+
+/// Apply the motion solved from the tracks, relative to the reference
+/// frame: `params` carry each track's position now (`track<i>`) and at the
+/// reference frame (`ref<i>`, added by [`resolve_params`]).
+fn tracker(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
+    let src = input(inputs, 0, "tracker")?;
+    let output = params.get("output").and_then(Value::as_str).unwrap_or("input");
+    if output == "input" {
+        return Ok(src.clone());
+    }
+    let p = params_with_defaults("tracker", params);
+    let now = track::positions(&p, 0);
+    let (mut from, mut to) = (Vec::new(), Vec::new());
+    for (i, cur) in now.iter().enumerate() {
+        let r = &p[format!("ref{}", i + 1)];
+        if let (Some(c), Some(r)) = (cur, r.as_array().filter(|a| a.len() >= 2)) {
+            from.push([r[0].as_f64().unwrap_or(0.0) as f32, r[1].as_f64().unwrap_or(0.0) as f32]);
+            to.push(*c);
+        }
+    }
+    if from.is_empty() {
+        bail!("no tracks enabled");
+    }
+    let kind = match p["solve"].as_str() {
+        Some("translate") => Solve::Translate,
+        Some("translate, rotate") => Solve::Rotate,
+        _ => Solve::Scale,
+    };
+    // Reference → now. A match-move moves the image along with the
+    // tracks, so each output pixel samples where it came from.
+    let m = track::solve(&from, &to, kind);
+    let sample_at = match output {
+        "match-move" => track::invert(&m),
+        "stabilize" => m,
+        other => bail!("unknown tracker output '{other}'"),
+    };
+    Ok(warp(src, &sample_at))
+}
+
+/// Resample `src`: each output pixel center `o` reads `src` at `m(o)`.
+fn warp(src: &Image, m: &track::Affine) -> Image {
+    let mut out = Image::new(src.width, src.height);
+    let w = src.width;
+    out.pixels.par_iter_mut().enumerate().for_each(|(i, px)| {
+        let o = [(i % w) as f32 + 0.5, (i / w) as f32 + 0.5];
+        let q = track::apply(m, o);
+        // `sample_bilinear` puts pixel centers on integers.
+        *px = src.sample_bilinear(q[0] - 0.5, q[1] - 0.5);
+    });
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1520,6 +1630,27 @@ mod tests {
         let area: f32 = out.pixels.iter().map(|p| p[3]).sum();
         let exact = std::f32::consts::PI * 120.0 * 120.0;
         assert!((area - exact).abs() / exact < 0.003, "{area} vs {exact}");
+    }
+
+    #[test]
+    fn tracker_match_moves_and_stabilizes_relative_to_the_reference_frame() {
+        let mut src = Image::new(20, 20);
+        src.set(5, 5, [1.0, 1.0, 1.0, 1.0]);
+        // One track moving 3 px right and 2 down from frame 1 to frame 5.
+        let params = json!({
+            "track1": { "keys": [[1, [5.5, 5.5]], [5, [8.5, 7.5]]], "interp": "linear" },
+            "output": "match-move", "reference_frame": 1,
+        });
+        let at = |f: i64, params: &Value| eval("tracker", &resolve_params("tracker", params, f), &[Some(&src)], &CTX).unwrap();
+        assert_eq!(at(1, &params).get(5, 5)[3], 1.0, "identity at the reference frame");
+        let moved = at(5, &params);
+        assert_eq!((moved.get(8, 7)[3], moved.get(5, 5)[3]), (1.0, 0.0));
+        let mut params = params;
+        params["output"] = json!("stabilize");
+        let steady = at(5, &params);
+        assert_eq!((steady.get(2, 3)[3]), 1.0, "moved back by the track's motion");
+        params["output"] = json!("input");
+        assert_eq!(at(5, &params).get(5, 5)[3], 1.0);
     }
 
     #[test]

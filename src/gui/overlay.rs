@@ -9,7 +9,7 @@
 
 use crate::doc::Doc;
 use arclight::ops::{self, Overlay};
-use arclight::{anim, shape};
+use arclight::{anim, shape, track};
 use eframe::egui::{self, Color32, CursorIcon, Pos2, Rect, Response, Shape, Stroke, Vec2};
 use serde_json::{json, Value};
 
@@ -29,6 +29,8 @@ const MIN_POINTS: usize = 3;
 const SPLINE: usize = 6;
 /// Samples per spline segment when hit-testing and drawing it.
 const SAMPLES: usize = 48;
+/// A Tracker's track position params, in track order.
+const TRACK_PARAMS: [&str; track::TRACKS] = ["track1", "track2", "track3", "track4"];
 
 const HANDLE: Color32 = Color32::from_rgb(240, 200, 80);
 const HOT: Color32 = Color32::WHITE;
@@ -73,6 +75,11 @@ enum Part {
     Tangent { i: usize, out: bool },
     /// New symmetric tangents pulled out of spline vertex `i`.
     Pull(usize),
+    /// Tracker track `i`: its pattern box moves the track.
+    Track(usize),
+    /// A corner of track `i`'s pattern (or search) box: sizes that box for
+    /// every track.
+    TrackBox { i: usize, search: bool },
 }
 
 /// The selected node's overlay, resolved at the current frame.
@@ -93,6 +100,9 @@ enum Geo {
     /// spline (stride 6) also has each vertex's in and out handle offsets
     /// in `tan`; other point lists leave it empty.
     Points { param: &'static str, stride: usize, pts: Vec<Vec2>, tan: Vec<[Vec2; 2]> },
+    /// Tracker boxes: each track's position (`None` when it is off) and the
+    /// shared box sizes, in image pixels.
+    Tracker { names: [&'static str; 2], pos: Vec<Option<Vec2>>, pattern: f32, search: f32 },
 }
 
 impl Geo {
@@ -178,6 +188,12 @@ fn geo(doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
             };
             Geo::Points { param, stride, pts, tan }
         }
+        Overlay::Tracker { pattern, search } => Geo::Tracker {
+            names: [pattern, search],
+            pos: track::positions(&doc.node(id)?.params, frame).into_iter().map(|p| p.map(|[x, y]| Vec2::new(x, y))).collect(),
+            pattern: num(&at(pattern)),
+            search: num(&at(search)),
+        },
     })
 }
 
@@ -284,6 +300,13 @@ const LAYER_PARTS: [Part; 8] = [
     Part::Size { x: true, y: false },
 ];
 
+/// The screen corners of a square box of `size` image pixels centered on
+/// `c`, clockwise from top left.
+fn square(xf: &Xf, c: Vec2, size: f32) -> [Pos2; 4] {
+    let h = size / 2.0;
+    [(-h, -h), (h, -h), (h, h), (-h, h)].map(|(x, y)| xf.screen(c + Vec2::new(x, y)))
+}
+
 /// Whether `p` lies inside the convex quad `q` (either winding).
 fn in_quad(p: Pos2, q: &[Pos2]) -> bool {
     let side = |a: Pos2, b: Pos2| (b - a).x * (p - a).y - (b - a).y * (p - a).x;
@@ -345,6 +368,27 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
                 return Some(part);
             }
             (xf.screen(center).distance(p) < GRAB * 1.5).then_some(Part::Move)
+        }
+        Geo::Tracker { ref pos, pattern, search, .. } => {
+            // Later tracks draw on top, so they take the pointer first.
+            for (i, c) in pos.iter().enumerate().rev() {
+                let Some(c) = *c else { continue };
+                // The nearer corner, as the boxes' corners can nearly meet.
+                let corner = [(pattern, false), (search, true)]
+                    .into_iter()
+                    .map(|(size, is_search)| (square(xf, c, size).iter().map(|q| q.distance(p)).fold(f32::MAX, f32::min), is_search))
+                    .filter(|&(d, _)| d < GRAB)
+                    .min_by(|a, b| a.0.total_cmp(&b.0));
+                if let Some((_, is_search)) = corner {
+                    return Some(Part::TrackBox { i, search: is_search });
+                }
+                let half = (pattern / 2.0 * xf.zoom).max(GRAB);
+                let d = p - xf.screen(c);
+                if d.x.abs() < half && d.y.abs() < half {
+                    return Some(Part::Track(i));
+                }
+            }
+            None
         }
         Geo::Points { ref pts, ref tan, .. } => {
             let s: Vec<Pos2> = pts.iter().map(|&v| xf.screen(v)).collect();
@@ -632,6 +676,43 @@ impl Overlays {
                 let c = xf.screen(center);
                 painter.circle(c, 5.0, color(Part::Move, HANDLE), outline);
             }
+            Geo::Tracker { pos, pattern, search, .. } => {
+                let node = doc.node(id);
+                for (i, c) in pos.iter().enumerate() {
+                    let Some(c) = *c else { continue };
+                    // The tracked path: the position at every keyed frame.
+                    let raw = node.map(|n| ops::params_with_defaults(&n.op, &n.params)[TRACK_PARAMS[i]].clone()).unwrap_or_default();
+                    let path: Vec<Pos2> = anim::key_frames(&raw)
+                        .into_iter()
+                        .map(|f| vec2(&json!(anim::sample(&raw, f as f64))))
+                        .map(|v| xf.screen(v))
+                        .collect();
+                    if path.len() >= 2 {
+                        painter.add(Shape::line(path.clone(), Stroke::new(1.0, Color32::from_rgba_unmultiplied(240, 200, 80, 120))));
+                        for &q in &path {
+                            painter.circle_filled(q, 1.5, Color32::from_rgba_unmultiplied(240, 200, 80, 160));
+                        }
+                    }
+                    let hot_track = hot == Some(Part::Track(i));
+                    let col = if hot_track { HOT } else { HANDLE };
+                    let sbox = square(xf, c, search);
+                    let mut ring = sbox.to_vec();
+                    ring.push(sbox[0]);
+                    painter.add(Shape::dashed_line(&ring, Stroke::new(1.0, Color32::from_white_alpha(150)), 5.0, 4.0));
+                    let pbox = square(xf, c, pattern);
+                    outline_path(painter, pbox.to_vec(), col);
+                    for (corners, is_search) in [(pbox, false), (sbox, true)] {
+                        let fill = if hot == Some(Part::TrackBox { i, search: is_search }) { HOT } else { HANDLE };
+                        for q in corners {
+                            painter.rect(Rect::from_center_size(q, Vec2::splat(6.0)), 1.0, fill, outline, egui::StrokeKind::Middle);
+                        }
+                    }
+                    let center = xf.screen(c);
+                    crosshair(painter, center, 5.0, Stroke::new(1.0, col));
+                    let label = pbox[0] + Vec2::new(0.0, -3.0);
+                    painter.text(label, egui::Align2::LEFT_BOTTOM, format!("{}", i + 1), egui::FontId::proportional(12.0), col);
+                }
+            }
             Geo::Points { pts, tan, .. } => {
                 let s: Vec<Pos2> = pts.iter().map(|&v| xf.screen(v)).collect();
                 outline_path(painter, points_outline(xf, &pts, &tan), HANDLE);
@@ -813,6 +894,27 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
             }
             _ => {}
         },
+        Geo::Tracker { names, pos, pattern, search } => match drag.part {
+            Part::Track(i) => {
+                let Some(c) = pos.get(i).copied().flatten() else { return };
+                let q = c + if shift { constrain(delta) } else { delta };
+                doc.edit_param(&id, TRACK_PARAMS[i], frame, json!([q.x, q.y]));
+            }
+            Part::TrackBox { i, search: is_search } => {
+                let Some(c) = pos.get(i).copied().flatten() else { return };
+                // Symmetric about the track: the corner follows the pointer.
+                let d = (p - c).abs();
+                let size = (2.0 * d.x.max(d.y)).round();
+                // The search box stays bigger than the pattern.
+                let (name, size) = if is_search {
+                    (names[1], size.clamp(pattern + 2.0, 511.0))
+                } else {
+                    (names[0], size.clamp(5.0, (search - 2.0).min(255.0)))
+                };
+                doc.edit_param(&id, name, frame, json!(size as i64));
+            }
+            _ => {}
+        },
         Geo::Points { param, stride, pts, tan } => {
             let mut v: Vec<f64> = anim::sample(&doc.param(&id, param), frame as f64);
             let handles = match drag.part {
@@ -856,7 +958,8 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
 
 fn cursor(part: Part) -> CursorIcon {
     match part {
-        Part::Point | Part::Move | Part::Vertex(_) | Part::Tangent { .. } | Part::Pull(_) => CursorIcon::Move,
+        Part::Point | Part::Move | Part::Vertex(_) | Part::Tangent { .. } | Part::Pull(_) | Part::Track(_) => CursorIcon::Move,
+        Part::TrackBox { .. } => CursorIcon::ResizeNwSe,
         Part::Edge(..) => CursorIcon::Crosshair,
         Part::Size { x: true, y: true } => CursorIcon::ResizeNwSe,
         Part::Size { x: true, .. } => CursorIcon::ResizeHorizontal,
@@ -971,6 +1074,27 @@ mod tests {
         assert_eq!(drag(&mut d, right, Pos2::new(100.0, 150.0), 1), Part::Size { x: true, y: false });
         let s = vec2(&d.param("n", "scale"));
         assert!((s.x - 1.0).abs() < 1e-3 && (s.y - 0.5).abs() < 1e-3, "{s:?}");
+    }
+
+    #[test]
+    fn tracker_boxes_move_tracks_and_size_the_boxes() {
+        let mut d = doc("tracker", json!({ "track1": [50, 50], "track2_on": true, "track2": [150, 50], "pattern": 20, "search": 40 }));
+        // Anywhere in the pattern box moves its track; the other stays.
+        assert_eq!(drag(&mut d, Pos2::new(155.0, 45.0), Pos2::new(165.0, 55.0), 1), Part::Track(1));
+        assert_eq!(vec2(&d.param("n", "track2")), Vec2::new(160.0, 60.0));
+        assert_eq!(vec2(&d.param("n", "track1")), Vec2::new(50.0, 50.0));
+        // A pattern corner sizes the pattern of every track.
+        assert_eq!(drag(&mut d, Pos2::new(60.0, 60.0), Pos2::new(65.0, 62.0), 1), Part::TrackBox { i: 0, search: false });
+        assert_eq!(d.param("n", "pattern"), json!(30));
+        // The pattern can't outgrow the search box.
+        drag(&mut d, Pos2::new(65.0, 65.0), Pos2::new(90.0, 90.0), 1);
+        assert_eq!(d.param("n", "pattern"), json!(38));
+        assert_eq!(drag(&mut d, Pos2::new(70.0, 30.0), Pos2::new(80.0, 20.0), 1), Part::TrackBox { i: 0, search: true });
+        assert_eq!(d.param("n", "search"), json!(60));
+        // Tracks that are off have no handles.
+        let mut d = doc("tracker", json!({ "track1_on": false, "track1": [50, 50] }));
+        let missed = gesture(&mut Overlays::default(), &mut d, Pos2::new(50.0, 50.0), Pos2::new(60.0, 50.0), 1, Mods::default());
+        assert_eq!(missed, None);
     }
 
     #[test]

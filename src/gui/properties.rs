@@ -7,12 +7,13 @@ use arclight::anim::{self, Interp};
 use arclight::media;
 use arclight::ops::{self, ParamKind, ParamSpec};
 use arclight::render::{self, Progress};
+use arclight::track;
 use eframe::egui::{self, Color32, RichText};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 const MAX_OPEN: usize = 6;
@@ -26,6 +27,17 @@ struct RenderJob {
     result: Option<(bool, String)>,
 }
 
+/// Positions found so far by a tracking run, per frame.
+type Found = Arc<Mutex<Vec<(i64, Vec<Option<track::Pt>>)>>>;
+
+struct TrackJob {
+    progress: Arc<Progress>,
+    handle: Option<JoinHandle<anyhow::Result<track::Outcome>>>,
+    found: Found,
+    /// Outcome once finished: (succeeded, message).
+    result: Option<(bool, String)>,
+}
+
 #[derive(Default)]
 pub struct Properties {
     open: Vec<String>,
@@ -33,6 +45,7 @@ pub struct Properties {
     name_edit: HashMap<String, String>,
     name_error: Option<(String, String)>,
     jobs: HashMap<String, RenderJob>,
+    tracks: HashMap<String, TrackJob>,
     media_info: HashMap<String, String>,
     /// The current frame (keyframes are read and written here).
     frame: i64,
@@ -43,6 +56,11 @@ pub struct Properties {
 impl Properties {
     pub fn is_rendering(&self) -> bool {
         self.jobs.values().any(|j| j.handle.is_some())
+    }
+
+    /// A tracking run is writing keys (the edits form one undo step).
+    pub fn is_tracking(&self) -> bool {
+        self.tracks.values().any(|j| j.handle.is_some())
     }
 
     /// Forget cached per-node UI state; call after undo/redo replaces the graph.
@@ -56,6 +74,7 @@ impl Properties {
     pub fn ui(&mut self, ui: &mut egui::Ui, doc: &mut Doc, frame: i64) -> Option<i64> {
         self.frame = frame;
         self.seek = None;
+        self.collect_tracks(doc);
         self.show(ui, doc);
         self.seek.take()
     }
@@ -152,6 +171,7 @@ impl Properties {
             match op.as_str() {
                 "media_in" => self.media_in_extras(ui, doc, id),
                 "media_out" => self.media_out_extras(ui, doc, id),
+                "tracker" => self.tracker_extras(ui, doc, id),
                 _ => {}
             }
 
@@ -167,6 +187,9 @@ impl Properties {
                         }
                         if let Some(job) = self.jobs.remove(id) {
                             self.jobs.insert(new.clone(), job);
+                        }
+                        if let Some(job) = self.tracks.remove(id) {
+                            self.tracks.insert(new.clone(), job);
                         }
                         self.last_selected = doc.selected.clone();
                         self.name_error = None;
@@ -435,6 +458,123 @@ impl Properties {
                 let color = if *ok { Color32::from_rgb(110, 200, 120) } else { Color32::from_rgb(235, 100, 90) };
                 ui.colored_label(color, msg);
             }
+        }
+    }
+}
+
+impl Properties {
+    /// Key the positions tracking runs have found since the last UI frame,
+    /// follow them with the current frame, and collect finished runs. Runs
+    /// for every tracker, open panel or not.
+    fn collect_tracks(&mut self, doc: &mut Doc) {
+        for (id, job) in &mut self.tracks {
+            // Checked before draining, so a finished run's last frame isn't missed.
+            let finished = job.handle.as_ref().is_some_and(|h| h.is_finished());
+            let found = std::mem::take(&mut *job.found.lock().unwrap());
+            for (frame, pos) in &found {
+                key_tracks(doc, id, *frame, pos);
+            }
+            if let Some(&(frame, _)) = found.last() {
+                self.seek = Some(frame);
+            }
+            if finished {
+                job.result = Some(match job.handle.take().unwrap().join() {
+                    Ok(Ok(out)) => {
+                        let mut msg = format!("Tracked {} frame(s).", out.frames);
+                        for (i, f) in out.lost {
+                            msg += &format!(" Track {} lost at frame {f}.", i + 1);
+                        }
+                        (true, msg)
+                    }
+                    Ok(Err(e)) => (false, format!("{e:#}")),
+                    Err(_) => (false, "tracking thread panicked".into()),
+                });
+            }
+        }
+    }
+
+    fn tracker_extras(&mut self, ui: &mut egui::Ui, doc: &mut Doc, id: &str) {
+        ui.add_space(4.0);
+        if let Some(job) = self.tracks.get(id).filter(|j| j.handle.is_some()) {
+            let p = &job.progress;
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::ProgressBar::new(p.fraction())
+                        .text(format!("{} / {}", p.done.load(Ordering::Relaxed), p.total.load(Ordering::Relaxed)))
+                        .desired_width(ui.available_width() - 70.0),
+                );
+                if ui.button("Stop").clicked() {
+                    p.cancel.store(true, Ordering::Relaxed);
+                }
+            });
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(30));
+            return;
+        }
+        let (first, last) = (doc.graph.project.first_frame, doc.graph.project.last_frame);
+        let frame = self.frame;
+        let mut run = None;
+        ui.horizontal(|ui| {
+            let enabled = doc.node(id).is_some_and(|n| n.inputs.first().is_some_and(|i| !i.is_empty()));
+            ui.add_enabled_ui(enabled, |ui| {
+                if ui.button("◀◀ Track").on_hover_text(format!("Track backward to frame {first}")).clicked() {
+                    run = Some(first);
+                }
+                if ui.button("◀ 1").on_hover_text("Track one frame backward").clicked() {
+                    run = Some((frame - 1).max(first));
+                }
+                if ui.button("1 ▶").on_hover_text("Track one frame forward").clicked() {
+                    run = Some((frame + 1).min(last));
+                }
+                if ui.button("Track ▶▶").on_hover_text(format!("Track forward to frame {last}")).clicked() {
+                    run = Some(last);
+                }
+            })
+            .response
+            .on_disabled_hover_text("Connect an input to track");
+        });
+        if ui.button("Reference = this frame").on_hover_text("Solve the output transform relative to the current frame").clicked() {
+            doc.set_param(id, "reference_frame", json!(frame));
+        }
+        if let Some(to) = run.filter(|&to| to != frame) {
+            self.start_tracking(doc, id, frame, to);
+        }
+        if let Some((ok, msg)) = self.tracks.get(id).and_then(|j| j.result.as_ref()) {
+            let color = if *ok { Color32::from_rgb(110, 200, 120) } else { Color32::from_rgb(235, 100, 90) };
+            ui.colored_label(color, msg);
+        }
+    }
+
+    fn start_tracking(&mut self, doc: &mut Doc, id: &str, from: i64, to: i64) {
+        let Some(node) = doc.node(id) else { return };
+        let start = track::positions(&node.params, from);
+        let settings = track::Settings::from_params(&ops::params_with_defaults("tracker", &node.params));
+        // Anchor each track's curve at the start frame.
+        key_tracks(doc, id, from, &start);
+        let frames = match track::input_frames(&doc.graph, id) {
+            Ok(f) => f,
+            Err(e) => {
+                let job = TrackJob { progress: Default::default(), handle: None, found: Default::default(), result: Some((false, format!("{e:#}"))) };
+                self.tracks.insert(id.to_string(), job);
+                return;
+            }
+        };
+        let progress = Arc::new(Progress::default());
+        let found = Found::default();
+        let (pg, out) = (progress.clone(), found.clone());
+        let handle = std::thread::spawn(move || {
+            track::track(frames, &start, from, to, &settings, &pg, |f, p| out.lock().unwrap().push((f, p.to_vec())))
+        });
+        self.tracks.insert(id.to_string(), TrackJob { progress, handle: Some(handle), found, result: None });
+    }
+}
+
+/// Key each found track position of tracker `id` at `frame`.
+fn key_tracks(doc: &mut Doc, id: &str, frame: i64, pos: &[Option<track::Pt>]) {
+    for (i, p) in pos.iter().enumerate() {
+        if let Some(p) = p {
+            let name = format!("track{}", i + 1);
+            let raw = doc.param(id, &name);
+            doc.set_param(id, &name, anim::set_key(&raw, frame, &json!(p)));
         }
     }
 }

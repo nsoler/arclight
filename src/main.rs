@@ -285,4 +285,31 @@ mod tests {
         assert_eq!(Evaluator::key(&g, "c", &at(11)).unwrap(), Evaluator::key(&g, "c", &at(40)).unwrap());
         assert_ne!(Evaluator::key(&g, "c", &at(5)).unwrap(), Evaluator::key(&g, "c", &at(6)).unwrap());
     }
+
+    #[test]
+    fn tracker_follows_an_animated_shape_through_the_graph() {
+        use arclight::{render::Progress, track};
+        // A rotated box gliding from (60, 60) to (100, 80) over frames 1–11.
+        let g: Graph = serde_json::from_value(serde_json::json!({
+            "nodes": [
+                { "id": "bg", "op": "constant", "params": { "width": 160, "height": 120, "color": [0.1, 0.1, 0.1, 1] } },
+                { "id": "box", "op": "rectangle", "inputs": ["bg"], "params": {
+                    "center": { "keys": [[1, [60, 60]], [11, [100, 80]]], "interp": "linear" },
+                    "size": [18, 12], "rotate": 20, "feather": 2 } },
+                { "id": "trk", "op": "tracker", "inputs": ["box"], "params": { "track1": [60, 60], "pattern": 25, "search": 45 } }
+            ]
+        }))
+        .unwrap();
+        let frames = track::input_frames(&g, "trk").unwrap();
+        let start = track::positions(&g.node("trk").unwrap().params, 1);
+        let settings = track::Settings { pattern: 25, search: 45, min_score: 0.8, update: false };
+        let mut found = Vec::new();
+        let out = track::track(frames, &start, 1, 11, &settings, &Progress::default(), |f, p| found.push((f, p[0]))).unwrap();
+        assert_eq!((out.frames, out.lost.len()), (10, 0));
+        for (f, p) in found {
+            let t = (f - 1) as f32 / 10.0;
+            let p = p.unwrap();
+            assert!((p[0] - (60.0 + 40.0 * t)).abs() < 0.05 && (p[1] - (60.0 + 20.0 * t)).abs() < 0.05, "frame {f}: {p:?}");
+        }
+    }
 }

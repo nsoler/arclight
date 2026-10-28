@@ -485,6 +485,11 @@ impl App {
                 ui.spinner();
                 ui.label("Rendering…");
             }
+            if self.props.is_tracking() {
+                ui.separator();
+                ui.spinner();
+                ui.label("Tracking…");
+            }
         });
     }
 }
@@ -567,7 +572,7 @@ impl eframe::App for App {
             });
         });
         // One undo step per finished gesture (drag, typing, click).
-        let gesture = ctx.input(|i| i.pointer.any_down()) || ctx.text_edit_focused();
+        let gesture = ctx.input(|i| i.pointer.any_down()) || ctx.text_edit_focused() || self.props.is_tracking();
         self.doc.commit(gesture);
     }
 }
