@@ -264,6 +264,33 @@ fn gizmo(xf: &Xf, center: Vec2, translate: Vec2, rotate: f32) -> (Pos2, Pos2, Po
     (c, x, y)
 }
 
+/// Screen positions of the transformed layer's frame: its corners
+/// (clockwise from top left), then the midpoints of its top, right, bottom
+/// and left edges. The layer is taken to be the viewed image's size.
+fn layer_frame(xf: &Xf, center: Vec2, translate: Vec2, rotate: f32, scale: Vec2) -> [Pos2; 8] {
+    let at = |x: f32, y: f32| xf.screen(center + translate + rot(Vec2::new(x, y) * center * scale, rotate));
+    [at(-1.0, -1.0), at(1.0, -1.0), at(1.0, 1.0), at(-1.0, 1.0), at(0.0, -1.0), at(1.0, 0.0), at(0.0, 1.0), at(-1.0, 0.0)]
+}
+
+/// Which axes each [`layer_frame`] handle scales.
+const LAYER_PARTS: [Part; 8] = [
+    Part::Size { x: true, y: true },
+    Part::Size { x: true, y: true },
+    Part::Size { x: true, y: true },
+    Part::Size { x: true, y: true },
+    Part::Size { x: false, y: true },
+    Part::Size { x: true, y: false },
+    Part::Size { x: false, y: true },
+    Part::Size { x: true, y: false },
+];
+
+/// Whether `p` lies inside the convex quad `q` (either winding).
+fn in_quad(p: Pos2, q: &[Pos2]) -> bool {
+    let side = |a: Pos2, b: Pos2| (b - a).x * (p - a).y - (b - a).y * (p - a).x;
+    let s: Vec<f32> = (0..4).map(|i| side(q[i], q[(i + 1) % 4])).collect();
+    s.iter().all(|&v| v >= 0.0) || s.iter().all(|&v| v <= 0.0)
+}
+
 /// The crop box in screen space.
 fn inset_rect(xf: &Xf, v: [f32; 4], size: Vec2) -> Rect {
     Rect::from_min_max(xf.screen(Vec2::new(v[0], v[1])), xf.screen(Vec2::new(size.x - v[2], size.y - v[3])))
@@ -274,16 +301,23 @@ fn inset_rect(xf: &Xf, v: [f32; 4], size: Vec2) -> Rect {
 fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
     match *g {
         Geo::Point { value, .. } => (xf.screen(value).distance(p) < GRAB * 1.5).then_some(Part::Point),
-        Geo::Transform { center, translate, rotate, .. } => {
+        Geo::Transform { center, translate, rotate, scale, .. } => {
             let (c, x, y) = gizmo(xf, center, translate, rotate);
+            let frame = layer_frame(xf, center, translate, rotate, scale);
             if x.distance(p) < GRAB {
                 Some(Part::ScaleX)
             } else if y.distance(p) < GRAB {
                 Some(Part::ScaleY)
             } else if c.distance(p) < GRAB * 1.5 {
                 Some(Part::Move)
+            } else if let Some(i) = (0..8).find(|&i| frame[i].distance(p) < GRAB) {
+                // Before the ring, which can run over a small layer's corners.
+                Some(LAYER_PARTS[i])
             } else if (c.distance(p) - RING).abs() < GRAB {
                 Some(Part::Rotate)
+            } else if in_quad(p, &frame[..4]) {
+                // Anywhere on the layer moves it.
+                Some(Part::Move)
             } else {
                 None
             }
@@ -520,7 +554,18 @@ impl Overlays {
                 painter.circle(c, 5.0, color(Part::Point, HANDLE), outline);
                 crosshair(painter, c, 10.0, Stroke::new(1.0, color(Part::Point, HANDLE)));
             }
-            Geo::Transform { center, translate, rotate, .. } => {
+            Geo::Transform { center, translate, rotate, scale, .. } => {
+                // The layer's frame, and its scale handles.
+                let layer = layer_frame(xf, center, translate, rotate, scale);
+                let hot_move = hot == Some(Part::Move);
+                outline_path(painter, layer[..4].to_vec(), if hot_move { HOT } else { Color32::from_white_alpha(170) });
+                if let Some(Some(i)) = hover.filter(|_| self.drag.is_none()).map(|p| (0..8).find(|&i| layer[i].distance(p) < GRAB)) {
+                    // Only the handle under the pointer lights up, not every one sharing its part.
+                    painter.rect(Rect::from_center_size(layer[i], Vec2::splat(9.0)), 1.0, HOT, outline, egui::StrokeKind::Middle);
+                }
+                for &h in &layer {
+                    painter.rect(Rect::from_center_size(h, Vec2::splat(7.0)), 1.0, HANDLE, outline, egui::StrokeKind::Middle);
+                }
                 let (c, x, y) = gizmo(xf, center, translate, rotate);
                 // A dark under-stroke keeps lines readable over bright images.
                 let shadowed = |a: Pos2, b: Pos2, col: Color32| {
@@ -709,6 +754,25 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
                     };
                     doc.edit_param(&id, names[2], frame, json!([s.x, s.y]));
                 }
+                Part::Size { x, y } => {
+                    // Frame handles, in the layer's own (rotated) axes.
+                    let from = rot(drag.start - pivot, -rotate);
+                    let to = rot(p - pivot, -rotate);
+                    let ratio = |a: f32, b: f32| if a.abs() < 1e-3 { 1.0 } else { b / a };
+                    let s = if x && y && !shift {
+                        // Corners scale uniformly; Shift frees the aspect.
+                        if from.length() < 1e-3 {
+                            return;
+                        }
+                        scale * (to.length() / from.length())
+                    } else {
+                        Vec2::new(
+                            if x { scale.x * ratio(from.x, to.x) } else { scale.x },
+                            if y { scale.y * ratio(from.y, to.y) } else { scale.y },
+                        )
+                    };
+                    doc.edit_param(&id, names[2], frame, json!([s.x, s.y]));
+                }
                 _ => {}
             }
         }
@@ -873,7 +937,8 @@ mod tests {
         assert_eq!(vec2(&d.param("n", "translate")), Vec2::new(10.0, 5.0));
 
         let c = c + Vec2::new(10.0, 5.0);
-        assert_eq!(drag(&mut d, c + Vec2::new(0.0, -RING), c + Vec2::new(RING, 0.0), 1), Part::Rotate);
+        let ring = |deg: f32| c + rot(Vec2::new(RING, 0.0), deg);
+        assert_eq!(drag(&mut d, ring(-45.0), ring(45.0), 1), Part::Rotate);
         assert!((num(&d.param("n", "rotate")) - 90.0).abs() < 1e-3);
 
         // At 90°, the x axis points down the screen.
@@ -881,6 +946,31 @@ mod tests {
         assert_eq!(drag(&mut d, x_handle, c + Vec2::new(0.0, AXIS * 2.0), 1), Part::ScaleX);
         let s = vec2(&d.param("n", "scale"));
         assert!((s.x - 2.0).abs() < 1e-3 && (s.y - 1.0).abs() < 1e-3, "{s:?}");
+    }
+
+    #[test]
+    fn dragging_inside_the_layer_moves_it_and_its_frame_scales_it() {
+        let mut d = doc("transform", json!({ "scale": [0.5, 0.5] }));
+        // The layer covers x 50–150, y 25–75; grab it between the center and the ring.
+        assert_eq!(drag(&mut d, Pos2::new(75.0, 50.0), Pos2::new(95.0, 60.0), 1), Part::Move);
+        assert_eq!(vec2(&d.param("n", "translate")), Vec2::new(20.0, 10.0));
+        // Outside the layer nothing is grabbed (the viewer pans).
+        let missed = gesture(&mut Overlays::default(), &mut d, Pos2::new(10.0, 10.0), Pos2::new(20.0, 20.0), 1, Mods::default());
+        assert_eq!(missed, None);
+
+        // Corners scale uniformly about the pivot (now at 120, 60).
+        let corner = Pos2::new(170.0, 85.0);
+        assert_eq!(drag(&mut d, corner, Pos2::new(220.0, 110.0), 1), Part::Size { x: true, y: true });
+        let s = vec2(&d.param("n", "scale"));
+        assert!((s.x - 1.0).abs() < 1e-3 && (s.y - 1.0).abs() < 1e-3, "{s:?}");
+        // An edge handle scales one axis.
+        let mut d = doc("transform", json!({ "scale": [0.5, 0.5], "rotate": 90.0 }));
+        // Rotated 90° clockwise, the layer's right edge faces down: its
+        // midpoint is 25 px (half width × 0.5) below the center.
+        let right = Pos2::new(100.0, 100.0);
+        assert_eq!(drag(&mut d, right, Pos2::new(100.0, 150.0), 1), Part::Size { x: true, y: false });
+        let s = vec2(&d.param("n", "scale"));
+        assert!((s.x - 1.0).abs() < 1e-3 && (s.y - 0.5).abs() < 1e-3, "{s:?}");
     }
 
     #[test]

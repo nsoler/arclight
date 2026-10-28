@@ -15,7 +15,7 @@ Last updated 2026-10-27 (session 3, after Roto). Read this, then `README.md`
   generators (Rectangle, Ellipse, Polygon) and Roto. Not done: Phase 0.6
   (bounding boxes / format), Phases 3–4, and Phase 2 extras (box select,
   select-all / move whole shape, motion blur).
-- ~8,450 lines of Rust, 57 tests passing, clippy clean apart from two old
+- ~8,550 lines of Rust, 58 tests passing, clippy clean apart from two old
   style lints (`Graph::from_str` name, `chunks_exact_mut(4)` in media.rs).
 - **Next:** Phase 3 (2D tracker), or the Phase 2 extras first if the user
   wants roto to feel complete (box select, select all, move whole shape).
@@ -81,6 +81,15 @@ Last updated 2026-10-27 (session 3, after Roto). Read this, then `README.md`
   Curve hit-testing samples each segment 48× in screen space; an edge click
   splits the curve in every key without changing its shape. `Mods` gained
   `alt`, and `drag_to`/`apply` take `Mods`.
+
+- **Session 3, part 3** (commit "Make Transform layers draggable in the
+  viewer"): the Transform overlay also draws the transformed layer's frame
+  (`layer_frame`, the viewed image's size, like the pivot). Dragging
+  anywhere inside it moves (`in_quad`); its corners scale uniformly (⇧
+  free) and edge midpoints scale one axis, in the layer's rotated axes
+  (`Part::Size` reused). Hit order: axis handles, center, frame handles,
+  ring, inside. Selecting a Transform means a left-drag over the layer moves
+  it instead of panning; middle-drag or dragging outside the layer still pans.
 
 ```sh
 cargo run --release --bin arclight-gui        # GUI with the animated starter project
