@@ -16,7 +16,7 @@ Last updated 2026-10-27 (session 3, after starting the 2D tracker). Read this, t
   generators (Rectangle, Ellipse, Polygon) and Roto. Not done: Phase 0.6
   (bounding boxes / format), Phases 3–4, and Phase 2 extras (box select,
   select-all / move whole shape, motion blur).
-- ~9,400 lines of Rust, 67 tests passing, clippy clean apart from two old
+- ~9,500 lines of Rust, 69 tests passing, clippy clean apart from two old
   style lints (`Graph::from_str` name, `chunks_exact_mut(4)` in media.rs).
 - **Phase 3 started:** Tracker node works end to end (see session 3 part 4).
   **Next:** the tracker follow-ups listed under Phase 3, or the Phase 2
@@ -113,6 +113,20 @@ Last updated 2026-10-27 (session 3, after starting the 2D tracker). Read this, t
   every UI frame by `collect_tracks`, which keys positions and seeks the
   playhead to follow). `main.rs` treats an active run as a gesture, so a
   whole run is one undo step.
+
+- **Session 3, part 5** (commit "Track rotating and scaling features"):
+  translation-only NCC drifted ~6 px over 48 frames on a corner turning
+  25° ("every frame") or lost it after ~8° ("first frame"). Now each track
+  carries a `Warp { angle, scale }` and the *target* window is sampled
+  through it (`Luma::window(c, r, &Mat)`), so the first-frame pattern
+  keeps matching. `find`: integer search with the predicted warp (angular
+  and scale velocity), coarse angle scan ±6° (and scale ±4%), a ±2 px
+  re-search, then 4 rounds of per-parameter parabola `refine` (steps halve;
+  a step may move a full step, not half, or the coarse residual can't
+  close). "Every frame" re-takes the pattern through the current warp, so
+  it keeps the first orientation. New param `motion` (default
+  `translate, rotate`). Result on that shot: within ~0.1 px at frame 48.
+  Tests: 40° rotation < 0.1 px, rotation + 49% growth < 0.15 px.
 
 ```sh
 cargo run --release --bin arclight-gui        # GUI with the animated starter project
@@ -268,12 +282,7 @@ Several of these need engine or GUI infrastructure first. Suggested order:
 - Corner-pin from 4 tracks is a natural follow-on (needs a perspective warp op).
 - **Built (session 3):** everything above except corner-pin and exporting
   to a Transform node. Follow-ups, roughly in order:
-  - Rotating/scaling features drift: translation-only NCC with
-    "every frame" updates drifted ~6 px over 48 frames on a corner
-    rotating 25°; "first frame" loses it after ~8°. Options: match an
-    affine-warped pattern (rotate/scale search around the NCC peak, or
-    Lucas–Kanade affine refinement), or keep the first-frame pattern and
-    re-anchor to it whenever it still correlates well.
+  - ~~Rotating/scaling features drift~~ fixed (session 3 part 5).
   - The overlay draws tracks in input coordinates, also when the output
     is match-moved/stabilized (it then looks offset).
   - Per-track box sizes; per-track score shown on the curve; "clear keys

@@ -549,6 +549,7 @@ pub static OPS: &[OpInfo] = &[
             fixed!("search", "Search size", ParamKind::Int { min: 7, max: 511 }, 91),
             fixed!("min_score", "Min. correlation", ParamKind::Float { min: 0.0, max: 1.0 }, 0.7),
             fixed!("update", "Pattern from", ParamKind::Choice(&["first frame", "every frame"]), "first frame"),
+            fixed!("motion", "Track motion", ParamKind::Choice(SOLVES), "translate, rotate"),
             fixed!("output", "Output", ParamKind::Choice(&["input", "match-move", "stabilize"]), "input"),
             fixed!("solve", "Solve", ParamKind::Choice(SOLVES), "translate, rotate, scale"),
             fixed!("reference_frame", "Reference frame", FRAME, 1),
@@ -558,6 +559,8 @@ pub static OPS: &[OpInfo] = &[
         help: "Tracks up to four points through the shot. Place each track's box on a \
                distinct feature in the viewer, then Track forward or backward: each tracked \
                frame keys the track's position (correct bad frames by dragging the box). \
+               Track motion sets what the features may do besides move: turn, or turn and \
+               change size (needed for features that rotate, or zoom, through the shot). \
                A track stops when its best match falls below Min. correlation. Output: the \
                input unchanged, or the solved motion relative to the reference frame applied \
                to it (match-move) or removed from it (stabilize). One track solves translation; \

@@ -51,16 +51,51 @@ impl Luma {
         top * (1.0 - fy) + bot * fy
     }
 
-    /// The `(2r+1)²` samples of a square window centered on `c`, row-major.
-    pub fn window(&self, c: Pt, r: usize) -> Vec<f32> {
+    /// The `(2r+1)²` samples of a square window centered on `c` and
+    /// warped by `m` (sample `k` of the grid reads `c + m·k`), row-major.
+    pub fn window(&self, c: Pt, r: usize, m: &Mat) -> Vec<f32> {
         let n = 2 * r + 1;
         (0..n * n)
-            .map(|i| self.at(c[0] + (i % n) as f32 - r as f32, c[1] + (i / n) as f32 - r as f32))
+            .map(|i| {
+                let k = [(i % n) as f32 - r as f32, (i / n) as f32 - r as f32];
+                let q = mul(m, k);
+                self.at(c[0] + q[0], c[1] + q[1])
+            })
             .collect()
     }
 
     pub fn contains(&self, p: Pt) -> bool {
         p[0] >= 0.0 && p[1] >= 0.0 && p[0] < self.width as f32 && p[1] < self.height as f32
+    }
+}
+
+/// A 2×2 matrix `[a, b, c, d]` (rows `a b`, `c d`).
+pub type Mat = [f32; 4];
+
+pub const IDENTITY: Mat = [1.0, 0.0, 0.0, 1.0];
+
+fn mul(m: &Mat, k: Pt) -> Pt {
+    [m[0] * k[0] + m[1] * k[1], m[2] * k[0] + m[3] * k[1]]
+}
+
+/// How a track's feature has turned and grown since its pattern was taken.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Warp {
+    /// Radians; positive is clockwise on screen (y down).
+    pub angle: f32,
+    pub scale: f32,
+}
+
+impl Default for Warp {
+    fn default() -> Warp {
+        Warp { angle: 0.0, scale: 1.0 }
+    }
+}
+
+impl Warp {
+    pub fn matrix(&self) -> Mat {
+        let (s, c) = self.angle.sin_cos();
+        [self.scale * c, -self.scale * s, self.scale * s, self.scale * c]
     }
 }
 
@@ -75,10 +110,11 @@ pub struct Pattern {
 }
 
 impl Pattern {
-    /// The `(2r+1)²` pattern centered on `c`, or `None` when it is flat
-    /// (nothing to lock onto).
-    pub fn new(img: &Luma, c: Pt, r: usize) -> Option<Pattern> {
-        let mut v = img.window(c, r);
+    /// The `(2r+1)²` pattern centered on `c`, sampled through `m` (so a
+    /// pattern re-taken from a turned feature keeps the first orientation),
+    /// or `None` when it is flat (nothing to lock onto).
+    pub fn new(img: &Luma, c: Pt, r: usize, m: &Mat) -> Option<Pattern> {
+        let mut v = img.window(c, r, m);
         let mean = v.iter().sum::<f32>() / v.len() as f32;
         v.iter_mut().for_each(|x| *x -= mean);
         let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -90,26 +126,56 @@ impl Pattern {
     }
 }
 
-/// Search for `pat` within `s` pixels of `guess` in `img`. Returns the best
-/// match position (sub-pixel) and its correlation, −1 to 1.
-pub fn find(pat: &Pattern, img: &Luma, guess: Pt, s: usize) -> (Pt, f32) {
-    let (mut p, mut score) = search(pat, img, guess, s);
-    // A parabola through whole-pixel neighbours misplaces an asymmetric
-    // peak; fitting again through ever closer samples shrinks that error.
-    for h in [0.5, 0.25, 0.125] {
-        let at = |dx: f32, dy: f32| ncc(pat, img, [p[0] + dx, p[1] + dy]);
-        let c = at(0.0, 0.0);
-        let fx = parabola(at(-h, 0.0), c, at(h, 0.0));
-        let fy = parabola(at(0.0, -h), c, at(0.0, h));
-        let q = [p[0] + fx * h, p[1] + fy * h];
-        let sc = ncc(pat, img, q);
-        if sc >= c {
-            (p, score) = (q, sc);
-        } else {
-            score = score.max(c);
+/// Search for `pat` within `s` pixels of `guess` in `img`, with the
+/// feature turned and scaled by about `warp`. `motion` says what may
+/// change: with rotation (and scale), `warp` is re-estimated too, so the
+/// pattern from the first frame keeps matching a turning feature. Returns
+/// the best match position (sub-pixel) and its correlation, −1 to 1.
+pub fn find(pat: &Pattern, img: &Luma, guess: Pt, s: usize, warp: &mut Warp, motion: Solve) -> (Pt, f32) {
+    let (rotate, scale) = (motion != Solve::Translate, motion == Solve::Scale);
+    let (mut p, _) = search(pat, img, guess, s, &warp.matrix());
+    if rotate {
+        // Coarse steps first, then a short search where the turned
+        // pattern now fits best.
+        let score = |w: &Warp| ncc(pat, img, p, &w.matrix());
+        let best = |cands: Vec<Warp>| cands.into_iter().map(|w| (score(&w), w)).max_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, w)| w);
+        let step = 3f32.to_radians();
+        *warp = best((-2..=2).map(|k| Warp { angle: warp.angle + k as f32 * step, ..*warp }).collect()).unwrap_or(*warp);
+        if scale {
+            *warp = best((-1..=1).map(|k| Warp { scale: warp.scale * (1.0 + 0.04 * k as f32), ..*warp }).collect()).unwrap_or(*warp);
+        }
+        (p, _) = search(pat, img, p, 2, &warp.matrix());
+    }
+    // A parabola through whole-pixel (or whole-step) neighbours misplaces
+    // an asymmetric peak; fitting again through ever closer samples
+    // shrinks that error.
+    for k in [1.0, 0.5, 0.25, 0.125] {
+        let m = warp.matrix();
+        p[0] = refine(p[0], 0.5 * k, |x| ncc(pat, img, [x, p[1]], &m));
+        p[1] = refine(p[1], 0.5 * k, |y| ncc(pat, img, [p[0], y], &m));
+        if rotate {
+            let w = *warp;
+            warp.angle = refine(w.angle, k * 1f32.to_radians(), |a| ncc(pat, img, p, &Warp { angle: a, ..w }.matrix()));
+        }
+        if scale {
+            let w = *warp;
+            warp.scale = refine(w.scale, k * 0.02, |s| ncc(pat, img, p, &Warp { scale: s, ..w }.matrix())).clamp(0.25, 4.0);
         }
     }
-    (p, score)
+    (p, ncc(pat, img, p, &warp.matrix()))
+}
+
+/// One parabola step toward the peak of `f` near `x`, sampling `h` either
+/// side and moving at most `h`; `x` is kept when the step doesn't improve
+/// on it.
+fn refine(x: f32, h: f32, f: impl Fn(f32) -> f32) -> f32 {
+    let (l, c, r) = (f(x - h), f(x), f(x + h));
+    let d = l - 2.0 * c + r;
+    if d >= 0.0 {
+        return x;
+    }
+    let q = x + (0.5 * (l - r) / d).clamp(-1.0, 1.0) * h;
+    if f(q) >= c { q } else { x }
 }
 
 /// Vertex offset (in sample steps, within ±½) of the parabola through
@@ -119,9 +185,9 @@ fn parabola(l: f32, c: f32, r: f32) -> f32 {
     if d < 0.0 { (0.5 * (l - r) / d).clamp(-0.5, 0.5) } else { 0.0 }
 }
 
-/// Correlation of `pat` with the window centered on `c`.
-fn ncc(pat: &Pattern, img: &Luma, c: Pt) -> f32 {
-    let w = img.window(c, pat.r);
+/// Correlation of `pat` with the window centered on `c`, warped by `m`.
+fn ncc(pat: &Pattern, img: &Luma, c: Pt, m: &Mat) -> f32 {
+    let w = img.window(c, pat.r, m);
     let mean = w.iter().sum::<f32>() / w.len() as f32;
     let (mut dot, mut var) = (0.0, 0.0);
     for (a, b) in w.iter().zip(&pat.v) {
@@ -131,14 +197,14 @@ fn ncc(pat: &Pattern, img: &Luma, c: Pt) -> f32 {
     if var < FLAT * FLAT * w.len() as f32 { 0.0 } else { (dot / var.sqrt()).clamp(-1.0, 1.0) }
 }
 
-/// One correlation search on the integer grid around `guess`, with a
-/// parabola fit through the peak.
-fn search(pat: &Pattern, img: &Luma, guess: Pt, s: usize) -> (Pt, f32) {
+/// One correlation search on the integer grid around `guess` (in the
+/// pattern's frame, warped by `m`), with a parabola fit through the peak.
+fn search(pat: &Pattern, img: &Luma, guess: Pt, s: usize, m: &Mat) -> (Pt, f32) {
     let r = pat.r;
     let pn = 2 * r + 1;
     let gn = 2 * (r + s) + 1;
     // The search area, sampled once on the guess's sub-pixel grid.
-    let g = img.window(guess, r + s);
+    let g = img.window(guess, r + s, m);
     // Summed-area tables of the values and their squares, for each
     // window's mean and variance in O(1).
     let mut sum = vec![0.0f64; (gn + 1) * (gn + 1)];
@@ -182,8 +248,8 @@ fn search(pat: &Pattern, img: &Luma, guess: Pt, s: usize) -> (Pt, f32) {
     let at = |x: usize, y: usize| scores[y * sn + x];
     let fx = fit(bx.checked_sub(1).map(|x| at(x, by)), at(bx, by), (bx + 1 < sn).then(|| at(bx + 1, by)));
     let fy = fit(by.checked_sub(1).map(|y| at(bx, y)), at(bx, by), (by + 1 < sn).then(|| at(bx, by + 1)));
-    let p = [guess[0] + bx as f32 - s as f32 + fx, guess[1] + by as f32 - s as f32 + fy];
-    (p, at(bx, by))
+    let d = mul(m, [bx as f32 - s as f32 + fx, by as f32 - s as f32 + fy]);
+    ([guess[0] + d[0], guess[1] + d[1]], at(bx, by))
 }
 
 /// A Tracker node's tracking settings.
@@ -197,6 +263,8 @@ pub struct Settings {
     /// Take a fresh pattern at every tracked frame, instead of keeping the
     /// one from the start frame. Follows gradual changes but drifts.
     pub update: bool,
+    /// How the features may move: whether rotation and scale are tracked.
+    pub motion: Solve,
 }
 
 impl Settings {
@@ -207,6 +275,11 @@ impl Settings {
             search: int("search", 91),
             min_score: p.get("min_score").and_then(Value::as_f64).unwrap_or(0.7) as f32,
             update: p.get("update").and_then(Value::as_str) == Some("every frame"),
+            motion: match p.get("motion").and_then(Value::as_str) {
+                Some("translate") => Solve::Translate,
+                Some("translate, rotate, scale") => Solve::Scale,
+                _ => Solve::Rotate,
+            },
         }
     }
 
@@ -246,7 +319,10 @@ pub fn track(
     let first = Luma::new(&image(from)?);
     let mut pos: Vec<Option<Pt>> = start.to_vec();
     let mut vel: Vec<Pt> = vec![[0.0; 2]; pos.len()];
-    let mut pats: Vec<Option<Pattern>> = pos.iter().map(|p| p.and_then(|p| Pattern::new(&first, p, r))).collect();
+    // Each feature's turn and growth since the start, and its last step.
+    let mut warps = vec![Warp::default(); pos.len()];
+    let mut turn = vec![Warp::default(); pos.len()];
+    let mut pats: Vec<Option<Pattern>> = pos.iter().map(|p| p.and_then(|p| Pattern::new(&first, p, r, &IDENTITY))).collect();
     for (i, p) in pos.iter_mut().enumerate() {
         if p.is_some() && pats[i].is_none() {
             // Nothing to follow: lost before it starts.
@@ -266,16 +342,20 @@ pub fn track(
             let (Some(p), Some(pat)) = (pos[i], &pats[i]) else { continue };
             // Predict from the last step's motion, then search around it.
             let guess = [p[0] + vel[i][0], p[1] + vel[i][1]];
-            let (q, score) = find(pat, &img, guess, s);
+            let before = warps[i];
+            let mut w = Warp { angle: before.angle + turn[i].angle, scale: before.scale * turn[i].scale };
+            let (q, score) = find(pat, &img, guess, s, &mut w, settings.motion);
             if score < settings.min_score || !img.contains(q) {
                 pos[i] = None;
                 out.lost.push((i, frame));
                 continue;
             }
             vel[i] = [q[0] - p[0], q[1] - p[1]];
+            turn[i] = Warp { angle: w.angle - before.angle, scale: w.scale / before.scale };
+            warps[i] = w;
             pos[i] = Some(q);
             if settings.update {
-                pats[i] = Pattern::new(&img, q, r);
+                pats[i] = Pattern::new(&img, q, r, &w.matrix());
             }
         }
         found(frame, &pos);
@@ -376,11 +456,17 @@ mod tests {
 
     /// A smooth, textured test image: a few gaussian blobs, offset by `d`.
     fn blobs(w: usize, h: usize, d: Pt) -> Image {
+        blobs_moved(w, h, &[1.0, 0.0, d[0], 0.0, 1.0, d[1]])
+    }
+
+    /// The blobs moved by the affine map `m` (image → screen).
+    fn blobs_moved(w: usize, h: usize, m: &Affine) -> Image {
+        let back = invert(m);
         let mut img = Image::new(w, h);
         let spots = [(30.0, 40.0, 6.0), (70.0, 30.0, 4.0), (50.0, 70.0, 8.0), (90.0, 80.0, 5.0), (40.0, 55.0, 3.0)];
         for y in 0..h {
             for x in 0..w {
-                let (px, py) = (x as f32 + 0.5 - d[0], y as f32 + 0.5 - d[1]);
+                let [px, py] = apply(&back, [x as f32 + 0.5, y as f32 + 0.5]);
                 let v: f32 = spots.iter().map(|&(cx, cy, r)| (-((px - cx).powi(2) + (py - cy).powi(2)) / (2.0 * r * r)).exp()).sum();
                 img.set(x, y, [v, v, v, 1.0]);
             }
@@ -392,8 +478,8 @@ mod tests {
     fn finds_a_sub_pixel_shift() {
         let a = Luma::new(&blobs(128, 128, [0.0, 0.0]));
         let b = Luma::new(&blobs(128, 128, [3.3, -2.6]));
-        let pat = Pattern::new(&a, [50.0, 70.0], 10).unwrap();
-        let (p, score) = find(&pat, &b, [50.0, 70.0], 8);
+        let pat = Pattern::new(&a, [50.0, 70.0], 10, &IDENTITY).unwrap();
+        let (p, score) = find(&pat, &b, [50.0, 70.0], 8, &mut Warp::default(), Solve::Translate);
         assert!(score > 0.99, "{score}");
         assert!((p[0] - 53.3).abs() < 0.02 && (p[1] - 67.4).abs() < 0.02, "{p:?}");
     }
@@ -401,7 +487,7 @@ mod tests {
     #[test]
     fn flat_patterns_are_refused() {
         let flat = Luma::new(&Image::new(32, 32));
-        assert!(Pattern::new(&flat, [16.0, 16.0], 5).is_none());
+        assert!(Pattern::new(&flat, [16.0, 16.0], 5, &IDENTITY).is_none());
     }
 
     #[test]
@@ -415,8 +501,8 @@ mod tests {
             }
         }
         let l = Luma::new(&img);
-        let pat = Pattern::new(&l, [20.0, 16.0], 6).unwrap();
-        let (p, score) = find(&pat, &l, [26.0, 16.0], 10);
+        let pat = Pattern::new(&l, [20.0, 16.0], 6, &IDENTITY).unwrap();
+        let (p, score) = find(&pat, &l, [26.0, 16.0], 10, &mut Warp::default(), Solve::Translate);
         assert!((p[0] - 20.0).abs() < 0.05 && score <= 1.0, "{p:?} {score}");
     }
 
@@ -424,7 +510,7 @@ mod tests {
     fn tracks_motion_over_frames_and_reports_lost_tracks() {
         // Moves 2.5 px right and 1 px down per frame.
         let frame = |f: i64| Ok(blobs(128, 128, [2.5 * (f - 1) as f32, (f - 1) as f32]));
-        let settings = Settings { pattern: 21, search: 41, min_score: 0.8, update: false };
+        let settings = Settings { pattern: 21, search: 41, min_score: 0.8, update: false, motion: Solve::Rotate };
         let mut seen = Vec::new();
         // The second track sits on a flat corner and can't be followed.
         let start = [Some([30.0, 40.0]), Some([5.0, 120.0]), None];
@@ -441,11 +527,56 @@ mod tests {
     #[test]
     fn tracks_backward() {
         let frame = |f: i64| Ok(blobs(128, 128, [2.0 * f as f32, 0.0]));
-        let settings = Settings { pattern: 21, search: 41, min_score: 0.8, update: true };
+        let settings = Settings { pattern: 21, search: 41, min_score: 0.8, update: true, motion: Solve::Rotate };
         let mut last = None;
         track(frame, &[Some([70.0, 30.0])], 5, 2, &settings, &Progress::default(), |_, p| last = p[0]).unwrap();
         let p = last.unwrap();
         assert!((p[0] - 64.0).abs() < 0.02 && (p[1] - 30.0).abs() < 0.02, "{p:?}");
+    }
+
+    /// The blobs turning `deg` per frame (and growing by `grow`) about
+    /// (60, 55) while drifting right; returns the error at each frame
+    /// tracking the point (50, 40), or `None` once it is lost.
+    fn track_turning(deg: f32, grow: f32, motion: Solve, update: bool) -> Vec<Option<f32>> {
+        let at = |f: i64| {
+            let t = (f - 1) as f32;
+            let (s, c) = (deg * t).to_radians().sin_cos();
+            let k = grow.powf(t);
+            // Turn and scale about (60, 55), then move 1 px right per frame.
+            let (a, b, d, e) = (k * c, -k * s, k * s, k * c);
+            [a, b, 60.0 + t - (a * 60.0 + b * 55.0), d, e, 55.0 - (d * 60.0 + e * 55.0)]
+        };
+        let frame = |f: i64| Ok(blobs_moved(128, 128, &at(f)));
+        let settings = Settings { pattern: 25, search: 45, min_score: 0.8, update, motion };
+        let mut errors = Vec::new();
+        track(frame, &[Some([50.0, 40.0])], 1, 21, &settings, &Progress::default(), |f, p| {
+            let truth = apply(&at(f), [50.0, 40.0]);
+            errors.push(p[0].map(|p| ((p[0] - truth[0]).powi(2) + (p[1] - truth[1]).powi(2)).sqrt()));
+        })
+        .unwrap();
+        errors
+    }
+
+    #[test]
+    fn rotating_features_are_followed_without_drift() {
+        // 2° a frame: 40° by the end.
+        for update in [false, true] {
+            let errors = track_turning(2.0, 1.0, Solve::Rotate, update);
+            assert_eq!(errors.len(), 20);
+            let worst = errors.iter().map(|e| e.expect("never lost")).fold(0.0, f32::max);
+            assert!(worst < 0.1, "update {update}: worst error {worst} px");
+        }
+        // Matching shifts only can't follow it.
+        let errors = track_turning(2.0, 1.0, Solve::Translate, false);
+        assert!(errors.iter().any(|e| e.is_none_or(|e| e > 1.0)), "{errors:?}");
+    }
+
+    #[test]
+    fn scaling_features_are_followed() {
+        // Turning 1° and growing 2% a frame: 49% bigger by the end.
+        let errors = track_turning(1.0, 1.02, Solve::Scale, false);
+        let worst = errors.iter().map(|e| e.expect("never lost")).fold(0.0, f32::max);
+        assert!(worst < 0.15, "worst error {worst} px");
     }
 
     #[test]
