@@ -110,7 +110,8 @@ export don't change.
    accessors, `full`, `flatten`. Every op still outputs window = frame.
    Boundaries (viewer, I/O, Python, plugins, tracker) go through `flatten`.
    All existing tests pass unchanged; add model tests.
-2. **Windows that shrink.** Shapes (tight bounds), Crop, mask/mix and
+2. **Done (session 6).** **Windows that shrink.** (Dissolve takes B's
+   frame too. Nodes still waiting for milestone 3 flatten their input.) Shapes (tight bounds), Crop, mask/mix and
    pixel ops honor windows; Merge takes the union. Tests: a 4K shape's
    window is its bounds; merge of two small layers; alpha Invert grows
    to the frame.

@@ -9,7 +9,7 @@
 
 use crate::anim;
 use crate::color::{self, Rgba};
-use crate::image::Image;
+use crate::image::{IRect, Image, Size};
 use crate::media;
 use crate::shape::{self, FillRule, Pt};
 use crate::track::{self, Solve};
@@ -737,21 +737,36 @@ fn map_pixels(img: &mut Image, f: impl Fn(Rgba) -> Rgba + Sync + Send) {
     img.pixels.par_iter_mut().for_each(|p| *p = f(*p));
 }
 
-/// A copy of `src` with `f` applied to every pixel.
+/// A copy of `src` with `f` applied to every pixel (see [`pointwise_window`]
+/// for where).
 fn mapped(src: &Image, f: impl Fn(Rgba) -> Rgba + Sync + Send) -> Image {
+    let window = pointwise_window(src.format, &[src.window()], f(color::TRANSPARENT));
+    if window != src.window() {
+        return generate(src.format, window, |x, y| f(src.at(x, y)));
+    }
     let mut out = src.clone();
     map_pixels(&mut out, f);
     out
 }
 
-/// Pixel (x, y) of `img`, transparent outside it.
-#[inline]
-fn pixel_or_clear(img: &Image, x: usize, y: usize) -> Rgba {
-    if x < img.width && y < img.height {
-        img.get(x, y)
-    } else {
-        color::TRANSPARENT
-    }
+/// The data window of an op whose output pixel depends only on its inputs'
+/// pixels at the same place: their windows' union, grown to the whole frame
+/// when the op turns transparent inputs (`blank`, its output there) into
+/// something else.
+fn pointwise_window(format: Size, windows: &[IRect], blank: Rgba) -> IRect {
+    let w = windows.iter().fold(IRect::default(), |u, w| u.union(w));
+    if blank == color::TRANSPARENT { w } else { w.union(&IRect::frame(format)) }
+}
+
+/// An image of frame `format` holding `window`, each pixel `f(x, y)` at its
+/// frame position.
+fn generate(format: Size, window: IRect, f: impl Fn(i32, i32) -> Rgba + Sync + Send) -> Image {
+    let mut out = Image::blank(format, window);
+    let w = window.width().max(1);
+    out.pixels.par_iter_mut().enumerate().for_each(|(i, px)| {
+        *px = f(window.x0 + (i % w) as i32, window.y0 + (i / w) as i32);
+    });
+    out
 }
 
 /// Evaluate one operator. `inputs` are the already-rendered upstream images,
@@ -769,26 +784,18 @@ pub fn eval(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalConte
 
 /// `result` blended back toward `base` by `mix × mask alpha`. Outside the
 /// mask's extent the mask counts as empty; with no mask it counts as full.
-fn mask_mix(base: &Image, mut result: Image, mask: Option<&Image>, mix: f32) -> Image {
+fn mask_mix(base: &Image, result: Image, mask: Option<&Image>, mix: f32) -> Image {
     let mix = mix.clamp(0.0, 1.0);
     if mask.is_none() && mix >= 1.0 {
         return result;
     }
-    let w = result.width;
-    result.pixels.par_iter_mut().enumerate().for_each(|(i, px)| {
-        let (x, y) = (i % w, i / w);
-        let m = match mask {
-            Some(m) if x < m.width && y < m.height => m.get(x, y)[3].clamp(0.0, 1.0),
-            Some(_) => 0.0,
-            None => 1.0,
-        };
-        let t = mix * m;
-        let b = if x < base.width && y < base.height { base.get(x, y) } else { color::TRANSPARENT };
-        for c in 0..4 {
-            px[c] = b[c] + (px[c] - b[c]) * t;
-        }
-    });
-    result
+    // Where the mask holds back the result, the base shows: both windows.
+    let window = result.window().union(&base.window());
+    generate(result.format, window, |x, y| {
+        let t = mix * mask.map_or(1.0, |m| m.at(x, y)[3].clamp(0.0, 1.0));
+        let (b, r) = (base.at(x, y), result.at(x, y));
+        std::array::from_fn(|c| b[c] + (r[c] - b[c]) * t)
+    })
 }
 
 fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContext) -> Result<Image> {
@@ -938,8 +945,7 @@ struct Grade {
 fn grade(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: Grade = parse(params, "grade")?;
     let src = input(inputs, 0, "grade")?;
-    let mut out = src.clone();
-    map_pixels(&mut out, |px| {
+    Ok(mapped(src, |px| {
         let s = color::unpremultiply(px);
         let mut rgb = [0.0f32; 3];
         for c in 0..3 {
@@ -950,8 +956,7 @@ fn grade(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
             rgb[c] = v;
         }
         color::premultiply([rgb[0], rgb[1], rgb[2], s[3]])
-    });
-    Ok(out)
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -970,31 +975,11 @@ fn merge(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let fg = input(inputs, 0, "merge")?;
     let bg = input(inputs, 1, "merge")?;
 
-    // Output canvas is the union bounding box (both share origin here).
-    let w = fg.width.max(bg.width);
-    let h = fg.height.max(bg.height);
-    let sample = |img: &Image, x: usize, y: usize| -> Rgba {
-        if x < img.width && y < img.height {
-            img.get(x, y)
-        } else {
-            color::TRANSPARENT
-        }
-    };
-
+    // B's frame, holding both inputs' data.
     let op = p.operation.as_str();
-    let mut out = Image::new(w, h);
-    out.pixels
-        .par_iter_mut()
-        .enumerate()
-        .try_for_each(|(i, px)| -> Result<()> {
-            let x = i % w;
-            let y = i / w;
-            let f = sample(fg, x, y);
-            let b = sample(bg, x, y);
-            *px = blend(op, f, b)?;
-            Ok(())
-        })?;
-    Ok(out)
+    let blank = blend(op, color::TRANSPARENT, color::TRANSPARENT)?;
+    let window = pointwise_window(bg.format, &[fg.window(), bg.window()], blank);
+    Ok(generate(bg.format, window, |x, y| blend(op, fg.at(x, y), bg.at(x, y)).unwrap_or(blank)))
 }
 
 #[inline]
@@ -1067,7 +1052,9 @@ struct Transform {
 /// output pixel we find the source location and sample it.
 fn transform(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: Transform = parse(params, "transform")?;
-    let src = input(inputs, 0, "transform")?;
+    // Not data-window aware yet (Phase 0.6 milestone 3): the whole frame.
+    let flat = input(inputs, 0, "transform")?.flat();
+    let src: &Image = &flat;
     let (w, h) = (src.width, src.height);
     let cx = w as f32 / 2.0;
     let cy = h as f32 / 2.0;
@@ -1101,11 +1088,13 @@ fn transform(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
 /// frame: `params` carry each track's position now (`track<i>`) and at the
 /// reference frame (`ref<i>`, added by [`resolve_params`]).
 fn tracker(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
-    let src = input(inputs, 0, "tracker")?;
     let output = params.get("output").and_then(Value::as_str).unwrap_or("input");
     if output == "input" {
-        return Ok(src.clone());
+        return Ok(input(inputs, 0, "tracker")?.clone());
     }
+    // Not data-window aware yet (Phase 0.6 milestone 3): the whole frame.
+    let flat = input(inputs, 0, "tracker")?.flat();
+    let src: &Image = &flat;
     let p = params_with_defaults("tracker", params);
     let now = track::positions(&p, 0);
     let refs: Vec<_> = (1..=now.len())
@@ -1152,7 +1141,9 @@ struct CornerPin {
 /// that map from behind the source's horizon stay transparent.
 fn corner_pin(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: CornerPin = parse(params, "corner_pin")?;
-    let src = input(inputs, 0, "corner_pin")?;
+    // Not data-window aware yet (Phase 0.6 milestone 3): the whole frame.
+    let flat = input(inputs, 0, "corner_pin")?.flat();
+    let src: &Image = &flat;
     let to = [p.to1, p.to2, p.to3, p.to4];
     let from = [p.from1, p.from2, p.from3, p.from4];
     // Each output pixel reads where it came from: to → from.
@@ -1192,7 +1183,9 @@ struct Blur {
 
 fn blur(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: Blur = parse(params, "blur")?;
-    let src = input(inputs, 0, "blur")?;
+    // Not data-window aware yet (Phase 0.6 milestone 3): the whole frame.
+    let flat = input(inputs, 0, "blur")?.flat();
+    let src: &Image = &flat;
     let r = p.radius.max(0.0).round() as usize;
     if r == 0 {
         return Ok(src.clone());
@@ -1366,21 +1359,16 @@ fn channel_select(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     if b.is_none() && srcs.iter().any(|s| matches!(s, Source::Channel(1, _))) {
         bail!("input 'B' is not connected");
     }
-    let w = a.width;
-    let mut out = Image::new(a.width, a.height);
-    out.pixels.par_iter_mut().enumerate().for_each(|(i, px)| {
-        let (x, y) = (i % w, i / w);
-        let pa = a.pixels[i];
-        let pb = b.map_or(color::TRANSPARENT, |b| pixel_or_clear(b, x, y));
-        for (c, src) in srcs.iter().enumerate() {
-            px[c] = match *src {
-                Source::Channel(0, ch) => pa[ch],
-                Source::Channel(_, ch) => pb[ch],
-                Source::Value(v) => v,
-            };
-        }
-    });
-    Ok(out)
+    let pick = |pa: Rgba, pb: Rgba| -> Rgba {
+        std::array::from_fn(|c| match srcs[c] {
+            Source::Channel(0, ch) => pa[ch],
+            Source::Channel(_, ch) => pb[ch],
+            Source::Value(v) => v,
+        })
+    };
+    let windows: Vec<IRect> = [Some(a), b].into_iter().flatten().map(Image::window).collect();
+    let window = pointwise_window(a.format, &windows, pick(color::TRANSPARENT, color::TRANSPARENT));
+    Ok(generate(a.format, window, |x, y| pick(a.at(x, y), b.map_or(color::TRANSPARENT, |b| b.at(x, y)))))
 }
 
 // ---------------------------------------------------------------------------
@@ -1408,27 +1396,19 @@ fn dissolve(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let a = input(inputs, 0, "dissolve")?;
     let b = input(inputs, 1, "dissolve")?;
     let t = p.amount.clamp(0.0, 1.0);
-    let (w, h) = (a.width.max(b.width), a.height.max(b.height));
-    let mut out = Image::new(w, h);
-    out.pixels.par_iter_mut().enumerate().for_each(|(i, px)| {
-        let (x, y) = (i % w, i / w);
-        let (pa, pb) = (pixel_or_clear(a, x, y), pixel_or_clear(b, x, y));
-        for c in 0..4 {
-            px[c] = pa[c] + (pb[c] - pa[c]) * t;
-        }
-    });
-    Ok(out)
+    let window = a.window().union(&b.window());
+    Ok(generate(b.format, window, |x, y| {
+        let (pa, pb) = (a.at(x, y), b.at(x, y));
+        std::array::from_fn(|c| pa[c] + (pb[c] - pa[c]) * t)
+    }))
 }
 
-/// A on a canvas covering both inputs; [`eval`]'s mask/mix step then blends
-/// it over B by the mask.
+/// A in B's frame; [`eval`]'s mask/mix step then blends it over B by the
+/// mask.
 fn keymix(inputs: &[Option<&Image>]) -> Result<Image> {
     let a = input(inputs, 0, "keymix")?;
     let b = input(inputs, 1, "keymix")?;
-    let (w, h) = (a.width.max(b.width), a.height.max(b.height));
-    let mut out = Image::new(w, h);
-    out.pixels.par_iter_mut().enumerate().for_each(|(i, px)| *px = pixel_or_clear(a, i % w, i / w));
-    Ok(out)
+    Ok(generate(b.format, a.window(), |x, y| a.at(x, y)))
 }
 
 // ---------------------------------------------------------------------------
@@ -1447,30 +1427,21 @@ struct Crop {
 fn crop(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: Crop = parse(params, "crop")?;
     let src = input(inputs, 0, "crop")?;
-    let x0 = p.left.min(src.width);
-    let y0 = p.top.min(src.height);
-    let x1 = src.width.saturating_sub(p.right).max(x0);
-    let y1 = src.height.saturating_sub(p.bottom).max(y0);
+    let f = src.format;
+    let x0 = p.left.min(f.width);
+    let y0 = p.top.min(f.height);
+    let x1 = f.width.saturating_sub(p.right).max(x0);
+    let y1 = f.height.saturating_sub(p.bottom).max(y0);
+    let keep = IRect::new(x0 as i32, y0 as i32, x1 as i32, y1 as i32);
+    let window = src.window().intersect(&keep);
     match p.mode.as_str() {
-        "clear outside" => {
-            let w = src.width;
-            let mut out = src.clone();
-            out.pixels.par_iter_mut().enumerate().for_each(|(i, px)| {
-                let (x, y) = (i % w, i / w);
-                if x < x0 || x >= x1 || y < y0 || y >= y1 {
-                    *px = color::TRANSPARENT;
-                }
-            });
-            Ok(out)
-        }
+        "clear outside" => Ok(generate(f, window, |x, y| src.at(x, y))),
         "shrink canvas" => {
-            let w = (x1 - x0).max(1);
-            let h = (y1 - y0).max(1);
-            let mut out = Image::new(w, h);
-            out.pixels.par_iter_mut().enumerate().for_each(|(i, px)| {
-                *px = pixel_or_clear(src, x0 + i % w, y0 + i / w);
-            });
-            Ok(out)
+            // The box becomes the frame, its corner the new origin.
+            let format = Size { width: keep.width().max(1), height: keep.height().max(1) };
+            let (dx, dy) = (keep.x0, keep.y0);
+            let moved = IRect::new(window.x0 - dx, window.y0 - dy, window.x1 - dx, window.y1 - dy);
+            Ok(generate(format, moved, |x, y| src.at(x + dx, y + dy)))
         }
         other => bail!("unknown crop mode '{other}'"),
     }
@@ -1487,7 +1458,9 @@ struct Resize {
 /// pixels are skipped) and bilinear interpolation when enlarging.
 fn resize(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: Resize = parse(params, "resize")?;
-    let src = input(inputs, 0, "resize")?;
+    // Not data-window aware yet (Phase 0.6 milestone 3): the whole frame.
+    let flat = input(inputs, 0, "resize")?.flat();
+    let src: &Image = &flat;
     let (w, h) = (p.width.max(1), p.height.max(1));
     let (sx, sy) = (w as f32 / src.width as f32, h as f32 / src.height as f32);
     let (sx, sy) = match p.fit.as_str() {
@@ -1562,7 +1535,7 @@ struct Polygon {
 fn shape_op(op: &str, params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let style: ShapeStyle = parse(params, op)?;
     let bg = inputs.first().copied().flatten();
-    let (w, h) = bg.map_or((style.width, style.height), |b| (b.width, b.height));
+    let format = bg.map_or(Size { width: style.width, height: style.height }, |b| b.format);
     let (outline, rule) = match op {
         "rectangle" | "ellipse" => {
             let b: BoxShape = parse(params, op)?;
@@ -1576,13 +1549,37 @@ fn shape_op(op: &str, params: &Value, inputs: &[Option<&Image>]) -> Result<Image
             (outline, rule)
         }
     };
-    let cov = shape::coverage(&[outline], w, h, style.feather, rule);
-    shade(&cov, w, h, &style, bg)
+    // Coverage only where the shape can reach: its outline's bounds plus
+    // the feather (centered on the edge), within the frame. Inverted, it
+    // covers the rest of the frame.
+    let frame = IRect::frame(format);
+    let reach = if style.invert {
+        frame
+    } else {
+        let pad = (style.feather.max(1.0) / 2.0).ceil() as i32 + 1;
+        let (lo, hi) = outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).fold(
+            ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]),
+            |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]),
+        );
+        let bounds = if lo[0] <= hi[0] {
+            IRect::new(lo[0].floor() as i32, lo[1].floor() as i32, hi[0].ceil() as i32, hi[1].ceil() as i32).expand(pad)
+        } else {
+            IRect::default()
+        };
+        bounds.intersect(&frame)
+    };
+    let shifted: Vec<Pt> = outline.iter().map(|p| [p[0] - reach.x0 as f32, p[1] - reach.y0 as f32]).collect();
+    let cov = shape::coverage(&[shifted], reach.width(), reach.height(), style.feather, rule);
+    let at = |x: i32, y: i32| {
+        if reach.contains(x, y) { cov[(y - reach.y0) as usize * reach.width() + (x - reach.x0) as usize] } else { 0.0 }
+    };
+    shade(at, reach, format, &style, bg)
 }
 
-/// Turn shape coverage into an image: the shape's color over `bg`, or with
-/// the Subtract operation, `bg` held out by the shape.
-fn shade(cov: &[f32], w: usize, h: usize, style: &ShapeStyle, bg: Option<&Image>) -> Result<Image> {
+/// Turn shape coverage (`cov(x, y)`, zero outside `reach`) into an image:
+/// the shape's color over `bg`, or with the Subtract operation, `bg` held
+/// out by the shape.
+fn shade(cov: impl Fn(i32, i32) -> f32 + Sync + Send, reach: IRect, format: Size, style: &ShapeStyle, bg: Option<&Image>) -> Result<Image> {
     let subtract = match style.operation.as_str() {
         "over" => false,
         "subtract" => true,
@@ -1590,15 +1587,14 @@ fn shade(cov: &[f32], w: usize, h: usize, style: &ShapeStyle, bg: Option<&Image>
     };
     let color = color::premultiply(style.color);
     let opacity = style.opacity.clamp(0.0, 1.0);
-    let mut img = Image::new(w, h);
-    img.pixels.par_iter_mut().enumerate().for_each(|(i, px)| {
-        let c = if style.invert { 1.0 - cov[i] } else { cov[i] } * opacity;
-        let b = bg.map_or(color::TRANSPARENT, |b| b.pixels[i]);
-        for k in 0..4 {
-            px[k] = if subtract { b[k] * (1.0 - c) } else { color[k] * c + b[k] * (1.0 - color[3] * c) };
-        }
-    });
-    Ok(img)
+    let bg_window = bg.map_or(IRect::default(), Image::window);
+    // Subtracting only removes from the background.
+    let window = if subtract { bg_window } else { bg_window.union(&reach) };
+    Ok(generate(format, window, |x, y| {
+        let c = if style.invert { 1.0 - cov(x, y) } else { cov(x, y) } * opacity;
+        let b = bg.map_or(color::TRANSPARENT, |b| b.at(x, y));
+        std::array::from_fn(|k| if subtract { b[k] * (1.0 - c) } else { color[k] * c + b[k] * (1.0 - color[3] * c) })
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1679,24 +1675,72 @@ mod tests {
     fn shapes_draw_on_their_own_canvas_or_over_a_background() {
         let params = json!({ "width": 20, "height": 10, "center": [10, 5], "size": [4, 4], "color": [1, 0, 0, 0.5] });
         let out = eval("rectangle", &params, &[None], &CTX).unwrap();
-        assert_eq!((out.width, out.height), (20, 10));
-        assert_eq!(out.get(10, 5), [0.5, 0.0, 0.0, 0.5], "premultiplied color");
-        assert_eq!(out.get(0, 0), color::TRANSPARENT);
+        assert_eq!((out.format.width, out.format.height), (20, 10));
+        assert_eq!(out.at(10, 5), [0.5, 0.0, 0.0, 0.5], "premultiplied color");
+        assert_eq!(out.at(0, 0), color::TRANSPARENT);
+        assert_eq!(out.window(), IRect::new(6, 1, 14, 9), "only the shape's bounds are stored");
 
         let bg = solid(8, 8, [0.0, 0.0, 1.0, 1.0]);
         let params = json!({ "center": [4, 4], "size": [4, 4], "color": [1, 0, 0, 0.5] });
         let out = eval("ellipse", &params, &[Some(&bg)], &CTX).unwrap();
-        assert_eq!((out.width, out.height), (8, 8), "background sets the canvas");
-        assert_eq!(out.get(0, 0), [0.0, 0.0, 1.0, 1.0]);
-        let c = out.get(4, 4);
+        assert_eq!((out.format.width, out.format.height), (8, 8), "background sets the canvas");
+        assert_eq!(out.at(0, 0), [0.0, 0.0, 1.0, 1.0]);
+        let c = out.at(4, 4);
         assert!(approx(c[0], 0.5) && approx(c[2], 0.5) && approx(c[3], 1.0), "{c:?}");
 
         let cut = eval("rectangle", &json!({ "center": [4, 4], "size": [2, 2], "operation": "subtract" }), &[Some(&bg)], &CTX).unwrap();
-        assert_eq!(cut.get(4, 4), color::TRANSPARENT);
-        assert_eq!(cut.get(0, 0), [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(cut.at(4, 4), color::TRANSPARENT);
+        assert_eq!(cut.at(0, 0), [0.0, 0.0, 1.0, 1.0]);
 
         let inv = eval("rectangle", &json!({ "width": 8, "height": 8, "center": [4, 4], "size": [2, 2], "invert": true }), &[None], &CTX).unwrap();
-        assert_eq!((inv.get(4, 4)[3], inv.get(0, 0)[3]), (0.0, 1.0));
+        assert_eq!((inv.at(4, 4)[3], inv.at(0, 0)[3]), (0.0, 1.0));
+    }
+
+    /// A `w × h` patch of `px` at (x, y) in a `fw × fh` frame.
+    fn patch(fw: usize, fh: usize, x: i32, y: i32, w: usize, h: usize, px: Rgba) -> Image {
+        let mut img = Image::blank(Size { width: fw, height: fh }, IRect::new(x, y, x + w as i32, y + h as i32));
+        img.pixels.iter_mut().for_each(|p| *p = px);
+        img
+    }
+
+    #[test]
+    fn small_layers_keep_small_windows() {
+        let red = patch(100, 50, 10, 10, 4, 4, [1.0, 0.0, 0.0, 1.0]);
+        let blue = patch(80, 40, 60, 20, 5, 5, [0.0, 0.0, 1.0, 1.0]);
+        // Merge: B's frame, holding both.
+        let m = eval("merge", &json!({}), &[Some(&red), Some(&blue), None], &CTX).unwrap();
+        assert_eq!((m.format, m.window()), (blue.format, IRect::new(10, 10, 65, 25)));
+        assert_eq!((m.at(11, 11), m.at(61, 21), m.at(30, 15)), ([1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0], color::TRANSPARENT));
+        // Color ops keep the window unless transparent black stops being so.
+        let rgb = eval("invert", &json!({ "channels": "rgb" }), &[Some(&red), None], &CTX).unwrap();
+        assert_eq!(rgb.window(), red.window());
+        let alpha = eval("invert", &json!({ "channels": "alpha" }), &[Some(&red), None], &CTX).unwrap();
+        assert_eq!((alpha.window(), alpha.at(0, 0)[3], alpha.at(11, 11)[3]), (red.frame(), 1.0, 0.0));
+        let lifted = eval("clamp", &json!({ "min": 0.2 }), &[Some(&red), None], &CTX).unwrap();
+        assert_eq!(lifted.window(), red.frame());
+        // A constant-1 channel fills the frame.
+        let cs = eval("channel_select", &json!({ "alpha": "one" }), &[Some(&red), None], &CTX).unwrap();
+        assert_eq!((cs.window(), cs.at(90, 40)[3]), (red.frame(), 1.0));
+        // Mask/mix: the result where the mask is, the base elsewhere.
+        let mask = patch(100, 50, 12, 10, 2, 4, [1.0; 4]);
+        let graded = eval("exposure", &json!({ "stops": 1 }), &[Some(&red), Some(&mask)], &CTX).unwrap();
+        assert_eq!((graded.at(10, 11)[0], graded.at(12, 11)[0]), (1.0, 2.0));
+        // Shrinking the canvas moves the window with the new origin.
+        let c = eval("crop", &json!({ "left": 8, "top": 5, "mode": "shrink canvas" }), &[Some(&red)], &CTX).unwrap();
+        assert_eq!((c.format, c.window()), (Size { width: 92, height: 45 }, IRect::new(2, 5, 6, 9)));
+    }
+
+    #[test]
+    fn a_shape_merged_over_a_background_matches_one_drawn_on_it() {
+        let bg = eval("checkerboard", &json!({ "width": 64, "height": 48, "size": 8 }), &[], &CTX).unwrap();
+        let p = json!({ "width": 64, "height": 48, "center": [30, 20], "size": [20, 12], "rotate": 20, "feather": 3, "color": [1, 0.5, 0, 0.8] });
+        let alone = eval("rectangle", &p, &[None], &CTX).unwrap();
+        assert!(alone.window().width() < 40, "{:?}", alone.window());
+        let merged = eval("merge", &json!({}), &[Some(&alone), Some(&bg), None], &CTX).unwrap();
+        let drawn = eval("rectangle", &p, &[Some(&bg)], &CTX).unwrap();
+        let (a, b) = (merged.flat(), drawn.flat());
+        let diff = a.pixels.iter().zip(&b.pixels).flat_map(|(x, y)| (0..4).map(move |c| (x[c] - y[c]).abs())).fold(0.0, f32::max);
+        assert!(diff < 1e-5, "off by {diff}");
     }
 
     #[test]
@@ -1707,18 +1751,18 @@ mod tests {
         });
         let first = eval("polygon", &resolve_params("polygon", &params, 1), &[None], &CTX).unwrap();
         let last = eval("polygon", &resolve_params("polygon", &params, 11), &[None], &CTX).unwrap();
-        assert_eq!((first.get(2, 2)[3], first.get(8, 8)[3]), (1.0, 0.0));
-        assert_eq!((last.get(2, 2)[3], last.get(8, 8)[3]), (0.0, 1.0));
+        assert_eq!((first.at(2, 2)[3], first.at(8, 8)[3]), (1.0, 0.0));
+        assert_eq!((last.at(2, 2)[3], last.at(8, 8)[3]), (0.0, 1.0));
     }
 
     #[test]
     fn roto_draws_a_smooth_closed_curve() {
         let out = eval("roto", &json!({}), &[None], &CTX).unwrap();
-        assert_eq!((out.width, out.height), (512, 512));
-        assert_eq!(out.get(256, 256)[3], 1.0);
+        assert_eq!((out.format.width, out.format.height), (512, 512));
+        assert_eq!(out.at(256, 256)[3], 1.0);
         // The default circle has radius 120: a square's corner at 45° would be inside, the circle's isn't.
-        assert_eq!(out.get(256 + 100, 256 + 100)[3], 0.0);
-        assert_eq!(out.get(256 + 80, 256 + 80)[3], 1.0);
+        assert_eq!(out.at(256 + 100, 256 + 100)[3], 0.0);
+        assert_eq!(out.at(256 + 80, 256 + 80)[3], 1.0);
         let area: f32 = out.pixels.iter().map(|p| p[3]).sum();
         let exact = std::f32::consts::PI * 120.0 * 120.0;
         assert!((area - exact).abs() / exact < 0.003, "{area} vs {exact}");
@@ -1904,10 +1948,11 @@ mod tests {
         let src = solid(10, 8, [1.0; 4]);
         let p = json!({ "left": 2, "top": 1, "right": 3, "bottom": 0, "mode": "shrink canvas" });
         let out = eval("crop", &p, &[Some(&src)], &CTX).unwrap();
-        assert_eq!((out.width, out.height), (5, 7));
+        assert_eq!((out.format.width, out.format.height), (5, 7));
         let p = json!({ "left": 2, "mode": "clear outside" });
         let out = eval("crop", &p, &[Some(&src)], &CTX).unwrap();
-        assert_eq!(out.get(1, 0)[3], 0.0);
-        assert_eq!(out.get(2, 0)[3], 1.0);
+        assert_eq!(out.at(1, 0)[3], 0.0);
+        assert_eq!(out.at(2, 0)[3], 1.0);
+        assert_eq!(out.window(), IRect::new(2, 0, 10, 8));
     }
 }
