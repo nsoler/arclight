@@ -153,6 +153,26 @@ pub struct VideoInfo {
     pub height: usize,
     pub fps: f64,
     pub frames: usize,
+    /// Bits per component of the stream (8, 10, 12, …). Deeper than 8 is
+    /// decoded at 16 bits so none of it is lost.
+    pub bits: u32,
+}
+
+/// Bits per component of an ffmpeg pixel format, from its name:
+/// `yuv420p10le` 10, `p010le` 10, `rgb48le` 16, `gbrpf32le` 32,
+/// `yuv420p` / `nv12` / `rgb24` 8.
+pub fn pix_fmt_bits(name: &str) -> u32 {
+    let base = name.strip_suffix("le").or_else(|| name.strip_suffix("be")).unwrap_or(name);
+    let digits = base.len() - base.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+    let n: u32 = base[base.len() - digits..].parse().unwrap_or(0);
+    match n {
+        // nv12, nv16, … name their chroma layout, not a depth.
+        9..=16 if !base.starts_with("nv") => n,
+        // Whole-pixel sizes: rgb48 / rgba64 are 16 a component.
+        48 | 64 => 16,
+        32 if base.contains('f') => 32,
+        _ => 8,
+    }
 }
 
 static PROBES: LazyLock<Mutex<HashMap<PathBuf, VideoInfo>>> = LazyLock::new(Default::default);
@@ -170,7 +190,7 @@ pub fn probe_video(path: &Path) -> Result<VideoInfo> {
     }
     let out = Command::new("ffprobe")
         .args(["-v", "error", "-select_streams", "v:0", "-show_entries"])
-        .arg("stream=width,height,r_frame_rate,avg_frame_rate,nb_frames,duration:format=duration")
+        .arg("stream=width,height,r_frame_rate,avg_frame_rate,nb_frames,duration,pix_fmt,bits_per_raw_sample:format=duration")
         .args(["-of", "json"])
         .arg(path)
         .output()
@@ -198,7 +218,9 @@ pub fn probe_video(path: &Path) -> Result<VideoInfo> {
     if width == 0 || height == 0 {
         bail!("could not read the resolution of {}", path.display());
     }
-    let info = VideoInfo { width, height, fps, frames };
+    // The pixel format names the depth; bits_per_raw_sample backs it up.
+    let bits = s["pix_fmt"].as_str().map_or(8, pix_fmt_bits).max(num(&s["bits_per_raw_sample"]).map_or(0, |b| b as u32));
+    let info = VideoInfo { width, height, fps, frames, bits };
     PROBES.lock().unwrap().insert(path.to_path_buf(), info);
     Ok(info)
 }
@@ -227,7 +249,7 @@ impl Decoder {
         let mut child = Command::new("ffmpeg")
             .args(["-v", "error", "-nostdin", "-ss", &format!("{t:.6}"), "-i"])
             .arg(path)
-            .args(["-f", "rawvideo", "-pix_fmt", "rgba", "-"])
+            .args(["-f", "rawvideo", "-pix_fmt", if self.info.bits > 8 { "rgba64le" } else { "rgba" }, "-"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -249,7 +271,8 @@ impl Decoder {
             self.start(path, index)?;
         }
         let (w, h) = (self.info.width, self.info.height);
-        let mut buf = vec![0u8; w * h * 4];
+        let deep = self.info.bits > 8;
+        let mut buf = vec![0u8; w * h * if deep { 8 } else { 4 }];
         let (_, stdout) = self.child.as_mut().unwrap();
         if let Err(e) = stdout.read_exact(&mut buf) {
             self.stop();
@@ -261,7 +284,7 @@ impl Decoder {
             return Err(e).with_context(|| format!("decoding frame {index} of {}", path.display()));
         }
         self.next = index + 1;
-        let img = Arc::new(rgba8_to_image(&buf, w, h));
+        let img = Arc::new(if deep { rgba16_to_image(&buf, w, h) } else { rgba8_to_image(&buf, w, h) });
         self.last = Some((index, img.clone()));
         Ok(img)
     }
@@ -287,6 +310,22 @@ pub fn read_video_frame(path: &Path, index: usize) -> Result<Arc<Image>> {
         last: None,
     });
     dec.read(path, index)
+}
+
+/// 16-bit little-endian sRGB RGBA (straight alpha) -> linear premultiplied
+/// float, for sources deeper than 8 bits.
+fn rgba16_to_image(buf: &[u8], w: usize, h: usize) -> Image {
+    use rayon::prelude::*;
+    static LUT: LazyLock<Vec<f32>> = LazyLock::new(|| (0..65536).map(|v| color::srgb_to_linear(v as f32 / 65535.0)).collect());
+    let mut img = Image::new(w, h);
+    img.pixels
+        .par_iter_mut()
+        .zip(buf.par_chunks_exact(8))
+        .for_each(|(px, s)| {
+            let c = |i: usize| u16::from_le_bytes([s[i * 2], s[i * 2 + 1]]) as usize;
+            *px = color::premultiply([LUT[c(0)], LUT[c(1)], LUT[c(2)], c(3) as f32 / 65535.0]);
+        });
+    img
 }
 
 /// 8-bit sRGB RGBA (straight alpha) -> linear premultiplied float.
@@ -404,6 +443,44 @@ mod tests {
         assert_eq!(frame_path("shot.%d.png", 5), PathBuf::from("shot.5.png"));
         assert_eq!(frame_path("still.png", 5), PathBuf::from("still.png"));
         assert!(!is_sequence_pattern("still.png"));
+    }
+
+    #[test]
+    fn pixel_format_depths() {
+        for (name, bits) in [
+            ("yuv420p", 8), ("yuvj422p", 8), ("yuv410p", 8), ("nv12", 8), ("nv16", 8), ("rgb24", 8), ("rgba", 8), ("rgb565le", 8),
+            ("yuv420p10le", 10), ("yuv422p10be", 10), ("p010le", 10), ("x2rgb10le", 10), ("gbrp10le", 10), ("yuva444p12le", 12),
+            ("gray16le", 16), ("rgb48le", 16), ("rgba64be", 16), ("gbrpf32le", 32),
+        ] {
+            assert_eq!(pix_fmt_bits(name), bits, "{name}");
+        }
+    }
+
+    /// A 10-bit video keeps its 10 bits: a ramp of 1024 levels comes back
+    /// as 1024 distinct values (8 bits would give at most 256). Needs ffmpeg;
+    /// skipped without it.
+    #[test]
+    fn ten_bit_video_decodes_at_full_depth() {
+        let dir = std::env::temp_dir().join(format!("arclight_10bit_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let clip = dir.join("ramp.mkv");
+        // gbrp10le FFV1: lossless, so the codes are exact.
+        let made = Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "nullsrc=s=1024x2:d=0.1,format=gbrp10le,geq=r='X':g='X':b='X'"])
+            .args(["-frames:v", "1", "-c:v", "ffv1", "-pix_fmt", "gbrp10le"])
+            .arg(&clip)
+            .status();
+        if !made.is_ok_and(|s| s.success()) {
+            eprintln!("skipping: ffmpeg couldn't make a 10-bit clip");
+            return;
+        }
+        let info = probe_video(&clip).unwrap();
+        assert_eq!(info.bits, 10);
+        let img = read_video_frame(&clip, 0).unwrap();
+        let mut levels: Vec<u32> = (0..1024).map(|x| img.at(x, 0)[0].to_bits()).collect();
+        levels.dedup();
+        assert!(levels.len() > 1000, "only {} distinct levels", levels.len());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

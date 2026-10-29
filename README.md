@@ -288,7 +288,10 @@ what loaded, and `arclight ops [OP]` to see the op catalog.
   a one-frame sequence. A frame missing from the middle holds the nearest
   earlier frame. Media Out and Write take `####` / `%04d` patterns.
 - **Video** (via ffmpeg): `.mp4 .mov .m4v .mkv .avi .webm .mxf .mpg .mpeg`
-  in; H.264 `.mp4` or ProRes 422 HQ `.mov` out. Decoded to 8-bit sRGB.
+  in; H.264 `.mp4` or ProRes 422 HQ `.mov` out. Sources deeper than 8 bits
+  (10-bit HEVC, 10/12-bit ProRes, DNxHR HQX, …) are decoded at 16 bits, so
+  their full precision reaches the comp; 8-bit sources stay on the lighter
+  8-bit path. The Media In panel shows the clip's bit depth.
 - **Resolution**: no fixed limit on reads. Every image is held as 32-bit
   float RGBA (16 bytes a pixel: about 130 MB for a 4K UHD frame, 530 MB
   for 8K UHD), so memory sets the practical ceiling; the frame cache

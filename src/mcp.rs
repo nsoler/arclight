@@ -305,7 +305,7 @@ pub fn probe_media(path: &Path) -> Result<Value> {
     let s = path.to_string_lossy();
     if media::is_video(path) {
         let v = media::probe_video(path)?;
-        return Ok(json!({"kind": "video", "width": v.width, "height": v.height, "fps": v.fps, "frames": v.frames}));
+        return Ok(json!({"kind": "video", "width": v.width, "height": v.height, "bits": v.bits, "fps": v.fps, "frames": v.frames}));
     }
     let (pattern, range) = if media::is_sequence_pattern(&s) {
         (s.to_string(), media::detect_sequence_range(&s))

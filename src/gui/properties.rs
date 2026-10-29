@@ -812,7 +812,7 @@ fn describe_media(path: &str) -> String {
     let p = Path::new(path);
     if media::is_video(p) {
         match media::probe_video(p) {
-            Ok(v) => format!("Video · {}x{} · {:.3} fps · {} frames", v.width, v.height, v.fps, v.frames),
+            Ok(v) => format!("Video · {}x{} · {}-bit · {:.3} fps · {} frames", v.width, v.height, v.bits, v.fps, v.frames),
             Err(e) => format!("{e:#}"),
         }
     } else if media::is_sequence_pattern(path) {

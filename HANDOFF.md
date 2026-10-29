@@ -480,6 +480,15 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   color; ffmpeg and ImageMagick read our DPX back to it too. Not handled:
   RLE-encoded DPX, 1-bit, 32/64-bit float, multi-element files (first
   element only).
+- **Session 7, part 19** (user request): 10-bit video. `VideoInfo::bits`
+  from ffprobe's `pix_fmt` (`pix_fmt_bits`: trailing digits, nv* = 8,
+  48/64 = 16, f32 = 32) and `bits_per_raw_sample`. Deeper than 8 →
+  `-pix_fmt rgba64le` and `rgba16_to_image` (65536-entry LUT); else the
+  8-bit path as before. Checked: an FFV1 gbrp10 ramp keeps 1024 levels
+  (8-bit gave 256); HEVC Main10, ProRes 422 HQ 10-bit and 4444 12-bit
+  probe and decode; 4K ProRes 10-bit ~72 ms/frame vs 60 ms for 8-bit
+  H.264. `probe_media` reports `bits`. Video *encode* is still 8-bit
+  H.264 / 10-bit ProRes from 8-bit frames (`Encoder` pipes rgba).
 - **CorridorKey** (AI keyer, github.com/nikopueringer/CorridorKey; the
   OFX port gitcapoom/corridorkey_ofx is Windows/Resolve-only): the user
   deferred it. If revisited: run upstream's PyTorch engine (Linux OK; the
