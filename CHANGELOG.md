@@ -11,6 +11,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.45 — 2026-10-29
+
+- MCP / Python: new **particles** tool (`Node.particles(frame, offset,
+  limit)`) returns the particles a particle node (or a Scene / Scanline
+  Render) passes on at a frame: ids, positions, velocities, ages, lives,
+  sizes, colors and source stream, paged (limit default 1000, at most
+  100000). README and help describe every particle node, Scanline
+  Render's growable inputs and the auto-wire into a selected Scanline
+  Render (M13).
+
 ## 0.9.44 — 2026-10-29
 
 - **Particle nodes in the graph:** Particle Emitter, Gravity, Wind,

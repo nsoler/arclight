@@ -317,6 +317,54 @@ color).
   `matte.<node>.A`, …) that other compositing and 3D apps read; other
   formats write the picture only.
 
+## Particles
+
+Particles: Particle Emitter → forces (Gravity, Wind, Turbulence, Attractor,
+Vortex, Bounce, Kill, Speed Limit) → Particle Render (points, sprites,
+objects) → a Scanline Render input, or Particles 2D for no camera.
+Particles are simulated only where they're drawn and cached per frame;
+editing a param re-simulates from the first frame it changes.
+
+- **Scanline Render** takes any number of scenes or particle streams:
+  connect to its last (empty) input and a new one appears. With a Scanline
+  Render selected, a Particle Emitter added from the node browser goes
+  straight into its spare input. A **Scene** node gathers streams too.
+- **Particle Emitter:** where they're born: a **Shape** (point, line,
+  rectangle, disk, sphere, box, placed by Translate / Rotate / Scale; **On
+  the surface** for a sphere's or box's skin), the surface or vertices of
+  the **geometry** input (a card, a primitive, a file), or where the
+  **mask** input's alpha is (for Particles 2D). **Rate** a frame from
+  **Start** to **End frame**, plus a **Burst** at the start. They leave
+  along **Direction** at **Speed** (units a second) within a **Spread**
+  cone, with variations; **Life** (frames), **Size** and **Color** change
+  to their end-of-life values; **Rotation** and **Spin** turn sprites and
+  objects. The same **Seed** always gives the same particles;
+  **Substeps** split frames for fast motion; **Pre-roll** starts early.
+- **Forces and constraints**, each a node in the chain with **Strength**
+  (0: off) and **Start / End frame**: **Gravity** (an acceleration),
+  **Wind** (drag toward a wind velocity), **Turbulence** (swirling curl
+  noise), **Attractor** (pulls to a point; negative pushes), **Vortex**
+  (swirls round an axis), **Bounce** (a floor plane, with bounce and
+  friction), **Kill** (by age, or inside / outside a sphere or box) and
+  **Speed Limit**.
+- **Particle Render:** how they look. **Points**; **sprites** (camera-facing
+  squares or disks, tinted by their color, textured by the **texture**
+  input, which cycles or picks by age through a sequence, faded from
+  **Opacity** to its end value, **over** or **additive** for sparks and
+  fire); or **objects** (a copy of the **objects** input's meshes at each
+  particle, one at random when there are several, scaled by size and
+  facing along their velocity, spinning, or as modelled). Rendered by
+  Scanline Render with everything else, behind nearer surfaces.
+- **Particles 2D:** no camera: x and y are frame pixels (y down) and size
+  is pixels, drawn over the **background** as Particle Render says. Pair it
+  with an emitter's **mask** shape to emit where an image is.
+- In the **3D view**, particles show as colored dots.
+- Scripts and AI agents: create the nodes with **create_node**
+  (`particle_emitter`, `particle_gravity`, …, `particle_render`,
+  `particles_2d`) and read particles with **particles** (Python:
+  `node.particles(frame)`): ids, positions, velocities, ages, sizes,
+  colors.
+
 ## Light 2D
 
 **Light 2D** lights a flat image: a lamp on a plate, a spot on a wall, the

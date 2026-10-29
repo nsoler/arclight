@@ -19,6 +19,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const UNDO_LIMIT: usize = 200;
+/// The most particles one [`Session::particles`] call returns (page
+/// through more with its offset).
+pub const MAX_PARTICLES: usize = 100_000;
 
 pub struct Session {
     pub graph: Graph,
@@ -533,6 +536,44 @@ impl Session {
             })
             .collect();
         Ok(json!({"node": id, "frame": frame, "cameras": cameras, "cards": cards, "meshes": meshes, "lights": lights, "points": scene.points.len()}))
+    }
+
+    /// The particles node `id` passes on at `frame` (an emitter's,
+    /// a modifier's, a Particle Render's, or a Scene's or Scanline Render's
+    /// gathered streams), simulated as needed: from the `offset`th, at most
+    /// `limit` of them (capped at [`MAX_PARTICLES`]), as columns: ids,
+    /// positions, velocities (units per second), ages and lives (frames),
+    /// sizes, colors (premultiplied linear RGBA), and which stream each
+    /// came from. `total` counts them all; `next_offset` is where the next
+    /// page starts, if there is one. Err if the node passes on no particles.
+    pub fn particles(&mut self, id: &str, frame: i64, offset: usize, limit: usize) -> Result<Value> {
+        let img = self.render(id, frame)?;
+        let streams = img.scene.as_ref().map(|s| s.particles.clone()).unwrap_or_default();
+        if streams.is_empty() {
+            bail!("'{id}' passes on no particles (connect it after a Particle Emitter)");
+        }
+        let all: Vec<(usize, crate::particles::Particle)> = streams.iter().enumerate().flat_map(|(k, st)| st.particles().into_iter().map(move |p| (k, p))).collect();
+        let total = all.len();
+        let page = &all[offset.min(total)..(offset.saturating_add(limit.min(MAX_PARTICLES))).min(total)];
+        let v3 = |v: &crate::geom::Vec3| [v.x, v.y, v.z];
+        let end = offset.min(total) + page.len();
+        Ok(json!({
+            "node": id,
+            "frame": frame,
+            "total": total,
+            "offset": offset.min(total),
+            "count": page.len(),
+            "next_offset": (end < total).then_some(end),
+            "streams": streams.iter().map(|st| st.node.clone()).collect::<Vec<_>>(),
+            "ids": page.iter().map(|(_, p)| p.id).collect::<Vec<_>>(),
+            "positions": page.iter().map(|(_, p)| v3(&p.position)).collect::<Vec<_>>(),
+            "velocities": page.iter().map(|(_, p)| v3(&p.velocity)).collect::<Vec<_>>(),
+            "ages": page.iter().map(|(_, p)| p.age).collect::<Vec<_>>(),
+            "lives": page.iter().map(|(_, p)| p.life).collect::<Vec<_>>(),
+            "sizes": page.iter().map(|(_, p)| p.size).collect::<Vec<_>>(),
+            "colors": page.iter().map(|(_, p)| p.color).collect::<Vec<_>>(),
+            "stream": page.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+        }))
     }
 
     /// Render node `id` at `frame` and write it to `path` (EXR keeps float;

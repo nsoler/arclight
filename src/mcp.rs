@@ -87,6 +87,8 @@ static TOOLS: &[Tool] = &[
         }, "required": ["node"]}),
     tool!("scene_objects", "What a 3D node's scene holds at 'frame' (default 1): cameras, cards and meshes (node, world position; meshes their bounds) and lights (node, type ambient/directional/point/spot/area, world position and direction, color, intensity, enabled, shadows, and the type's own settings: cone/penumbra/falloff, size/shape/two_sided/quality, radius), and the number of points. Lights are made with create_node (light_ambient, light_directional, light_point, light_spot, light_area; light_2d lights an image in 2D).",
         {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}}, "required": ["node"]}),
+    tool!("particles", "The particles a particle node passes on at 'frame' (default 1), simulated as needed: an emitter's, a modifier's or a Particle Render's stream, or the streams a Scene or Scanline Render gathers. Columns: ids, positions, velocities (units per second), ages and lives (frames), sizes, colors (premultiplied linear RGBA) and stream (index into 'streams', the nodes they came from). Pages: 'limit' (default 1000, at most 100000) from 'offset' (default 0); 'total' counts all, 'next_offset' starts the next page. Particle nodes: particle_emitter, particle_gravity/wind/turbulence/attractor/vortex/bounce/kill/speed_limit, particle_render, particles_2d.",
+        {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 0}}, "required": ["node"]}),
     tool!("camera_points", "A Camera Tracker's solved points: index, position in 3D, and where each lands in the frame at 'frame' (default: the first solved frame), to pick points for place_on_points or orient_camera; also the solve's mode ('free move' or 'tripod') and the frames placed by PnP.",
         {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}}, "required": ["node"]}),
     tool!("orient_camera", "Move a Camera Tracker's solve (arbitrary until then): 'ground' (3+ point indices) becomes level at height 0 with the camera above, 'origin' (a point index) goes to 0,0,0, and 'scale' ({points: [a, b], distance}) sets the distance between two points. Applied in that order; any may be left out.",
@@ -300,6 +302,10 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
         }
         "track_camera" => s.track_camera(str_arg(args, "node")?, opt_str(args, "mode"), args.get("distance").and_then(Value::as_f64), progress)?,
         "scene_objects" => s.scene_objects(str_arg(args, "node")?, args.get("frame").and_then(Value::as_i64).unwrap_or(1))?,
+        "particles" => {
+            let n = |k: &str, d: u64| args.get(k).and_then(Value::as_u64).unwrap_or(d) as usize;
+            s.particles(str_arg(args, "node")?, args.get("frame").and_then(Value::as_i64).unwrap_or(1), n("offset", 0), n("limit", 1000))?
+        }
         "camera_points" => {
             let sol = s.camera_solution(str_arg(args, "node")?)?;
             let frame = args.get("frame").and_then(Value::as_i64).or_else(|| sol.frames.first().copied()).unwrap_or(1);
@@ -895,6 +901,42 @@ mod tests {
         assert_eq!(r["isError"], false, "{r}");
         let img = s.session.render("lamp", 1).unwrap();
         assert!(img.get(8, 8)[0] > 0.9 && (img.get(20, 8)[0] - 0.1).abs() < 1e-6);
+    }
+
+    /// The particles query: a burst under gravity, in pages, the same for
+    /// the same seed.
+    #[test]
+    fn particles_are_listed_in_pages() {
+        let mut s = Server::new(Session::default());
+        call(&mut s, "create_node", json!({"op": "particle_emitter", "name": "emit", "params": {"rate": 0, "burst": 25, "start": 1, "speed": 0, "life": 1000, "seed": 3}}));
+        call(&mut s, "create_node", json!({"op": "particle_gravity", "name": "fall", "inputs": ["emit"]}));
+        let at = |s: &mut Server, args: Value| {
+            let r = call(s, "particles", args);
+            assert_eq!(r["isError"], false, "{r}");
+            r["structuredContent"].clone()
+        };
+        let all = at(&mut s, json!({"node": "fall", "frame": 25}));
+        assert_eq!((all["total"].as_u64(), all["count"].as_u64(), all["next_offset"].clone()), (Some(25), Some(25), Value::Null));
+        assert_eq!(all["streams"], json!(["fall"]));
+        // Falling: below where they were born, moving down.
+        let born = at(&mut s, json!({"node": "emit", "frame": 25}));
+        let y = |o: &Value, k: &str, i: usize| o[k][i][1].as_f64().unwrap();
+        assert!(y(&all, "positions", 0) < y(&born, "positions", 0) - 1.0 && y(&all, "velocities", 0) < -5.0, "{} {}", y(&all, "positions", 0), y(&all, "velocities", 0));
+        assert_eq!(all["ids"].as_array().unwrap().len(), 25);
+        assert!(all["ages"][0].as_f64().unwrap() > 0.0 && all["sizes"][0].as_f64().unwrap() > 0.0 && all["colors"][0].as_array().unwrap().len() == 4);
+        // Pages of 10: 10, 10, 5, then the ids line up with the whole list.
+        let mut ids = Vec::new();
+        let mut offset = Some(0u64);
+        while let Some(o) = offset {
+            let page = at(&mut s, json!({"node": "fall", "frame": 25, "offset": o, "limit": 10}));
+            ids.extend(page["ids"].as_array().unwrap().clone());
+            offset = page["next_offset"].as_u64();
+        }
+        assert_eq!(json!(ids), all["ids"]);
+        // The same again (cached or not), and an image node has none.
+        assert_eq!(at(&mut s, json!({"node": "fall", "frame": 25}))["positions"], all["positions"]);
+        call(&mut s, "create_node", json!({"op": "constant", "name": "plate"}));
+        assert_eq!(call(&mut s, "particles", json!({"node": "plate"}))["isError"], true);
     }
 
     #[test]

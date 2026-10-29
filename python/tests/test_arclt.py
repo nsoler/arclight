@@ -24,6 +24,18 @@ class ArcltTest(unittest.TestCase):
     def setUp(self):
         arclt.new()
 
+    def test_particles(self):
+        emit = arclt.create_node("particle_emitter", name="emit", rate=0, burst=30, speed=0, life=1000, seed=1)
+        fall = arclt.create_node("particle_gravity", emit)
+        p = fall.particles(20)
+        self.assertEqual((p["total"], p["count"], len(p["positions"])), (30, 30, 30))
+        self.assertLess(p["velocities"][0][1], 0.0)
+        page = fall.particles(20, offset=25, limit=10)
+        self.assertEqual((page["count"], page["ids"]), (5, p["ids"][25:]))
+        self.assertEqual(fall.particles(20)["positions"], p["positions"])
+        with self.assertRaises(arclt.ArcltError):
+            arclt.create_node("constant").particles()
+
     def test_lights_and_scene_objects(self):
         target = arclt.create_node("locator", name="target", translate=[3, 0, 0])
         key = arclt.create_node("light_spot", target, name="key", translate=[0, 4, 0], cone=30)

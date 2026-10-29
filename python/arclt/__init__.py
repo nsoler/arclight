@@ -129,6 +129,24 @@ class Node:
         and the number of ``points``."""
         return _call("scene_objects", node=self._name, frame=frame)
 
+    def particles(self, frame: int | None = None, offset: int = 0, limit: int | None = None) -> dict:
+        """The particles this node passes on at ``frame`` (simulated as
+        needed), as columns: ``ids``, ``positions``, ``velocities``,
+        ``ages``, ``lives``, ``sizes``, ``colors`` and ``stream`` (an index
+        into ``streams``), with ``total``. All of them by default, or
+        ``limit`` from ``offset``."""
+        columns = ("ids", "positions", "velocities", "ages", "lives", "sizes", "colors", "stream")
+        if limit is not None:
+            return _call("particles", node=self._name, frame=frame, offset=offset, limit=limit)
+        out = _call("particles", node=self._name, frame=frame, offset=offset, limit=100_000)
+        while out.get("next_offset") is not None:
+            page = _call("particles", node=self._name, frame=frame, offset=out["next_offset"], limit=100_000)
+            for c in columns:
+                out[c].extend(page[c])
+            out["count"] += page["count"]
+            out["next_offset"] = page.get("next_offset")
+        return out
+
     def camera_points(self, frame: int | None = None) -> list[dict]:
         """For a solved Camera Tracker: its points (``index``,
         ``position`` in 3D, ``frame_position`` in ``frame`` or None)."""
