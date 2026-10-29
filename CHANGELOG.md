@@ -11,6 +11,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.31 — 2026-10-29
+
+- Fixed: the app stopped responding while a file dialog was open
+  (Hyprland and other compositors flagged it as Not Responding). File
+  dialogs now run beside the app (`src/gui/dialogs.rs`), which keeps
+  drawing ("Choosing a file…" in the status bar), and the
+  unsaved-changes questions are shown inside the window.
+
 ## 0.9.30 — 2026-10-29
 
 - Wires can be selected (click; Delete disconnects) and right-clicked

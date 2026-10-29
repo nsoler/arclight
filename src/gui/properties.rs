@@ -1,6 +1,7 @@
 //! Properties panels: one per opened node, stacked newest-first. Widgets are
 //! generated from each op's [`ParamSpec`]s, plus extras for media nodes.
 
+use crate::dialogs;
 use crate::doc::{Doc, NODE_H, NODE_W};
 use crate::node_editor::category_color;
 use arclight::anim::{self, Interp};
@@ -123,6 +124,8 @@ pub struct Properties {
     /// Formulas being typed, by node and param (applied on Enter or when
     /// the field loses focus, if they parse).
     formula_edit: HashMap<(String, String), String>,
+    /// A Browse… file dialog that's open, and the param it's for.
+    browse: Option<dialogs::Pending<Browse>>,
     /// Text params being typed (a Shuffle's plane names), by node and param:
     /// applied on Enter or when the field loses focus, so a half-typed name
     /// isn't evaluated.
@@ -157,6 +160,7 @@ impl Properties {
     pub fn ui(&mut self, ui: &mut egui::Ui, doc: &mut Doc, frame: i64) -> Option<i64> {
         self.frame = frame;
         self.seek = None;
+        self.poll_browse(ui.ctx(), doc);
         self.collect_tracks(doc);
         self.show(ui, doc);
         self.seek.take()
@@ -670,27 +674,16 @@ impl Properties {
                 let mut s = value.as_str().unwrap_or("").to_string();
                 let mut out = None;
                 ui.horizontal(|ui| {
-                    if ui.button("Browse…").clicked() {
-                        if save {
-                            if let Some(p) = rfd::FileDialog::new()
-                                .set_file_name("render.####.png")
-                                .add_filter("Image sequence / video", WRITE_EXTS)
-                                .save_file()
-                            {
-                                out = Some(json!(p.to_string_lossy()));
-                            }
-                        } else if let Some(p) = if op == "read_geo" {
-                            rfd::FileDialog::new().add_filter("3D geometry (OBJ, glTF)", GEO_EXTS).pick_file()
+                    let browse = ui.add_enabled(!dialogs::busy(), egui::Button::new("Browse…")).on_disabled_hover_text("A file dialog is open");
+                    if browse.clicked() {
+                        let what = Browse { node: id.to_string(), param: spec.name, op: op.to_string(), animatable: spec.animatable, frame: self.frame };
+                        self.browse = if save {
+                            dialogs::save(what, dialogs::new().set_file_name("render.####.png").add_filter("Image sequence / video", WRITE_EXTS))
+                        } else if op == "read_geo" {
+                            dialogs::pick(what, dialogs::new().add_filter("3D geometry (OBJ, glTF)", GEO_EXTS))
                         } else {
-                            rfd::FileDialog::new().add_filter("Images & video", READ_EXTS).pick_file()
-                        } {
-                            if op == "media_in" {
-                                self.media_info.remove(id);
-                                apply_media(doc, id, &p);
-                            } else {
-                                out = Some(json!(p.to_string_lossy()));
-                            }
-                        }
+                            dialogs::pick(what, dialogs::new().add_filter("Images & video", READ_EXTS))
+                        };
                     }
                     let resp = ui.add(egui::TextEdit::singleline(&mut s).desired_width(f32::INFINITY));
                     if resp.changed() {
@@ -707,6 +700,21 @@ impl Properties {
             } else {
                 doc.set_param(id, spec.name, v);
             }
+        }
+    }
+
+    /// A Browse… dialog that has closed: set its param to the file chosen
+    /// (a Media In takes the file's range too), as if chosen at once.
+    fn poll_browse(&mut self, ctx: &egui::Context, doc: &mut Doc) {
+        let Some(answer) = self.browse.as_ref().and_then(|p| p.poll()) else {
+            if self.browse.is_some() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
+            return;
+        };
+        let Some(b) = self.browse.take().map(|p| p.what) else { return };
+        if let Some(path) = answer {
+            apply_browse(doc, &mut self.media_info, &b, &path);
         }
     }
 
@@ -1175,6 +1183,33 @@ fn clear_track_keys(doc: &mut Doc, id: &str, frame: i64, after: bool) {
 /// Point a Media In node at `file`: videos and sequences get their frame
 /// range filled in. The first clip brought into a project also sets the
 /// project's frame range and rate.
+/// What a Browse… dialog is choosing a file for.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Browse {
+    pub node: String,
+    pub param: &'static str,
+    pub op: String,
+    /// The param animates: the file goes in as a key at `frame`.
+    pub animatable: bool,
+    pub frame: i64,
+}
+
+/// Put file `path`, chosen for `b`, in its param: a Media In's file brings
+/// its frame range along ([`apply_media`]); others just the path.
+fn apply_browse(doc: &mut Doc, media_info: &mut HashMap<String, String>, b: &Browse, path: &Path) {
+    if doc.node(&b.node).is_none() {
+        return;
+    }
+    if b.op == "media_in" && b.param == "path" {
+        media_info.remove(&b.node);
+        apply_media(doc, &b.node, path);
+    } else if b.animatable {
+        doc.edit_param(&b.node, b.param, b.frame, json!(path.to_string_lossy()));
+    } else {
+        doc.set_param(&b.node, b.param, json!(path.to_string_lossy()));
+    }
+}
+
 pub fn apply_media(doc: &mut Doc, id: &str, file: &Path) {
     let first_clip = !doc
         .graph
@@ -1404,6 +1439,59 @@ fn formula_help(ui: &mut egui::Ui) {
 mod tests {
     use super::*;
     use arclight::graph::{Graph, NodeSpec};
+
+    #[test]
+    fn a_browse_answer_arriving_later_sets_the_param() {
+        let _turn = crate::dialogs::tests::TURN.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("arclight_browse_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in 3..=6 {
+            arclight::image::Image::new(4, 4).write(&dir.join(format!("shot.{f:04}.exr"))).unwrap();
+        }
+        let mut doc = Doc::new(Graph::default(), None);
+        let read = doc.add_node("read", [0.0, 0.0]);
+        let clip = doc.add_node("media_in", [0.0, 100.0]);
+        doc.commit(false);
+        let ctx = egui::Context::default();
+        let mut props = Properties::default();
+        let browse = |node: &str, op: &str| Browse { node: node.into(), param: "path", op: op.into(), animatable: false, frame: 1 };
+        // A dialog held open: nothing happens until it answers.
+        let (go, answer) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+        props.browse = dialogs::start(browse(&read, "read"), move || answer.recv().unwrap());
+        props.poll_browse(&ctx, &mut doc);
+        assert!(props.browse.is_some() && doc.param(&read, "path") == json!(""));
+        go.send(Some(dir.join("plate.exr"))).unwrap();
+        let t0 = std::time::Instant::now();
+        while props.browse.is_some() && t0.elapsed().as_secs() < 5 {
+            props.poll_browse(&ctx, &mut doc);
+        }
+        assert_eq!(doc.param(&read, "path"), json!(dir.join("plate.exr").to_string_lossy()));
+        // One undo step, as a pick at once would be.
+        doc.commit(false);
+        doc.undo();
+        assert_eq!(doc.param(&read, "path"), json!(""));
+        // A Media In takes the sequence's range with the file.
+        let frame = dir.join("shot.0004.exr");
+        props.browse = dialogs::start(browse(&clip, "media_in"), move || Some(frame));
+        while props.browse.is_some() {
+            props.poll_browse(&ctx, &mut doc);
+        }
+        assert_eq!((doc.param(&clip, "first_frame"), doc.param(&clip, "last_frame")), (json!(3), json!(6)));
+        assert!(doc.param(&clip, "path").as_str().unwrap().ends_with("shot.####.exr"));
+        // Cancelled: nothing changes; the node gone meanwhile: ignored.
+        let before = doc.graph.clone();
+        props.browse = dialogs::start(browse(&read, "read"), || None);
+        while props.browse.is_some() {
+            props.poll_browse(&ctx, &mut doc);
+        }
+        assert_eq!(doc.graph, before);
+        props.browse = dialogs::start(browse("gone", "read"), || Some("x.exr".into()));
+        while props.browse.is_some() {
+            props.poll_browse(&ctx, &mut doc);
+        }
+        assert_eq!(doc.graph, before);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn shuffle_offers_its_inputs_layers() {

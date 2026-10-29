@@ -6,6 +6,7 @@
 
 mod camera_tracker;
 mod curve_editor;
+mod dialogs;
 mod doc;
 mod gizmo3d;
 mod help;
@@ -29,7 +30,6 @@ use eframe::egui::{self, Key, KeyboardShortcut, Modifiers};
 use node_editor::NodeEditor;
 use properties::Properties;
 use script_jobs::ScriptJobs;
-use rfd::{MessageButtons, MessageDialog, MessageDialogResult};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -126,6 +126,12 @@ struct App {
     scripts: ScriptJobs,
     /// Unsaved changes were dealt with; let the next close request through.
     closing: bool,
+    /// The question about unsaved changes being asked, if any.
+    ask: Option<Ask>,
+    /// The file dialog open for the File menu, if any (see `dialogs`).
+    file: Option<dialogs::Pending<FileFor>>,
+    /// Close once the save the close prompt asked for is done.
+    close_after_save: bool,
     /// Help > About is open.
     about: bool,
     /// Help > Arclight Help (F1).
@@ -170,6 +176,9 @@ impl App {
             bridge,
             scripts: ScriptJobs::default(),
             closing: false,
+            ask: None,
+            file: None,
+            close_after_save: false,
             about: false,
             help: help::Help::default(),
             project_settings: Default::default(),
@@ -321,78 +330,93 @@ impl App {
         self.requested = None;
     }
 
-    /// Ask before discarding unsaved changes. True = go ahead.
-    fn confirm_discard(&self) -> bool {
-        !self.doc.dirty
-            || MessageDialog::new()
-                .set_title("Unsaved changes")
-                .set_description("Discard unsaved changes to this project?")
-                .set_buttons(MessageButtons::YesNo)
-                .show()
-                == MessageDialogResult::Yes
-    }
-
     /// On a close request with unsaved changes, ask whether to save them
-    /// first; Cancel (or a cancelled save) keeps the window open.
+    /// first (see [`App::ask_ui`]); Cancel (or a cancelled save) keeps the
+    /// window open.
     fn handle_close(&mut self, ctx: &egui::Context) {
         if !ctx.input(|i| i.viewport().close_requested()) || self.closing || !self.doc.dirty {
             return;
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        let (save, discard) = ("Save".to_string(), "Don't Save".to_string());
-        let answer = MessageDialog::new()
-            .set_title("Unsaved changes")
-            .set_description("Save changes to this project before closing?")
-            .set_buttons(MessageButtons::YesNoCancelCustom(save.clone(), discard.clone(), "Cancel".into()))
-            .show();
-        let save_first = match answer {
-            MessageDialogResult::Yes => true,
-            MessageDialogResult::Custom(c) if c == save => true,
-            MessageDialogResult::No => false,
-            MessageDialogResult::Custom(c) if c == discard => false,
-            _ => return,
-        };
-        if save_first {
-            self.save(false);
-            if self.doc.dirty {
-                return;
-            }
-        }
+        self.ask = Some(Ask::Close);
+    }
+
+    /// Close the window now (unsaved changes dealt with).
+    fn close_now(&mut self, ctx: &egui::Context) {
         self.closing = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
     fn new_doc(&mut self) {
-        if self.confirm_discard() {
+        if self.doc.dirty {
+            self.ask = Some(Ask::Discard(Then::New));
+        } else {
             self.load(Doc::new(Graph::default(), None));
         }
     }
 
     fn open(&mut self) {
-        if !self.confirm_discard() {
+        if self.doc.dirty {
+            self.ask = Some(Ask::Discard(Then::Open));
+        } else {
+            self.choose(FileFor::Open);
+        }
+    }
+
+    /// Show the file dialog for `what` (nothing if one is open already).
+    fn choose(&mut self, what: FileFor) {
+        if self.file.is_some() {
             return;
         }
-        let Some(path) = rfd::FileDialog::new().add_filter("Arclight graph", &["json"]).pick_file() else {
+        self.file = match what {
+            FileFor::Open => dialogs::pick(what, dialogs::new().add_filter("Arclight graph", &["json"])),
+            FileFor::SaveAs => dialogs::save(what, dialogs::new().add_filter("Arclight graph", &["json"]).set_file_name("comp.json")),
+            FileFor::Import => dialogs::pick(what, dialogs::new()),
+        };
+    }
+
+    /// The File menu's dialog, once it has closed: open, save or import
+    /// what was chosen.
+    fn poll_file(&mut self, ctx: &egui::Context) {
+        let Some(answer) = self.file.as_ref().and_then(|p| p.poll()) else {
+            if self.file.is_some() {
+                // Keep looking while it's open.
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
             return;
         };
-        match Graph::from_file(&path) {
-            Ok(g) => self.load(Doc::new(g, Some(path))),
-            Err(e) => self.status = Some(format!("{e:#}")),
+        let what = self.file.take().map(|p| p.what);
+        let after_save = std::mem::take(&mut self.close_after_save);
+        let Some(path) = answer else { return };
+        match what {
+            Some(FileFor::Open) => match Graph::from_file(&path) {
+                Ok(g) => self.load(Doc::new(g, Some(path))),
+                Err(e) => self.status = Some(format!("{e:#}")),
+            },
+            Some(FileFor::SaveAs) => {
+                self.write(path);
+                if after_save && !self.doc.dirty {
+                    self.close_now(ctx);
+                }
+            }
+            Some(FileFor::Import) => {
+                let id = self.doc.add_node("media_in", [0.0, -90.0]);
+                properties::apply_media(&mut self.doc, &id, &path);
+                self.doc.selected = Some(id);
+            }
+            None => {}
         }
     }
 
     fn save(&mut self, save_as: bool) {
-        let path = match (&self.doc.path, save_as) {
-            (Some(p), false) => p.clone(),
-            _ => match rfd::FileDialog::new()
-                .add_filter("Arclight graph", &["json"])
-                .set_file_name("comp.json")
-                .save_file()
-            {
-                Some(p) => p,
-                None => return,
-            },
-        };
+        match (&self.doc.path, save_as) {
+            (Some(p), false) => self.write(p.clone()),
+            _ => self.choose(FileFor::SaveAs),
+        }
+    }
+
+    /// Save the project to `path`.
+    fn write(&mut self, path: PathBuf) {
         match std::fs::write(&path, self.doc.graph.to_json()) {
             Ok(()) => {
                 self.doc.path = Some(path);
@@ -400,6 +424,65 @@ impl App {
                 self.status = None;
             }
             Err(e) => self.status = Some(format!("saving {}: {e}", path.display())),
+        }
+    }
+
+    /// The question about unsaved changes, as a modal over the window (the
+    /// system's message boxes would stop the app while they're up).
+    fn ask_ui(&mut self, ctx: &egui::Context) {
+        let Some(ask) = self.ask.clone() else { return };
+        let mut answer = None;
+        egui::Modal::new(egui::Id::unique("unsaved_changes")).show(ctx, |ui| {
+            ui.set_width(340.0);
+            ui.heading("Unsaved changes");
+            ui.add_space(6.0);
+            ui.label(match &ask {
+                Ask::Close => "Save changes to this project before closing?",
+                Ask::Discard(_) => "Discard unsaved changes to this project?",
+            });
+            ui.add_space(10.0);
+            ui.horizontal(|ui| match &ask {
+                Ask::Close => {
+                    if ui.button("Save").clicked() {
+                        answer = Some(Answer::Save);
+                    }
+                    if ui.button("Don't Save").clicked() {
+                        answer = Some(Answer::Discard);
+                    }
+                    if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        answer = Some(Answer::Cancel);
+                    }
+                }
+                Ask::Discard(_) => {
+                    if ui.button("Discard").clicked() {
+                        answer = Some(Answer::Discard);
+                    }
+                    if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        answer = Some(Answer::Cancel);
+                    }
+                }
+            });
+        });
+        let Some(answer) = answer else { return };
+        self.ask = None;
+        match (ask, answer) {
+            (_, Answer::Cancel) => {}
+            (Ask::Close, Answer::Save) => {
+                self.save(false);
+                if !self.doc.dirty {
+                    self.close_now(ctx);
+                } else if self.file.is_some() {
+                    // Saving as: close once it's saved.
+                    self.close_after_save = true;
+                }
+            }
+            (Ask::Close, _) => self.close_now(ctx),
+            (Ask::Discard(Then::New), _) => self.load(Doc::new(Graph::default(), None)),
+            (Ask::Discard(Then::Open), _) => self.choose(FileFor::Open),
+            (Ask::Discard(Then::Load(path)), _) => match Graph::from_file(&path) {
+                Ok(g) => self.load(Doc::new(g, Some(path))),
+                Err(e) => self.status = Some(format!("{e:#}")),
+            },
         }
     }
 
@@ -561,7 +644,9 @@ impl App {
         for (k, path) in dropped.into_iter().enumerate() {
             if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json")) {
                 if let Ok(g) = Graph::from_file(&path) {
-                    if self.confirm_discard() {
+                    if self.doc.dirty {
+                        self.ask = Some(Ask::Discard(Then::Load(path)));
+                    } else {
                         self.load(Doc::new(g, Some(path)));
                     }
                 }
@@ -719,13 +804,9 @@ impl App {
                     ui.close();
                     self.open();
                 }
-                if ui.button("Import media…").clicked() {
+                if ui.add_enabled(!dialogs::busy(), egui::Button::new("Import media…")).clicked() {
                     ui.close();
-                    if let Some(p) = rfd::FileDialog::new().pick_file() {
-                        let id = self.doc.add_node("media_in", [0.0, -90.0]);
-                        properties::apply_media(&mut self.doc, &id, &p);
-                        self.doc.selected = Some(id);
-                    }
+                    self.choose(FileFor::Import);
                 }
                 if ui.add(egui::Button::new("Project Settings…").shortcut_text(ui.ctx().format_shortcut(&PROJECT_SETTINGS))).clicked() {
                     ui.close();
@@ -829,6 +910,11 @@ impl App {
                 ui.separator();
                 ui.colored_label(egui::Color32::from_rgb(235, 100, 90), s);
             }
+            if dialogs::busy() {
+                ui.separator();
+                ui.spinner();
+                ui.label("Choosing a file…");
+            }
             if self.props.is_rendering() {
                 ui.separator();
                 ui.spinner();
@@ -859,9 +945,44 @@ impl App {
     }
 }
 
+/// What the File menu's file dialog is choosing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FileFor {
+    Open,
+    SaveAs,
+    Import,
+}
+
+/// A question about unsaved changes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Ask {
+    /// Closing the window: save first?
+    Close,
+    /// Throwing them away to do `Then`.
+    Discard(Then),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Then {
+    New,
+    /// Choose a project to open.
+    Open,
+    /// Open this project (dropped on the window).
+    Load(PathBuf),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Answer {
+    Save,
+    Discard,
+    Cancel,
+}
+
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        dialogs::set_parent(frame);
+        self.poll_file(&ctx);
         self.handle_close(&ctx);
         self.handle_bridge(&ctx);
         self.handle_drops(&ctx);
@@ -883,6 +1004,7 @@ impl eframe::App for App {
         self.about_dialog(&ctx);
         self.help.ui(&ctx);
         self.project_settings.ui(&ctx, &mut self.doc);
+        self.ask_ui(&ctx);
         egui::Panel::right("properties")
             .default_size(380.0)
             .min_size(280.0)
