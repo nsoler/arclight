@@ -5,10 +5,25 @@ build-backend = "maturin"
 [project]
 name = "arclt"
 description = "Scripting API for the Arclight compositor"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
 requires-python = ">=3.10"
+# The version comes from python/Cargo.toml.
 dynamic = ["version"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Topic :: Multimedia :: Graphics",
+]
 
 [tool.maturin]
 python-source = "."
 module-name = "arclt._arclt"
 features = []
+# One wheel for every CPython from 3.10 (pyo3's abi3-py310 feature).
+# build.sh's in-place copy of the extension and caches stay out of
+# wheels and sdists; maturin builds its own.
+exclude = ["arclt/_arclt*.so", "**/__pycache__/**", "build.sh"]

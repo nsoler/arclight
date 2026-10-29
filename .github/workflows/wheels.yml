@@ -1,0 +1,123 @@
+# Build the `arclt` Python wheels (python/, maturin): one abi3 wheel per
+# platform covering CPython 3.10+, for Linux x86_64 (manylinux2014) and
+# Apple Silicon macOS, plus an sdist. Each wheel is installed into a fresh
+# venv and the Python tests run against it. Runs when started by hand
+# (Actions tab → "Python wheels" → Run workflow) or on a version tag; for a
+# tag the wheels and sdist are attached to that tag's GitHub release.
+# The macOS job only builds and runs the Python tests (macos.yml runs the
+# full cargo tests there): macOS minutes count against the account.
+name: Python wheels
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the wheel (manylinux2014, in its container)
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64
+          manylinux: "2014"
+          args: --release --out dist -m python/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-linux-x86_64
+          path: dist/*.whl
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-14 # Apple Silicon (arm64)
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: aarch64-apple-darwin
+          args: --release --out dist -m python/Cargo.toml
+      - name: Test it in a fresh venv
+        run: |
+          python -m venv /tmp/venv
+          /tmp/venv/bin/pip install dist/*.whl
+          cd /tmp && cp -R "$GITHUB_WORKSPACE/python/tests" arclt-tests
+          /tmp/venv/bin/python -m unittest discover -s arclt-tests -v
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-macos-arm64
+          path: dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist -m python/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # The Linux wheel on the oldest and newest supported Pythons, with the
+  # example plugin built so the plugin test runs too.
+  test-linux:
+    needs: linux
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheel-linux-x86_64
+          path: dist
+      - name: Build the example plugin
+        run: cargo build --release -p arclight-plugin-example
+      - name: Test the wheel in a fresh venv
+        run: |
+          python -m venv /tmp/venv
+          /tmp/venv/bin/pip install dist/*.whl
+          cp -R python/tests /tmp/arclt-tests
+          cd /tmp
+          ARCLIGHT_PLUGIN_PATH="$GITHUB_WORKSPACE/target/release" /tmp/venv/bin/python -m unittest discover -s arclt-tests -v
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, sdist, test-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          # macos.yml may be creating the same release at the same moment:
+          # a failed create is fine as long as the release then exists.
+          gh release view "$tag" >/dev/null 2>&1 \
+            || gh release create "$tag" --title "Arclight ${tag#v} (alpha)" --prerelease --notes "See CHANGELOG.md." \
+            || true
+          gh release view "$tag" >/dev/null 2>&1 || { sleep 10; gh release view "$tag" >/dev/null; }
+          gh release upload "$tag" dist/*.whl dist/*.tar.gz --clobber

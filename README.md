@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.0.29** (alpha); see `CHANGELOG.md`.
+Version **0.0.30** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -327,6 +327,11 @@ a message naming the bad param or node. Protocol errors use the standard
 JSON-RPC codes.
 
 ### Python (`arclt`)
+
+Install: `pip install arclt-<version>-cp310-abi3-<platform>.whl` from a
+release (or `pip install ./python` to build it; needs Rust and maturin).
+The wheel is self-contained; video needs ffmpeg on `PATH`. For working on
+Arclight itself, `python/build.sh` builds the module in place:
 
 ```sh
 python/build.sh

@@ -7,6 +7,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.30 — 2026-10-29
+
+- Python wheels: the `arclt` module is packaged with maturin as one abi3
+  wheel per platform (CPython 3.10+) for Linux x86_64 (manylinux2014) and
+  macOS arm64, plus an sdist; the Python wheels workflow builds and tests
+  them and attaches them to release tags.
+
 ## 0.0.29 — 2026-10-29
 
 - Scanline Render node (3D): draws a scene's cards through a camera (the

@@ -37,7 +37,7 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.29**.
+  in the same commit as the change. Current: **0.0.30**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -116,6 +116,17 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   `install.sh`, so on this machine the two replace each other. The GUI
   finds the starter clip at `../share/arclight/examples/media` beside its
   binary (and `../Resources/…` in the macOS bundle).
+  **Python wheels (v0.0.30, worker wD:p3):** `.github/workflows/wheels.yml`
+  (workflow_dispatch and `v*` tags) builds a manylinux2014 x86_64 wheel
+  (maturin-action), a macos-14 arm64 wheel (Python tests only, no cargo
+  test: macOS minutes) and an sdist, tests the Linux wheel on Python 3.10
+  and 3.13 in fresh venvs with the example plugin, and for tags attaches
+  `arclt-*.whl` and `arclt-*.tar.gz` to the release. Both workflows
+  tolerate creating the same release at once (`create || true`, then
+  re-check). Local build: a venv with maturin + ziglang, then from
+  `python/`: `maturin build --release --zig --compatibility manylinux2014
+  --target x86_64-unknown-linux-gnu --out <dir>`. `python/build.sh` is
+  still the quick in-place build for the tests.
 - **Session 7, part 23** (user request): viewer toolbar color picker
   (`Viewer::color_picker`, rightmost in `status`): swatch + R/G/B/A
   (`{:>6.3}`, monospace, tinted labels); `Viewer::picked` is set while
