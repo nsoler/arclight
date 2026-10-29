@@ -37,7 +37,7 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.33**.
+  in the same commit as the change. Current: **0.0.34**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -970,7 +970,23 @@ parallax ≥ enough). Tests: pose conversion, exact noiseless
 triangulation/decomposition, 0.3 px noise + 20 % outliers (rotation
 < 0.1°, direction < 2°, points < 1 % after scaling), initial pair waits
 for parallax and refuses a pure pan.
-Next: M7, incremental solve + bundle adjustment.
+**M7 done (v0.0.34): incremental solve + bundle adjustment.**
+`src/bundle.rs`: `Obs {cam, point, px}`, `Problem {poses, points, obs,
+intr, fixed, points_fixed, solve_focal, huber}` with `residual`/`cost`/
+`adjust(iterations)` → `Report {start_rms, end_rms, iterations}`;
+analytic Jacobians; rotations updated R ← exp(w) R and renormalized
+(without that, the constant-velocity guess compounded rounding into a 4°
+error by frame 39). `src/sfm.rs`: `Settings {max_error 1 px,
+min_parallax 1°, start_parallax 4°, min_shared 30, solve_focal}`,
+`solve(tracks, first, last, intr, settings, progress: FnMut(f32) ->
+bool)` → `Solution {intr, poses: BTreeMap<frame, Pose>, points:
+Vec<Option<V3>> per track, rms, frame_rms}`; `similarity()` (Umeyama).
+Scale and placement are arbitrary (start frame at the origin, 1 unit to
+the second). No PnP: a frame starts from a neighbour's pose. Tests:
+bundle (disturbed solve pulled back; focal from 15 % off with 5 %
+outliers; cameras only), sfm (synthetic 40 frames, focal from 10 % off,
+pure turn refused, rendered + tracked + solved).
+Next: M8, Camera Tracker node + point placement.
 M8 now also includes **point placement** (select solved points → Place
 Card here / Place locator; MCP/Python `place_on_points`), user request.
 **M9, the 3D viewport, is specified** in `docs/phase-4-plan.md`

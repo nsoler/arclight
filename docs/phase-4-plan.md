@@ -254,7 +254,19 @@ then poses of in-between frames by PnP and a final pass).
    parallax.) Fundamental /
    essential matrix in RANSAC, pose recovery, DLT triangulation. Tests:
    known synthetic camera pair recovered up to scale.
-7. **Incremental solve and bundle adjustment.** PnP, LM with Schur,
+7. **Done (2026-10-29).** **Incremental solve and bundle adjustment.**
+   (As built: `src/bundle.rs` (Levenberg–Marquardt, Huber loss, Schur
+   complement onto the cameras, left-multiplied rotation updates with
+   renormalization, optional focal, cameras-only mode) and `src/sfm.rs`
+   (start pair, frames added nearest-first from a constant-velocity
+   guess refined cameras-only with outlier tracks skipped, triangulation
+   past a parallax threshold, periodic and final full adjustment,
+   outlier points dropped, per-frame RMS, cancel via the progress
+   callback; `similarity` (Umeyama)). No PnP: each frame starts from its
+   neighbour, which suits video and avoids PnP's trouble with flat
+   scenes. Tested on a synthetic 40-frame shot with noise and outlier
+   tracks, with the focal solved from 10 % off, and end to end on a
+   rendered, tracked shot.) PnP, LM with Schur,
    Huber loss, optional focal. Tests: synthetic shot solved to sub-pixel
    reprojection error and camera path matching ground truth (after a
    similarity alignment); outliers rejected.

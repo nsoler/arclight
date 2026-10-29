@@ -7,6 +7,19 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.34 — 2026-10-29
+
+- Camera solving (library, no node yet): from feature tracks, a camera
+  for every frame and a cloud of 3D points: start from the frame pair
+  with the most parallax, add frames one at a time, triangulate new
+  points, and refine everything with bundle adjustment
+  (Levenberg–Marquardt with a robust loss and the Schur complement),
+  optionally solving the focal length; outlier tracks are dropped. Shots
+  where the camera only turns are refused with a clear message. End to
+  end on a rendered test shot (tracked with the feature tracker), the
+  camera path comes out within 1 % and 0.1° of the truth. Phase 4
+  milestone 7.
+
 ## 0.0.33 — 2026-10-29
 
 - Camera-tracker groundwork: from tracked features in two frames, the

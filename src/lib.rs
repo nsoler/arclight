@@ -4,6 +4,7 @@
 //! graph. This is original work, not derived from any existing product.
 
 pub mod anim;
+pub mod bundle;
 #[cfg(unix)]
 pub mod bridge;
 pub mod color;
@@ -24,6 +25,7 @@ pub mod render;
 pub mod render3d;
 pub mod scene;
 pub mod session;
+pub mod sfm;
 pub mod shape;
 pub mod solve;
 pub mod track;

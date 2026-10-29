@@ -454,7 +454,7 @@ impl FeatureTracker {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::geom::{self, Camera, Vec3};
     use crate::image::Size;
@@ -468,6 +468,11 @@ mod tests {
             self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             (self.0 >> 40) as f32 / (1u64 << 24) as f32
         }
+    }
+
+    /// A `w` × `h` texture of `n` soft gray blobs (seeded), for test scenes.
+    pub(crate) fn blob_texture(n: usize, w: usize, h: usize, seed: u64) -> Image {
+        Blobs::new(n, w as f32, h as f32, seed).image(w, h, 0.0, 0.0)
     }
 
     /// Soft blobs at random places and sizes: a smooth texture with plenty
