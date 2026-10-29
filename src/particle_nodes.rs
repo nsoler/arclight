@@ -28,9 +28,8 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-/// What particle ports carry. (Scenes until the graph has a particle
-/// kind of its own.)
-const STREAM: Kind = Kind::Scene;
+/// What particle ports carry.
+const STREAM: Kind = Kind::Particles;
 
 const fn port(label: &'static str, optional: bool, kind: Kind) -> Port {
     Port { label, optional, kind }

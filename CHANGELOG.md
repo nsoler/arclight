@@ -11,6 +11,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.44 — 2026-10-29
+
+- **Particle nodes in the graph:** Particle Emitter, Gravity, Wind,
+  Turbulence, Attractor, Vortex, Bounce, Kill, Speed Limit, Particle
+  Render and Particles 2D. Streams plug into Scanline Render's extra
+  inputs (a new empty one appears as you connect; a new Emitter goes
+  straight into a selected Scanline Render), render as sprites hidden
+  behind nearer geometry or as object instances, and show as colored
+  dots in the 3D view; animated params are followed at every frame
+  (M13).
+
 ## 0.9.43 — 2026-10-29
 
 - MCP / Python: new **scene_objects** tool (`Node.scene_objects(frame)`)

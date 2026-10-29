@@ -31,6 +31,8 @@ pub struct Scene {
     /// Each point's reprojection error in pixels, when a solve gave one
     /// (else negative), for coloring the cloud.
     pub point_errors: Vec<f32>,
+    /// Particle streams (simulated when drawn; each knows its node).
+    pub particles: Vec<crate::particle_nodes::ParticleStream>,
 }
 
 /// An image on a flat rectangle in 3D: `size` wide and high in its own
@@ -116,6 +118,7 @@ impl Scene {
         self.meshes.extend(other.meshes.iter().cloned());
         self.lights.extend(other.lights.iter().cloned());
         self.points.extend(other.points.iter().copied());
+        self.particles.extend(other.particles.iter().cloned());
         let mut other = other.clone();
         other.fill_nodes();
         self.camera_nodes.extend(other.camera_nodes);
@@ -163,6 +166,9 @@ impl Scene {
         }
         if !self.points.is_empty() {
             parts.push(n(self.points.len(), "point", "points"));
+        }
+        if !self.particles.is_empty() {
+            parts.push(n(self.particles.len(), "particle stream", "particle streams"));
         }
         parts.join(", ")
     }

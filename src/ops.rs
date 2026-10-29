@@ -14,6 +14,7 @@ use crate::render3d;
 use crate::scene::{self, Scene};
 use crate::image::{IRect, Image, Size};
 use crate::media;
+use crate::particle_nodes;
 use crate::shape::{self, FillRule, Pt};
 use crate::track::{self, Solve};
 use anyhow::{anyhow, bail, Context, Result};
@@ -52,11 +53,14 @@ pub enum Category {
 }
 
 /// What travels along a wire: an image, or a 3D scene (an image whose
-/// [`scene`](Image::scene) is set, with no pixels).
+/// [`scene`](Image::scene) is set, with no pixels). Particle streams
+/// travel in scenes; a port of kind `Particles` takes only a particle
+/// node's stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Image,
     Scene,
+    Particles,
 }
 
 impl Kind {
@@ -64,6 +68,7 @@ impl Kind {
         match self {
             Kind::Image => "image",
             Kind::Scene => "scene",
+            Kind::Particles => "particles",
         }
     }
 
@@ -71,28 +76,64 @@ impl Kind {
     pub fn of(img: &Image) -> Kind {
         if img.scene.is_some() { Kind::Scene } else { Kind::Image }
     }
+
+    /// Whether a port of this kind takes `img`.
+    pub fn takes(self, img: &Image) -> bool {
+        match self {
+            Kind::Particles => img.scene.as_ref().is_some_and(|s| !s.particles.is_empty()),
+            k => k == Kind::of(img),
+        }
+    }
 }
 
-/// The kind of output `op` makes.
+/// The kind of output `op` makes (a particle node's stream is a scene).
 pub fn output_kind(op: &str) -> Kind {
     match op {
+        "particles_2d" => Kind::Image,
+        _ if particle_nodes::is_particle(op) => Kind::Scene,
         "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
 
 /// Why the output of an `from_op` node can't go into port `port` of a
-/// `to_op` node, if it can't: a scene into an image port or the other way.
+/// `to_op` node, if it can't: a scene into an image port or the other way,
+/// or anything but a particle node's stream into a particles port.
 pub fn wire_error(from_op: &str, to_op: &str, port: usize) -> Option<String> {
-    let p = info(to_op)?.inputs.get(port)?;
+    let p = self::port(to_op, port)?;
     let k = output_kind(from_op);
-    (k != p.kind).then(|| format!("input '{}' takes {}, not {}", p.label, article(p.kind), article(k)))
+    let stream = particle_nodes::is_particle(from_op) && k == Kind::Scene;
+    let fits = match p.kind {
+        Kind::Particles => stream,
+        want => want == k,
+    };
+    let made = if stream { Kind::Particles } else { k };
+    (!fits).then(|| format!("input '{}' takes {}, not {}", p.label, article(p.kind), article(made)))
 }
 
-fn article(k: Kind) -> &'static str {
+/// "an image", "a scene", "particles".
+pub fn article(k: Kind) -> &'static str {
     match k {
         Kind::Image => "an image",
         Kind::Scene => "a scene",
+        Kind::Particles => "particles",
+    }
+}
+
+/// How many fixed inputs `op` has before any number more of the same
+/// kind, if it grows that way: a Scanline Render's scene, camera and
+/// background, then more scenes or particle streams, rendered together.
+/// The node editor keeps one spare empty input after the connected ones.
+pub fn growable(op: &str) -> Option<usize> {
+    (op == "scanline_render").then_some(3)
+}
+
+/// `op`'s input `i`: a fixed one, or a growable op's extra.
+pub fn port(op: &str, i: usize) -> Option<Port> {
+    let fixed = info(op)?.inputs;
+    match fixed.get(i) {
+        Some(p) => Some(*p),
+        None => growable(op).filter(|&n| i >= n).map(|_| scene_in("scene")),
     }
 }
 
@@ -1355,12 +1396,12 @@ impl ParamSpec {
 
 /// A built-in op or one registered by a loaded plugin.
 pub fn info(op: &str) -> Option<&'static OpInfo> {
-    OPS.iter().find(|o| o.name == op).or_else(|| crate::plugin::info(op))
+    OPS.iter().find(|o| o.name == op).or_else(|| particle_nodes::info(op)).or_else(|| crate::plugin::info(op))
 }
 
-/// Every op: the built-ins followed by plugin ops.
+/// Every op: the built-ins, the particle nodes, then plugin ops.
 pub fn all() -> Vec<&'static OpInfo> {
-    OPS.iter().chain(crate::plugin::infos()).collect()
+    OPS.iter().chain(particle_nodes::OPS).chain(crate::plugin::infos()).collect()
 }
 
 /// `params` with every missing key filled in from the op's declared defaults.
@@ -1712,6 +1753,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
             Ok(scene_output(DEFAULT_FORMAT, Scene { lights: vec![light], ..Scene::default() }))
         }
         "scanline_render" => scanline_render(params, inputs),
+        _ if particle_nodes::is_particle(op) => particle_node(op, params, inputs, ctx),
         // The solve lives in its params; in the graph the plate passes through.
         "camera_tracker" => Ok(input(inputs, 0, "camera_tracker")?.clone()),
         "point_cloud" => {
@@ -2840,6 +2882,20 @@ struct ScanlineRender {
     passes: Option<Vec<String>>,
 }
 
+/// A particle node outside a graph: its params the same at every frame,
+/// simulated afresh (the graph's evaluator keeps its simulation and reads
+/// animated params at every frame).
+fn particle_node(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContext) -> Result<Image> {
+    let fixed = params.clone();
+    let upstream = inputs.first().copied().flatten().and_then(|i| i.scene.as_ref()).and_then(|s| s.particles.first());
+    let keys = vec![0; inputs.len()];
+    let cx = particle_nodes::Context { node: op, frame: ctx.frame, fps: 24.0, format: DEFAULT_FORMAT, own: std::sync::Arc::new(move |_| fixed.clone()), inputs, keys: &keys, upstream };
+    Ok(match particle_nodes::eval(op, cx, &mut particle_nodes::ParticleState::default())? {
+        particle_nodes::Output::Image(img) => img,
+        particle_nodes::Output::Stream(stream) => scene_output(DEFAULT_FORMAT, Scene { particles: vec![stream], ..Scene::default() }),
+    })
+}
+
 fn scanline_render(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     scanline_render_next(params, inputs, [None, None])
 }
@@ -2859,7 +2915,16 @@ pub fn scanline_render_next(params: &Value, inputs: &[Option<&Image>], next: [Op
     let camera_of = |scene_in: Option<&Image>, camera_in: Option<&Image>| {
         camera_in.and_then(|img| img.scene.as_ref()?.cameras.first().cloned()).or_else(|| scene_in?.scene.as_ref()?.cameras.first().cloned())
     };
-    let scene = port(0).and_then(|img| img.scene.clone());
+    // More scenes (or particles) on the extra inputs join the first.
+    let extra: Vec<&Scene> = inputs.iter().skip(3).flatten().filter_map(|i| i.scene.as_deref()).collect();
+    let scene = match port(0).and_then(|img| img.scene.clone()) {
+        Some(s) if extra.is_empty() => Some(s),
+        first => {
+            let mut all = first.as_deref().cloned().unwrap_or_default();
+            extra.into_iter().for_each(|s| all.extend(s));
+            Some(std::sync::Arc::new(all))
+        }
+    };
     let camera = camera_of(port(0), port(1)).context("no camera: connect a Camera to the camera input, or put one in the scene")?;
     let bg = port(2);
     let format = bg.map_or(source_size(p.width, p.height), |b| b.format);

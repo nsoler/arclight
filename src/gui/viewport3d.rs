@@ -282,6 +282,9 @@ fn bounds(scene: &Scene, only: Option<&dyn Fn(&str) -> bool>) -> Option<(Vec3, f
             pts.push(*p);
         }
     }
+    for s in scene.particles.iter().filter(|s| keep(&s.node)) {
+        pts.extend(s.particles().iter().map(|p| p.position));
+    }
     if pts.is_empty() {
         return None;
     }
@@ -769,6 +772,8 @@ const MESH: Color32 = Color32::from_rgb(150, 170, 190);
 /// Meshes with more edges than this are outlined by their box.
 const MAX_EDGES: usize = 40_000;
 const POINT: Color32 = Color32::from_rgb(90, 175, 225);
+/// The most particles drawn as dots per stream (past it, every so many).
+const MAX_PARTICLE_DOTS: usize = 20_000;
 const SELECTED: Color32 = Color32::from_rgb(255, 160, 40);
 const LIGHT: Color32 = Color32::from_rgb(250, 225, 120);
 
@@ -1549,6 +1554,26 @@ impl Viewport3d {
                 let on = self.points.iter().any(|(n, k)| n == node && *k == i);
                 let color = scene.point_errors.get(i).copied().filter(|e| *e >= 0.0).map_or(POINT, error_color);
                 painter.circle_filled(s, if on { 3.0 } else { 1.8 }, if on { SELECTED } else { color });
+            }
+        }
+        // Particles: a dot each in its color (every so many past a cap),
+        // ringed when their node is selected.
+        for stream in &scene.particles {
+            let all = stream.particles();
+            let every = all.len().div_ceil(MAX_PARTICLE_DOTS).max(1);
+            let on = selected(&stream.node);
+            for pt in all.iter().step_by(every) {
+                let Some((s, _)) = p.project(pt.position) else { continue };
+                if !p.rect.contains(s) {
+                    continue;
+                }
+                let a = pt.color[3].max(1e-6);
+                let [r, g, b] = [0, 1, 2].map(|c| (pt.color[c] / a).clamp(0.0, 1.0));
+                let color: Color32 = egui::Rgba::from_rgb(r, g, b).into();
+                if on {
+                    painter.circle_filled(s, 2.6, SELECTED);
+                }
+                painter.circle_filled(s, 1.6, color);
             }
         }
         // Through a camera: its frame, the outside darkened.

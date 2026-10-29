@@ -75,6 +75,7 @@ impl Doc {
 
     /// An edit that affects rendering.
     pub fn changed(&mut self) {
+        self.normalize();
         self.revision += 1;
         self.dirty = true;
         self.edits += 1;
@@ -342,6 +343,14 @@ impl Doc {
                 if n.inputs.len() < info.inputs.len() {
                     n.inputs.resize(info.inputs.len(), String::new());
                 }
+            }
+            // A growable node (a Scanline Render) ends in one empty input
+            // to connect more to.
+            if let Some(fixed) = ops::growable(&n.op) {
+                while n.inputs.len() > fixed && n.inputs.last().is_some_and(String::is_empty) {
+                    n.inputs.pop();
+                }
+                n.inputs.push(String::new());
             }
         }
     }

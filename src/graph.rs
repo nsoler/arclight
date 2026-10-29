@@ -6,6 +6,7 @@
 
 use crate::image::{IRect, Image, Size};
 use crate::ops::{self, Category, EvalContext};
+use crate::particle_nodes;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -285,6 +286,8 @@ pub struct Evaluator {
     /// Results a frame later, for nodes that need them (a Scanline
     /// Render's motion pass: see [`ops::needs_next_frame`]).
     next: Option<Box<Evaluator>>,
+    /// Particle nodes' simulation caches and shapes.
+    particles: particle_nodes::ParticleState,
 }
 
 impl Evaluator {
@@ -301,6 +304,7 @@ impl Evaluator {
     ) -> Result<Arc<Image>, NodeError> {
         let index = graph.index()?;
         self.cache.retain(|id, _| index.contains_key(id.as_str()));
+        self.particles.retain(|id| index.contains_key(id));
         let order = Graph::order(&index, [target.to_string()])?;
         self.run(&index, &order, ctx, &graph.project)?;
         Ok(self.cache[target].1.clone())
@@ -314,6 +318,7 @@ impl Evaluator {
     ) -> Result<HashMap<String, Arc<Image>>, NodeError> {
         let index = graph.index()?;
         self.cache.retain(|id, _| index.contains_key(id.as_str()));
+        self.particles.retain(|id| index.contains_key(id));
         let order = Graph::order(&index, graph.nodes.iter().map(|n| n.id.clone()))?;
         self.run(&index, &order, ctx, &graph.project)?;
         Ok(order
@@ -357,6 +362,9 @@ impl Evaluator {
         let mut keys: HashMap<&str, u64> = HashMap::with_capacity(order.len());
         // What an unconnected input sees: nothing, in the project's format.
         let empty = Image::blank(graph_format, IRect::default());
+        // The graph as it is, for particle nodes to read their params at
+        // other frames (made when the first one needs it).
+        let mut snapshot: Option<Arc<Vec<NodeSpec>>> = None;
         for id in order {
             let node = index[id.as_str()];
             // Keyframes and links are resolved first and the resolved values
@@ -384,6 +392,7 @@ impl Evaluator {
                 continue;
             }
 
+            let particle = particle_nodes::info(&node.op);
             let info = ops::info(&node.op);
             let ports = info.map(|i| i.inputs).unwrap_or(&[]);
             // Outputs (viewer, writes) refuse to show or write nothing;
@@ -406,14 +415,19 @@ impl Evaluator {
                     let img = self.cache[dep].1.as_ref();
                     // A scene only into a scene port, an image only into an
                     // image port (a hand-edited or old file may mix them).
-                    if let Some(port) = ports.get(i).filter(|p| p.kind != ops::Kind::of(img)) {
-                        let (want, got) = (port.kind.name(), ops::Kind::of(img).name());
-                        return Err(node_err(id, format!("input '{}' takes {} {want}, but '{dep}' outputs {} {got}", port.label, a(want), a(got))));
+                    if let Some(port) = ops::port(&node.op, i).filter(|p| !p.kind.takes(img)) {
+                        let got = ops::article(ops::Kind::of(img));
+                        return Err(node_err(id, format!("input '{}' takes {}, but '{dep}' outputs {got}", port.label, ops::article(port.kind))));
                     }
                     inputs.push(Some(img));
                 }
             }
             let out = match &next {
+                _ if particle.is_some() => {
+                    let snap = snapshot.get_or_insert_with(|| Arc::new(index.values().map(|n| (*n).clone()).collect())).clone();
+                    let input_keys: Vec<u64> = node.inputs.iter().map(|d| keys.get(d.as_str()).copied().unwrap_or(0)).collect();
+                    particle_node(node, snap, project, &inputs, &input_keys, ctx.frame, &mut self.particles)
+                }
                 Some(later) => ops::scanline_render_next(&params, &inputs, [later[0].as_deref(), later[1].as_deref()]),
                 None => ops::eval(&node.op, &params, &inputs, ctx),
             };
@@ -426,6 +440,35 @@ impl Evaluator {
         }
         Ok(())
     }
+}
+
+/// Evaluate particle node `node` (see [`particle_nodes`]): its params at
+/// any frame read from `graph` (a snapshot), its particles input's stream
+/// as its upstream, a stream out as a scene.
+fn particle_node(
+    node: &NodeSpec,
+    graph: Arc<Vec<NodeSpec>>,
+    project: &Project,
+    inputs: &[Option<&Image>],
+    keys: &[u64],
+    frame: i64,
+    state: &mut particle_nodes::ParticleState,
+) -> Result<Image> {
+    let (id, at) = (node.id.clone(), project.clone());
+    let own: particle_nodes::Own = Arc::new(move |g| {
+        let index: HashMap<&str, &NodeSpec> = graph.iter().map(|n| (n.id.as_str(), n)).collect();
+        index.get(id.as_str()).and_then(|n| linked_params(&index, n, g, &at).ok()).unwrap_or(Value::Null)
+    });
+    let upstream = inputs.first().copied().flatten().and_then(|i| i.scene.as_ref()).and_then(|s| s.particles.first());
+    let cx = particle_nodes::Context { node: &node.id, frame, fps: project.fps, format: project.format, own, inputs, keys, upstream };
+    Ok(match particle_nodes::eval(&node.op, cx, state)? {
+        particle_nodes::Output::Image(img) => img,
+        particle_nodes::Output::Stream(stream) => {
+            let mut out = Image::blank(project.format, IRect::default());
+            out.scene = Some(Arc::new(crate::scene::Scene { particles: vec![stream], ..Default::default() }));
+            out
+        }
+    })
 }
 
 /// `node`'s params at `frame`: keyframes evaluated and live links
@@ -447,11 +490,6 @@ fn linked_params(index: &HashMap<&str, &NodeSpec>, node: &NodeSpec, frame: i64, 
     Ok(ops::resolve_params_linked(&node.op, &node.params, frame, Some(&follow)))
 }
 
-/// "an" before "image", "a" before "scene".
-fn a(word: &str) -> &'static str {
-    if word.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" }
-}
-
 /// `params` are the node's params already resolved at `ctx.frame`.
 /// The inputs a node needing the next frame wants then (a Scanline
 /// Render's scene and camera; None where unconnected).
@@ -471,10 +509,15 @@ fn node_key(node: &NodeSpec, params: &Value, keys: &HashMap<&str, u64>, ctx: &Ev
     let mut h = DefaultHasher::new();
     node.op.hash(&mut h);
     params.to_string().hash(&mut h);
+    // A particle node's past frames count too (a key moved earlier).
+    let particle = particle_nodes::is_particle(&node.op);
+    if particle {
+        node.params.to_string().hash(&mut h);
+    }
     for dep in &node.inputs {
         keys.get(dep.as_str()).copied().unwrap_or(0).hash(&mut h);
     }
-    if ops::is_time_varying(&node.op, params) {
+    if particle || ops::is_time_varying(&node.op, params) {
         ctx.frame.hash(&mut h);
     }
     if node.op == "write" {
@@ -518,5 +561,52 @@ mod tests {
         // Title, color and font size are optional in the file.
         let g = Graph::from_str(r#"{"nodes": [], "backdrops": [{"id": "x", "pos": [0, 0], "size": [10, 10]}]}"#).unwrap();
         assert_eq!((g.backdrops[0].color, g.backdrops[0].font_size), (Backdrop::COLORS[0], Backdrop::FONT_SIZE));
+    }
+
+    #[test]
+    fn particle_nodes_flow_through_the_graph_with_keyed_params() {
+        use serde_json::json;
+        let node = |id: &str, op: &str, inputs: &[&str], params: Value| NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None };
+        let mut g = Graph::default();
+        g.project.format = Size { width: 64, height: 48 };
+        g.nodes = vec![
+            node("cam", "camera", &[], json!({})),
+            // One at frame 1, then (keyed on at frame 4) one a frame.
+            node("emit", "particle_emitter", &["", ""], json!({ "burst": 1, "rate": { "keys": [[1, 0], [4, 1]], "interp": "step" }, "translate": [0, 0, -5], "size": 0.5, "speed": 0, "color": [1, 0, 0, 1] })),
+            node("look", "particle_render", &["emit", "", ""], json!({ "look": "sprites" })),
+            node("fall", "particle_gravity", &["look"], json!({ "acceleration": [0, -50, 0] })),
+            node("render", "scanline_render", &["fall", "cam", ""], json!({ "samples": 1 })),
+        ];
+        let mut ev = Evaluator::new();
+        let at = |ev: &mut Evaluator, g: &Graph, id: &str, frame: i64| ev.evaluate(g, id, &EvalContext { frame, write_outputs: false }).unwrap();
+        let stream = |img: &Image| img.scene.as_ref().unwrap().particles[0].clone();
+        // Frame 1: the burst, in the middle of the render.
+        let img = at(&mut ev, &g, "render", 1);
+        assert_eq!(img.at(32, 24), [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(img.at(2, 2)[3], 0.0);
+        assert!(img.plane("depth").is_some_and(|d| (img.plane_value(d, 32, 24) - 5.0).abs() < 1e-4));
+        // Frame 6: three more since frame 4, and the first has fallen.
+        let fall = at(&mut ev, &g, "fall", 6);
+        let ps = stream(&fall).particles();
+        assert_eq!(ps.len(), 4);
+        let t = 5.0 / 24.0;
+        assert!((ps[0].position.y + 25.0 * t * t).abs() < 1e-9);
+        assert!(matches!(stream(&fall).look, particle_nodes::Look::Sprites(_)), "the look carries down the chain");
+        // The emitter's own stream simulates nothing until asked.
+        assert_eq!(stream(&at(&mut ev, &g, "emit", 6)).steps(), 0);
+        // A key edited at frame 4 (not the frame shown) changes frame 6.
+        g.nodes[1].params["rate"] = json!({ "keys": [[1, 0], [4, 3]], "interp": "step" });
+        assert_eq!(stream(&at(&mut ev, &g, "fall", 6)).particles().len(), 10);
+        // Into a Scanline Render's extra input instead: rendered with its scene.
+        g.nodes[4].inputs = vec!["".into(), "cam".into(), "".into(), "look".into(), "".into()];
+        assert_eq!(at(&mut ev, &g, "render", 1).at(32, 24), [1.0, 0.0, 0.0, 1.0]);
+        g.nodes.push(node("plate", "constant", &[], json!({})));
+        g.nodes[4].inputs[4] = "plate".into();
+        let err = ev.evaluate(&g, "render", &EvalContext { frame: 1, write_outputs: false }).err().unwrap();
+        assert!(err.to_string().contains("input 'scene' takes a scene, but 'plate' outputs an image"), "{err}");
+        // A particle node with nothing on its particles input: an error naming it.
+        g.nodes[3].inputs = vec![String::new()];
+        let err = ev.evaluate(&g, "fall", &EvalContext { frame: 6, write_outputs: false }).err().unwrap();
+        assert!(err.to_string().contains("fall") && err.to_string().contains("particles"), "{err}");
     }
 }

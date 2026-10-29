@@ -25,6 +25,7 @@ use crate::shade::{self, Light, Shaded};
 use rayon::prelude::*;
 use std::borrow::Cow;
 
+mod particles;
 mod shadow;
 
 /// A triangle mesh to draw, in its own space, placed by `world`, colored
@@ -395,11 +396,25 @@ pub fn render_passes(scene: &Scene, cam: &Camera, format: Size, samples: usize, 
 /// the motion pass (without it, motion is the camera's and objects' move
 /// as if nothing moved: all 0).
 pub fn render_motion(scene: &Scene, cam: &Camera, format: Size, samples: usize, background: Option<&Image>, passes: Passes, next: Option<(&Scene, &Camera)>) -> Image {
+    // Particles drawn as objects render as meshes; as points or sprites,
+    // over the rest, hidden by its depth (made for them if not asked for).
+    let objects = particles::with_objects(scene);
+    let scene = objects.as_ref().unwrap_or(scene);
+    let sprites = scene.particles.iter().any(|s| !matches!(s.look, crate::particle_nodes::Look::Objects { .. }));
+    let depth_for_sprites = sprites && !passes.depth;
+    let passes = Passes { depth: passes.depth || sprites, ..passes };
     let out = draw_passes(&surfaces(scene), &scene.lights, &scene.points, cam, format, samples, passes, next);
-    match background {
+    let mut out = match background {
         Some(bg) => over_background(out, bg),
         None => out,
+    };
+    if sprites {
+        out = particles::draw(scene, cam, format, out);
+        if depth_for_sprites {
+            out.planes.retain(|p| p.name != "depth");
+        }
     }
+    out
 }
 
 /// `scene`'s cards and meshes through `cam`, one sample a pixel, the meshes

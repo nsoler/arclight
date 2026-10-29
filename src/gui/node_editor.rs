@@ -324,7 +324,9 @@ impl NodeEditor {
     ///
     /// A Camera comes with what it needs (`Doc::add_camera_setup`): a
     /// Scene and a Scanline Render, which goes where the node would have;
-    /// the Camera is selected. `bare` (Shift held): just the Camera.
+    /// the Camera is selected. `bare` (Shift held): just the Camera. With a
+    /// Scanline Render selected, a node making a scene or particles goes
+    /// into its spare input.
     fn place(&mut self, doc: &mut Doc, op: &OpInfo, at: Pos2, bare: bool) {
         let upstream = doc.selected.clone();
         if op.name == "camera" && !bare {
@@ -335,6 +337,15 @@ impl NodeEditor {
         let id = doc.add_node(op.name, [at.x, at.y]);
         if let Some(w) = self.target_wire.take() {
             if fits_between(doc, &id, &w.src, &w.dst, w.port) && doc.insert_on_wire(&id, &w.src, &w.dst, w.port) {
+                doc.selected = Some(id);
+                return;
+            }
+        }
+        // Added with a Scanline Render selected, a scene or particles go
+        // into its spare input.
+        if let Some(render) = upstream.as_deref().and_then(|u| doc.node(u)).filter(|n| ops::growable(&n.op).is_some()) {
+            let (render, spare) = (render.id.clone(), render.inputs.len() - 1);
+            if fits(doc, &id, &render, spare) && doc.connect(&id, &render, spare) {
                 doc.selected = Some(id);
                 return;
             }
@@ -640,12 +651,12 @@ impl NodeEditor {
                     }
                 }
                 let hot = resp.hovered() || resp.dragged();
-                let port = ops::info(op).and_then(|o| o.inputs.get(i));
+                let port = ops::port(op, i);
                 let mask = is_mask_port(op, i);
                 if mask {
                     resp.on_hover_text("mask: where this node's effect applies (its alpha by default; Mask channel and Invert mask in Properties)");
                 }
-                port_dot(&painter, p, self.zoom, PortKind::Input, hot, port.is_some_and(|p| p.optional), port.is_some_and(|p| p.kind == ops::Kind::Scene), mask);
+                port_dot(&painter, p, self.zoom, PortKind::Input, hot, port.is_some_and(|p| p.optional), port.is_some_and(|p| p.kind != ops::Kind::Image), mask);
                 if (*n_in > 1 || mask) && self.zoom > 0.6 {
                     let label = port.map_or("", |p| p.label);
                     let color = if mask { MASK_PORT_COLOR } else { Color32::from_gray(210) };
@@ -1548,7 +1559,7 @@ mod tests {
 
     #[test]
     fn browser_search_matches_words_and_ranks_prefixes() {
-        assert_eq!(browse("").len(), arclight::ops::OPS.len());
+        assert_eq!(browse("").len(), arclight::ops::all().len());
         let names: Vec<_> = browse("pre").iter().map(|o| o.name).collect();
         assert_eq!(names.first(), Some(&"premult"));
         assert!(names.contains(&"unpremult"));
@@ -1873,5 +1884,31 @@ mod tests {
         assert!(ed.browser.is_none() && doc.graph.nodes.len() == 1, "nothing added from over the viewer");
         run(&mut ed, &mut doc, vec![egui::Event::PointerMoved(Pos2::new(600.0, 500.0)), key(Key::M, Modifiers::SHIFT)], Modifiers::SHIFT);
         assert_eq!(doc.graph.nodes.len(), 2, "over the graph it adds");
+    }
+
+    #[test]
+    fn particles_go_into_a_scanline_renders_spare_input() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let render = doc.add_node("scanline_render", [400.0, 0.0]);
+        let inputs = |doc: &Doc| doc.node(&render).unwrap().inputs.clone();
+        assert_eq!(inputs(&doc).len(), 4, "scene, camera, background and one spare");
+        // Added with the render selected, an Emitter takes the spare, and
+        // a new spare appears.
+        doc.selected = Some(render.clone());
+        let mut ed = NodeEditor::default();
+        ed.place(&mut doc, ops::info("particle_emitter").unwrap(), Pos2::ZERO, false);
+        let emitter = doc.selected.clone().unwrap();
+        assert_eq!(inputs(&doc), ["", "", "", emitter.as_str(), ""]);
+        assert_eq!(ops::port("scanline_render", 4).map(|p| p.label), Some("scene"));
+        // Disconnected: back to one spare.
+        doc.disconnect(&render, 3);
+        assert_eq!(inputs(&doc).len(), 4);
+        // A particles input takes particles only.
+        let gravity = doc.add_node("particle_gravity", [200.0, 0.0]);
+        let scene = doc.add_node("scene", [0.0, 200.0]);
+        assert!(fits(&doc, &emitter, &gravity, 0) && !fits(&doc, &scene, &gravity, 0));
+        assert!(fits(&doc, &gravity, &render, 3), "and a stream goes where scenes go");
+        assert_eq!(ops::wire_error("scene", "particle_gravity", 0).as_deref(), Some("input 'particles' takes particles, not a scene"));
+        assert!(ops::wire_error("particle_gravity", "merge", 0).is_some());
     }
 }
