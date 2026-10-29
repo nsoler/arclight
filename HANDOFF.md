@@ -1,19 +1,19 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-29, end of session 9 (herdr multi-agent sessions:
+Last updated 2026-10-29, during session 10 (herdr multi-agent sessions:
 one master + workers; see "Several agent sessions" below). Read this,
 then `README.md` (user-facing features, file format, shortcuts,
 scripting, the "3D view" section), `docs/phase-4-plan.md` (3D plan: M1–M9
-done, M10 specified), `docs/help.md` (the in-app help) and
+and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app help) and
 `docs/spec-coverage.md` (planning docs vs. what exists).
 
 ## Start here (next session)
 
 - **State:** version **0.9.11** on branch **`wip-ns-3dwork`**, commit
-  `c127e53` (M11 complete), merged to `main`. The local build
-  (`target/release`) is 0.9.11, so the Omarchy launcher entry (repo
-  `install.sh`) runs 0.9.11. (The Python `.so` in `python/` is still
-  0.9.7; rebuild with `python/build.sh` if needed.)
+  `aca56fd` (M11 complete, handoff notes after it), merged to `main`.
+  The local build (`target/release`) is 0.9.11, so the Omarchy launcher
+  entry (repo `install.sh`) runs 0.9.11. (The Python `.so` in `python/`
+  is still 0.9.7; rebuild with `python/build.sh` if needed.)
 - **Latest release: v0.9.11**
   (github.com/nsoler/arclight/releases/tag/v0.9.11): Linux x86_64 tarball
   `arclight-0.9.11-linux-x86_64.tar.gz`, macOS universal DMG
@@ -21,22 +21,53 @@ done, M10 specified), `docs/help.md` (the in-app help) and
   wheels (Linux manylinux2014, macOS universal2) + sdist. Both
   workflows passed. Earlier: v0.9.7, v0.9.5, v0.8.4, v0.8.3 and the
   0.0.x pre-releases.
+- **In progress (session 10): M10, 3D objects and render passes**
+  ("Milestone 10 in detail" in `docs/phase-4-plan.md`). **The user asked
+  for a release (Linux tarball + universal DMG + wheels) when all of M10
+  lands**, steps (a)–(e).
+  - **mathwiz** (wD:p3) owns new `src/mesh.rs` (+ `pub mod mesh;` in
+    lib.rs): step 1 = `Mesh { name, positions: Vec<Vec3>, normals, uvs:
+    Vec<[f64;2]>, triangles: Vec<[u32;3]>, material }` (f64 geom::Vec3,
+    per-vertex, CCW from outside, UV v up, object space; world/ID/flags
+    on the Scene entry), `Material { name, shading: Unlit|Lambert|Blinn,
+    color, texture: Option<PathBuf>, specular, roughness, emission }`
+    (default Unlit white), primitives cube / sphere / cylinder / plane
+    (XY facing +Z, like Card), helpers bounds / transform / merge /
+    compute_normals. Step 2 = OBJ + MTL import. Later: Shuffle node and
+    multi-plane EXR writing, once worker3d's ops.rs work is committed.
+  - **3DWorker** (wD:p4, `worker3d`) owns scene.rs, render3d.rs, ops.rs,
+    graph.rs, gui/*: (a) triangles in render3d (depth-sorted hits,
+    binning or BVH), cards as two-triangle meshes with identical output,
+    primitive nodes + Read Geo, viewport drawing/selection; (b) passes
+    (depth, P, N, uv, id, matte.<node>, holdout).
+  - **Not assigned yet:** (d) materials, lights and lighting passes;
+    (e) motion vectors, zmerge, glTF.
+  - At this update the tree had uncommitted worker files (`src/mesh.rs`,
+    `src/lib.rs`, `src/render3d.rs`); nothing of M10 is committed yet.
+    Next version: **0.9.12**.
 - **Ask the user first** how the Mac builds (v0.9.11 universal DMG) went
   on their M4 Pro, and whether anyone tried an Intel Mac. Mac-only bugs
   come first.
-- **Next work, in order:** (1) Mac feedback; (2) hand checks of the 3D
-  view (below); (3) M9 leftovers: a true orthographic texture path in
-  render3d (ortho views now use a 1000×-away long lens), the pivot at
-  the median of a multi-selection, transforming several objects at once;
-  (4) **M11, PnP and the tripod solve** ("Milestone 11 in detail" in
-  `docs/phase-4-plan.md`; added 2026-10-29 at the user's request: M7
-  left out PnP, and a camera that only turns is refused today) —
-  **done in 0.9.8–0.9.11** (session 10);
-  (5) **M10, 3D objects and render passes (AOVs)** ("Milestone 10 in
-  detail"); (6) **M12, lights** (Area lights, lights movable in the 3D
-  view with G / R / S and gizmos, a Light 2D node) and (7) **M13,
-  particles** (emitters, forces, sprites or objects from files), both
-  specified in the plan 2026-10-29; (8) other M8 follow-ups and older items under "Next steps". Keep `docs/help.md` in step with new features.
+- **Next work, in order:** (1) finish M10 and release; (2) Mac feedback
+  and hand checks of the 3D view (below) and the Camera Tracker's tripod
+  / PnP on real footage; (3) M9 leftovers: a true orthographic texture
+  path in render3d (ortho views now use a 1000×-away long lens), the
+  pivot at the median of a multi-selection, transforming several objects
+  at once; (4) **M12, lights** (Area lights, lights movable in the 3D
+  view with G / R / S and gizmos, a Light 2D node) and (5) **M13,
+  particles** (emitters, forces, sprites or objects from files; emitters
+  plug into Scanline Render as extra, growable inputs), both specified
+  in the plan 2026-10-29; (6) other M8 follow-ups and older items under
+  "Next steps". Keep `docs/help.md` in step with new features.
+- **Session 10 so far:** M11 done (0.9.8 MathWiz nodal engine, 0.9.9
+  3DWorker `solve::pnp`, 0.9.10 PnP in the solve + Frames list, 0.9.11
+  Solve Auto / Free move / Tripod + MCP/Python), released v0.9.11; M12
+  lights and M13 particles specified in the plan.
+- **Verification worktrees:** `/tmp` (tmpfs, 16 GB) filled up once with
+  build targets; verify in `../.verify/` (on /home) with its own
+  `CARGO_TARGET_DIR=../.verify/target`. `packaging/linux/build-tarball.sh`
+  ignores `CARGO_TARGET_DIR` (installs from `./target`), so run it without
+  it inside the release worktree.
 - **Not yet tried by hand** (session 9): all of the 3D view with a real
   mouse and trackpad (orbit / pan / zoom feel, numpad and pie, the
   navigation gizmo's buttons, box select, G / R / S typing, gizmo drags,
