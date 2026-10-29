@@ -32,7 +32,16 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
   Blender-style controls,** on branch `wip-ns-3dwork`, from 0.9.0. Spec:
   `docs/phase-4-plan.md`, "Milestone 9 in detail". Workers: wD:p4
   (viewport camera, navigation, drawing, picking, textured cards) and
-  mathwiz/wD:p3 (2D/3D toggle and Tab, G/R/S and gizmos).
+  mathwiz/wD:p3 (2D/3D toggle and Tab, G/R/S and gizmos). wD:p4 is
+  called **3DWorker** by the user (herdr name `worker3d`).
+  - **0.9.1 (mathwiz step 1):** 2D | 3D toggle at the left of the viewer
+    toolbar; Tab switches only over the viewer and never while a text
+    field has focus (handled after main.rs's text-field guard; egui moves
+    focus on Tab at frame start, so the handler calls that off: tested).
+    `viewer::scene_of(doc, node)` finds the scene (the node's own, else
+    its connected scene input, e.g. Scanline Render's; a Viewer node
+    stands for what feeds it). No scene: a message; with a scene, a
+    placeholder in `Viewer::ui_3d` until `Viewport3d::ui` replaces it.
 - **Next work, in order:** (1) anything from the Mac test; (2) the
   hand checks listed below for session 8's GUI work; (3) **M9, the 3D
   viewport** (fully specified in `docs/phase-4-plan.md`, "Milestone 9 in
@@ -90,7 +99,7 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.0**.
+  in the same commit as the change. Current: **0.9.1**.
 - ~23,200 lines of Rust + Python. Tests: 134 library + 10 CLI + 46 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

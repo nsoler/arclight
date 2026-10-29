@@ -7,6 +7,7 @@
 use crate::doc::Doc;
 use crate::overlay::{Overlays, Xf};
 use arclight::color;
+use arclight::ops;
 use arclight::image::{IRect, Image, Plane};
 use eframe::egui::{
     self, Align2, Color32, ColorImage, FontId, Pos2, Rect, Sense, Stroke, TextureHandle,
@@ -63,6 +64,9 @@ pub struct Viewer {
     /// the pointer leaves, the same position keeps being read from each new
     /// frame, so it can be read at leisure (and follows playback).
     picked: Option<Picked>,
+    /// Showing the viewed node's 3D scene instead of its image (the 2D / 3D
+    /// toggle, or Tab over the viewer).
+    pub mode3d: bool,
     pub rect: Rect,
 }
 
@@ -90,6 +94,7 @@ impl Default for Viewer {
             picked: None,
             fit_pending: true,
             overlays: Overlays::default(),
+            mode3d: false,
             rect: Rect::NOTHING,
         }
     }
@@ -123,14 +128,27 @@ impl Viewer {
         self.overlays.delete_points(doc)
     }
 
+    /// Switch between the image (2D) and the scene (3D).
+    pub fn toggle_3d(&mut self) {
+        self.mode3d = !self.mode3d;
+    }
+
     /// `doc` and `frame` drive the selected node's overlay handles; edits
     /// key animated params at `frame`.
     pub fn ui(&mut self, ui: &mut egui::Ui, d: Display<'_>, doc: &mut Doc, frame: i64) {
-        self.toolbar(ui, &d);
+        if self.mode3d {
+            self.toolbar_3d(ui, &d);
+        } else {
+            self.toolbar(ui, &d);
+        }
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         self.rect = rect;
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, Color32::from_gray(24));
+        if self.mode3d {
+            self.ui_3d(ui, rect, &resp, &d, doc, frame);
+            return;
+        }
 
         let Some(img) = d.image else {
             let msg = d.error.unwrap_or("Nothing to view — connect a node to a Viewer, or select one.");
@@ -237,9 +255,54 @@ impl Viewer {
         }
     }
 
+    /// The 3D view of the viewed node's scene (see [`scene_of`]).
+    fn ui_3d(&mut self, ui: &mut egui::Ui, rect: Rect, resp: &egui::Response, d: &Display<'_>, doc: &mut Doc, frame: i64) {
+        let _ = (resp, frame);
+        let painter = ui.painter_at(rect);
+        let Some(node) = d.target else {
+            painter.text(rect.center(), Align2::CENTER_CENTER, "Nothing to view — connect a node to a Viewer, or select one.", FontId::proportional(14.0), Color32::GRAY);
+            return;
+        };
+        match scene_of(doc, node) {
+            None => {
+                let text = format!(
+                    "'{node}' has no 3D scene.\nView a Camera, Card, Scene, Locator, Point Cloud or a Scanline Render to see one here,\nor press Tab (or 2D) for its image."
+                );
+                painter.text(rect.center(), Align2::CENTER_CENTER, text, FontId::proportional(14.0), Color32::GRAY);
+            }
+            // Placeholder until the viewport (src/gui/viewport3d.rs) lands.
+            Some(scene) => {
+                let text = format!("3D view of '{scene}'");
+                painter.text(rect.center(), Align2::CENTER_CENTER, text, FontId::proportional(14.0), Color32::from_rgb(120, 190, 235));
+            }
+        }
+    }
+
+    /// The 2D / 3D switch, at the left of either toolbar.
+    fn mode_switch(&mut self, ui: &mut egui::Ui) {
+        let tip = "Show the viewed node's image (2D) or its 3D scene (3D). Tab switches while the pointer is over the viewer.";
+        if ui.selectable_label(!self.mode3d, "2D").on_hover_text(tip).clicked() {
+            self.mode3d = false;
+        }
+        if ui.selectable_label(self.mode3d, "3D").on_hover_text(tip).clicked() {
+            self.mode3d = true;
+        }
+        ui.separator();
+    }
+
+    fn toolbar_3d(&mut self, ui: &mut egui::Ui, d: &Display<'_>) {
+        ui.horizontal(|ui| {
+            self.mode_switch(ui);
+            if let Some(t) = d.target {
+                ui.weak(format!("Viewing {t}"));
+            }
+        });
+    }
+
     fn toolbar(&mut self, ui: &mut egui::Ui, d: &Display<'_>) {
         let mut fits = true;
         ui.horizontal(|ui| {
+            self.mode_switch(ui);
             for (ch, label) in Channel::ALL {
                 ui.selectable_value(&mut self.channel, ch, label);
             }
@@ -430,4 +493,71 @@ fn plane_image(img: &Image, plane: &Plane, region: IRect, step: usize) -> ColorI
         out.copy_from_slice(&[g, g, g, 255]);
     });
     ColorImage::from_rgba_unmultiplied([tw, th], &bytes)
+}
+
+/// The node whose 3D scene viewing `node` shows: `node` itself when it
+/// outputs a scene (Camera, Card, Scene, …), else what feeds its first
+/// scene input (a Scanline Render's or Camera Tracker's). A Viewer node
+/// stands for what it shows. None: no scene.
+pub fn scene_of(doc: &Doc, node: &str) -> Option<String> {
+    let mut n = doc.node(node)?;
+    if n.op == "viewer" {
+        n = doc.node(n.inputs.first().filter(|s| !s.is_empty())?)?;
+    }
+    let node = n.id.as_str();
+    if ops::output_kind(&n.op) == ops::Kind::Scene {
+        return Some(node.to_string());
+    }
+    let ports = ops::info(&n.op)?.inputs;
+    ports.iter().zip(&n.inputs).find(|(p, src)| p.kind == ops::Kind::Scene && !src.is_empty()).map(|(_, src)| src.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arclight::graph::Graph;
+
+    #[test]
+    fn the_scene_of_a_node_is_its_own_or_its_scene_input() {
+        let mut d = Doc::new(Graph::default(), None);
+        let cam = d.add_node("camera", [0.0, 0.0]);
+        let card = d.add_node("card", [0.0, 100.0]);
+        let render = d.add_node("scanline_render", [200.0, 0.0]);
+        let blur = d.add_node("blur", [400.0, 0.0]);
+        assert_eq!(scene_of(&d, &cam).as_deref(), Some(cam.as_str()));
+        assert_eq!(scene_of(&d, &card).as_deref(), Some(card.as_str()));
+        assert_eq!(scene_of(&d, &render), None, "nothing in its scene input yet");
+        let port = ops::info("scanline_render").unwrap().inputs.iter().position(|p| p.kind == ops::Kind::Scene).unwrap();
+        d.connect(&card, &render, port);
+        assert_eq!(scene_of(&d, &render).as_deref(), Some(card.as_str()));
+        assert_eq!(scene_of(&d, &blur), None);
+        // A Viewer shows what feeds it.
+        let viewer = d.add_node("viewer", [600.0, 0.0]);
+        assert_eq!(scene_of(&d, &viewer), None);
+        d.connect(&render, &viewer, 0);
+        assert_eq!(scene_of(&d, &viewer).as_deref(), Some(card.as_str()));
+    }
+
+    /// Tab over the viewer (main.rs) must not also move keyboard focus:
+    /// egui reads Tab when the frame starts and focuses the first widget
+    /// that wants focus, unless the move is called off before any widget.
+    #[test]
+    fn calling_off_the_focus_move_keeps_tab_from_focusing_a_field() {
+        let tab = egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        for call_off in [false, true] {
+            let ctx = egui::Context::default();
+            let mut text = String::new();
+            let mut focused = false;
+            for events in [vec![], vec![tab.clone()], vec![]] {
+                let raw = egui::RawInput { events, ..Default::default() };
+                let _ = ctx.run_ui(raw, |ui| {
+                    if call_off && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) {
+                        ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+                    }
+                    focused = ui.text_edit_singleline(&mut text).has_focus();
+                });
+            }
+            assert_eq!(focused, !call_off, "call_off {call_off}");
+        }
+    }
 }

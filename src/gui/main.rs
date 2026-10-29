@@ -424,6 +424,14 @@ impl App {
         } else if ctx.input_mut(|i| i.consume_shortcut(&UNDO)) {
             self.undo();
         }
+        // Tab over the viewer switches it between 2D and 3D (elsewhere, and
+        // in text fields, which returned above, Tab keeps its usual job).
+        let over_viewer = ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| self.viewer.rect.contains(p));
+        if over_viewer && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab)) {
+            self.viewer.toggle_3d();
+            // egui read the Tab already, to move keyboard focus this frame.
+            ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+        }
         // ⌘A: every node, over the node graph; else every vertex of the
         // selected shape.
         let over_graph = self.tab == BottomTab::Graph && ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| self.editor.rect.contains(p));

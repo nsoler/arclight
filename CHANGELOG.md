@@ -11,6 +11,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.1 — 2026-10-29
+
+- Viewer: a 2D / 3D toggle in the toolbar (Tab over the viewer switches,
+  never while a text field has focus); in 3D a node without a scene says
+  so. The 3D view itself is a placeholder until the viewport lands.
+
 ## 0.9.0 — 2026-10-29
 
 - Phase 9 begins: work on the 3D viewport (M9 of `docs/phase-4-plan.md`)
