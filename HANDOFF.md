@@ -826,8 +826,8 @@ windows exist.
 - **Arbitrary channels** in `Image` (named planes such as rgba, mask,
   depth, motion) instead of fixed `[f32; 4]`. A big refactor; do it before
   3D.
-- **Expressions / param linking** (e.g. a Transform following a Tracker
-  live, instead of copied keys).
+- **Expressions**: live links exist (v0.0.19, `src/link.rs`); math on
+  linked values (offsets, multipliers) would be the next step.
 - **ROI / tiled evaluation** once images get large or graphs get deep.
 
 ## Known issues and gaps
