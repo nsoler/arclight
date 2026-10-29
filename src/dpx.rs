@@ -303,8 +303,8 @@ pub fn write(img: &Image, path: &Path, encoding: Encoding) -> Result<()> {
         if deep {
             // R, G, B as 16-bit halves.
             let at = HEADER_SIZE + (i / w) * line + (i % w) * 6;
-            for c in 0..3 {
-                put16(&mut out, at + c * 2, code(px[c]) as u16);
+            for (c, &v) in px.iter().take(3).enumerate() {
+                put16(&mut out, at + c * 2, code(v) as u16);
             }
         } else {
             // R, G, B in one word each.
