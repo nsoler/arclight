@@ -75,6 +75,20 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   runner and produced `Arclight-0.1.0-arm64.dmg` (15.5 MB; checked: arm64
   Mach-O GUI + CLI, .icns, Info.plist, signature, example clip). The GUI
   hasn't been opened on a real Mac yet: that's the next check.
+- **Releases (session 7, user request):** GitHub releases, marked
+  pre-release, tagged `v<version>`. First: `v0.0.19`. To make one at the
+  current commit: tag it (`git tag -a v0.0.N -m "Arclight 0.0.N (alpha)"`)
+  and push the tag; the macOS workflow builds the DMG and attaches it to
+  the tag's release (`gh release upload`, creating the release if needed).
+  Build the Linux tarball (`packaging/linux/build-tarball.sh`, from a
+  clean `git worktree` so uncommitted work stays out) and
+  `gh release create v0.0.N … dist/arclight-0.0.N-linux-x86_64.tar.gz`
+  (or `gh release upload` if the workflow got there first). The tarball
+  is built on Omarchy (links glibc only); its `install.sh` installs to
+  `~/.local/bin` and writes the same `arclight.desktop` as the repo's
+  `install.sh`, so on this machine the two replace each other. The GUI
+  finds the starter clip at `../share/arclight/examples/media` beside its
+  binary (and `../Resources/…` in the macOS bundle).
 - **Session 7, part 23** (user request): viewer toolbar color picker
   (`Viewer::color_picker`, rightmost in `status`): swatch + R/G/B/A
   (`{:>6.3}`, monospace, tinted labels); `Viewer::picked` is set while
