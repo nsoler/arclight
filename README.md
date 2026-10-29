@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.0.16** (alpha); see `CHANGELOG.md`.
+Version **0.0.17** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -291,15 +291,16 @@ what loaded, and `arclight ops [OP]` to see the op catalog.
 ## I/O formats
 
 - **EXR**: full 32-bit float, assumed linear + premultiplied. The display window is the frame and the data window where the pixels are (smaller, offset or past the frame); writing stores only the data window.
-- **DPX** (`.dpx`): read at 8, 10, 12 or 16 bits (RGB, RGBA, ABGR or
+- **DPX** (`.dpx`): read at 8, 10, 12 or 16 bits, or 32/64-bit float (RGB, RGBA, ABGR or
   luma; 10/12-bit filled or packed; either byte order; any orientation).
   Log (printing density) DPX is converted to linear with the Cineon curve
   (black 95, white 685, gamma 0.6), linear DPX is taken as is, and
-  video-coded DPX is decoded like the 8/16-bit formats. Written as RGB
-  (alpha dropped, color over black) per the **DPX encoding** setting on
-  Media Out and Write: `10-bit log` (default; keeps values above 1.0),
+  video-coded DPX is decoded like the 8/16-bit formats; float DPX is
+  linear unless marked as video. Written per the **DPX encoding** setting
+  on Media Out and Write: `10-bit log` (default; keeps values above 1.0),
   `10-bit video` or `16-bit video` (sRGB-coded, full range, marked
-  Rec. 709; values above 1.0 clip).
+  Rec. 709; values above 1.0 clip), or `32-bit float linear` (exact). As
+  RGB over black, or with **DPX alpha** on, RGBA with straight alpha.
 - **TIFF** (`.tif`/`.tiff`): read at 8, 16 or 32-bit (any common
   compression); written as 16-bit sRGB with straight alpha (tagged as
   alpha), LZW-compressed.

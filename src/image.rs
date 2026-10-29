@@ -254,11 +254,11 @@ impl Image {
     /// sRGB with alpha; other extensions are 8-bit sRGB after
     /// unpremultiplying (JPEG, which has no alpha, over black).
     pub fn write(&self, path: &Path) -> Result<()> {
-        self.write_as(path, crate::dpx::Encoding::default())
+        self.write_as(path, crate::dpx::Options::default())
     }
 
     /// [`write`](Self::write), choosing how a `.dpx` is encoded.
-    pub fn write_as(&self, path: &Path, dpx: crate::dpx::Encoding) -> Result<()> {
+    pub fn write_as(&self, path: &Path, dpx: crate::dpx::Options) -> Result<()> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent).ok();

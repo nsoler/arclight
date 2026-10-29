@@ -20,7 +20,7 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.16**.
+  in the same commit as the change. Current: **0.0.17**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -118,7 +118,18 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   `Layer` of the window's size at `layer_position`, display window = the
   frame (empty window: one transparent pixel at 0,0). Checked with
   oiiotool-made offset / past-the-frame data windows and `exrheader` on
-  ours. No Developer ID signing / notarization (needs a paid Apple
+  ours.
+- **Session 8, part 2**, **v0.0.17**: DPX alpha and float. `dpx::Options
+  { encoding, alpha }` (`Image::write_as`); `dpx_alpha` Bool on
+  media_out/write. Writer builds each row's component stream (straight
+  color + linear alpha with alpha; premultiplied color without) and packs
+  it: 10-bit 3 per word (method A, lines word-aligned), 16-bit halves
+  (lines padded), 32-bit float (`Encoding::Float32`, transfer 2,
+  colorimetric 6). Reader: 32/64-bit float via `unpack_float`, values
+  linear unless transfer is a video code (4–10). Interop: integer RGBA
+  read correctly by ImageMagick, OIIO, ffmpeg; float matches OIIO's
+  layout and OIIO reads it exactly, but ImageMagick and ffmpeg can't read
+  float DPX at all (not even their own / OIIO's). No Developer ID signing / notarization (needs a paid Apple
   account); ffmpeg not bundled (GPL builds; Homebrew instead).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
@@ -181,8 +192,8 @@ steps": take them in this order, one milestone at a time (commit, push and
 fast-forward `main` after each, per the standing instruction above), and
 report back after a few milestones.
 
-1. **Small UX debts:** formats: RLE / float / 1-bit
-   DPX, DPX with alpha, video color tags (encodes carry no color metadata).
+1. **Small UX debts:** formats: RLE / 1-bit DPX (rare;
+   no test files), video color tags (encodes carry no color metadata).
 2. **Session-4 follow-ups** (small to medium):
    - Python plugins (custom ops written in Python): embed Python in the
      host via the `python/` crate, or run them out of process.

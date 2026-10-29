@@ -7,6 +7,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.17 — 2026-10-29
+
+- DPX with alpha: a DPX alpha setting on Media Out and Write stores RGBA
+  (alpha straight, as DPX readers expect) in any DPX encoding. Read by
+  ImageMagick, OpenImageIO and ffmpeg.
+- Float DPX: reading 32- and 64-bit float DPX (linear unless marked as
+  video), and a new 32-bit float linear encoding that stores values
+  exactly, highlights included. Matches OpenImageIO's float DPX (which
+  reads it exactly); ImageMagick and ffmpeg don't read float DPX at all.
+
 ## 0.0.16 — 2026-10-29
 
 - EXR data windows: reading places an EXR's pixels where its data window

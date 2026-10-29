@@ -1,14 +1,18 @@
 //! DPX (SMPTE 268M) images: the common film and video variants.
 //!
 //! Reading takes the first image element: 8, 10, 12 or 16 bits per
-//! component; RGB, RGBA, ABGR or luma; 10- and 12-bit data filled into
+//! component, or 32/64-bit float; RGB, RGBA, ABGR or luma; 10- and 12-bit
+//! data filled into
 //! words (method A or B) or packed as a continuous bit stream; either byte
 //! order; any orientation. Log data (printing density) is converted to
 //! linear with the Cineon curve (black 95, white 685 on the 10-bit scale),
 //! linear data is taken as is, and video-coded data is decoded like the
-//! other 8/16-bit formats (sRGB). Writing is RGB (see [`Encoding`]): 10-bit
-//! log, the usual film deliverable (values above 1.0 survive it), or 10- or
-//! 16-bit video-coded (sRGB, full range, marked Rec. 709).
+//! other 8/16-bit formats (sRGB); float data is linear unless marked as
+//! video. Writing is RGB or RGBA (see [`Options`]): 10-bit log, the usual
+//! film deliverable (values above 1.0 survive it), 10- or 16-bit
+//! video-coded (sRGB, full range, marked Rec. 709), or 32-bit float linear
+//! (exact). Alpha is written straight (not premultiplied), as DPX readers
+//! expect.
 
 use crate::color;
 use crate::image::Image;
@@ -34,7 +38,7 @@ const ELEMENT_OFFSET: usize = 28;
 const HEADER_SIZE: usize = 2048;
 
 /// Media Out's and Write's DPX choices.
-pub const ENCODINGS: &[&str] = &["10-bit log", "10-bit video", "16-bit video"];
+pub const ENCODINGS: &[&str] = &["10-bit log", "10-bit video", "16-bit video", "32-bit float linear"];
 
 /// How DPX is written.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -46,6 +50,8 @@ pub enum Encoding {
     Video10,
     /// sRGB-coded video, full range, 16-bit.
     Video16,
+    /// Linear 32-bit float: exact, any range.
+    Float32,
 }
 
 impl Encoding {
@@ -54,9 +60,18 @@ impl Encoding {
         match choice {
             "10-bit video" => Encoding::Video10,
             "16-bit video" => Encoding::Video16,
+            "32-bit float linear" => Encoding::Float32,
             _ => Encoding::Log10,
         }
     }
+}
+
+/// How to write a DPX: the encoding, and whether to store alpha (RGBA,
+/// straight) or only color (RGB, over black).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Options {
+    pub encoding: Encoding,
+    pub alpha: bool,
 }
 
 /// Cineon printing density: code values for black and white.
@@ -140,15 +155,22 @@ fn decode(data: &[u8]) -> Result<Image> {
     } as usize;
     let comps = layout(descriptor)?;
     let nc = comps.len();
-    let values = unpack(data.get(offset..).context("image data offset past the end")?, big, bits, packing, w * nc, h)?;
-
-    let max = ((1u64 << bits) - 1) as f32;
-    let to_linear = |v: u32| -> f32 {
-        let n = v as f32 / max;
+    let stored = data.get(offset..).context("image data offset past the end")?;
+    // Each component as a number: 0–1 for integer data, as stored for float.
+    let float = matches!(bits, 32 | 64);
+    let values: Vec<f32> = if float {
+        unpack_float(stored, big, bits, w * nc, h)?
+    } else {
+        let max = ((1u64 << bits) - 1) as f32;
+        unpack(stored, big, bits, packing, w * nc, h)?.into_iter().map(|v| v as f32 / max).collect()
+    };
+    let to_linear = |n: f32| -> f32 {
         match transfer {
             // Printing density or logarithmic: the Cineon curve.
             1 | 3 => log_to_linear(n * 1023.0),
             2 => n,
+            // Float that isn't marked as video (4–10) is linear.
+            t if float && !(4..=10).contains(&t) => n,
             _ => color::srgb_to_linear(n),
         }
     };
@@ -161,7 +183,7 @@ fn decode(data: &[u8]) -> Result<Image> {
             let mut px = [0.0, 0.0, 0.0, 1.0];
             for (&c, &v) in comps.iter().zip(src) {
                 if c == 3 {
-                    px[3] = v as f32 / max;
+                    px[3] = v;
                 } else if nc == 1 {
                     px = [to_linear(v), to_linear(v), to_linear(v), 1.0];
                 } else {
@@ -247,15 +269,40 @@ fn unpack(data: &[u8], big: bool, bits: u32, packing: u16, per_row: usize, rows:
     Ok(out)
 }
 
-/// Write `img` (its frame) as RGB DPX, big-endian: 10-bit filled method A
-/// (one word a pixel) or 16-bit. DPX keeps no alpha here, so the color is
-/// written over black.
-pub fn write(img: &Image, path: &Path, encoding: Encoding) -> Result<()> {
+/// `rows` lines of `per_row` float components (`bits` 32 or 64).
+fn unpack_float(data: &[u8], big: bool, bits: u32, per_row: usize, rows: usize) -> Result<Vec<f32>> {
+    let size = bits as usize / 8;
+    let need = per_row * rows * size;
+    let data = data.get(..need).context("image data is cut short")?;
+    Ok(data
+        .chunks_exact(size)
+        .map(|b| match (size, big) {
+            (4, true) => f32::from_be_bytes(b.try_into().unwrap()),
+            (4, false) => f32::from_le_bytes(b.try_into().unwrap()),
+            (_, true) => f64::from_be_bytes(b.try_into().unwrap()) as f32,
+            (_, false) => f64::from_le_bytes(b.try_into().unwrap()) as f32,
+        })
+        .collect())
+}
+
+/// Write `img` (its frame) as a big-endian RGB or RGBA DPX (see
+/// [`Options`]): 10-bit filled method A (three components a word, lines on
+/// word boundaries), 16-bit, or 32-bit float.
+pub fn write(img: &Image, path: &Path, options: Options) -> Result<()> {
+    let Options { encoding, alpha } = options;
     let flat = img.flat();
     let (w, h) = (flat.width, flat.height);
-    let deep = encoding == Encoding::Video16;
-    // 16-bit lines are padded to whole 32-bit words.
-    let line = if deep { (w * 6).div_ceil(4) * 4 } else { w * 4 };
+    let nc = if alpha { 4 } else { 3 };
+    let bits: usize = match encoding {
+        Encoding::Log10 | Encoding::Video10 => 10,
+        Encoding::Video16 => 16,
+        Encoding::Float32 => 32,
+    };
+    let line = match bits {
+        10 => (w * nc).div_ceil(3) * 4,
+        16 => (w * nc * 2).div_ceil(4) * 4,
+        _ => w * nc * 4,
+    };
     let mut out = vec![0u8; HEADER_SIZE + line * h];
     let size = out.len() as u32;
     let put32 = |out: &mut Vec<u8>, at: usize, v: u32| out[at..at + 4].copy_from_slice(&v.to_be_bytes());
@@ -279,37 +326,71 @@ pub fn write(img: &Image, path: &Path, encoding: Encoding) -> Result<()> {
     put32(&mut out, WIDTH, w as u32);
     put32(&mut out, HEIGHT, h as u32);
     let el = |field: usize| ELEMENT + field;
-    let max = if deep { 65535 } else { 1023 };
-    let (low, high) = if encoding == Encoding::Log10 { (LOG_BLACK as u32, LOG_WHITE as u32) } else { (0, max) };
+    let max = ((1u64 << bits.min(16)) - 1) as u32;
+    let (low, high) = match encoding {
+        Encoding::Log10 => (LOG_BLACK as u32, LOG_WHITE as u32),
+        Encoding::Float32 => (0, 0),
+        _ => (0, max),
+    };
     put32(&mut out, el(4), low); // reference low data code
     put32(&mut out, el(12), high); // reference high data code
-    out[el(DESCRIPTOR)] = 50; // RGB
-    // Printing density, or Rec. 709 video.
-    let (transfer, colorimetric) = if encoding == Encoding::Log10 { (1, 1) } else { (6, 6) };
+    out[el(DESCRIPTOR)] = if alpha { 51 } else { 50 }; // RGBA or RGB
+    // Printing density, Rec. 709 video, or linear (Rec. 709 primaries).
+    let (transfer, colorimetric) = match encoding {
+        Encoding::Log10 => (1, 1),
+        Encoding::Float32 => (2, 6),
+        _ => (6, 6),
+    };
     out[el(TRANSFER)] = transfer;
     out[el(22)] = colorimetric;
-    out[el(BIT_DEPTH)] = if deep { 16 } else { 10 };
-    put16(&mut out, el(PACKING), if deep { 0 } else { 1 }); // 10-bit: filled, method A
+    out[el(BIT_DEPTH)] = bits as u8;
+    put16(&mut out, el(PACKING), if bits == 10 { 1 } else { 0 }); // 10-bit: filled, method A
     put16(&mut out, el(ENCODING), 0);
     put32(&mut out, el(ELEMENT_OFFSET), HEADER_SIZE as u32);
     // The other seven elements and the orientation/film/TV headers stay zero.
+    // A color component as stored (alpha is always linear).
     let code = |v: f32| -> u32 {
         match encoding {
             Encoding::Log10 => linear_to_log(v).round() as u32,
+            Encoding::Float32 => v.to_bits(),
             _ => (color::linear_to_srgb(v).clamp(0.0, 1.0) * max as f32).round() as u32,
         }
     };
-    for (i, px) in flat.pixels.iter().enumerate() {
-        if deep {
-            // R, G, B as 16-bit halves.
-            let at = HEADER_SIZE + (i / w) * line + (i % w) * 6;
-            for (c, &v) in px.iter().take(3).enumerate() {
-                put16(&mut out, at + c * 2, code(v) as u16);
+    let alpha_code = |a: f32| -> u32 {
+        match encoding {
+            Encoding::Float32 => a.to_bits(),
+            _ => (a.clamp(0.0, 1.0) * max as f32).round() as u32,
+        }
+    };
+    let mut row = Vec::with_capacity(w * nc);
+    for y in 0..h {
+        row.clear();
+        for px in &flat.pixels[y * w..(y + 1) * w] {
+            // With alpha: straight color. Without: premultiplied, over black.
+            let c = if alpha { color::unpremultiply(*px) } else { *px };
+            row.extend(c.iter().take(3).map(|&v| code(v)));
+            if alpha {
+                row.push(alpha_code(c[3]));
             }
-        } else {
-            // R, G, B in one word each.
-            let word = (code(px[0]) << 22) | (code(px[1]) << 12) | (code(px[2]) << 2);
-            put32(&mut out, HEADER_SIZE + i * 4, word);
+        }
+        let at = HEADER_SIZE + y * line;
+        match bits {
+            10 => {
+                for (k, three) in row.chunks(3).enumerate() {
+                    let word = three.iter().zip([22, 12, 2]).fold(0, |wd, (&v, s)| wd | (v << s));
+                    put32(&mut out, at + k * 4, word);
+                }
+            }
+            16 => {
+                for (k, &v) in row.iter().enumerate() {
+                    put16(&mut out, at + k * 2, v as u16);
+                }
+            }
+            _ => {
+                for (k, &v) in row.iter().enumerate() {
+                    put32(&mut out, at + k * 4, v);
+                }
+            }
         }
     }
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -340,7 +421,7 @@ mod tests {
         }
         let dir = std::env::temp_dir().join(format!("arclight_dpx_{}", std::process::id()));
         let path = dir.join("frame.dpx");
-        write(&img, &path, Encoding::Log10).unwrap();
+        write(&img, &path, Options::default()).unwrap();
         let back = read(&path).unwrap();
         assert_eq!((back.width, back.height), (5, 3));
         for (a, b) in img.pixels.iter().zip(&back.pixels) {
@@ -363,7 +444,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("arclight_dpxv_{}", std::process::id()));
         for (enc, bits, tol) in [(Encoding::Video10, 10, 2e-3), (Encoding::Video16, 16, 1e-4)] {
             let path = dir.join(format!("v{bits}.dpx"));
-            write(&img, &path, enc).unwrap();
+            write(&img, &path, Options { encoding: enc, alpha: false }).unwrap();
             let data = std::fs::read(&path).unwrap();
             assert_eq!((data[ELEMENT + TRANSFER], data[ELEMENT + BIT_DEPTH]), (6, bits), "Rec. 709 video, {bits}-bit");
             let back = read(&path).unwrap();
@@ -372,6 +453,51 @@ mod tests {
                 // Compare in the coded (sRGB) domain, where the steps are even.
                 let err = (0..3).map(|c| (color::linear_to_srgb(want[c]) - color::linear_to_srgb(b[c])).abs()).fold(0.0, f32::max);
                 assert!(err < tol, "{bits}-bit pixel {i}: {a:?} vs {b:?}");
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn every_encoding_with_and_without_alpha_reads_back() {
+        // Half-transparent pixels and a highlight, at an odd width (lines of
+        // 10-bit RGBA end mid-word).
+        let mut img = Image::new(5, 2);
+        for (i, p) in img.pixels.iter_mut().enumerate() {
+            let a = [1.0, 0.5, 0.25, 0.75, 1.0][i % 5];
+            *p = color::premultiply([0.05 + 0.08 * i as f32, 0.18, 0.6, a]);
+        }
+        img.pixels[9] = [3.5, 0.5, 0.25, 1.0]; // above 1.0
+        let dir = std::env::temp_dir().join(format!("arclight_dpxa_{}", std::process::id()));
+        for encoding in [Encoding::Log10, Encoding::Video10, Encoding::Video16, Encoding::Float32] {
+            for alpha in [false, true] {
+                let path = dir.join(format!("{encoding:?}_{alpha}.dpx"));
+                write(&img, &path, Options { encoding, alpha }).unwrap();
+                let back = read(&path).unwrap();
+                for (i, (a, b)) in img.pixels.iter().zip(&back.pixels).enumerate() {
+                    // Without alpha the color is over black (premultiplied),
+                    // and comes back opaque.
+                    let want = if alpha { *a } else { [a[0], a[1], a[2], 1.0] };
+                    // Video clips at 1.0; float is exact; the rest within a
+                    // code step (log steps are ~1% of the value).
+                    let want = match encoding {
+                        Encoding::Video10 | Encoding::Video16 => {
+                            let s = color::unpremultiply(want);
+                            let c = s.map(|v| v.min(1.0));
+                            if alpha { color::premultiply([c[0], c[1], c[2], s[3]]) } else { [c[0], c[1], c[2], 1.0] }
+                        }
+                        _ => want,
+                    };
+                    let tol = |v: f32| match encoding {
+                        Encoding::Float32 => 1e-6,
+                        Encoding::Log10 => 0.012 * v.abs().max(0.05),
+                        Encoding::Video10 => 0.004,
+                        Encoding::Video16 => 1e-4,
+                    };
+                    for c in 0..4 {
+                        assert!((want[c] - b[c]).abs() <= tol(want[c]), "{encoding:?} alpha {alpha}, pixel {i}: {want:?} vs {b:?}");
+                    }
+                }
             }
         }
         std::fs::remove_dir_all(&dir).ok();
