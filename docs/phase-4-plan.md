@@ -2,7 +2,7 @@
 
 Status: **agreed** (2026-10-29). The user chose the proposed option for
 D1–D4; D5 (viewport) and D6 (order) stand as proposed until milestone 9.
-Milestones 1–4 done, 5 partly. The work goes one milestone at a time, as in
+Milestones 1–5 done. The work goes one milestone at a time, as in
 `phase-0.6-plan.md`.
 
 ## Goal
@@ -229,15 +229,17 @@ then poses of in-between frames by PnP and a final pass).
    makes it fill the frame renders like the image; depth equals that
    distance; perspective (a tilted card's near edge is wider); two
    overlapping cards sort by depth.
-5. **Partly done (2026-10-29).** **Features and KLT.** (As built:
+5. **Done (2026-10-29).** **Features and KLT.** (As built:
    `src/features.rs`: Gray, Pyramid, detect (Shi–Tomasi), follow /
-   follow_checked (pyramidal LK, forward–backward), FeatureTracker
-   (top-up below 90 %). Nothing calls it yet. Open: on a rendered camera
-   move, error grows ~0.05 px a frame (pure pan ~1 % of the motion; a
-   still camera gives 0); refining against the first frame didn't
-   change it, so a Scanline Render / `geom` projection mismatch is a
-   suspect. Ignored test `rendered_tracks_drift_under_a_tenth_of_a_pixel`
-   holds the target.) Shi–Tomasi on a pyramid, pyramidal LK, forward–
+   follow_checked (pyramidal LK, forward–backward), affine_refine, and
+   FeatureTracker (top-up below 90 %). The drift first seen here was not
+   a projection mismatch (a sideways camera move tracks to 1.0002 of the
+   true motion): a shift-only window can't follow content that stretches
+   (toward the edges of a pan, all over in a push-in), so each step
+   landed slightly off and the error added up. Each step is now refined
+   against the feature's first frame with an affine window warp:
+   0.015 px median, 0.12 px at the 95th percentile over the test shot,
+   down from 0.22 / 0.94.) Shi–Tomasi on a pyramid, pyramidal LK, forward–
    backward check. Tests on synthetic renders (Scanline Render of
    textured cards through a known moving camera: ground truth for free).
 6. **Two-view initialization and triangulation.** Fundamental /

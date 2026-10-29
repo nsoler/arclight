@@ -37,7 +37,7 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.31**.
+  in the same commit as the change. Current: **0.0.32**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -940,16 +940,19 @@ min eigenvalue over 5×5, 3×3 local maxima, greedy spacing via a grid),
 `lk_level` / `follow` / `follow_checked` (pyramidal LK, 15×15 window,
 forward–backward error ≤ 0.5 px), `FeatureTrack {start, points}`,
 `FeatureTracker::push(frame, img)`. Positions in frame pixels (pixel i
-spans i..i+1). **Open issue before M6/M7 rely on long tracks:** on a
-rendered camera move, error against ground truth grows ~0.05 px/frame
-(pure 0.4°/frame pan: ~0.013 px/frame, about 1% of the motion; still
-camera: exactly 0). Refining against the feature's first frame instead
-of chaining didn't change it, so suspect a small Scanline Render vs
-`geom::Camera::project` mismatch, or the test's ground truth; next,
-measure the tracked/true displacement ratio. The ignored test
-`features::tests::rendered_tracks_drift_under_a_tenth_of_a_pixel` holds
-the target; `features_track_a_rendered_camera_move` asserts what holds
-now (one-frame accuracy, survival, top-up).
+spans i..i+1). **Drift fixed (v0.0.32):** not a projection mismatch
+(a sideways move tracks at 1.0002 of the true displacement); a
+shift-only LK window can't follow content that stretches (pan edges,
+push-ins), so each step lands slightly off and chaining adds it up. Each
+step is now refined against the feature's first frame with an affine
+window warp: `affine_refine(anchor, img, p, warp, q, r)` (19×19 window,
+forward-additive Gauss–Newton on 6 params, nalgebra `Matrix6` Cholesky;
+rejected if it doesn't settle, the warp's determinant leaves 0.5..2, or
+it lands > 2 px from the followed position). `FeatureTracker` keeps
+per-track warps and an anchor `Gray` per start frame (dropped when no
+live track uses it). Test shot: 0.015 px median / 0.12 px p95 (was
+0.22 / 0.94); `rendered_tracks_drift_under_a_tenth_of_a_pixel` is on
+(median < 0.05, p95 < 0.2).
 
 - 3D needs a scene system first: Camera (focal length, film back, transform,
   animatable), Card / geometry nodes, a Scene node, and a **scanline renderer**

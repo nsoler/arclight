@@ -15,6 +15,14 @@
 //! - **Checking:** each feature is also tracked back from the new frame;
 //!   if it doesn't come back to where it started (forward–backward error),
 //!   it drifted or was hidden, and is dropped.
+//! - **Refining:** a window that only shifts can't follow content that
+//!   stretches, turns or shears as the camera moves (toward the edges of a
+//!   pan, or all over in a push-in); the best shift then lands a little
+//!   off, differently for each feature, and frame after frame the error
+//!   adds up. So each new position is refined against the frame the
+//!   feature was found on, with the window allowed an affine warp (Shi and
+//!   Tomasi's affine feature tracking): the deformation is modelled
+//!   instead of becoming error, and nothing accumulates.
 //!
 //! Positions are frame pixels, y down, pixel i spanning i..i+1 (as the 2D
 //! tracker's and shapes'), so a pixel's center is at i + 0.5.
@@ -310,6 +318,44 @@ pub fn follow_checked(from: &Pyramid, to: &Pyramid, p: Pt, r: usize, max_error: 
     ((back[0] - p[0]).hypot(back[1] - p[1]) <= max_error).then_some(q)
 }
 
+/// Refine where the window of `anchor` around `p` (pixel centers on
+/// integers) is in `img`: an affine warp `a` (2×2, about the window's
+/// center) and a position `q`, starting from the given ones, by Gauss–Newton
+/// on the brightness difference. None if it doesn't settle or the warp
+/// degenerates.
+fn affine_refine(anchor: &Gray, img: &Gray, p: Pt, a: [f32; 4], q: Pt, r: usize) -> Option<([f32; 4], Pt)> {
+    use nalgebra::{Matrix6, Vector6};
+    let r = r as isize;
+    let mut tmpl = Vec::with_capacity(((2 * r + 1) * (2 * r + 1)) as usize);
+    for dy in -r..=r {
+        for dx in -r..=r {
+            tmpl.push((dx as f64, dy as f64, anchor.sample(p[0] + dx as f32, p[1] + dy as f32) as f64));
+        }
+    }
+    let mut x = Vector6::new(a[0] as f64, a[1] as f64, a[2] as f64, a[3] as f64, q[0] as f64, q[1] as f64);
+    for _ in 0..20 {
+        let (mut h, mut b) = (Matrix6::<f64>::zeros(), Vector6::<f64>::zeros());
+        for &(dx, dy, t) in &tmpl {
+            let u = (x[0] * dx + x[1] * dy + x[4]) as f32;
+            let v = (x[2] * dx + x[3] * dy + x[5]) as f32;
+            let gx = ((img.sample(u + 1.0, v) - img.sample(u - 1.0, v)) / 2.0) as f64;
+            let gy = ((img.sample(u, v + 1.0) - img.sample(u, v - 1.0)) / 2.0) as f64;
+            let e = t - img.sample(u, v) as f64;
+            let j = Vector6::new(gx * dx, gx * dy, gy * dx, gy * dy, gx, gy);
+            h += j * j.transpose();
+            b += j * e;
+        }
+        let step = h.cholesky()?.solve(&b);
+        x += step;
+        if step[4].hypot(step[5]) < 1e-4 && step.rows(0, 4).norm() < 1e-5 {
+            let det = x[0] * x[3] - x[1] * x[2];
+            let ok = (0.5..2.0).contains(&det) && (x[4] as f32) >= 0.0 && (x[5] as f32) >= 0.0 && x[4] <= img.w as f64 && x[5] <= img.h as f64;
+            return ok.then(|| ([x[0] as f32, x[1] as f32, x[2] as f32, x[3] as f32], [x[4] as f32, x[5] as f32]));
+        }
+    }
+    None
+}
+
 /// A feature's positions on consecutive frames from `start`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FeatureTrack {
@@ -337,12 +383,16 @@ pub struct FeatureTracker {
     pub tracks: Vec<FeatureTrack>,
     /// Indices into `tracks` still being followed.
     live: Vec<usize>,
+    /// Each track's window warp from its first frame to its last.
+    warps: Vec<[f32; 4]>,
     prev: Option<(i64, Pyramid)>,
+    /// The finest level of each frame a live feature was found on.
+    anchors: std::collections::HashMap<i64, std::sync::Arc<Gray>>,
 }
 
 impl FeatureTracker {
     pub fn new(settings: Settings) -> FeatureTracker {
-        FeatureTracker { settings, tracks: Vec::new(), live: Vec::new(), prev: None }
+        FeatureTracker { settings, tracks: Vec::new(), live: Vec::new(), warps: Vec::new(), prev: None, anchors: Default::default() }
     }
 
     /// The tracks still being followed.
@@ -358,15 +408,26 @@ impl FeatureTracker {
         let pyr = Pyramid::new(Gray::new(img), s.levels);
         if let Some((pf, prev)) = &self.prev {
             assert_eq!(frame, pf + 1, "frames must come in order");
-            let moved: Vec<Option<Pt>> = self
+            // Followed from the last frame, then refined against the first
+            // (a larger window than the search's, to pin the warp down);
+            // a refinement far from the followed position is a lost track.
+            let moved: Vec<Option<([f32; 4], Pt)>> = self
                 .live
                 .par_iter()
-                .map(|&i| follow_checked(prev, &pyr, *self.tracks[i].points.last().unwrap(), s.radius, s.max_fb_error))
+                .map(|&i| {
+                    let t = &self.tracks[i];
+                    let q = follow_checked(prev, &pyr, *t.points.last().unwrap(), s.radius, s.max_fb_error)?;
+                    let half = |p: Pt| [p[0] - 0.5, p[1] - 0.5];
+                    let (a, r) = affine_refine(&self.anchors[&t.start], &pyr.levels[0], half(t.points[0]), self.warps[i], half(q), s.radius + 2)?;
+                    let r = [r[0] + 0.5, r[1] + 0.5];
+                    ((r[0] - q[0]).hypot(r[1] - q[1]) < 2.0).then_some((a, r))
+                })
                 .collect();
             let mut still = Vec::with_capacity(self.live.len());
-            for (&i, q) in self.live.iter().zip(moved) {
-                if let Some(q) = q {
+            for (&i, m) in self.live.iter().zip(moved) {
+                if let Some((a, q)) = m {
                     self.tracks[i].points.push(q);
+                    self.warps[i] = a;
                     still.push(i);
                 }
             }
@@ -375,11 +436,19 @@ impl FeatureTracker {
         if self.live.len() * 10 < s.max_features * 9 {
             let avoid: Vec<Pt> = self.live().map(|t| *t.points.last().unwrap()).collect();
             let border = s.radius + 2;
-            for (p, _) in detect(&pyr.levels[0], s.max_features - self.live.len(), s.min_distance, s.quality, border, &avoid) {
+            let found = detect(&pyr.levels[0], s.max_features - self.live.len(), s.min_distance, s.quality, border, &avoid);
+            if !found.is_empty() {
+                self.anchors.insert(frame, std::sync::Arc::new(pyr.levels[0].clone()));
+            }
+            for (p, _) in found {
                 self.live.push(self.tracks.len());
                 self.tracks.push(FeatureTrack { start: frame, points: vec![p] });
+                self.warps.push([1.0, 0.0, 0.0, 1.0]);
             }
         }
+        // Frames no live feature was found on aren't needed any more.
+        let starts: std::collections::HashSet<i64> = self.live().map(|t| t.start).collect();
+        self.anchors.retain(|f, _| starts.contains(f));
         self.prev = Some((frame, pyr));
     }
 }
@@ -526,18 +595,30 @@ mod tests {
         assert!(median < 0.06 && p95 < 0.3, "after one frame: median {median}, 95% {p95}");
     }
 
-    /// OPEN (2026-10-29): over this shot the error grows about 0.05 px a
-    /// frame (0.013 a frame for a pure 0.4°/frame pan, about 1% of the
-    /// motion), though a still camera gives 0. Refining against the
-    /// first frame instead of chaining didn't change it, so it may be a
-    /// small mismatch between Scanline Render and `geom`'s projection
-    /// rather than the tracker. To look into before the solver relies on
-    /// long tracks.
+    /// Over the whole shot (a push-in with a pan and a roll, up to 11
+    /// frames a track) the features stay on their wall points: the affine
+    /// refinement against each feature's first frame keeps the window's
+    /// stretching from turning into drift (shift-only tracking reached a
+    /// 0.22 px median, 0.94 px at the 95th percentile, growing every frame;
+    /// now about 0.015 and 0.12).
     #[test]
-    #[ignore]
     fn rendered_tracks_drift_under_a_tenth_of_a_pixel() {
         let (_, errs) = rendered_camera_move();
         let (median, p95) = median_and_p95(errs.into_iter().map(|e| e.1));
-        assert!(median < 0.1 && p95 < 0.3, "median {median}, 95% {p95}");
+        assert!(median < 0.05 && p95 < 0.2, "median {median}, 95% {p95}");
+    }
+
+    #[test]
+    fn dbg_timing() {
+        let fmt = Size { width: 1920, height: 1080 };
+        let tex = Blobs::new(20000, 2048.0, 2048.0, 5).image(2048, 2048, 0.0, 0.0);
+        let wall = Card { image: Arc::new(tex), world: geom::trs([0.0, 0.0, -5.0], [0.0; 3], [1.0; 3]), size: [16.0, 16.0] };
+        let scene = Scene { cards: vec![wall], ..Scene::default() };
+        let cam = |t: f64| Camera { focal: 18.0, world: geom::trs([0.02 * t, 0.01 * t, -0.02 * t], [0.0, 0.2 * t, 0.1 * t], [1.0; 3]), ..Camera::default() };
+        let frames: Vec<Image> = (0..20).map(|f| crate::render3d::render(&scene, &cam(f as f64), fmt, 1, None)).collect();
+        let mut tracker = FeatureTracker::new(Settings { max_features: 200, ..Settings::default() });
+        let t0 = std::time::Instant::now();
+        for (f, img) in frames.iter().enumerate() { tracker.push(f as i64, img); }
+        eprintln!("TIMING {:.1} ms/frame, live {}", t0.elapsed().as_secs_f64() * 1000.0 / 20.0, tracker.live().count());
     }
 }

@@ -7,6 +7,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.32 — 2026-10-29
+
+- Camera-tracker features no longer drift: each tracked feature is
+  refined against the frame it was found on with an affine window warp,
+  so content that stretches as the camera pans or pushes in (which a
+  shift-only window follows slightly off, adding up frame after frame)
+  stays locked: 0.015 px median error over a rendered test shot, down
+  from 0.22 px.
+
 ## 0.0.31 — 2026-10-29
 
 - Groundwork for the 3D camera tracker (no node yet): `src/features.rs`
