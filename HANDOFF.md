@@ -37,7 +37,7 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.27**.
+  in the same commit as the change. Current: **0.0.28**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -943,6 +943,11 @@ an empty frame).
   (text, char cursor, Doc) -> (word start, list); `FORMULA_FUNCS` /
   `FORMULA_VARS` feed the list and the ? help, and a test parses every
   listed name so the list can't drift from `src/expr.rs`.
+  One number for a list param (v0.0.28): `ops::resolve_at` (and
+  `Doc::param_at` for the panel) repeats a link's or formula's single
+  number to the length of the param's list default; plain stored numbers,
+  number params and Null defaults (Transform's automatic center) are left
+  alone.
 - **ROI / tiled evaluation** once images get large or graphs get deep.
 
 ## Known issues and gaps

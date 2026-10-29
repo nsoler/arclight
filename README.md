@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.0.27** (alpha); see `CHANGELOG.md`.
+Version **0.0.28** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -272,8 +272,8 @@ nodes' params at the frame being rendered:
   (`(frame - first_frame) / fps`, so 0 on the first frame); `fps`, the
   project's rate; `pi`, `tau`, `e`; lists `[a, b]`; `+ - * / % ^`; comparisons
   and `&& || !` (1 or 0). Lists work per component, and a number goes
-  with every component (`a.center * 0.5`). Give a list param a list: a
-  formula for a position or color must make one.
+  with every component (`a.center * 0.5`). One number for a list
+  param (a position, size or color) fills every component.
 - `sin cos tan asin acos atan atan2` (radians: `sin(rad(30))`; rotation
   params are degrees), `sqrt abs floor ceil round fract sign pow exp log
   rad deg min max clamp mix smoothstep length dist`, `if(c, a, b)`.

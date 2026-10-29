@@ -354,6 +354,26 @@ mod tests {
         assert!(e.contains("'color'") && e.contains("loops"), "{e}");
     }
 
+    /// A link giving one number for a list param fills every component.
+    #[test]
+    fn a_number_for_a_list_param_fills_every_component() {
+        let g = graph(json!([
+            { "id": "a", "op": "rectangle", "params": { "rotate": 0.25 } },
+            { "id": "c", "op": "constant", "params": { "width": 2, "height": 2, "color": expr("0.5") } },
+            { "id": "d", "op": "constant", "params": { "width": 2, "height": 2, "color": param("a", "rotate") } },
+            { "id": "s", "op": "rectangle", "params": { "size": expr("frame * 10"), "rotate": expr("frame") } },
+            { "id": "half", "op": "constant", "params": { "width": 2, "height": 2, "color": [0.5, 0.5, 0.5, 0.5] } },
+            { "id": "quarter", "op": "constant", "params": { "width": 2, "height": 2, "color": [0.25, 0.25, 0.25, 0.25] } },
+        ]));
+        let ctx = EvalContext { frame: 3, write_outputs: false };
+        let mut ev = Evaluator::new();
+        let mut px = |id: &str| ev.evaluate(&g, id, &ctx).unwrap().pixels[0];
+        assert_eq!(px("c"), px("half"));
+        assert_eq!(px("d"), px("quarter"));
+        let p = ops::resolve_params_linked("rectangle", &g.node("s").unwrap().params, 3, Some(&|v: &Value, t| resolve(&|id: &str| g.node(id), v, t, Clock::default())));
+        assert_eq!((&p["size"], &p["rotate"]), (&json!([30.0, 30.0]), &json!(3.0)), "a number param stays one");
+    }
+
     /// `time` and `fps` come from the graph's project.
     #[test]
     fn formulas_tell_time_from_the_project() {

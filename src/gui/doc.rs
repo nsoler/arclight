@@ -395,9 +395,20 @@ impl Doc {
 
     /// A param's value at `frame`, with keyframes evaluated and a live
     /// link followed.
+    /// A link giving one number for a list param stands for it in every
+    /// component, as when rendering.
     pub fn param_at(&self, id: &str, name: &str, frame: i64) -> Value {
         let lookup = |n: &str| self.node(n);
-        arclight::link::resolve(&lookup, &self.param(id, name), frame as f64, self.graph.project.clock())
+        let raw = self.param(id, name);
+        let v = arclight::link::resolve(&lookup, &raw, frame as f64, self.graph.project.clock());
+        let default = || self.node(id).and_then(|n| ops::info(&n.op))?.params.iter().find(|s| s.name == name).map(|s| s.default_value());
+        match (v.as_f64(), arclight::link::is_link(&raw)) {
+            (Some(x), true) => match default() {
+                Some(Value::Array(d)) => Value::from(vec![x; d.len()]),
+                _ => v,
+            },
+            _ => v,
+        }
     }
 
     /// Why a linked param can't be worked out at `frame` (a formula that
@@ -578,6 +589,8 @@ mod tests {
         d.rename("src", "a2").unwrap();
         assert_eq!(arclight::link::formula(&d.param(&b, "center")), Some("a2.center + [wiggle(0.2, 0), 1]"));
         assert_eq!(d.param_error(&b, "center", 6), None);
+        d.set_param(&b, "center", arclight::link::expr("7"));
+        assert_eq!(d.param_at(&b, "center", 6), json!([7.0, 7.0]), "one number fills both");
         d.set_param(&b, "center", arclight::link::expr("a2.center + [1, 2, 3]"));
         assert_eq!(d.param_error(&b, "center", 6), Some("lists of 2 and 3 components".into()));
     }

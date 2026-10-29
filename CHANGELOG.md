@@ -7,6 +7,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.28 — 2026-10-29
+
+- A link or formula that gives one number for a list param (a position,
+  size or color) now fills every component, e.g. a color formula of 0.5
+  is mid grey.
+
 ## 0.0.27 — 2026-10-29
 
 - 3D scene nodes (new 3D category): Camera (focal length, film back,

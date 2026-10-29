@@ -987,6 +987,12 @@ fn resolve_at(op: &str, map: &Map<String, Value>, t: f64, links: Links) -> Value
                 Some(follow) if crate::link::is_link(v) => follow(v, t),
                 _ => anim::evaluate(v, t),
             };
+            // A link giving one number for a list param: every component.
+            if let (Some(x), true) = (v.as_f64(), crate::link::is_link(&map[k])) {
+                if let Some(Value::Array(d)) = specs.iter().find(|s| s.name == k).map(ParamSpec::default_value) {
+                    v = json!(vec![x; d.len()]);
+                }
+            }
             if specs.iter().any(|s| s.name == k && matches!(s.kind, ParamKind::Int { .. })) {
                 if let Some(x) = v.as_f64() {
                     v = json!(x.round() as i64);
