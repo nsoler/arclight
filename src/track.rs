@@ -268,6 +268,9 @@ pub struct Settings {
     /// Pattern and search box sizes, in pixels.
     pub pattern: usize,
     pub search: usize,
+    /// Each track's own `[pattern, search]` sizes, where they differ from
+    /// the shared ones (see [`box_sizes`]); empty means all shared.
+    pub sizes: Vec<[usize; 2]>,
     /// Matches below this correlation lose the track.
     pub min_score: f32,
     /// Take a fresh pattern at every tracked frame, instead of keeping the
@@ -283,15 +286,18 @@ impl Settings {
         Settings {
             pattern: int("pattern", 31),
             search: int("search", 91),
+            sizes: box_sizes(p).into_iter().map(|s| s.map(|x| x.max(1.0) as usize)).collect(),
             min_score: p.get("min_score").and_then(Value::as_f64).unwrap_or(0.7) as f32,
             update: p.get("update").and_then(Value::as_str) == Some("every frame"),
             motion: Solve::from_choice(p.get("motion").and_then(Value::as_str), Solve::Rotate),
         }
     }
 
-    fn radii(&self) -> (usize, usize) {
-        let r = (self.pattern / 2).max(2);
-        (r, (self.search / 2).saturating_sub(r).max(1))
+    /// Track `i`'s pattern radius and search reach around it.
+    fn radii(&self, i: usize) -> (usize, usize) {
+        let [pattern, search] = self.sizes.get(i).copied().unwrap_or([self.pattern, self.search]);
+        let r = (pattern / 2).max(2);
+        (r, (search / 2).saturating_sub(r).max(1))
     }
 }
 
@@ -325,7 +331,6 @@ pub fn track(
     progress: &Progress,
     mut found: impl FnMut(i64, Step),
 ) -> Result<Outcome> {
-    let (r, s) = settings.radii();
     let step = if to >= from { 1 } else { -1 };
     progress.total.store((to - from).abs(), Ordering::Relaxed);
     progress.done.store(0, Ordering::Relaxed);
@@ -338,7 +343,8 @@ pub fn track(
     let mut warps = vec![Warp::default(); pos.len()];
     let mut turn = vec![Warp::default(); pos.len()];
     let mut scores = vec![1.0; pos.len()];
-    let mut pats: Vec<Option<Pattern>> = pos.iter().map(|p| p.and_then(|p| Pattern::new(&first, p, r, &IDENTITY))).collect();
+    let mut pats: Vec<Option<Pattern>> =
+        pos.iter().enumerate().map(|(i, p)| p.and_then(|p| Pattern::new(&first, p, settings.radii(i).0, &IDENTITY))).collect();
     for (i, p) in pos.iter_mut().enumerate() {
         if p.is_some() && pats[i].is_none() {
             // Nothing to follow: lost before it starts.
@@ -356,6 +362,7 @@ pub fn track(
         let img = Luma::new(&image(frame)?);
         for i in 0..pos.len() {
             let (Some(p), Some(pat)) = (pos[i], &pats[i]) else { continue };
+            let (r, s) = settings.radii(i);
             // Predict from the last step's motion, then search around it.
             let guess = [p[0] + vel[i][0], p[1] + vel[i][1]];
             let before = warps[i];
@@ -407,6 +414,15 @@ pub fn warps(params: &Value, frame: i64) -> Vec<Option<Warp>> {
             (on && v.len() >= 2).then(|| Warp { angle: (v[0] as f32).to_radians(), scale: v[1] as f32 })
         })
         .collect()
+}
+
+/// Each track's `[pattern, search]` box sizes: its own `track<i>_pattern` /
+/// `track<i>_search` (set by sizing one track's box in the viewer), else
+/// the shared `pattern` / `search`.
+pub fn box_sizes(params: &Value) -> Vec<[f32; 2]> {
+    let p = ops::params_with_defaults("tracker", params);
+    let size = |name: String, shared: &str| p.get(&name).and_then(Value::as_f64).or(p[shared].as_f64()).unwrap_or(31.0) as f32;
+    (1..=TRACKS).map(|i| [size(format!("track{i}_pattern"), "pattern"), size(format!("track{i}_search"), "search")]).collect()
 }
 
 /// Below this a match counts as weak: halfway from `min_score` (where a
@@ -746,7 +762,7 @@ mod tests {
     fn tracks_motion_over_frames_and_reports_lost_tracks() {
         // Moves 2.5 px right and 1 px down per frame.
         let frame = |f: i64| Ok(blobs(128, 128, [2.5 * (f - 1) as f32, (f - 1) as f32]));
-        let settings = Settings { pattern: 21, search: 41, min_score: 0.8, update: false, motion: Solve::Rotate };
+        let settings = Settings { pattern: 21, search: 41, sizes: vec![], min_score: 0.8, update: false, motion: Solve::Rotate };
         let mut seen = Vec::new();
         // The second track sits on a flat corner and can't be followed.
         let start = [Some([30.0, 40.0]), Some([5.0, 120.0]), None];
@@ -763,7 +779,7 @@ mod tests {
     #[test]
     fn tracks_backward() {
         let frame = |f: i64| Ok(blobs(128, 128, [2.0 * f as f32, 0.0]));
-        let settings = Settings { pattern: 21, search: 41, min_score: 0.8, update: true, motion: Solve::Rotate };
+        let settings = Settings { pattern: 21, search: 41, sizes: vec![], min_score: 0.8, update: true, motion: Solve::Rotate };
         let mut last = None;
         track(frame, &[Some([70.0, 30.0])], 5, 2, &settings, &Progress::default(), |_, s| last = s.pos[0]).unwrap();
         let p = last.unwrap();
@@ -784,7 +800,7 @@ mod tests {
             [a, b, 60.0 + t - (a * 60.0 + b * 55.0), d, e, 55.0 - (d * 60.0 + e * 55.0)]
         };
         let frame = |f: i64| Ok(blobs_moved(128, 128, &at(f)));
-        let settings = Settings { pattern: 25, search: 45, min_score: 0.8, update, motion };
+        let settings = Settings { pattern: 25, search: 45, sizes: vec![], min_score: 0.8, update, motion };
         let (mut errors, mut warp, mut worst) = (Vec::new(), Warp::default(), 1.0f32);
         track(frame, &[Some([50.0, 40.0])], 1, 21, &settings, &Progress::default(), |f, s| {
             let truth = apply(&at(f), [50.0, 40.0]);
@@ -865,6 +881,14 @@ mod tests {
         assert!((project(&h2, [50.0, 50.0]).unwrap()[1] - y).abs() < 1e-3);
         // Three in a line: no map.
         assert!(homography(&[[0.0, 0.0], [50.0, 0.0], [100.0, 0.0], [0.0, 100.0]], &trap).is_none());
+    }
+
+    #[test]
+    fn tracks_can_have_their_own_box_sizes() {
+        let s = Settings::from_params(&json!({ "pattern": 21, "search": 41, "track2_pattern": 11, "track3_search": 81 }));
+        assert_eq!(s.radii(0), (10, 10));
+        assert_eq!(s.radii(1), (5, 15));
+        assert_eq!(s.radii(2), (10, 30));
     }
 
     #[test]

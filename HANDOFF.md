@@ -16,7 +16,7 @@ Last updated 2026-10-28 (session 5). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~12,300 lines of Rust + Python. Tests: 62 library + 10 CLI + 25 GUI
+- ~12,300 lines of Rust + Python. Tests: 63 library + 10 CLI + 25 GUI
   (`cargo test --release`) and 8 Python (see "Working tips"), all passing.
   Clippy is clean apart from two old style lints (`Graph::from_str` name,
   `chunks_exact_mut(4)` in media.rs).
@@ -70,7 +70,7 @@ order of value:
      (originality rule).
 
 1. **Tracker follow-ups** (small to medium, builds on fresh code):
-   - Per-track box sizes; an offset point (track one spot, place the
+   - An offset point (track one spot, place the
      result at another); weak frames on the timeline too (they show on the
      viewer path and in the panel now).
 2. **Phase 2 extras for Roto/Polygon:** box-select of vertices, select all
@@ -227,6 +227,12 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   removes enabled tracks' position/warp/score keys before/after the
   current frame (`anim::remove_keys`, which holds the value when no key
   is left).
+- **Session 5, part 6**: per-track box sizes. Hidden `track<i>_pattern` /
+  `track<i>_search` override the shared sizes (`track::box_sizes`;
+  `Settings::sizes`, `radii(i)`). Dragging a box corner sizes that track;
+  Shift+drag sets the shared size and drops every override
+  (`Doc::remove_param`). The panel's Pattern/Search size fields only reach
+  tracks without their own size (no per-track fields in the panel).
 
 ## Architecture in one page
 

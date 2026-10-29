@@ -127,9 +127,9 @@ enum Geo {
     /// spline (stride 6) also has each vertex's in and out handle offsets
     /// in `tan`; other point lists leave it empty.
     Points { param: &'static str, stride: usize, pts: Vec<Vec2>, tan: Vec<[Vec2; 2]> },
-    /// Tracker boxes: each track's position (`None` when it is off) and the
-    /// shared box sizes, in image pixels.
-    Tracker { names: [&'static str; 2], pos: Vec<Option<Vec2>>, pattern: f32, search: f32 },
+    /// Tracker boxes: each track's position (`None` when it is off) and its
+    /// `[pattern, search]` box sizes, in image pixels.
+    Tracker { names: [&'static str; 2], pos: Vec<Option<Vec2>>, sizes: Vec<[f32; 2]> },
     /// Corner pin quads, in image pixels.
     CornerPin { names: [[&'static str; 4]; 2], to: [Vec2; 4], from: [Vec2; 4] },
 }
@@ -223,8 +223,7 @@ fn geo(doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
         Overlay::Tracker { pattern, search } => Geo::Tracker {
             names: [pattern, search],
             pos: track::positions(&doc.node(id)?.params, frame).into_iter().map(|p| p.map(|[x, y]| Vec2::new(x, y))).collect(),
-            pattern: num(&at(pattern)),
-            search: num(&at(search)),
+            sizes: track::box_sizes(&doc.node(id)?.params),
         },
         Overlay::CornerPin { to, from } => Geo::CornerPin {
             names: [to, from],
@@ -411,10 +410,11 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
             }
             (xf.screen(center).distance(p) < GRAB * 1.5).then_some(Part::Move)
         }
-        Geo::Tracker { ref pos, pattern, search, .. } => {
+        Geo::Tracker { ref pos, ref sizes, .. } => {
             // Later tracks draw on top, so they take the pointer first.
             for (i, c) in pos.iter().enumerate().rev() {
                 let Some(c) = *c else { continue };
+                let [pattern, search] = sizes[i];
                 // The nearer corner, as the boxes' corners can nearly meet.
                 let corner = [(pattern, false), (search, true)]
                     .into_iter()
@@ -734,10 +734,11 @@ impl Overlays {
                     painter.text(t + Vec2::new(7.0, -7.0), egui::Align2::LEFT_BOTTOM, format!("{}", i + 1), egui::FontId::proportional(12.0), col);
                 }
             }
-            Geo::Tracker { pos, pattern, search, .. } => {
+            Geo::Tracker { pos, sizes, .. } => {
                 let node = doc.node(id);
                 for (i, c) in pos.iter().enumerate() {
                     let Some(c) = *c else { continue };
+                    let [pattern, search] = sizes[i];
                     // The tracked path: the position at every keyed frame.
                     let p = node.map(|n| ops::params_with_defaults(&n.op, &n.params)).unwrap_or_default();
                     let (raw, scores) = (&p[TRACK_PARAMS[i]], &p[format!("track{}_score", i + 1)]);
@@ -961,7 +962,7 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
             }
             _ => {}
         },
-        Geo::Tracker { names, pos, pattern, search } => match drag.part {
+        Geo::Tracker { names, pos, sizes } => match drag.part {
             Part::Track(i) => {
                 let Some(c) = pos.get(i).copied().flatten() else { return };
                 let q = c + if shift { constrain(delta) } else { delta };
@@ -969,16 +970,22 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
             }
             Part::TrackBox { i, search: is_search } => {
                 let Some(c) = pos.get(i).copied().flatten() else { return };
+                let [pattern, search] = sizes[i];
                 // Symmetric about the track: the corner follows the pointer.
                 let d = (p - c).abs();
                 let size = (2.0 * d.x.max(d.y)).round();
                 // The search box stays bigger than the pattern.
-                let (name, size) = if is_search {
-                    (names[1], size.clamp(pattern + 2.0, 511.0))
+                let size = if is_search { size.clamp(pattern + 2.0, 511.0) } else { size.clamp(5.0, (search - 2.0).min(255.0)) };
+                let which = if is_search { "search" } else { "pattern" };
+                if shift {
+                    // Every track: the shared size, dropping each one's own.
+                    doc.edit_param(&id, names[is_search as usize], frame, json!(size as i64));
+                    for i in 1..=track::TRACKS {
+                        doc.remove_param(&id, &format!("track{i}_{which}"));
+                    }
                 } else {
-                    (names[0], size.clamp(5.0, (search - 2.0).min(255.0)))
-                };
-                doc.edit_param(&id, name, frame, json!(size as i64));
+                    doc.set_param(&id, &format!("track{}_{which}", i + 1), json!(size as i64));
+                }
             }
             _ => {}
         },
@@ -1150,14 +1157,19 @@ mod tests {
         assert_eq!(drag(&mut d, Pos2::new(155.0, 45.0), Pos2::new(165.0, 55.0), 1), Part::Track(1));
         assert_eq!(vec2(&d.param("n", "track2")), Vec2::new(160.0, 60.0));
         assert_eq!(vec2(&d.param("n", "track1")), Vec2::new(50.0, 50.0));
-        // A pattern corner sizes the pattern of every track.
+        // A pattern corner sizes that track's pattern.
         assert_eq!(drag(&mut d, Pos2::new(60.0, 60.0), Pos2::new(65.0, 62.0), 1), Part::TrackBox { i: 0, search: false });
-        assert_eq!(d.param("n", "pattern"), json!(30));
+        assert_eq!(track::box_sizes(&d.node("n").unwrap().params)[..2], [[30.0, 40.0], [20.0, 40.0]]);
         // The pattern can't outgrow the search box.
         drag(&mut d, Pos2::new(65.0, 65.0), Pos2::new(90.0, 90.0), 1);
-        assert_eq!(d.param("n", "pattern"), json!(38));
+        assert_eq!(d.param("n", "track1_pattern"), json!(38));
         assert_eq!(drag(&mut d, Pos2::new(70.0, 30.0), Pos2::new(80.0, 20.0), 1), Part::TrackBox { i: 0, search: true });
-        assert_eq!(d.param("n", "search"), json!(60));
+        assert_eq!(d.param("n", "track1_search"), json!(60));
+        // With Shift, a corner sizes every track and drops their own sizes.
+        let shift = Mods { shift: true, ..Mods::default() };
+        let part = gesture(&mut Overlays::default(), &mut d, Pos2::new(170.0, 70.0), Pos2::new(172.0, 72.0), 1, shift);
+        assert_eq!(part, Some(Part::TrackBox { i: 1, search: false }));
+        assert_eq!(track::box_sizes(&d.node("n").unwrap().params)[..2], [[24.0, 60.0], [24.0, 40.0]]);
         // Tracks that are off have no handles.
         let mut d = doc("tracker", json!({ "track1_on": false, "track1": [50, 50] }));
         let missed = gesture(&mut Overlays::default(), &mut d, Pos2::new(50.0, 50.0), Pos2::new(60.0, 50.0), 1, Mods::default());

@@ -348,6 +348,14 @@ impl Doc {
             .is_some_and(|m| m.values().any(anim::is_animated))
     }
 
+    /// Drop a param from a node (back to its default, or gone for one
+    /// outside the op's spec).
+    pub fn remove_param(&mut self, id: &str, name: &str) {
+        if self.node_mut(id).and_then(|n| n.params.as_object_mut()).and_then(|m| m.remove(name)).is_some() {
+            self.changed();
+        }
+    }
+
     pub fn set_param(&mut self, id: &str, name: &str, value: Value) {
         if let Some(n) = self.node_mut(id) {
             if !n.params.is_object() {
