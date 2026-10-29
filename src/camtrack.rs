@@ -70,6 +70,10 @@ pub struct Solution {
     /// Root-mean-square reprojection error, pixels: overall and per frame.
     pub rms: f64,
     pub frame_rms: Vec<f64>,
+    /// Each point's reprojection error (pixels), in the same order as
+    /// `points` (empty in solves saved before it was kept).
+    #[serde(default)]
+    pub point_rms: Vec<f64>,
 }
 
 /// Computer-vision frame (y down, z forward) ↔ the scene's (y up, z back).
@@ -102,6 +106,7 @@ impl Solution {
             points: sol.points.iter().flatten().map(|x| (f * x).into()).collect(),
             rms: sol.rms,
             frame_rms,
+            point_rms: sol.points.iter().zip(&sol.point_rms).filter(|(p, _)| p.is_some()).map(|(_, e)| e.unwrap_or(0.0)).collect(),
         }
     }
 
@@ -307,6 +312,7 @@ mod tests {
             points,
             rms: 0.3,
             frame_rms: vec![0.3, 0.3],
+            point_rms: Vec::new(),
         }
     }
 
@@ -397,6 +403,7 @@ mod tests {
         assert_eq!(summary["frames_solved"], 24, "{summary}");
         assert!(summary["rms_error_px"].as_f64().unwrap() < 0.3, "{summary}");
         let sol = s.camera_solution("ct").unwrap();
+        assert_eq!(sol.point_rms.len(), sol.points.len(), "an error per point");
         let fmt = Size { width: 480, height: 270 };
         // Solved points below row 175 of frame 1: all on the floor (it meets
         // the wall at about row 165).

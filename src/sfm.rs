@@ -48,9 +48,11 @@ pub struct Solution {
     pub poses: BTreeMap<i64, Pose>,
     /// Each track's point, when it was triangulated and kept.
     pub points: Vec<Option<V3>>,
-    /// Root-mean-square reprojection error, pixels: overall and per frame.
+    /// Root-mean-square reprojection error, pixels: overall, per frame, and
+    /// per track (for those with a point).
     pub rms: f64,
     pub frame_rms: BTreeMap<i64, f64>,
+    pub point_rms: Vec<Option<f64>>,
 }
 
 /// The working state while solving.
@@ -256,19 +258,27 @@ pub fn solve(tracks: &[FeatureTrack], first: i64, last: i64, intr: Intrinsics, s
     st.adjust_all(s.solve_focal, 50);
     progress(st.poses.len() as f32 / total);
     let frames: Vec<i64> = st.poses.keys().copied().collect();
-    let (p, _) = st.problem(&frames, &|_| true, true);
+    let (p, ids) = st.problem(&frames, &|_| true, true);
     let mut sums: BTreeMap<i64, (f64, usize)> = BTreeMap::new();
+    let mut per_point = vec![(0.0, 0usize); ids.len()];
     let mut all = (0.0, 0usize);
     for o in &p.obs {
         let e = p.residual(o).map_or(1000.0, |r| r[0].hypot(r[1]));
         let s = sums.entry(frames[o.cam]).or_default();
         s.0 += e * e;
         s.1 += 1;
+        per_point[o.point].0 += e * e;
+        per_point[o.point].1 += 1;
         all.0 += e * e;
         all.1 += 1;
     }
-    let frame_rms = sums.into_iter().map(|(f, (s, n))| (f, (s / n.max(1) as f64).sqrt())).collect();
-    Ok(Solution { intr: st.intr, poses: st.poses, points: st.points, rms: (all.0 / all.1.max(1) as f64).sqrt(), frame_rms })
+    let rms = |(s, n): (f64, usize)| (s / n.max(1) as f64).sqrt();
+    let frame_rms = sums.into_iter().map(|(f, sn)| (f, rms(sn))).collect();
+    let mut point_rms = vec![None; tracks.len()];
+    for (j, &t) in ids.iter().enumerate() {
+        point_rms[t] = Some(rms(per_point[j]));
+    }
+    Ok(Solution { intr: st.intr, poses: st.poses, points: st.points, rms: rms(all), frame_rms, point_rms })
 }
 
 /// The similarity (scale `s`, rotation `r`, translation `t`) taking points
@@ -384,8 +394,11 @@ mod tests {
         assert!(sol.rms < 0.5, "rms {}", sol.rms);
         let (center, rot) = compare(&sol, &truth, &pts, &which);
         assert!(center < 0.005 && rot < 0.1, "center {center} of the path, rotation {rot}°");
-        // The tracks that jumped were thrown out, most of the rest kept.
+        // The tracks that jumped were thrown out, most of the rest kept,
+        // each with its own error (about the noise).
         let kept = sol.points.iter().filter(|p| p.is_some()).count();
+        assert!(sol.points.iter().zip(&sol.point_rms).all(|(p, e)| p.is_some() == e.is_some()));
+        assert!(sol.point_rms.iter().flatten().all(|e| *e < 1.5), "per-point errors");
         assert!(kept * 10 > tracks.len() * 7, "{kept} of {} points", tracks.len());
         assert!(calls > 30);
         // Cancelling stops it.

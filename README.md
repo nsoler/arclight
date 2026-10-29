@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.9.5** (alpha); see `CHANGELOG.md`.
+Version **0.9.6** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -114,6 +114,59 @@ Shortcuts: **Space** play/pause · **J/K/L** back/stop/forward · **←/→** st
 **⌘O/⌘S/⇧⌘S/⌘N** open/save/save as/new · **⇧E** node browser ·
 **⌘A** select all (over the graph; over the viewer, every point of the
 selected shape) · **Esc** select none · **⌘G / ⇧⌘G** group / ungroup.
+
+### 3D view (Blender-style)
+
+The viewer's **2D | 3D** toggle (or **Tab** with the pointer over the
+viewer) shows the 3D scene of the node being viewed (a Camera, Card,
+Scene, Locator, Point Cloud, Camera Tracker, or a Scanline Render's scene
+input); a node without one says so. The viewport camera is saved with the
+project.
+
+- **Navigate:** middle-drag orbits, **⇧** + middle-drag pans, scroll or
+  **Ctrl** + middle-drag zooms toward the pointer. Trackpad: two-finger
+  scroll orbits, **⇧** pans, pinch or **Ctrl** zooms. Without a middle
+  button, turn on *Emulate 3-button mouse* (Alt + left-drag).
+- **Views:** numpad **1 / 3 / 7** front, right, top (**Ctrl**: the
+  opposite sides), **5** perspective / orthographic, **0** through the
+  scene camera (its film frame, outside darkened), **2 / 4 / 6 / 8**
+  orbit 15°, **.** or **F** frame the selection, **Home** frame all;
+  **`** (backtick) opens a pie of views around the pointer. The
+  navigation gizmo (top right) does the same with the mouse: click an
+  axis, drag the ball to orbit, or use the pan, zoom, camera and ortho
+  buttons.
+- **Draws** the ground grid and axes, cards textured with their images
+  (at lower resolution while the view moves), outlines, camera frusta and
+  animated cameras' paths, locators, and point clouds (a Camera Tracker's
+  colored by error: green under 0.25 px, yellow about 1 px, red from
+  2 px).
+- **Select:** left-click a card, camera, locator or point (**⇧** adds or
+  removes), left-drag on empty space to box-select, **A** all, **Alt+A**
+  or **Esc** none. The node graph and Properties follow, and the other
+  way round. Right-click a Camera Tracker's selected points to Place Card
+  here or Place locator.
+
+**Transforming in 3D** (Blender-style). With an object selected and the
+pointer over the 3D view: **G** moves, **R** rotates, **S** scales it,
+following the pointer (Move: in the view plane at the object's depth;
+Rotate: by how far the pointer turns about the object's center; Scale: by
+how much farther from its center the pointer is). Then **X / Y / Z**
+constrains to that world axis (press it again for the object's own axis,
+a third time to free it), **⇧ X / Y / Z** excludes that axis, typing a
+number sets the amount exactly (`G X 2 Enter`, `R Z 90 Enter`,
+`S 0.5 Enter`; **-** negates, Backspace edits), **Ctrl** snaps (1 unit,
+15°, 0.1); **Enter** or a click confirms, **Esc** or a right-click
+cancels and puts everything back. **Alt + G / R / S** resets translate /
+rotate / scale. The viewer toolbar's **Select / Move / Rotate / Scale /
+All** pick the gizmo on the selected object: drag an arrow to move along
+an axis, a square to move in that plane, the center circle to move in the
+view plane; a colored ring to rotate about that axis, the white outer
+ring about the view, inside it like a trackball; a cube to scale along
+that axis, the center to scale evenly. **Global / Local** sets the
+gizmo's axes. Every move, rotate or scale sets a key when the param is
+animated (at the current frame) and is one undo step; a linked param
+(e.g. a Card linked to tracker points) shows the gizmo gray and says what
+it's linked to: Unlink it in Properties to move it by hand.
 
 **Help** lists these shortcuts; **Help → About Arclight Compositor…** shows
 the version and when the binary was built (UTC; `build.rs` stamps it, or

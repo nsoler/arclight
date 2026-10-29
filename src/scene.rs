@@ -23,6 +23,9 @@ pub struct Scene {
     /// 3D viewport selects objects by node.
     pub camera_nodes: Vec<String>,
     pub point_nodes: Vec<String>,
+    /// Each point's reprojection error in pixels, when a solve gave one
+    /// (else negative), for coloring the cloud.
+    pub point_errors: Vec<f32>,
 }
 
 /// An image on a flat rectangle in 3D: `size` wide and high in its own
@@ -56,12 +59,14 @@ impl Scene {
         other.fill_nodes();
         self.camera_nodes.extend(other.camera_nodes);
         self.point_nodes.extend(other.point_nodes);
+        self.point_errors.extend(other.point_errors);
     }
 
     /// Pad the node lists to the cameras and points ("" for unknown).
     fn fill_nodes(&mut self) {
         self.camera_nodes.resize(self.cameras.len(), String::new());
         self.point_nodes.resize(self.points.len(), String::new());
+        self.point_errors.resize(self.points.len(), -1.0);
     }
 
     /// Mark everything not yet marked as coming from node `id` (what a

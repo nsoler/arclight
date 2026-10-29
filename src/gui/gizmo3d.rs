@@ -171,7 +171,6 @@ impl Gesture {
     }
 
     /// A gizmo drag: like [`Gesture::new`], constrained from the start.
-    #[cfg(test)] // Gizmo drags (step 4) will use it outside tests.
     pub fn with_constraint(mut self, c: Constraint) -> Gesture {
         self.constraint = c;
         self
@@ -534,10 +533,8 @@ impl Transforming {
     /// A drag on gizmo handle `h` (axes in `space`): releasing confirms.
     pub fn drag(doc: &Doc, node: &str, h: Handle, space: Space, world: &Mat4, mouse: Pos2, frame: i64) -> Result<Transforming, String> {
         let (mode, c) = h.gesture(space);
-        let mut t = Transforming::start(doc, node, mode, world, mouse, frame)?;
-        t.gesture.constraint = c;
-        t.by_drag = true;
-        Ok(t)
+        let t = Transforming::start(doc, node, mode, world, mouse, frame)?;
+        Ok(Transforming { gesture: t.gesture.with_constraint(c), by_drag: true, ..t })
     }
 
     /// One frame: handle `input`, write the param. Done or Cancelled ends it.

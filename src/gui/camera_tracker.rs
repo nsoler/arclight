@@ -331,7 +331,7 @@ mod tests {
     fn solved() -> Doc {
         let sol = Solution {
             format: [200, 100], focal: 35.0, film_back: [36.0, 24.0], frames: vec![1], cameras: vec![[0.0, 0.0, 0.0, -15.0, 0.0, 0.0]],
-            points: (0..9).map(|i| [(i % 3) as f64 - 1.0, -2.0, -8.0 - (i / 3) as f64]).collect(), rms: 0.1, frame_rms: vec![0.1],
+            points: (0..9).map(|i| [(i % 3) as f64 - 1.0, -2.0, -8.0 - (i / 3) as f64]).collect(), rms: 0.1, frame_rms: vec![0.1], point_rms: Vec::new(),
         };
         let node = NodeSpec { id: "ct".into(), op: "camera_tracker".into(), inputs: vec![String::new()], params: json!({ "solution": sol.to_value() }), pos: Some([0.0, 0.0]) };
         let mut d = Doc::new(Graph { nodes: vec![node], ..Default::default() }, None);

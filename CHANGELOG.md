@@ -11,6 +11,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.6 — 2026-10-29
+
+- 3D viewport: ` (backtick) opens a pie of views around the pointer
+  (Left, Right, Top, Bottom, Front, Back, Camera, Persp / Ortho), as in
+  Blender: point and click, or let go of the key; Esc cancels. A Camera
+  Tracker's point cloud is colored by each point's reprojection error
+  (green under 0.25 px, yellow about 1 px, red from 2 px); solves keep a
+  per-point error (re-track older solves to get it).
+- README: a "3D view" section with the navigation, selection and
+  transform controls.
+
 ## 0.9.5 — 2026-10-29
 
 - The 3D view is live: the viewer's 3D mode (2D / 3D toggle, or Tab over
@@ -23,6 +34,11 @@ menu, `arclight --version`, the MCP server info and Python's
   params get a key; one undo step per gesture; linked params say why they
   can't move.
 - The viewport camera is saved with the project.
+- 3D view gizmos, switched in the viewer toolbar (Select, Move, Rotate,
+  Scale, All; Global or Local axes): arrows, plane squares and a center
+  to move, axis rings, a view ring and a trackball to rotate, cubes and a
+  center to scale; drags key animated params, are one undo step each, and
+  snap with Ctrl; linked params show the gizmo gray and say why.
 
 ## 0.9.4 — 2026-10-29
 

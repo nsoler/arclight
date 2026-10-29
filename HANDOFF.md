@@ -89,8 +89,25 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
     world matrix comes from `viewport3d.object_world(node)`. Refusals
     (no selection, missing param, linked param) show 4 s at the
     viewport's bottom-left. `Graph.view` saves the viewport camera.
-    `Gesture::with_constraint` is `#[cfg(test)]` until step 4's gizmo
-    drags use it.
+    0.9.5 also holds mathwiz's step 4 (it was in the tree when the
+    snapshot was taken): toolbar Select / Move / Rotate / Scale / All and
+    Global / Local; `gizmo3d::Layout` (pure: arrows left out when they
+    point at the viewer, plane squares left out edge-on, rings with the
+    far half faint, `GIZMO_SIZE` 90 pt at any depth); hit-testing small
+    handles first, then arrows, rings, view ring, trackball; pressing a
+    handle starts a `Transforming` with that constraint (same code as
+    G/R/S); linked params gray with the reason on hover.
+  - **0.9.6 (3DWorker):** view pie (`PIE`, 8 slots clockwise from the
+    right, `pie_slot` with a 20 px dead zone, `pie_ui` / `pie_pick`) and
+    point error colors (`error_color`); `sfm::Solution.point_rms`,
+    `camtrack::Solution.point_rms` (`#[serde(default)]`),
+    `Scene.point_errors` (negative = unknown). Also mathwiz's small
+    `with_constraint` cleanup and the README "3D view" section.
+  - **Process note:** twice a worker kept editing after reporting, and a
+    commit took newer files than were tested (0.9.4 didn't build alone;
+    fixed by `f61ec6e`). The master now snapshots reported files first
+    and commits exactly the snapshot (see "Working tips"); workers don't
+    touch reported files until the master says "committed".
 - **Next work, in order:** (1) anything from the Mac test; (2) the
   hand checks listed below for session 8's GUI work; (3) **M9, the 3D
   viewport** (fully specified in `docs/phase-4-plan.md`, "Milestone 9 in
@@ -148,7 +165,7 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.5**.
+  in the same commit as the change. Current: **0.9.6**.
 - ~23,200 lines of Rust + Python. Tests: 134 library + 10 CLI + 46 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.
@@ -1296,7 +1313,10 @@ multi-layer out); later session, after M9.
   paths (never `git add -A`); if a shared file holds another worker's
   hunk, stage a filtered copy with `git hash-object -w` + `git
   update-index --cacheinfo`. Check reported files for leftover debug
-  tests before committing (one slipped into 0.0.32).
+  tests before committing (one slipped into 0.0.32). **Snapshot first:**
+  copy the reported files to a scratch folder before testing, test that
+  copy on HEAD, stage exactly those blobs, and build the committed HEAD
+  again before tagging (workers keep editing after they report).
 - **Screenshots without screen-capture permission:**
   `ARCLIGHT_SCREENSHOT=/path/out.png ARCLIGHT_SCREENSHOT_DELAY=3 ./target/release/arclight-gui [graph.json]`
   saves the window and quits. For a specific UI state, add temporary

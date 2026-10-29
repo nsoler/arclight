@@ -697,7 +697,7 @@ mod tests {
         let sol = crate::camtrack::Solution {
             format: [96, 54], focal: 35.0, film_back: [36.0, 24.0], frames: vec![1, 2],
             cameras: vec![[0.0, 0.0, 0.0, -20.0, 0.0, 0.0], [0.5, 0.0, 0.0, -20.0, 0.0, 0.0]],
-            points, rms: 0.2, frame_rms: vec![0.2, 0.2],
+            points, rms: 0.2, frame_rms: vec![0.2, 0.2], point_rms: Vec::new(),
         };
         s.session.graph.nodes[1].params["solution"] = sol.to_value();
         let r = call(&mut s, "camera_points", json!({"node": "ct", "frame": 2}))["structuredContent"].clone();

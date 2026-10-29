@@ -11,7 +11,7 @@
 //! owns them): 1 / 3 / 7 front / right / top (⌃: the opposite side), 5
 //! perspective / orthographic, 0 through the scene camera, 2 / 4 / 6 / 8
 //! orbit 15°, . or F frame the selection, Home frame everything, A select
-//! all, Alt+A or Esc deselect. (egui doesn't tell the numpad from the
+//! all, Alt+A or Esc deselect, ` a pie of views. (egui doesn't tell the numpad from the
 //! number row, so both work.) A navigation gizmo in the top-right corner
 //! does the same with the mouse.
 //!
@@ -370,6 +370,22 @@ pub fn box_pick(scene: &Scene, p: &Projector, a: Pos2, b: Pos2, is_locator: &dyn
     (objects, points)
 }
 
+/// The backtick pie's slots, clockwise from the right (as Blender's view
+/// pie: left / right across, top / bottom up and down, the rest between).
+const PIE: [&str; 8] = ["Right", "Back", "Bottom", "Camera", "Left", "Front", "Top", "Persp / Ortho"];
+
+/// Which pie slot screen point `at` points to from the pie's `center`
+/// (None within its dead zone).
+pub fn pie_slot(center: Pos2, at: Pos2) -> Option<usize> {
+    let d = at - center;
+    if d.length() < 20.0 {
+        return None;
+    }
+    // Angle clockwise from the right (screen y is down), in eighths.
+    let a = d.y.atan2(d.x).to_degrees().rem_euclid(360.0);
+    Some(((a + 22.5) / 45.0) as usize % 8)
+}
+
 /// A camera node's path at a graph revision: positions by frame.
 type CameraPath = (String, u64, Vec<(i64, Vec3)>);
 
@@ -441,6 +457,8 @@ pub struct Viewport3d {
     /// whether it had a saved view (if not, the first scene is framed).
     restored: Option<Option<std::path::PathBuf>>,
     frame_first_scene: bool,
+    /// The backtick pie, open at this screen point.
+    pie: Option<Pos2>,
 }
 
 impl Default for Viewport3d {
@@ -466,6 +484,7 @@ impl Default for Viewport3d {
             message: None,
             restored: None,
             frame_first_scene: false,
+            pie: None,
         }
     }
 }
@@ -609,7 +628,9 @@ impl Viewport3d {
             self.frame_all();
         }
         self.save(doc);
-        if !blocked {
+        if self.pie.is_some() {
+            self.pie_ui(ui, &painter, blocked);
+        } else if !blocked {
             self.select(ui, resp, doc, &p);
         } else {
             self.marquee = None;
@@ -680,6 +701,55 @@ impl Viewport3d {
         let pinch = ui.input(|i| i.zoom_delta());
         if pinch != 1.0 {
             self.view.zoom_at(1.0 / pinch as f64, at, &p);
+        }
+    }
+
+    /// The open pie: draw its slots around where it opened, the one the
+    /// pointer points to lit; a click or letting go of ` takes it, Esc
+    /// (or a gizmo taking over) closes it.
+    fn pie_ui(&mut self, ui: &egui::Ui, painter: &egui::Painter, blocked: bool) {
+        let Some(center) = self.pie else { return };
+        let hover = ui.input(|i| i.pointer.hover_pos()).unwrap_or(center);
+        let lit = pie_slot(center, hover);
+        painter.circle_stroke(center, 20.0, Stroke::new(1.0, Color32::from_white_alpha(90)));
+        for (k, label) in PIE.iter().enumerate() {
+            let a = (k as f32 * 45.0).to_radians();
+            let at = center + Vec2::new(a.cos(), a.sin()) * 95.0;
+            let galley = painter.layout_no_wrap(label.to_string(), FontId::proportional(13.0), Color32::from_gray(230));
+            let r = Rect::from_center_size(at, galley.size() + Vec2::new(16.0, 8.0));
+            let fill = if lit == Some(k) { Color32::from_rgb(70, 110, 160) } else { Color32::from_gray(50) };
+            painter.rect(r, 4.0, fill, Stroke::new(1.0, Color32::from_gray(90)), egui::StrokeKind::Outside);
+            painter.galley(r.center() - galley.size() / 2.0, galley, Color32::from_gray(230));
+        }
+        let (click, released, esc) = ui.input(|i| (i.pointer.primary_clicked(), i.key_released(egui::Key::Backtick), i.key_pressed(egui::Key::Escape)));
+        if esc || blocked {
+            self.pie = None;
+        } else if click || (released && lit.is_some()) {
+            self.pie = None;
+            if let Some(k) = lit {
+                self.pie_pick(k);
+            }
+        }
+    }
+
+    /// Do what pie slot `k` says.
+    fn pie_pick(&mut self, k: usize) {
+        match PIE[k] {
+            "Right" => self.axis(Axis::Right),
+            "Left" => self.axis(Axis::Left),
+            "Top" => self.axis(Axis::Top),
+            "Bottom" => self.axis(Axis::Bottom),
+            "Front" => self.axis(Axis::Front),
+            "Back" => self.axis(Axis::Back),
+            "Camera" => {
+                if self.look_through.is_none() {
+                    self.toggle_camera();
+                }
+            }
+            _ => {
+                self.view.ortho = !self.view.ortho;
+                self.view.auto_ortho = false;
+            }
         }
     }
 
@@ -856,7 +926,7 @@ impl Viewport3d {
     fn keys(&mut self, ui: &egui::Ui, doc: &mut Doc) {
         use egui::Key;
         let (pressed, ctrl, alt) = ui.input(|i| {
-            let keys = [Key::Num0, Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Period, Key::Home, Key::F, Key::A, Key::Escape];
+            let keys = [Key::Num0, Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Period, Key::Home, Key::F, Key::A, Key::Escape, Key::Backtick];
             (keys.into_iter().filter(|k| i.key_pressed(*k)).collect::<Vec<_>>(), i.modifiers.command || i.modifiers.ctrl, i.modifiers.alt)
         });
         for k in pressed {
@@ -883,6 +953,7 @@ impl Viewport3d {
                     doc.clear_selection();
                 }
                 Key::A => self.select_everything(doc),
+                Key::Backtick if self.pie.is_none() => self.pie = ui.input(|i| i.pointer.hover_pos()),
                 // Esc cancels a box first, else deselects.
                 Key::Escape if self.marquee.take().is_none() => {
                     self.points.clear();
@@ -1032,7 +1103,8 @@ impl Viewport3d {
                 line(*pt - Vec3::z() * arm, *pt + Vec3::z() * arm, Stroke::new(1.5, color(Z_COLOR)));
             } else {
                 let on = self.points.iter().any(|(n, k)| n == node && *k == i);
-                painter.circle_filled(s, if on { 3.0 } else { 1.8 }, if on { SELECTED } else { POINT });
+                let color = scene.point_errors.get(i).copied().filter(|e| *e >= 0.0).map_or(POINT, error_color);
+                painter.circle_filled(s, if on { 3.0 } else { 1.8 }, if on { SELECTED } else { color });
             }
         }
         // Through a camera: its frame, the outside darkened.
@@ -1181,6 +1253,15 @@ impl Viewport3d {
             }
         }
     }
+}
+
+/// A solved point's color by its reprojection error: green under a
+/// quarter pixel, through yellow at 1, to red from 2 pixels.
+pub fn error_color(e: f32) -> Color32 {
+    let t = ((e - 0.25) / 1.75).clamp(0.0, 1.0);
+    let (g, y, r) = ([80.0, 220.0, 90.0], [240.0, 210.0, 60.0], [235.0, 70.0, 60.0]);
+    let mix = |a: [f32; 3], b: [f32; 3], u: f32| Color32::from_rgb((a[0] + (b[0] - a[0]) * u) as u8, (a[1] + (b[1] - a[1]) * u) as u8, (a[2] + (b[2] - a[2]) * u) as u8);
+    if t < 0.43 { mix(g, y, t / 0.43) } else { mix(y, r, (t - 0.43) / 0.57) }
 }
 
 /// `img`'s frame as premultiplied 8-bit sRGB bytes (egui blends
@@ -1425,5 +1506,27 @@ mod tests {
         let mut w = Viewport3d::default();
         w.restore(&Doc::new(loaded, Some("p.json".into())));
         assert_eq!((w.view, w.frame_first_scene), (v.view, false));
+    }
+
+    #[test]
+    fn the_pie_points_by_direction() {
+        let c = Pos2::new(100.0, 100.0);
+        let at = |dx: f32, dy: f32| pie_slot(c, c + Vec2::new(dx, dy)).map(|k| PIE[k]);
+        assert_eq!(at(5.0, 5.0), None, "dead zone");
+        assert_eq!((at(60.0, 0.0), at(-60.0, 0.0)), (Some("Right"), Some("Left")));
+        assert_eq!((at(0.0, -60.0), at(0.0, 60.0)), (Some("Top"), Some("Bottom")));
+        assert_eq!((at(-40.0, -40.0), at(40.0, 40.0)), (Some("Front"), Some("Back")));
+        let mut v = Viewport3d::default();
+        v.pie_pick(PIE.iter().position(|p| *p == "Top").unwrap());
+        assert!(v.view.ortho && v.view.pitch == 90.0);
+    }
+
+    #[test]
+    fn points_are_colored_by_their_error() {
+        assert_eq!(error_color(0.1), error_color(0.25), "good is green");
+        let (good, poor) = (error_color(0.2), error_color(3.0));
+        assert!(good.g() > good.r() && poor.r() > poor.g());
+        let mid = error_color(1.0);
+        assert!(mid.r() > 200 && mid.g() > 150, "about yellow at a pixel: {mid:?}");
     }
 }

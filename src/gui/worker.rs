@@ -258,6 +258,7 @@ pub fn scene_of(eval: &mut Evaluator, graph: &Graph, id: &str, frame: i64) -> Re
         "camera_tracker" => {
             let Some(sol) = arclight::camtrack::Solution::from_params(&node.params) else { return Ok(Some(Arc::new(Scene::default()))) };
             let mut s = Scene { points: sol.points(), ..Scene::default() };
+            s.point_errors = sol.point_rms.iter().map(|e| *e as f32).collect();
             s.cameras.extend(sol.camera(frame));
             s.tag(id);
             Ok(Some(Arc::new(s)))
