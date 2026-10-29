@@ -11,6 +11,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.14 — 2026-10-29
+
+- Wavefront OBJ import, engine side (`mesh::read_obj`): objects and
+  groups per material, polygons, negative indices, normals computed when
+  missing, and MTL materials (diffuse, specular, emission, opacity,
+  shininess, texture path). Sample: `examples/geo/crate.obj`. Not yet a
+  node (Read Geo comes next) (M10 step c).
+
 ## 0.9.13 — 2026-10-29
 
 - Scanline Render draws everything as triangles (a Card is two), binned

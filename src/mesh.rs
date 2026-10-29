@@ -1,5 +1,5 @@
 //! Triangle meshes for 3D objects: primitives (cube, sphere, cylinder,
-//! plane) and materials.
+//! plane), materials, and Wavefront OBJ / MTL files.
 //!
 //! A mesh is in its object's own space (the scene places it); Y is up, as
 //! in [`crate::geom`]. Attributes are per vertex: a corner with its own
@@ -10,9 +10,10 @@
 //! GL have them.
 
 use crate::geom::{self, Mat4, Vec3};
+use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashMap;
 use std::f64::consts::TAU;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A triangle mesh.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -300,6 +301,226 @@ pub fn plane(size: [f64; 2], segments: [usize; 2]) -> Mesh {
     m
 }
 
+/// One object or group of a geometry file, in one material.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Part {
+    pub name: String,
+    pub mesh: Mesh,
+    pub material: Material,
+}
+
+/// The parts of the Wavefront OBJ file at `path` (see [`parse_obj`]).
+pub fn read_obj(path: &Path) -> Result<Vec<Part>> {
+    let text = std::fs::read_to_string(path).with_context(|| format!("can't read {}", path.display()))?;
+    parse_obj(&text, path.parent().unwrap_or(Path::new("."))).with_context(|| format!("in {}", path.display()))
+}
+
+/// A face corner: position, texture coordinate and normal indices (from 0).
+type Corner = (usize, Option<usize>, Option<usize>);
+
+/// A part being read.
+struct Building {
+    group: String,
+    material: String,
+    mesh: Mesh,
+    corners: HashMap<Corner, u32>,
+    /// Each vertex's position index in the file, and whether it has a
+    /// normal and texture coordinate there.
+    from: Vec<Corner>,
+}
+
+/// The index an OBJ index refers to, out of `count` so far: from 1, or
+/// from the end when negative.
+fn obj_index(s: &str, count: usize, what: &str) -> Result<usize> {
+    let i: i64 = s.parse().map_err(|_| anyhow!("'{s}' isn't an index"))?;
+    let k = if i > 0 { i - 1 } else { count as i64 + i };
+    if i == 0 || k < 0 || k >= count as i64 {
+        bail!("{what} {i} doesn't exist ({count} so far)");
+    }
+    Ok(k as usize)
+}
+
+/// Numbers `n` of `words` (missing ones `default`).
+fn numbers<const N: usize>(words: &[&str], default: f64) -> Result<[f64; N]> {
+    let mut out = [default; N];
+    for (o, w) in out.iter_mut().zip(words) {
+        *o = w.parse().map_err(|_| anyhow!("'{w}' isn't a number"))?;
+    }
+    Ok(out)
+}
+
+/// Wavefront OBJ text: positions (`v`), texture coordinates (`vt`), normals
+/// (`vn`) and faces (`f`, polygons split into fans; indices from 1, or
+/// negative from the end), into one [`Part`] per object or group (`o`,
+/// `g`) and material (`usemtl`, from the `mtllib` files in `folder`; see
+/// [`parse_mtl`]). A part's name is its group's (or object's), with
+/// `.<material>` when the group has more than one. Corners without normals
+/// get smooth ones from the faces around their position; without texture
+/// coordinates, (0, 0) (none at all when the part has none). Lines, points,
+/// smoothing groups and the rest are skipped.
+pub fn parse_obj(text: &str, folder: &Path) -> Result<Vec<Part>> {
+    let (mut v, mut vt, mut vn): (Vec<Vec3>, Vec<[f64; 2]>, Vec<Vec3>) = Default::default();
+    let mut materials: HashMap<String, Material> = HashMap::new();
+    let mut parts: Vec<Building> = Vec::new();
+    let mut at: HashMap<(String, String), usize> = HashMap::new();
+    let (mut group, mut material) = ("default".to_string(), String::new());
+    for (n, line) in text.lines().enumerate() {
+        let words: Vec<&str> = line.split('#').next().unwrap_or("").split_whitespace().collect();
+        let Some((&key, args)) = words.split_first() else { continue };
+        let fail = |e: anyhow::Error| e.context(format!("line {}: {}", n + 1, line.trim()));
+        match key {
+            "v" => v.push(Vec3::from(numbers::<3>(args, 0.0).map_err(fail)?)),
+            "vt" => vt.push(numbers::<2>(args, 0.0).map_err(fail)?),
+            "vn" => vn.push(Vec3::from(numbers::<3>(args, 0.0).map_err(fail)?).try_normalize(1e-300).unwrap_or_else(Vec3::y)),
+            "o" | "g" => group = if args.is_empty() { "default".into() } else { args.join(" ") },
+            "usemtl" => material = args.join(" "),
+            "mtllib" => {
+                // One name with spaces, or several; a missing library
+                // leaves its materials plain.
+                let joined = folder.join(args.join(" "));
+                let files: Vec<PathBuf> = if joined.is_file() { vec![joined] } else { args.iter().map(|a| folder.join(a)).collect() };
+                for path in files {
+                    if let Ok(src) = std::fs::read_to_string(&path) {
+                        for m in parse_mtl(&src, path.parent().unwrap_or(folder)) {
+                            materials.insert(m.name.clone(), m);
+                        }
+                    }
+                }
+            }
+            "f" => {
+                let corners: Vec<Corner> = args
+                    .iter()
+                    .map(|c| -> Result<Corner> {
+                        let mut it = c.split('/');
+                        let p = obj_index(it.next().unwrap_or(""), v.len(), "position")?;
+                        let t = it.next().filter(|s| !s.is_empty()).map(|s| obj_index(s, vt.len(), "texture coordinate")).transpose()?;
+                        let nn = it.next().filter(|s| !s.is_empty()).map(|s| obj_index(s, vn.len(), "normal")).transpose()?;
+                        Ok((p, t, nn))
+                    })
+                    .collect::<Result<_>>()
+                    .map_err(fail)?;
+                if corners.len() < 3 {
+                    return Err(fail(anyhow!("a face needs three corners")));
+                }
+                let k = *at.entry((group.clone(), material.clone())).or_insert_with(|| {
+                    parts.push(Building { group: group.clone(), material: material.clone(), mesh: Mesh::default(), corners: HashMap::new(), from: Vec::new() });
+                    parts.len() - 1
+                });
+                let b = &mut parts[k];
+                let ids: Vec<u32> = corners
+                    .iter()
+                    .map(|&c| {
+                        *b.corners.entry(c).or_insert_with(|| {
+                            b.mesh.positions.push(v[c.0]);
+                            b.mesh.normals.push(c.2.map_or_else(Vec3::zeros, |i| vn[i]));
+                            b.mesh.uvs.push(c.1.map_or([0.0, 0.0], |i| vt[i]));
+                            b.from.push(c);
+                            b.mesh.positions.len() as u32 - 1
+                        })
+                    })
+                    .collect();
+                for i in 1..ids.len() - 1 {
+                    b.mesh.triangles.push([ids[0], ids[i], ids[i + 1]]);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for b in &parts {
+        let mut mesh = b.mesh.clone();
+        if b.from.iter().all(|c| c.1.is_none()) {
+            mesh.uvs.clear();
+        }
+        // Smooth normals for corners without one, from every face of the
+        // part at their position (by its index in the file).
+        if b.from.iter().any(|c| c.2.is_none()) {
+            let mut sums: HashMap<usize, Vec3> = HashMap::new();
+            for t in 0..mesh.triangles.len() {
+                let Some(n) = mesh.face_normal(t).try_normalize(1e-300) else { continue };
+                let tri = mesh.triangles[t].map(|i| i as usize);
+                for k in 0..3 {
+                    let p = mesh.positions[tri[k]];
+                    let angle = (mesh.positions[tri[(k + 1) % 3]] - p).angle(&(mesh.positions[tri[(k + 2) % 3]] - p));
+                    *sums.entry(b.from[tri[k]].0).or_insert_with(Vec3::zeros) += n * angle;
+                }
+            }
+            for (i, c) in b.from.iter().enumerate() {
+                if c.2.is_none() {
+                    mesh.normals[i] = sums.get(&c.0).and_then(|n| n.try_normalize(1e-300)).unwrap_or_else(Vec3::y);
+                }
+            }
+        }
+        let several = parts.iter().filter(|o| o.group == b.group).count() > 1;
+        let name = if several && !b.material.is_empty() { format!("{}.{}", b.group, b.material) } else { b.group.clone() };
+        let material = materials
+            .get(&b.material)
+            .cloned()
+            .unwrap_or_else(|| Material { name: b.material.clone(), shading: Shading::Lambert, ..Material::default() });
+        out.push(Part { name, mesh, material });
+    }
+    Ok(out)
+}
+
+/// The materials of Wavefront MTL text: `newmtl` names, colors `Kd`
+/// (diffuse), `Ks` (specular) and `Ke` (emission), opacity `d` (or `Tr`,
+/// its complement), shininess `Ns` (as roughness √(2 / (Ns + 2))), `illum`
+/// (0 unlit, 1 Lambert, 2 and up Blinn; without it, Blinn when `Ks` isn't
+/// black) and the `map_Kd` image, resolved against `folder`.
+pub fn parse_mtl(text: &str, folder: &Path) -> Vec<Material> {
+    let mut out: Vec<(Material, Option<i64>)> = Vec::new();
+    for line in text.lines() {
+        let words: Vec<&str> = line.split('#').next().unwrap_or("").split_whitespace().collect();
+        let Some((&key, args)) = words.split_first() else { continue };
+        if key == "newmtl" {
+            out.push((Material { name: args.join(" "), shading: Shading::Lambert, ..Material::default() }, None));
+            continue;
+        }
+        let Some((m, illum)) = out.last_mut() else { continue };
+        let rgb = || numbers::<3>(args, f64::NAN).ok().map(|c| {
+            // One number is a gray.
+            let c = if c[1].is_nan() { [c[0]; 3] } else { c };
+            c.map(|x| x as f32)
+        });
+        let one = || args.first().and_then(|s| s.parse::<f64>().ok());
+        match key {
+            "Kd" => m.color = rgb().unwrap_or(m.color),
+            "Ks" => m.specular = rgb().unwrap_or(m.specular),
+            "Ke" => m.emission = rgb().unwrap_or(m.emission),
+            "d" => m.opacity = one().map_or(m.opacity, |d| d as f32),
+            "Tr" => m.opacity = one().map_or(m.opacity, |t| 1.0 - t as f32),
+            "Ns" => m.roughness = one().map_or(m.roughness, |ns| (2.0 / (ns.max(0.0) + 2.0)).sqrt() as f32),
+            "illum" => *illum = one().map(|i| i as i64),
+            "map_Kd" => {
+                // Options (-s 1 1 1, -clamp on, ...) come before the file
+                // name, which may hold spaces.
+                let mut rest = args;
+                while rest.len() > 1 && rest[0].starts_with('-') {
+                    let more = &rest[1..];
+                    let n = more.iter().take_while(|s| s.parse::<f64>().is_ok() || matches!(**s, "on" | "off")).count();
+                    rest = &more[n.max(1).min(more.len() - 1)..];
+                }
+                if !rest.is_empty() {
+                    m.texture = Some(folder.join(rest.join(" ").replace('\\', "/")));
+                }
+            }
+            _ => {}
+        }
+    }
+    out.into_iter()
+        .map(|(mut m, illum)| {
+            m.shading = match illum {
+                Some(0) => Shading::Unlit,
+                Some(1) => Shading::Lambert,
+                Some(_) => Shading::Blinn,
+                None if m.specular.iter().any(|c| *c > 0.0) => Shading::Blinn,
+                None => Shading::Lambert,
+            };
+            m
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,5 +685,126 @@ mod tests {
         assert_eq!((f.positions.len(), f.triangles.len()), (36, 12));
         assert!(f.normals.iter().all(|n| n.iter().filter(|c| c.abs() == 1.0).count() == 1));
         check(&f, true);
+    }
+
+
+    /// A box in two groups: the sides as quads with texture coordinates but
+    /// no normals (some by negative index), the top and bottom with
+    /// normals, the top a pentagon fan; materials from an MTL file.
+    const BOX: &str = "# test box
+mtllib box.mtl
+o box
+v -1 0 -1
+v 1 0 -1
+v 1 2 -1
+v -1 2 -1
+v -1 0 1
+v 1 0 1
+v 1 2 1
+v -1 2 1
+v 0 2 -1   # mid top back edge
+vt 0 0
+vt 1 0
+vt 1 1
+vt 0 1
+vn 0 1 0
+vn 0 -1 0
+usemtl red
+f 5/1 6/2 7/3 8/4
+f -8/1 -9/2 -6/3 -7/4
+usemtl blue
+f 6/1 2/2 3/3 7/4
+f 1/1 5/2 8/3 4/4
+g lid
+usemtl wood
+f 8//1 7//1 3//1 9//1 4//1
+f 1//2 2//2 6//2 5//2
+";
+
+    const BOX_MTL: &str = "newmtl red
+Kd 0.8 0.1 0.1
+illum 1
+newmtl blue
+Kd 0.1 0.1 0.9
+Ks 0.5 0.5 0.5
+Ns 198
+d 0.5
+newmtl wood
+Kd 1 1 1
+Ke 0.2
+map_Kd -s 1 1 1 -clamp on textures\\wood grain.png
+";
+
+    #[test]
+    fn an_obj_file_reads_into_parts_with_materials() {
+        let dir = std::env::temp_dir().join(format!("arclight_obj_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("box.obj"), BOX).unwrap();
+        std::fs::write(dir.join("box.mtl"), BOX_MTL).unwrap();
+        let parts = read_obj(&dir.join("box.obj")).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        let names: Vec<&str> = parts.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["box.red", "box.blue", "lid"]);
+        let (red, blue, lid) = (&parts[0], &parts[1], &parts[2]);
+        // Two quads each: eight corners, four triangles; the lid a
+        // pentagon (three triangles) and a quad (two).
+        assert_eq!((red.mesh.positions.len(), red.mesh.triangles.len()), (8, 4));
+        assert_eq!((blue.mesh.positions.len(), blue.mesh.triangles.len()), (8, 4));
+        assert_eq!((lid.mesh.positions.len(), lid.mesh.triangles.len()), (9, 5));
+        assert_eq!(Mesh::merge(&parts.iter().map(|p| p.mesh.clone()).collect::<Vec<_>>()).bounds(), Some((Vec3::new(-1.0, 0.0, -1.0), Vec3::new(1.0, 2.0, 1.0))));
+        // Texture coordinates where given, none where not.
+        assert_eq!(red.mesh.uvs[..4], [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+        assert!(lid.mesh.uvs.is_empty() && lid.mesh.normals.len() == 9);
+        // Normals: the file's on the lid; made, facing out, on the sides.
+        assert!(lid.mesh.normals[..5].iter().all(|n| *n == Vec3::y()) && lid.mesh.normals[5..].iter().all(|n| *n == -Vec3::y()));
+        assert_eq!(red.mesh.normals[0], Vec3::z());
+        assert_eq!(red.mesh.normals[4], -Vec3::z());
+        assert!(blue.mesh.normals[..4].iter().all(|n| *n == Vec3::x()));
+        for p in &parts {
+            for t in 0..p.mesh.triangles.len() {
+                let f = p.mesh.face_normal(t);
+                assert!(p.mesh.triangles[t].iter().all(|&i| f.dot(&p.mesh.normals[i as usize]) > 0.0), "{} triangle {t}", p.name);
+            }
+        }
+        // Materials.
+        assert_eq!((red.material.color, red.material.shading), ([0.8, 0.1, 0.1], Shading::Lambert));
+        let b = &blue.material;
+        assert_eq!((b.shading, b.specular, b.opacity), (Shading::Blinn, [0.5; 3], 0.5));
+        assert!((b.roughness - 0.1).abs() < 1e-6);
+        let w = &lid.material;
+        assert_eq!((w.emission, w.texture.as_deref()), ([0.2; 3], Some(dir.join("textures/wood grain.png").as_path())));
+    }
+
+    #[test]
+    fn bad_obj_files_say_where() {
+        let e = parse_obj("v 0 0 0\nv 1 0 0\nf 1 2 3\n", Path::new(".")).unwrap_err();
+        assert!(format!("{e:#}").contains("line 3") && format!("{e:#}").contains("position 3"), "{e:#}");
+        let e = parse_obj("v 0 0 x\n", Path::new(".")).unwrap_err();
+        assert!(format!("{e:#}").contains("line 1"), "{e:#}");
+        assert!(parse_obj("v 0 0 0\nf 1 1\n", Path::new(".")).is_err());
+        // A missing material library leaves plain materials; no faces, no
+        // parts.
+        let parts = parse_obj("mtllib nowhere.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nusemtl x\nf 1 2 3\n", Path::new("/nonexistent")).unwrap();
+        assert_eq!((parts.len(), parts[0].name.as_str(), parts[0].material.name.as_str()), (1, "default", "x"));
+        assert_eq!(parts[0].mesh.normals[0], Vec3::z());
+        assert!(parse_obj("v 0 0 0\n", Path::new(".")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_example_obj_reads() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/geo/crate.obj");
+        let parts = read_obj(&path).unwrap();
+        assert_eq!(parts.len(), 1);
+        let (m, mat) = (&parts[0].mesh, &parts[0].material);
+        assert_eq!((parts[0].name.as_str(), m.positions.len(), m.triangles.len(), m.uvs.len()), ("crate", 24, 12, 24));
+        assert_eq!(m.bounds(), Some((Vec3::repeat(-0.5), Vec3::repeat(0.5))));
+        for t in 0..m.triangles.len() {
+            let f = m.face_normal(t).normalize();
+            assert!(f.dot(&f.map(|c| c.signum() * c.abs().round())) > 0.999, "faces along an axis");
+            assert!(m.triangles[t].iter().all(|&i| (m.normals[i as usize] - f).norm() < 1e-12), "triangle {t}");
+            let mid = m.triangles[t].iter().map(|&i| m.positions[i as usize]).sum::<Vec3>() / 3.0;
+            assert!(f.dot(&mid) > 0.0, "triangle {t} faces in");
+        }
+        assert_eq!((mat.name.as_str(), mat.color, mat.shading), ("crate", [0.6, 0.4, 0.2], Shading::Blinn));
     }
 }
