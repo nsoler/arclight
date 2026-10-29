@@ -1,6 +1,6 @@
 [package]
 name = "arclt"
-version = "0.9.12"
+version = "0.9.13"
 edition = "2021"
 description = "Python bindings (the `arclt` module) for the Arclight compositor"
 license = "MIT OR Apache-2.0"

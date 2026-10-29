@@ -45,7 +45,10 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
   - **0.9.12 (MathWiz): mesh.rs step 1 committed** (Material also has
     `opacity`, `specular: [f32;3]`; helpers smooth_normals / flat /
     face_normal). Next: MathWiz OBJ + MTL (+ `examples/geo/` sample);
-    3DWorker's render3d triangles in progress.
+    **0.9.13 (3DWorker): render3d triangle core committed** (`Surface`,
+    `card_surface`, `surfaces(scene)`, row binning, per-sample depth
+    sort, one hit per surface at shared edges). Next: 3DWorker (a2) Scene
+    meshes, primitive + Read Geo nodes, viewport drawing.
 - **Ask the user first** how the Mac builds (v0.9.11 universal DMG) went
   on their M4 Pro, and whether anyone tried an Intel Mac. Mac-only bugs
   come first.
@@ -256,7 +259,7 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.12**.
+  in the same commit as the change. Current: **0.9.13**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

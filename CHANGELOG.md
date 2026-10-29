@@ -11,6 +11,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.13 — 2026-10-29
+
+- Scanline Render draws everything as triangles (a Card is two), binned
+  by pixel row and swept with an active list, ready for meshes; cards
+  render exactly as before (bit-identical). An 80,000-triangle plane at
+  1920×1080, 3×3 samples renders in about 46 ms (M10 step a).
+
 ## 0.9.12 — 2026-10-29
 
 - 3D meshes, engine side (`src/mesh.rs`): triangle meshes with normals
