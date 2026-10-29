@@ -1,25 +1,37 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-29, during session 11 (herdr multi-agent sessions:
+Last updated 2026-10-29, end of session 11 (herdr multi-agent sessions:
 one master + workers; see "Several agent sessions" below). Read this,
 then `README.md` (user-facing features, file format, shortcuts,
-scripting, the "3D view" section), `docs/phase-4-plan.md` (3D plan: M1–M11
-done, M12 lights and M13 particles specified), `docs/help.md` (the in-app help) and
+scripting, the "3D view" section), `docs/phase-4-plan.md` (3D plan: M1–M13
+done), `docs/help.md` (the in-app help) and
 `docs/spec-coverage.md` (planning docs vs. what exists).
 
 ## Start here (next session)
 
-- **State:** version **0.9.40** on branch **`wip-ns-3dwork`**, merged to
-  `main`. **M12 (lights) and M13 (particles) are in progress**; the user
-  asked to **test, commit, merge and release only once both are done**
-  (no releases in between). The local build (`target/release`) is still
-  **0.9.33** (the last release); rebuild before the user tests.
-- **Latest release: v0.9.33** (marked **Latest**;
+- **State:** version **0.9.46** on branch **`wip-ns-3dwork`**, merged to
+  `main`; **M12 (lights) and M13 (particles) are DONE**. The local build
+  (`target/release`) and the Python `.so` are 0.9.46, so the Omarchy
+  launcher runs 0.9.46. Both workers idle; nothing uncommitted.
+- **Latest release: v0.9.46** (marked **Latest**;
   github.com/nsoler/arclight/releases/latest): Linux x86_64 tarball,
-  macOS universal DMG, `arclt` wheels + sdist. Earlier: v0.9.32, v0.9.31,
-  v0.9.30, v0.9.27, v0.9.11. A stray **draft** release on tag v0.9.7
-  ("Arclight Compositor - ALPHA") was left alone (not ours); ask the
-  user before deleting.
+  macOS universal DMG, `arclt` wheels + sdist. Earlier: v0.9.33, v0.9.32,
+  v0.9.31, v0.9.30, v0.9.27, v0.9.11. A stray **draft** release on tag
+  v0.9.7 ("Arclight Compositor - ALPHA") was left alone (not ours); ask
+  the user before deleting.
+- **Ask the user first:** how 0.9.34–0.9.46 test: node graph Tab /
+  ⇧R / ⇧T / ⇧M; Area Light, falloff, radius, exposure, Look at; light
+  handles and Look through selected (0); shadows and the shadow pass;
+  Light 2D; particles (Emitter → forces → Particle Render → Scanline
+  Render's growable inputs, Particles 2D, dots and gizmos in the 3D
+  view). Then the older open questions below.
+- **Known limits (M13):** animated geometry emitters re-simulate from
+  scratch; particles have no motion vectors; sprite texture is one image
+  (no sequence input); the GUI bridge re-simulates particles per MCP
+  call. Shadows cost time (soft spot + 6×6 area ≈ 3.5× unshadowed).
+- **Next (no plan yet):** M12/M13 follow-ups above; the M9 leftover
+  (true ortho texture path), the viewport's solid view lit by scene
+  lights; other items under "Next steps". Ask the user what's next.
 - **M12 status (3DWorker): DONE (0.9.35–0.9.43).** Done (a) Area Light, falloff, radius,
   exposure / enabled, look at (0.9.35); (b) 3D view handles + Look
   through selected (0.9.37); (d) shadows + shadow pass (0.9.40); engine
@@ -40,11 +52,7 @@ done, M12 lights and M13 particles specified), `docs/help.md` (the in-app help) 
   gui/viewport3d.rs (while 3DWorker is in ops.rs), then ops.rs hooks
   after the Light 2D node is committed; (C) MCP `particles(node, frame)`
   + Python, help / README.
-- **After M12 + M13:** rebuild locally, full tests on a clean copy,
-  release (tarball + universal DMG + wheels, `--latest`), then ask the
-  user to test everything since 0.9.33 (node graph Tab / ⇧R / ⇧T / ⇧M,
-  area lights, light handles, look through, shadows, Light 2D,
-  particles).
+- **After M12 + M13:** done — released v0.9.46.
 - **Still unanswered from earlier:** whether `musicmen.MP4` plays from
   the GUI (0.9.32), the file-dialog fix when navigating folders (0.9.31),
   0.9.30 features (Fit to project, Project Settings, 3D setup), 0.9.33
