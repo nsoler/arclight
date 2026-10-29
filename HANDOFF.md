@@ -932,7 +932,7 @@ correctly from the CLI in 0.12 s at 3×3 samples. Tests:
 perspective_depth_order_transparency_and_edges,
 the_scanline_render_node_follows_the_camera,
 renders_over_a_background_and_draws_points}`.
-**M5 partly done (v0.0.31): features + KLT, library only** (nothing
+**M5 done (v0.0.31–0.0.32): features + KLT, library only** (nothing
 calls it yet; no node or GUI). `src/features.rs`: `Gray` (luma, bilinear
 sample), `Pyramid` (binomial blur + halve, down to ~32 px),
 `detect(gray, max, min_distance, quality, border, avoid)` (Shi–Tomasi
@@ -953,6 +953,9 @@ per-track warps and an anchor `Gray` per start frame (dropped when no
 live track uses it). Test shot: 0.015 px median / 0.12 px p95 (was
 0.22 / 0.94); `rendered_tracks_drift_under_a_tenth_of_a_pixel` is on
 (median < 0.05, p95 < 0.2).
+Speed: ~6.5 ms/frame at 1080p with ~200 live features (20 rendered
+frames, push-in + pan + roll), so 200 frames in ~1.3 s.
+Next: M6, two-view init + triangulation (new `src/solve.rs`).
 
 - 3D needs a scene system first: Camera (focal length, film back, transform,
   animatable), Card / geometry nodes, a Scene node, and a **scanline renderer**
