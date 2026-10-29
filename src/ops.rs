@@ -1076,25 +1076,16 @@ fn tracker(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     }
     let p = params_with_defaults("tracker", params);
     let now = track::positions(&p, 0);
-    let (mut from, mut to) = (Vec::new(), Vec::new());
-    for (i, cur) in now.iter().enumerate() {
-        let r = &p[format!("ref{}", i + 1)];
-        if let (Some(c), Some(r)) = (cur, r.as_array().filter(|a| a.len() >= 2)) {
-            from.push([r[0].as_f64().unwrap_or(0.0) as f32, r[1].as_f64().unwrap_or(0.0) as f32]);
-            to.push(*c);
-        }
-    }
-    if from.is_empty() {
-        bail!("no tracks enabled");
-    }
-    let kind = match p["solve"].as_str() {
-        Some("translate") => Solve::Translate,
-        Some("translate, rotate") => Solve::Rotate,
-        _ => Solve::Scale,
-    };
+    let refs: Vec<_> = (1..=now.len())
+        .map(|i| {
+            let r = p[format!("ref{i}")].as_array().filter(|a| a.len() >= 2)?;
+            Some([r[0].as_f64().unwrap_or(0.0) as f32, r[1].as_f64().unwrap_or(0.0) as f32])
+        })
+        .collect();
+    let kind = Solve::from_choice(p["solve"].as_str(), Solve::Scale);
     // Reference → now. A match-move moves the image along with the
     // tracks, so each output pixel samples where it came from.
-    let m = track::solve(&from, &to, kind);
+    let m = track::solve_tracks(&refs, &now, kind).context("no tracks enabled")?;
     let sample_at = match output {
         "match-move" => track::invert(&m),
         "stabilize" => m,
@@ -1679,6 +1670,51 @@ mod tests {
         assert_eq!((steady.get(2, 3)[3]), 1.0, "moved back by the track's motion");
         params["output"] = json!("input");
         assert_eq!(at(5, &params).get(5, 5)[3], 1.0);
+    }
+
+    #[test]
+    fn exported_transform_matches_the_tracker_output() {
+        let mut src = Image::new(40, 30);
+        for (i, px) in src.pixels.iter_mut().enumerate() {
+            let (x, y) = ((i % 40) as f32, (i / 40) as f32);
+            *px = [x / 40.0, y / 30.0, ((x * 0.7).sin() * (y * 0.5).cos()).abs(), 1.0];
+        }
+        // Two tracks that move, turn and grow between frames 1 and 5.
+        let mut params = json!({
+            "track1": { "keys": [[1, [10.5, 10.5]], [5, [14.5, 12.5]]], "interp": "linear" },
+            "track2_on": true,
+            "track2": { "keys": [[1, [30.5, 10.5]], [5, [33.0, 18.0]]], "interp": "linear" },
+            "reference_frame": 1,
+        });
+        for (output, stabilize) in [("match-move", false), ("stabilize", true)] {
+            params["output"] = json!(output);
+            let xf = Value::Object(track::transform_params(&params, [40, 30], stabilize).unwrap());
+            assert_eq!(anim::key_frames(&xf["rotate"]), [1, 5]);
+            for f in [1, 5] {
+                let want = eval("tracker", &resolve_params("tracker", &params, f), &[Some(&src)], &CTX).unwrap();
+                let got = eval("transform", &resolve_params("transform", &xf, f), &[Some(&src)], &CTX).unwrap();
+                let diff = want.pixels.iter().zip(&got.pixels).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0, f32::max);
+                assert!(diff < 2e-3, "{output} at frame {f}: off by {diff}");
+            }
+        }
+        // A translate-only solve leaves rotate and scale alone.
+        params["solve"] = json!("translate");
+        let xf = track::transform_params(&params, [40, 30], false).unwrap();
+        assert!(xf.contains_key("translate") && !xf.contains_key("rotate") && !xf.contains_key("scale"));
+    }
+
+    #[test]
+    fn exported_rotation_does_not_jump_a_full_turn() {
+        // One pair of tracks turning from 170° to 190° about (50, 50).
+        let at = |deg: f64| {
+            let (s, c) = deg.to_radians().sin_cos();
+            [[50.0 - 20.0 * c, 50.0 - 20.0 * s], [50.0 + 20.0 * c, 50.0 + 20.0 * s]]
+        };
+        let key = |i: usize| json!({ "keys": [[1, at(0.0)[i]], [2, at(170.0)[i]], [3, at(190.0)[i]]], "interp": "linear" });
+        let params = json!({ "track1": key(0), "track2_on": true, "track2": key(1), "solve": "translate, rotate" });
+        let xf = track::transform_params(&params, [100, 100], false).unwrap();
+        let angles: Vec<f64> = anim::keys(&xf["rotate"]).iter().map(|k| k.value[0]).collect();
+        assert!((angles[1] - 170.0).abs() < 0.01 && (angles[2] - 190.0).abs() < 0.01, "{angles:?}");
     }
 
     #[test]

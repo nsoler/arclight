@@ -1,6 +1,6 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-28 (end of session 4). Read this, then `README.md`
+Last updated 2026-10-28 (session 5). Read this, then `README.md`
 (user-facing features, file format, shortcuts, scripting) and
 `docs/spec-coverage.md` (what the planning docs ask for vs. what exists).
 
@@ -11,19 +11,20 @@ Last updated 2026-10-28 (end of session 4). Read this, then `README.md`
   "Linux port" plans that session 4 implemented in Rust) are in
   `~/Projects/arclight-compound/Archlight-Development-Documentationm/`.
 - **Branches:** work happens on `wip-ns-effects` (tracks
-  `origin/wip-ns-effects`). At the end of session 4 everything was
-  committed and pushed and `main` fast-forwarded to match, so `main`,
-  `wip-ns-effects` and both remote branches are at the same commit. Commit,
-  push and fast-forward `main` only when the user asks (they have asked
-  after each milestone so far).
-- ~12,100 lines of Rust + Python. Tests: 53 library + 10 CLI + 20 GUI
-  (`cargo test --release`) and 6 Python (see "Working tips"), all passing.
+  `origin/wip-ns-effects`). **Standing instruction from the user:** when a
+  milestone is finished (tests and clippy pass, README/HANDOFF updated),
+  commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
+  `main`, without asking first. Then carry on with the next step. Keep
+  `main`, `wip-ns-effects` and both remote branches at the same commit.
+- ~12,300 lines of Rust + Python. Tests: 56 library + 10 CLI + 22 GUI
+  (`cargo test --release`) and 8 Python (see "Working tips"), all passing.
   Clippy is clean apart from two old style lints (`Graph::from_str` name,
   `chunks_exact_mut(4)` in media.rs).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
   (Rectangle, Ellipse, Polygon, Roto), Transform layer dragging in the viewer,
-  and Phase 3's 2D Tracker (NCC with rotation/scale, match-move, stabilize).
+  and Phase 3's 2D Tracker (NCC with rotation/scale, match-move, stabilize,
+  export to a keyed Transform).
   Session 4: MCP server, Python `arclt` module, live GUI scripting bridge,
   native plugin host, XDG config (from the planning docs).
 - **Not done:** Phase 0.6 (bounding boxes / format), tracker follow-ups,
@@ -69,10 +70,6 @@ order of value:
      (originality rule).
 
 1. **Tracker follow-ups** (small to medium, builds on fresh code):
-   - **Export to a Transform node**: copy the solved per-frame transform
-     into keys on a new Transform's `translate`/`rotate`/`scale`, so the
-     motion can drive other layers (no expressions needed). Note Transform
-     pivots on the image center; convert the affine accordingly.
    - **Use a single track's rotation/scale.** `track()` already estimates a
      per-track `Warp { angle, scale }` but discards it; keying it (e.g.
      hidden `track<i>_warp` params) would let one track solve rotate/scale.

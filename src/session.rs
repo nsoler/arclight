@@ -10,6 +10,7 @@ use crate::graph::{Evaluator, Graph, NodeSpec};
 use crate::image::Image;
 use crate::ops::{self, EvalContext, OpInfo, ParamKind};
 use crate::render::{self, Progress};
+use crate::track;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
@@ -201,6 +202,13 @@ impl Session {
         self.checkpoint();
         self.graph.nodes.push(NodeSpec { id: id.clone(), op: op.to_string(), inputs: node_inputs, params: values, pos: None });
         Ok(id)
+    }
+
+    /// Add a Transform node keyed with Tracker `id`'s solved motion (the
+    /// match-move, or with `stabilize` its inverse), fed by `input` if given.
+    pub fn tracker_to_transform(&mut self, id: &str, stabilize: bool, name: Option<&str>, input: Option<&str>) -> Result<String> {
+        let params = track::export_transform(&self.graph, id, stabilize)?;
+        self.create_node("transform", name, &params, &[input.unwrap_or_default().to_string()])
     }
 
     /// Remove a node. Ports it fed are reconnected to its first input, so

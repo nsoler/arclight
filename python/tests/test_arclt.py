@@ -75,6 +75,18 @@ class ArcltTest(unittest.TestCase):
         self.assertLess(mean_rgba(c, 1)[0], 1e-6)
         self.assertGreater(mean_rgba(c, 10)[0], 0.999)
 
+    def test_tracker_to_transform(self):
+        plate = arclt.create_node("constant", width=64, height=32)
+        trk = arclt.create_node("tracker", plate, name="trk")
+        trk["track1"] = {"keys": [[1, [10.5, 10.5]], [4, [13.5, 9.5]]], "interp": "linear"}
+        xf = trk.to_transform(input=plate)
+        self.assertEqual(xf.input(), plate)
+        self.assertEqual(xf["translate"]["keys"][1], [4, [3.0, -1.0]])
+        steady = trk.to_transform("stabilize")
+        self.assertEqual(steady["translate"]["keys"][1], [4, [-3.0, 1.0]])
+        with self.assertRaises(arclt.ArcltError):
+            plate.to_transform()
+
     def test_view_tools_need_a_gui(self):
         c = arclt.create_node("constant")
         with self.assertRaisesRegex(arclt.ArcltError, "attach_instance"):

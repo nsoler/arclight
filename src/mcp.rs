@@ -12,7 +12,7 @@ use crate::ops;
 use crate::plugin;
 use crate::render::Progress;
 use crate::session::{self, Session};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -70,6 +70,13 @@ static TOOLS: &[Tool] = &[
         {"type": "object", "properties": {"node": {"type": "string"}, "params": {"type": "object"}}, "required": ["node", "params"]}),
     tool!("set_key", "Set a keyframe on a numeric param at a frame, animating it.",
         {"type": "object", "properties": {"node": {"type": "string"}, "param": {"type": "string"}, "frame": {"type": "integer"}, "value": {}}, "required": ["node", "param", "frame", "value"]}),
+    tool!("tracker_to_transform", "Add a Transform node keyed with a Tracker's solved motion on every tracked frame: 'match-move' (default) moves a layer along with the tracks, 'stabilize' removes the motion. 'input' connects a layer to it. Returns the new node's name.",
+        {"type": "object", "properties": {
+            "node": {"type": "string", "description": "The Tracker node."},
+            "mode": {"type": "string", "enum": ["match-move", "stabilize"]},
+            "name": {"type": "string"},
+            "input": {"type": "string"}
+        }, "required": ["node"]}),
     tool!("connect", "Connect node 'from' to input 'port' (index or label like \"B\"/\"mask\", default 0) of node 'to'.",
         {"type": "object", "properties": {"from": {"type": "string"}, "to": {"type": "string"}, "port": {"type": ["integer", "string"]}}, "required": ["from", "to"]}),
     tool!("disconnect", "Disconnect input 'port' (index or label) of a node.",
@@ -205,6 +212,15 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
             let value = args.get("value").ok_or_else(|| anyhow!("missing 'value'"))?;
             s.set_key(str_arg(args, "node")?, str_arg(args, "param")?, frame, value)?;
             ok()
+        }
+        "tracker_to_transform" => {
+            let stabilize = match opt_str(args, "mode").unwrap_or("match-move") {
+                "match-move" => false,
+                "stabilize" => true,
+                other => bail!("unknown mode '{other}' (match-move or stabilize)"),
+            };
+            let id = s.tracker_to_transform(str_arg(args, "node")?, stabilize, opt_str(args, "name"), opt_str(args, "input"))?;
+            json!({"node": id})
         }
         "connect" => {
             let to = str_arg(args, "to")?;
@@ -560,6 +576,23 @@ mod tests {
         let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"create_node") && names.contains(&"render_frame"));
         assert_eq!(rpc(&mut s, 3, "nope", json!({}))["error"]["code"], METHOD_NOT_FOUND);
+    }
+
+    #[test]
+    fn tracker_exports_a_keyed_transform() {
+        let mut s = Server::new(Session::default());
+        call(&mut s, "create_node", json!({"op": "constant", "name": "plate", "params": {"width": 64, "height": 32}}));
+        call(&mut s, "create_node", json!({"op": "tracker", "name": "trk", "inputs": ["plate"], "params": {
+            "track1": {"keys": [[1, [10.5, 10.5]], [4, [13.5, 9.5]]], "interp": "linear"}}}));
+        let r = call(&mut s, "tracker_to_transform", json!({"node": "trk", "input": "plate"}));
+        assert_eq!(r["isError"], false, "{r}");
+        let xf = call(&mut s, "describe_node", json!({"node": r["structuredContent"]["node"]}))["structuredContent"].clone();
+        assert_eq!(xf["inputs"][0]["source"], "plate");
+        assert_eq!(xf["params"]["translate"]["keys"][1], json!([4, [3.0, -1.0]]));
+        let r = call(&mut s, "tracker_to_transform", json!({"node": "trk", "mode": "stabilize"}));
+        assert_eq!(r["isError"], false, "{r}");
+        let r = call(&mut s, "tracker_to_transform", json!({"node": "plate"}));
+        assert_eq!(r["isError"], true);
     }
 
     #[test]

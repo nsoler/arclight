@@ -11,7 +11,7 @@ use crate::ops::{self, EvalContext};
 use crate::render::Progress;
 use anyhow::{bail, Context, Result};
 use rayon::prelude::*;
-use serde_json::Value;
+use serde_json::{json, Map, Value};
 use std::sync::atomic::Ordering;
 
 pub type Pt = [f32; 2];
@@ -275,11 +275,7 @@ impl Settings {
             search: int("search", 91),
             min_score: p.get("min_score").and_then(Value::as_f64).unwrap_or(0.7) as f32,
             update: p.get("update").and_then(Value::as_str) == Some("every frame"),
-            motion: match p.get("motion").and_then(Value::as_str) {
-                Some("translate") => Solve::Translate,
-                Some("translate, rotate, scale") => Solve::Scale,
-                _ => Solve::Rotate,
-            },
+            motion: Solve::from_choice(p.get("motion").and_then(Value::as_str), Solve::Rotate),
         }
     }
 
@@ -403,6 +399,18 @@ pub enum Solve {
     Scale,
 }
 
+impl Solve {
+    /// From a Tracker's `motion` or `solve` choice.
+    pub fn from_choice(choice: Option<&str>, default: Solve) -> Solve {
+        match choice {
+            Some("translate") => Solve::Translate,
+            Some("translate, rotate") => Solve::Rotate,
+            Some("translate, rotate, scale") => Solve::Scale,
+            _ => default,
+        }
+    }
+}
+
 /// An affine map `x' = [a b; d e] x + [c f]`, stored `[a, b, c, d, e, f]`.
 pub type Affine = [f32; 6];
 
@@ -448,6 +456,77 @@ pub fn solve(from: &[Pt], to: &[Pt], kind: Solve) -> Affine {
     let (sn, cs) = angle.sin_cos();
     let (a, b, d, e) = (scale * cs, -scale * sn, scale * sn, scale * cs);
     [a, b, cb[0] - (a * ca[0] + b * ca[1]), d, e, cb[1] - (d * ca[0] + e * ca[1])]
+}
+
+/// [`solve`] over the tracks that have a position in both `from` and `to`;
+/// `None` when there are none.
+pub fn solve_tracks(from: &[Option<Pt>], to: &[Option<Pt>], kind: Solve) -> Option<Affine> {
+    let (a, b): (Vec<Pt>, Vec<Pt>) = from.iter().zip(to).filter_map(|(a, b)| Some(((*a)?, (*b)?))).unzip();
+    (!a.is_empty()).then(|| solve(&a, &b, kind))
+}
+
+// ---------------------------------------------------------------------------
+// Exporting the solved motion
+// ---------------------------------------------------------------------------
+
+/// Params for a Transform node that reproduces a Tracker's solved motion on
+/// an image of `size`: the match-move (or, with `stabilize`, its inverse),
+/// keyed on every frame where an enabled track has a key. Rotation and scale
+/// are keyed only when the Tracker's `solve` includes them.
+pub fn transform_params(params: &Value, size: [usize; 2], stabilize: bool) -> Result<Map<String, Value>> {
+    let p = ops::params_with_defaults("tracker", params);
+    let kind = Solve::from_choice(p["solve"].as_str(), Solve::Scale);
+    let refs = positions(&p, p["reference_frame"].as_i64().unwrap_or(1));
+    let mut frames: Vec<i64> = (1..=TRACKS)
+        .filter(|i| p[format!("track{i}_on")].as_bool() == Some(true))
+        .flat_map(|i| crate::anim::key_frames(&p[format!("track{i}")]))
+        .collect();
+    frames.sort_unstable();
+    frames.dedup();
+    if frames.is_empty() {
+        bail!("no tracked frames: track first");
+    }
+    // Transform turns and scales about the image center, with pixel centers
+    // on integers: half a pixel past the middle in track coordinates.
+    let c = [size[0] as f32 / 2.0 + 0.5, size[1] as f32 / 2.0 + 0.5];
+    let round = |x: f64| (x * 1e4).round() / 1e4;
+    let (mut translate, mut rotate, mut scale) = (Vec::new(), Vec::new(), Vec::new());
+    let mut last_angle = 0.0;
+    for f in frames {
+        let m = solve_tracks(&refs, &positions(&p, f), kind).context("no tracks enabled")?;
+        let m = if stabilize { invert(&m) } else { m };
+        let o = apply(&m, c);
+        translate.push(json!([f, [round((o[0] - c[0]) as f64), round((o[1] - c[1]) as f64)]]));
+        // Unwrap, so the curve doesn't jump a full turn at ±180°.
+        let mut angle = (m[3] as f64).atan2(m[0] as f64).to_degrees();
+        angle -= ((angle - last_angle) / 360.0).round() * 360.0;
+        last_angle = angle;
+        rotate.push(json!([f, round(angle)]));
+        let s = round((m[0] as f64).hypot(m[3] as f64));
+        scale.push(json!([f, [s, s]]));
+    }
+    let curve = |keys: Vec<Value>| json!({ "keys": keys, "interp": "linear" });
+    let mut out = Map::new();
+    out.insert("translate".into(), curve(translate));
+    if kind != Solve::Translate {
+        out.insert("rotate".into(), curve(rotate));
+    }
+    if kind == Solve::Scale {
+        out.insert("scale".into(), curve(scale));
+    }
+    Ok(out)
+}
+
+/// [`transform_params`] for Tracker node `node` of `graph`, sized by its
+/// input at the reference frame.
+pub fn export_transform(graph: &Graph, node: &str, stabilize: bool) -> Result<Map<String, Value>> {
+    let n = graph.node(node).with_context(|| format!("no node named '{node}'"))?;
+    if n.op != "tracker" {
+        bail!("'{node}' is not a Tracker");
+    }
+    let reference = ops::params_with_defaults("tracker", &n.params)["reference_frame"].as_i64().unwrap_or(1);
+    let img = input_frames(graph, node)?(reference)?;
+    transform_params(&n.params, [img.width, img.height], stabilize)
 }
 
 #[cfg(test)]

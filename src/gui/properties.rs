@@ -1,7 +1,7 @@
 //! Properties panels: one per opened node, stacked newest-first. Widgets are
 //! generated from each op's [`ParamSpec`]s, plus extras for media nodes.
 
-use crate::doc::Doc;
+use crate::doc::{Doc, NODE_H, NODE_W};
 use crate::node_editor::category_color;
 use arclight::anim::{self, Interp};
 use arclight::media;
@@ -535,8 +535,26 @@ impl Properties {
         if ui.button("Reference = this frame").on_hover_text("Solve the output transform relative to the current frame").clicked() {
             doc.set_param(id, "reference_frame", json!(frame));
         }
+        let mut export = None;
+        ui.horizontal(|ui| {
+            ui.label("To Transform:");
+            if ui.button("Match-move").on_hover_text("Add a Transform keyed to move a layer along with the tracks").clicked() {
+                export = Some(false);
+            }
+            if ui.button("Stabilize").on_hover_text("Add a Transform keyed to remove the tracked motion").clicked() {
+                export = Some(true);
+            }
+        });
         if let Some(to) = run.filter(|&to| to != frame) {
             self.start_tracking(doc, id, frame, to);
+        }
+        if let Some(stabilize) = export {
+            let result = match export_transform(doc, id, stabilize) {
+                Ok(xf) => (true, format!("Added {xf}")),
+                Err(e) => (false, format!("{e:#}")),
+            };
+            let job = TrackJob { progress: Default::default(), handle: None, found: Default::default(), result: Some(result) };
+            self.tracks.insert(id.to_string(), job);
         }
         if let Some((ok, msg)) = self.tracks.get(id).and_then(|j| j.result.as_ref()) {
             let color = if *ok { Color32::from_rgb(110, 200, 120) } else { Color32::from_rgb(235, 100, 90) };
@@ -566,6 +584,23 @@ impl Properties {
         });
         self.tracks.insert(id.to_string(), TrackJob { progress, handle: Some(handle), found, result: None });
     }
+}
+
+/// Add a Transform below tracker `id`, keyed with its solved motion, and
+/// select it. Returns its name.
+fn export_transform(doc: &mut Doc, id: &str, stabilize: bool) -> anyhow::Result<String> {
+    let params = track::export_transform(&doc.graph, id, stabilize)?;
+    let at = doc.node(id).and_then(|n| n.pos).unwrap_or_default();
+    let mut pos = [at[0], at[1] + NODE_H + 40.0];
+    while doc.graph.nodes.iter().filter_map(|n| n.pos).any(|q| (q[0] - pos[0]).abs() < NODE_W + 20.0 && (q[1] - pos[1]).abs() < NODE_H + 20.0) {
+        pos[1] += NODE_H + 40.0;
+    }
+    let xf = doc.add_node("transform", pos);
+    for (name, v) in params {
+        doc.set_param(&xf, &name, v);
+    }
+    doc.selected = Some(xf.clone());
+    Ok(xf)
 }
 
 /// Key each found track position of tracker `id` at `frame`.

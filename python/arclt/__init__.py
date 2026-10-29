@@ -93,6 +93,12 @@ class Node:
         _call("set_key", node=self._name, param=param, frame=frame, value=value)
         return self
 
+    def to_transform(self, mode: str = "match-move", name: str | None = None, input: "Node | str | None" = None) -> "Node":
+        """For a Tracker: a new Transform node keyed with its solved motion
+        ("match-move" or "stabilize"), fed by ``input`` if given."""
+        src = None if input is None else _name(input)
+        return Node(_call("tracker_to_transform", node=self._name, mode=mode, name=name, input=src)["node"])
+
     def input(self, port: int | str = 0) -> "Node | None":
         for p in self.info()["inputs"]:
             if p["port"] == port or (isinstance(port, str) and p["label"].lower() == port.lower()):

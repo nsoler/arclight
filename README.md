@@ -138,7 +138,7 @@ result is blended back toward the main input (B for merge/keymix) by
 | `rectangle` / `ellipse` | background (optional) | `center` [2], `size` [2], `rotate`, + shape params | rotate is clockwise on screen |
 | `polygon` | background (optional) | `points` [x0,y0, x1,y1, …], `fill_rule` (`non-zero`/`even-odd`), + shape params | the whole point list animates as one value |
 | `roto` | background (optional) | `points` [x, y, in dx, in dy, out dx, out dy, …], `fill_rule`, + shape params | one closed bezier; handles are offsets from their vertex, so moving a vertex carries them; the whole list animates as one value |
-| `tracker` | 1 | `track1`–`track4` [2] + `track<i>_on`, `pattern`, `search` (box sizes, px), `min_score`, `update` (`first frame`/`every frame`), `motion` (`translate`/`translate, rotate`/`translate, rotate, scale`: what the matcher follows besides position), `output` (`input`/`match-move`/`stabilize`), `solve` (`translate`/`translate, rotate`/`translate, rotate, scale`), `reference_frame` | the panel's Track buttons key each track's position per frame (NCC on luminance, sub-pixel); the output applies or removes the motion relative to the reference frame |
+| `tracker` | 1 | `track1`–`track4` [2] + `track<i>_on`, `pattern`, `search` (box sizes, px), `min_score`, `update` (`first frame`/`every frame`), `motion` (`translate`/`translate, rotate`/`translate, rotate, scale`: what the matcher follows besides position), `output` (`input`/`match-move`/`stabilize`), `solve` (`translate`/`translate, rotate`/`translate, rotate, scale`), `reference_frame` | the panel's Track buttons key each track's position per frame (NCC on luminance, sub-pixel); the output applies or removes the motion relative to the reference frame; **To Transform: Match-move / Stabilize** adds a Transform keyed with that motion on every tracked frame, to move another layer with the shot (or steady it) |
 | `write` | 1 | `path` | `.exr` = float; others = 8-bit sRGB |
 | `media_out` | 1 | `path`, `first_frame`, `last_frame`, `fps` | renders a range to a sequence, `.mp4` (H.264) or `.mov` (ProRes 422 HQ) |
 | `viewer` | 1 | — | pass-through; marks what the GUI viewer shows |
@@ -170,7 +170,7 @@ arclight mcp --attach [PID]               # drive the newest (or given) running 
 
 Register it with an MCP client, e.g. `claude mcp add arclight -- /path/to/arclight mcp`.
 Tools: `list_ops`, `describe_op`, `get_graph`, `describe_node`, `create_node`,
-`delete_node`, `rename_node`, `set_params`, `set_key`, `connect`, `disconnect`,
+`delete_node`, `rename_node`, `set_params`, `set_key`, `tracker_to_transform`, `connect`, `disconnect`,
 `set_project`, `render_frame` (stats, optional file and PNG preview the model can
 see), `render_output`, `probe_media`, `new_graph`, `load_graph`, `save_graph`,
 `undo`, `redo`, `list_plugins`, `list_instances`, `attach_instance`,
@@ -210,7 +210,7 @@ Also: `node`, `nodes`, `delete`, `connect`, `disconnect`, `load`, `new`,
 info), `graph`, `plugins`, `instances`, `detach`, and, when attached,
 `select`, `view(node, frame=None)`, `view_state`. `Node` has `info`,
 `params`, `set`, `input(s)`, `set_input`, `outputs`, `rename`, `render`,
-`select`, `view`.
+`select`, `view`, `to_transform` (for a Tracker).
 Errors raise `arclt.ArcltError`. Tests:
 `PYTHONPATH=python python3 -m unittest discover -s python/tests`.
 
