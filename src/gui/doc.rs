@@ -31,6 +31,10 @@ pub struct Doc {
     /// A node shown in place of the Viewer node's input (double-click, V),
     /// until the Viewer is viewed again. View state: not saved or undone.
     pub view_override: Option<String>,
+    /// The frame of the image in the viewer, if any: new shapes are placed
+    /// and sized to fit it (the project format otherwise), so they land in
+    /// the picture being looked at even when it isn't project-sized.
+    pub view_format: Option<arclight::image::Size>,
     pub revision: u64,
     pub path: Option<PathBuf>,
     pub dirty: bool,
@@ -43,7 +47,7 @@ pub struct Doc {
 impl Doc {
     pub fn new(graph: Graph, path: Option<PathBuf>) -> Doc {
         let history = History { undo: Vec::new(), redo: Vec::new(), committed: Graph::default(), committed_edits: 0 };
-        let mut doc = Doc { graph, selected: None, view_override: None, revision: 1, path, dirty: false, edits: 0, history };
+        let mut doc = Doc { graph, selected: None, view_override: None, view_format: None, revision: 1, path, dirty: false, edits: 0, history };
         doc.normalize();
         doc.auto_layout();
         doc.history.committed = doc.graph.clone();
@@ -147,7 +151,7 @@ impl Doc {
         let info = ops::info(op).expect("known op");
         let id = self.unique_id(op);
         let mut params = ops::params_with_defaults(op, &Value::Null);
-        ops::fit_new_shape(op, &mut params, self.graph.project.format);
+        ops::fit_new_shape(op, &mut params, self.view_format.unwrap_or(self.graph.project.format));
         if op == "media_out" {
             params["first_frame"] = self.graph.project.first_frame.into();
             params["last_frame"] = self.graph.project.last_frame.into();
@@ -534,6 +538,22 @@ impl Doc {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn new_shapes_land_in_the_viewed_picture() {
+        // A 960×540 picture in a 1920×1080 project: shapes centered on it.
+        let mut d = Doc::new(Graph::default(), None);
+        d.view_format = Some(arclight::image::Size { width: 960, height: 540 });
+        let r = d.add_node("rectangle", [0.0, 0.0]);
+        assert_eq!(d.param(&r, "center"), json!([480.0, 270.0]));
+        let p = d.add_node("polygon", [0.0, 0.0]);
+        let pts: Vec<f64> = d.param(&p, "points").as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+        assert!(pts.chunks(2).all(|c| c[0] > 0.0 && c[0] < 960.0 && c[1] > 0.0 && c[1] < 540.0), "{pts:?}");
+        // Nothing viewed: the project format.
+        d.view_format = None;
+        let r = d.add_node("rectangle", [0.0, 0.0]);
+        assert_eq!(d.param(&r, "center"), json!([960.0, 540.0]));
+    }
 
     #[test]
     fn viewing_a_node_overrides_the_viewer_until_the_viewer_is_viewed() {

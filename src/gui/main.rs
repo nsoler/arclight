@@ -570,6 +570,7 @@ impl App {
                 self.millis = resp.millis;
                 self.cached = resp.cached_frames;
                 self.probe = resp.probe;
+                self.doc.view_format = self.image.as_ref().map(|img| img.format);
             }
         }
     }

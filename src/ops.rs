@@ -632,8 +632,9 @@ pub static OPS: &[OpInfo] = &[
         ],
         overlay: Overlay::Points("points"),
         mask_base: None,
-        help: shape_help!("A filled polygon. In the viewer, drag points, click an edge to add one, \
-               Ctrl+click to add after the selected point, Shift+click to select several, ⌫ to delete."),
+        help: shape_help!("A filled polygon. In the viewer, drag inside it to move it all, drag points \
+               or edges to reshape it, click an edge to add a point, Ctrl+click to add after the \
+               selected point, Shift+click to select several, ⌫ to delete."),
     },
     OpInfo {
         name: "roto",
@@ -663,8 +664,8 @@ pub static OPS: &[OpInfo] = &[
         overlay: Overlay::Points("points"),
         mask_base: None,
         help: shape_help!("A closed bezier shape for rotoscoping; chain Roto nodes through the \
-               background for several shapes or holes. In the viewer, drag points, click the \
-               curve to add one, Ctrl+click to add after the selected point (drag to pull out \
+               background for several shapes or holes. In the viewer, drag inside it to move it \
+               all, drag points or the curve between them to reshape it, click the curve to add a point, Ctrl+click to add after the selected point (drag to pull out \
                its tangents), Shift+click to select several, ⌫ to delete. Selected points show \
                their tangent handles: dragging one keeps the curve smooth, Alt breaks it; \
                Alt+drag a point to pull new tangents out of it."),

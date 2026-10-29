@@ -119,6 +119,11 @@ enum Part {
     Corner { i: usize, from: bool },
     /// Picking a color from the node's input (Ctrl+click / Ctrl+drag).
     Pick,
+    /// Edge `i` of a point list, pressed at fraction `t`: dragging moves its
+    /// two vertices; a click without moving inserts a vertex there.
+    EdgeMove { i: usize, t: f32 },
+    /// Inside a point list's shape: dragging moves the whole shape.
+    Body,
 }
 
 /// A handle of the selected vertices' transform box.
@@ -219,6 +224,14 @@ struct Drag {
     now: Vec2,
     /// What rotation turns about.
     pivot: Vec2,
+}
+
+impl Drag {
+    /// Moved more than a few screen pixels since the press: a drag, not a
+    /// click.
+    fn moved(&self) -> bool {
+        (self.now - self.start).length() * self.xf.zoom > 3.0
+    }
 }
 
 #[derive(Default)]
@@ -417,6 +430,18 @@ fn square(xf: &Xf, c: Vec2, size: f32) -> [Pos2; 4] {
 }
 
 /// Whether `p` lies inside the convex quad `q` (either winding).
+/// Inside a closed outline (even-odd), any shape.
+fn in_polygon(p: Pos2, poly: &[Pos2]) -> bool {
+    let mut inside = false;
+    for (j, &a) in poly.iter().enumerate() {
+        let b = poly[(j + 1) % poly.len()];
+        if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
 fn in_quad(p: Pos2, q: &[Pos2]) -> bool {
     let side = |a: Pos2, b: Pos2| (b - a).x * (p - a).y - (b - a).y * (p - a).x;
     let s: Vec<f32> = (0..4).map(|i| side(q[i], q[(i + 1) % 4])).collect();
@@ -475,7 +500,7 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
             let e = [left, top, right, bottom];
             e.contains(&true).then_some(Part::Edges(e))
         }
-        Geo::Box { center, size, rotate, .. } => {
+        Geo::Box { center, size, rotate, ellipse, .. } => {
             let (handles, spin) = box_handles(xf, center, size, rotate);
             if spin.distance(p) < GRAB {
                 return Some(Part::Rotate);
@@ -483,7 +508,9 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
             if let Some(&(_, part)) = handles.iter().find(|(h, _)| h.distance(p) < GRAB) {
                 return Some(part);
             }
-            (xf.screen(center).distance(p) < GRAB * 1.5).then_some(Part::Move)
+            // The center, or anywhere inside the shape, moves it.
+            let inside = in_polygon(p, &box_outline(xf, center, size, rotate, ellipse));
+            (inside || xf.screen(center).distance(p) < GRAB * 1.5).then_some(Part::Move)
         }
         Geo::Tracker { ref pos, ref sizes, ref offsets, .. } => {
             // Later tracks draw on top, so they take the pointer first.
@@ -547,8 +574,10 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
                 .filter(|&(.., d)| d < GRAB * 0.8)
                 .min_by(|a, b| a.2.total_cmp(&b.2))
                 .map(|(i, t, _)| Part::Edge(i, t))
-                // Anywhere else inside the transform box moves the selection.
+                // Anywhere else inside the transform box moves the selection…
                 .or_else(|| sbox.filter(|r| r.contains(xf.image(p).to_pos2())).map(|_| Part::SelBox(BoxHandle::Move)))
+                // …and inside the shape, the whole shape.
+                .or_else(|| (s.len() >= 3 && in_polygon(p, &line)).then_some(Part::Body))
         }
     }
 }
@@ -653,8 +682,31 @@ impl Overlays {
             self.drag_to(doc, frame, xf.image(ptr), mods);
         }
         if released || resp.drag_stopped() {
-            self.drag = None;
+            self.release(doc);
         }
+    }
+
+    /// The pointer came up: end the drag. An edge clicked without moving
+    /// gets a new vertex where it was clicked, in every key.
+    fn release(&mut self, doc: &mut Doc) {
+        let Some(drag) = self.drag.take() else { return };
+        let (Part::EdgeMove { i, t }, Geo::Points { param, stride, pts, .. }) = (drag.part, &drag.geo) else { return };
+        if drag.moved() {
+            return;
+        }
+        let (n, stride, spline) = (pts.len(), *stride, *stride == SPLINE);
+        doc.set_param(&drag.node, param, anim::edit_all(&doc.param(&drag.node, param), |v| {
+            if spline {
+                return split_spline(v, i, t);
+            }
+            let at = |k: usize, c: usize| v.get((k % n) * stride + c).copied().unwrap_or(0.0);
+            let mut vertex = vec![0.0; stride];
+            for (c, x) in vertex.iter_mut().enumerate().take(2) {
+                *x = at(i, c) + (at(i + 1, c) - at(i, c)) * t as f64;
+            }
+            insert_vertex(v, stride, i + 1, &vertex)
+        }));
+        self.points = vec![i + 1];
     }
 
     /// The pointer went down at screen position `o`: grab the handle there,
@@ -693,22 +745,22 @@ impl Overlays {
                     }
                 }
                 Some(Part::Edge(i, t)) => {
-                    // Each key gets the vertex at the same fraction of its own edge.
-                    let n = pts.len();
-                    doc.set_param(&id, param, anim::edit_all(&doc.param(&id, param), |v| {
-                        if spline {
-                            return split_spline(v, i, t);
-                        }
-                        let at = |k: usize, c: usize| v.get((k % n) * stride + c).copied().unwrap_or(0.0);
-                        let mut vertex = vec![0.0; stride];
-                        for (c, x) in vertex.iter_mut().enumerate().take(2) {
-                            *x = at(i, c) + (at(i + 1, c) - at(i, c)) * t as f64;
-                        }
-                        insert_vertex(v, stride, i + 1, &vertex)
-                    }));
-                    self.points = vec![i + 1];
-                    part = Some(Part::Vertex(i + 1));
+                    // Grab the edge's two vertices (Shift: as well as the
+                    // selection); a click that doesn't move inserts a vertex
+                    // instead (see `release`).
+                    let ends = [i, (i + 1) % pts.len()];
+                    if !mods.shift {
+                        self.points.clear();
+                    }
+                    self.points.extend(ends.iter().filter(|e| !self.points.contains(e)).collect::<Vec<_>>());
+                    part = Some(Part::EdgeMove { i, t });
                 }
+                Some(Part::Body) if mods.shift => {
+                    // Shift-drag inside still box-selects, adding.
+                    self.marquee_base = self.points.clone();
+                    part = Some(Part::Marquee);
+                }
+                Some(Part::Body) => self.points = (0..pts.len()).collect(),
                 None if mods.command => {
                     // Add after the last selected vertex, or at the end.
                     let i = self.points.last().map_or(pts.len(), |&i| i + 1);
@@ -756,6 +808,9 @@ impl Overlays {
             let drag = self.drag.take().unwrap();
             self.pick(&drag, doc, frame);
             self.drag = Some(drag);
+            return;
+        }
+        if matches!(drag.part, Part::EdgeMove { .. }) && !drag.moved() {
             return;
         }
         if drag.part != Part::Marquee {
@@ -1285,7 +1340,7 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
 
 fn cursor(part: Part) -> CursorIcon {
     match part {
-        Part::Point | Part::Move | Part::Vertex(_) | Part::Tangent { .. } | Part::Pull(_) | Part::Track(_) | Part::TrackOffset(_) | Part::Corner { .. } => CursorIcon::Move,
+        Part::Point | Part::Move | Part::Body | Part::EdgeMove { .. } | Part::Vertex(_) | Part::Tangent { .. } | Part::Pull(_) | Part::Track(_) | Part::TrackOffset(_) | Part::Corner { .. } => CursorIcon::Move,
         Part::Marquee | Part::Pick => CursorIcon::Crosshair,
         Part::SelBox(BoxHandle::Move) => CursorIcon::Move,
         Part::SelBox(BoxHandle::Rotate) => CursorIcon::Alias,
@@ -1355,7 +1410,7 @@ mod tests {
         // Two steps, as a real drag arrives over several frames.
         ov.drag_to(d, frame, XF.image(from.lerp(to, 0.5)), mods);
         ov.drag_to(d, frame, XF.image(to), mods);
-        ov.drag = None;
+        ov.release(d);
         part
     }
 
@@ -1590,13 +1645,59 @@ mod tests {
         let moved: Vec<f32> = SQUARE.iter().map(|v| v + 10.0).collect();
         let mut d = doc("polygon", json!({ "points": { "keys": [[1, SQUARE], [10, moved]] } }));
         let mut ov = Overlays::default();
-        // Press on the top edge's midpoint and pull it up.
-        let part = gesture(&mut ov, &mut d, Pos2::new(100.0, 25.0), Pos2::new(100.0, 5.0), 1, Mods::default());
-        assert_eq!(part, Some(Part::Vertex(1)));
-        assert_eq!(points(&d, 1), [50.0, 25.0, 100.0, 5.0, 150.0, 25.0, 150.0, 75.0, 50.0, 75.0]);
+        // Click the top edge's midpoint (no drag).
+        let at = Pos2::new(100.0, 25.0);
+        let part = gesture(&mut ov, &mut d, at, at, 1, Mods::default());
+        assert_eq!(part, Some(Part::EdgeMove { i: 0, t: 0.5 }));
+        assert_eq!(points(&d, 1), [50.0, 25.0, 100.0, 25.0, 150.0, 25.0, 150.0, 75.0, 50.0, 75.0]);
         // The other key gets the vertex on its own edge, at the same fraction.
         assert_eq!(points(&d, 10)[2..4], [110.0, 35.0]);
         assert_eq!(ov.points, vec![1]);
+    }
+
+    #[test]
+    fn dragging_an_edge_moves_its_two_vertices() {
+        let mut d = doc("polygon", json!({ "points": SQUARE }));
+        let mut ov = Overlays::default();
+        // The right edge, pulled 20 px right: both its ends follow, nothing
+        // is inserted.
+        let part = gesture(&mut ov, &mut d, Pos2::new(150.0, 50.0), Pos2::new(170.0, 50.0), 1, Mods::default());
+        assert_eq!(part, Some(Part::EdgeMove { i: 1, t: 0.5 }));
+        assert_eq!(points(&d, 1), [50.0, 25.0, 170.0, 25.0, 170.0, 75.0, 50.0, 75.0]);
+        assert_eq!(ov.points, vec![1, 2]);
+        // A shaky click (a pixel or two) still inserts rather than moving.
+        let mut d = doc("polygon", json!({ "points": SQUARE }));
+        gesture(&mut ov, &mut d, Pos2::new(100.0, 75.0), Pos2::new(101.0, 76.0), 1, Mods::default());
+        assert_eq!(points(&d, 1).len(), 10);
+    }
+
+    #[test]
+    fn dragging_inside_a_shape_moves_all_of_it() {
+        for op in ["polygon", "roto"] {
+            let pts = if op == "roto" { spline_square() } else { SQUARE.to_vec() };
+            let mut d = doc(op, json!({ "points": pts }));
+            let mut ov = Overlays::default();
+            let part = gesture(&mut ov, &mut d, Pos2::new(80.0, 60.0), Pos2::new(90.0, 40.0), 1, Mods::default());
+            assert_eq!(part, Some(Part::Body), "{op}");
+            let v = points(&d, 1);
+            let stride = if op == "roto" { SPLINE } else { 2 };
+            let corners: Vec<f32> = v.chunks(stride).flat_map(|c| [c[0], c[1]]).collect();
+            assert_eq!(corners, [60.0, 5.0, 160.0, 5.0, 160.0, 55.0, 60.0, 55.0], "{op}");
+            assert_eq!(ov.points, vec![0, 1, 2, 3], "{op}: all selected, for the transform box");
+        }
+        // Shift-drag inside still box-selects instead.
+        let mut d = doc("polygon", json!({ "points": SQUARE }));
+        let mut ov = Overlays::default();
+        let shift = Mods { shift: true, ..Default::default() };
+        assert_eq!(gesture(&mut ov, &mut d, Pos2::new(40.0, 15.0), Pos2::new(110.0, 85.0), 1, Mods::default()), Some(Part::Marquee));
+        assert_eq!(ov.points, vec![0, 3]);
+        assert_eq!(gesture(&mut ov, &mut d, Pos2::new(140.0, 60.0), Pos2::new(160.0, 80.0), 1, shift), Some(Part::Marquee));
+        assert_eq!(ov.points, vec![0, 3, 2]);
+        assert_eq!(points(&d, 1), SQUARE, "nothing moved");
+        // Rectangles move from anywhere inside, not just the center.
+        let mut d = doc("rectangle", json!({ "center": [100, 50], "size": [100, 50] }));
+        assert_eq!(drag(&mut d, Pos2::new(70.0, 35.0), Pos2::new(80.0, 45.0), 1), Part::Move);
+        assert_eq!(vec2(&d.param("n", "center")), Vec2::new(110.0, 60.0));
     }
 
     #[test]
@@ -1695,7 +1796,7 @@ mod tests {
         // One vertex selected: no box.
         let mut ov = Overlays::default();
         select(&mut ov, &mut d, Pos2::new(125.0, 0.0));
-        assert!(matches!(hit(&geo(&d, "n", 1, SIZE).unwrap(), &XF, Pos2::new(100.0, 50.0), &ov.points), None | Some(Part::Edge(..))));
+        assert!(!matches!(hit(&geo(&d, "n", 1, SIZE).unwrap(), &XF, Pos2::new(100.0, 50.0), &ov.points), Some(Part::SelBox(_))));
     }
 
     fn spline_square() -> Vec<f32> {
@@ -1718,7 +1819,7 @@ mod tests {
         // The right side bulges: its midpoint is at t = 0.5 on segment 1,
         // 3/4 · 20 = 15 px right of the straight line.
         let mid = Pos2::new(165.0, 50.0);
-        assert_eq!(gesture(&mut ov, &mut d, mid, mid, 1, Mods::default()), Some(Part::Vertex(2)));
+        assert_eq!(gesture(&mut ov, &mut d, mid, mid, 1, Mods::default()), Some(Part::EdgeMove { i: 1, t: 0.5 }));
         let v = points(&d, 1);
         assert_eq!(v.len(), 5 * SPLINE);
         assert!((v[12] - 165.0).abs() < 0.5 && (v[13] - 50.0).abs() < 0.5, "{:?}", &v[12..18]);

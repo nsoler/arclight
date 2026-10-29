@@ -74,7 +74,19 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   (`Viewer::color_picker`, rightmost in `status`): swatch + R/G/B/A
   (`{:>6.3}`, monospace, tinted labels); `Viewer::picked` is set while
   hovering and re-read from each frame at the same pixel afterwards. The
-  old bottom-left hover readout (x, y, RGBA to 4 places) is kept. No Developer ID signing / notarization (needs a paid Apple
+  old bottom-left hover readout (x, y, RGBA to 4 places) is kept.
+- **Session 7, part 24** (user report: new shapes land outside the
+  picture; polygons move a point at a time): (1) `Doc::view_format` (the
+  viewed image's frame, set by the App from each response) is what
+  `add_node` fits new shapes to, else the project format: the starter
+  clip is 960×540 in a 1920×1080 project, so shapes landed at its corner.
+  (2) Overlay: `Part::Body` (inside a Polygon/Roto outline, `in_polygon`
+  even-odd on `points_outline`) selects every vertex and drags them all;
+  Shift there still box-selects. `Part::EdgeMove { i, t }` (press on an
+  edge) selects its two ends and drags them, but only once the pointer
+  moves > 3 screen px (`Drag::moved`); a click inserts a vertex on
+  release (`Overlays::release`, which the tests' `gesture` now calls).
+  Rectangle/Ellipse move from anywhere inside (`box_outline`). No Developer ID signing / notarization (needs a paid Apple
   account); ffmpeg not bundled (GPL builds; Homebrew instead).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
