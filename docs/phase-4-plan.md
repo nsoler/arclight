@@ -737,7 +737,21 @@ G / R / S, gizmos, handles); (c) Light 2D node and viewer handles;
 ## Milestone 13 in detail: particles
 
 Specified 2026-10-29 at the user's request: "a particle system, emitter,
-particle nodes that can be objects from a file or just a" sprite/point.
+particle nodes that can be objects from a file, have the emitter connect
+to the scanline node as additional inputs to scanline node, so it can be
+rendered in viewer."
+
+**Wiring (the user's requirement).** A particle chain (Emitter →
+modifiers → optional Particle Render settings) ends in a particle
+stream that plugs **straight into Scanline Render as an additional
+input**: Scanline Render's inputs become growable, as Merge's are (a
+new empty input appears whenever the last one is connected), and each
+input takes a scene, a particle stream, or a card / geometry. Scanline
+Render then renders the particles with everything else through its
+camera, and the result shows in the viewer like any render. A Scene
+node can also take particle streams, for grouping. Adding an Emitter
+from the node menu while a Scanline Render is selected connects it to
+that render's next free input (as M8's "bring in the needed nodes").
 
 **Nodes** (scenes like the rest; particle streams flow between them):
 - **Particle Emitter:** where particles come from: a point, a line, a
@@ -761,7 +775,8 @@ particle nodes that can be objects from a file or just a" sprite/point.
     (sphere, cube, ...), or a **mesh loaded from a file** (OBJ, then
     glTF, as in M10), oriented by velocity or randomly spun, scaled by
     size. Several objects can be chosen at random per particle.
-  - The output is a scene, rendered by Scanline Render (lit by M12's
+  - The output is a particle stream, connected to Scanline Render as an
+    extra input (above) and rendered by it (lit by M12's
     lights, with motion blur from velocity once motion blur exists, and
     passes); in 2D, a **Particles 2D** path renders sprites straight
     into the image (no camera needed).
@@ -794,12 +809,17 @@ ids (for scripting and tests).
   frame.
 - Cache: scrubbing back returns the cached frame; changing gravity at
   frame 10 re-simulates from there.
+- Wiring: an Emitter connected to Scanline Render's second input renders
+  in the viewer; connecting it adds a new empty input; disconnecting
+  removes its particles from the render.
 - Rendering: sprites appear where the camera projects their positions;
   an instanced OBJ mesh renders at each particle with its size and
   rotation.
 
 **Order inside M13:** (a) particle data and the simulation core (emit,
-age, forces, cache, seed); (b) emitter shapes (incl. geometry surfaces
+age, forces, cache, seed), and Scanline Render's growable inputs taking
+particle streams (rendered as points first, so the viewer shows them
+from the start); (b) emitter shapes (incl. geometry surfaces
 and 2D masks) and modifier nodes; (c) sprite rendering in Scanline
 Render and Particles 2D; (d) object instancing (primitives, meshes from
 files); (e) 3D-view drawing and handles, MCP / Python, help text.
