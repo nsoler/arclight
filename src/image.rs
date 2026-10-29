@@ -177,8 +177,9 @@ impl Image {
     }
 
     /// Load an image from disk. `.exr` is read as-is (assumed linear,
-    /// premultiplied); everything else goes through the `image` crate and is
-    /// decoded from sRGB 8-bit, then premultiplied.
+    /// premultiplied); everything else goes through the `image` crate:
+    /// 8- and 16-bit files are decoded from sRGB at their own precision,
+    /// float files (`.hdr`) taken as linear, then premultiplied.
     pub fn read(path: &Path) -> Result<Image> {
         let ext = path
             .extension()
@@ -193,20 +194,34 @@ impl Image {
     }
 
     fn read_ldr(path: &Path) -> Result<Image> {
-        let dynimg = image::open(path)
-            .with_context(|| format!("decoding image {}", path.display()))?;
-        let rgba = dynimg.to_rgba8();
-        let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+        // The image crate's default 512 MB decode cap refuses e.g. 16-bit
+        // RGBA past ~8K square; allow up to 4 GB (a 16384² 16-bit RGBA still
+        // is 2 GB).
+        let mut limits = image::Limits::default();
+        limits.max_alloc = Some(4 << 30);
+        let mut reader = image::ImageReader::open(path)
+            .and_then(|r| r.with_guessed_format())
+            .with_context(|| format!("opening image {}", path.display()))?;
+        reader.limits(limits);
+        let dynimg = reader.decode().with_context(|| format!("decoding image {}", path.display()))?;
+        let (w, h) = (dynimg.width() as usize, dynimg.height() as usize);
         let mut img = Image::new(w, h);
-        for (i, px) in rgba.pixels().enumerate() {
-            let [r, g, b, a] = px.0;
-            let straight = [
-                color::srgb_to_linear(r as f32 / 255.0),
-                color::srgb_to_linear(g as f32 / 255.0),
-                color::srgb_to_linear(b as f32 / 255.0),
-                a as f32 / 255.0,
-            ];
-            img.pixels[i] = color::premultiply(straight);
+        let to_linear = |v: [f32; 4]| color::premultiply([color::srgb_to_linear(v[0]), color::srgb_to_linear(v[1]), color::srgb_to_linear(v[2]), v[3]]);
+        let bits = dynimg.color().bytes_per_pixel() / dynimg.color().channel_count();
+        if bits == 4 {
+            // Float images (e.g. Radiance .hdr) are linear already.
+            for (out, px) in img.pixels.iter_mut().zip(dynimg.to_rgba32f().pixels()) {
+                *out = color::premultiply(px.0);
+            }
+        } else if bits == 2 {
+            // 16-bit: keep the precision.
+            for (out, px) in img.pixels.iter_mut().zip(dynimg.to_rgba16().pixels()) {
+                *out = to_linear(px.0.map(|v| v as f32 / 65535.0));
+            }
+        } else {
+            for (out, px) in img.pixels.iter_mut().zip(dynimg.to_rgba8().pixels()) {
+                *out = to_linear(px.0.map(|v| v as f32 / 255.0));
+            }
         }
         Ok(img)
     }
@@ -285,6 +300,26 @@ impl Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sixteen_bit_and_float_files_keep_their_precision() {
+        let dir = std::env::temp_dir().join(format!("arclight_depth_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Two greys one 16-bit step apart: 8 bits would make them equal.
+        let deep = image::ImageBuffer::<image::Rgba<u16>, _>::from_fn(2, 1, |x, _| image::Rgba([30000 + x as u16, 30000, 30000, 65535]));
+        let png = dir.join("deep.png");
+        deep.save(&png).unwrap();
+        let img = Image::read(&png).unwrap();
+        let (a, b) = (img.at(0, 0)[0], img.at(1, 0)[0]);
+        assert!(b > a && (a - color::srgb_to_linear(30000.0 / 65535.0)).abs() < 1e-6, "{a} {b}");
+        // Radiance HDR is linear float: read as is, past 1.0.
+        let hdr = image::ImageBuffer::<image::Rgb<f32>, _>::from_pixel(1, 1, image::Rgb([4.0, 0.5, 0.25]));
+        let path = dir.join("bright.hdr");
+        image::DynamicImage::ImageRgb32F(hdr).save(&path).unwrap();
+        let px = Image::read(&path).unwrap().at(0, 0);
+        assert!((px[0] - 4.0).abs() < 0.05 && (px[1] - 0.5).abs() < 0.01 && px[3] == 1.0, "{px:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn a_window_sits_in_its_frame() {

@@ -268,7 +268,11 @@ impl Viewer {
             self.fit_pending = true;
         }
         self.region = img.frame().union(&img.window());
-        let ci = to_color_image(img, self.region, self.channel, self.exposure);
+        // Past the GPU's texture size limit, show it at a fraction of its
+        // resolution (the readout still reads full-resolution pixels).
+        let max_side = ctx.input(|i| i.max_texture_side).max(1);
+        let step = self.region.width().max(self.region.height()).div_ceil(max_side).max(1);
+        let ci = to_color_image(img, self.region, self.channel, self.exposure, step);
         let filter = if self.nearest { TextureOptions::NEAREST } else { TextureOptions::LINEAR };
         match &mut self.texture {
             Some(t) => t.set(ci, filter),
@@ -281,16 +285,32 @@ impl Viewer {
 /// Linear premultiplied float -> 8-bit sRGB for display, with exposure and
 /// channel isolation applied, over `region` (frame pixels). Color is shown
 /// premultiplied, i.e. over black; overscan (past the frame) is dimmed.
-fn to_color_image(img: &Image, region: IRect, channel: Channel, exposure: f32) -> ColorImage {
+/// With `step` > 1, each texel is the mean of a `step`×`step` block, for
+/// images larger than a texture can be.
+fn to_color_image(img: &Image, region: IRect, channel: Channel, exposure: f32, step: usize) -> ColorImage {
     let gain = 2f32.powf(exposure);
-    let (w, frame) = (region.width().max(1), img.frame());
-    let mut bytes = vec![0u8; region.width() * region.height() * 4];
+    let (tw, th) = (region.width().div_ceil(step).max(1), region.height().div_ceil(step).max(1));
+    let frame = img.frame();
+    let mut bytes = vec![0u8; tw * th * 4];
     bytes
         .par_chunks_exact_mut(4)
         .enumerate()
         .for_each(|(i, out)| {
-            let (x, y) = (region.x0 + (i % w) as i32, region.y0 + (i / w) as i32);
-            let px = img.at(x, y);
+            let (x, y) = (region.x0 + ((i % tw) * step) as i32, region.y0 + ((i / tw) * step) as i32);
+            let px = if step == 1 {
+                img.at(x, y)
+            } else {
+                let mut sum = [0.0f32; 4];
+                let (x1, y1) = ((x + step as i32).min(region.x1), (y + step as i32).min(region.y1));
+                for sy in y..y1 {
+                    for sx in x..x1 {
+                        let p = img.at(sx, sy);
+                        (0..4).for_each(|c| sum[c] += p[c]);
+                    }
+                }
+                let n = ((x1 - x) * (y1 - y)).max(1) as f32;
+                sum.map(|v| v / n)
+            };
             let gain = if frame.contains(x, y) { gain } else { gain * 0.35 };
             let enc = |v: f32| (color::linear_to_srgb(v * gain) * 255.0 + 0.5) as u8;
             let rgb = match channel {
@@ -303,5 +323,5 @@ fn to_color_image(img: &Image, region: IRect, channel: Channel, exposure: f32) -
             };
             out.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
         });
-    ColorImage::from_rgba_unmultiplied([region.width(), region.height()], &bytes)
+    ColorImage::from_rgba_unmultiplied([tw, th], &bytes)
 }

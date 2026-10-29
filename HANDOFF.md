@@ -449,6 +449,16 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   `app_icon()`). The window's app id is now `arclight` (it was the
   title-derived "Arclight"): Hyprland window rules need the new class.
   Installed on this machine; checked by launching with `gtk-launch`.
+- **Session 7, part 16** (from a user question about read resolutions):
+  (1) crash fix: images wider or taller than the GPU's max texture side
+  (8192 on this machine) panicked in wgpu `create_texture`; the viewer now
+  averages `step`×`step` blocks into each texel (`to_color_image`'s
+  `step`, from `max_texture_side`). (2) `Image::read_ldr` raises the image
+  crate's 512 MB decode cap to 4 GB (a 9000² 16-bit RGBA PNG was
+  refused). (3) 16-bit stills keep 16-bit precision (`to_rgba16`), float
+  ones (`.hdr`) are read as linear; 8-bit as before. Video stays 8-bit
+  (ffmpeg `-pix_fmt rgba`): a 16-bit/float decode path would be the next
+  step for 10-bit footage.
 - **CorridorKey** (AI keyer, github.com/nikopueringer/CorridorKey; the
   OFX port gitcapoom/corridorkey_ofx is Windows/Resolve-only): the user
   deferred it. If revisited: run upstream's PyTorch engine (Linux OK; the

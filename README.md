@@ -268,8 +268,20 @@ what loaded, and `arclight ops [OP]` to see the op catalog.
 ## I/O formats
 
 - **EXR**: full 32-bit float, assumed linear + premultiplied.
-- **PNG / JPEG / TIFF / …** (via the `image` crate): decoded from / encoded to
-  8-bit sRGB; straight alpha on disk, premultiplied internally.
+- **PNG / JPEG / TIFF / …** (via the `image` crate): read from sRGB at the
+  file's own depth (8- or 16-bit), written as 8-bit sRGB; straight alpha on
+  disk, premultiplied internally. Float files such as Radiance `.hdr` are
+  read as linear.
+- **Video** (via ffmpeg): `.mp4 .mov .m4v .mkv .avi .webm .mxf .mpg .mpeg`
+  in; H.264 `.mp4` or ProRes 422 HQ `.mov` out. Decoded to 8-bit sRGB.
+- **Resolution**: no fixed limit on reads. Every image is held as 32-bit
+  float RGBA (16 bytes a pixel: about 130 MB for a 4K UHD frame, 530 MB
+  for 8K UHD), so memory sets the practical ceiling; the frame cache
+  (`frame_cache_mb`, default 1536) holds fewer large frames. Stills decode
+  up to 4 GB each. Sizes typed into nodes (Constant, shapes, Resize,
+  Crop, project format) go up to 16384. The viewer shows images larger
+  than the GPU's texture limit (8192 here) at reduced resolution; the
+  pixel readout still reads full-resolution values.
 
 ## Layout
 
