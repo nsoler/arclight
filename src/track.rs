@@ -78,6 +78,10 @@ fn mul(m: &Mat, k: Pt) -> Pt {
     [m[0] * k[0] + m[1] * k[1], m[2] * k[0] + m[3] * k[1]]
 }
 
+fn add(a: Pt, b: Pt) -> Pt {
+    [a[0] + b[0], a[1] + b[1]]
+}
+
 /// How a track's feature has turned and grown since its pattern was taken.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Warp {
@@ -271,6 +275,9 @@ pub struct Settings {
     /// Each track's own `[pattern, search]` sizes, where they differ from
     /// the shared ones (see [`box_sizes`]); empty means all shared.
     pub sizes: Vec<[usize; 2]>,
+    /// Each track's pattern offset from its point (see [`offsets`]); empty
+    /// means none.
+    pub offsets: Vec<Pt>,
     /// Matches below this correlation lose the track.
     pub min_score: f32,
     /// Take a fresh pattern at every tracked frame, instead of keeping the
@@ -287,10 +294,15 @@ impl Settings {
             pattern: int("pattern", 31),
             search: int("search", 91),
             sizes: box_sizes(p).into_iter().map(|s| s.map(|x| x.max(1.0) as usize)).collect(),
+            offsets: offsets(p),
             min_score: p.get("min_score").and_then(Value::as_f64).unwrap_or(0.7) as f32,
             update: p.get("update").and_then(Value::as_str) == Some("every frame"),
             motion: Solve::from_choice(p.get("motion").and_then(Value::as_str), Solve::Rotate),
         }
+    }
+
+    fn offset(&self, i: usize) -> Pt {
+        self.offsets.get(i).copied().unwrap_or([0.0, 0.0])
     }
 
     /// Track `i`'s pattern radius and search reach around it.
@@ -337,7 +349,13 @@ pub fn track(
     let mut out = Outcome::default();
 
     let first = Luma::new(&image(from)?);
-    let mut pos: Vec<Option<Pt>> = start.to_vec();
+    // The features followed: each track's point plus its offset, which
+    // turns and scales with the feature; `found` gets the points.
+    let mut pos: Vec<Option<Pt>> = start.iter().enumerate().map(|(i, p)| p.map(|p| add(p, settings.offset(i)))).collect();
+    let point = |i: usize, c: Pt, w: &Warp| {
+        let o = mul(&w.matrix(), settings.offset(i));
+        [c[0] - o[0], c[1] - o[1]]
+    };
     let mut vel: Vec<Pt> = vec![[0.0; 2]; pos.len()];
     // Each feature's turn and growth since the start, and its last step.
     let mut warps = vec![Warp::default(); pos.len()];
@@ -382,7 +400,8 @@ pub fn track(
                 pats[i] = Pattern::new(&img, q, r, &w.matrix());
             }
         }
-        found(frame, Step { pos: &pos, warps: &warps, scores: &scores });
+        let points: Vec<Option<Pt>> = pos.iter().enumerate().map(|(i, c)| c.map(|c| point(i, c, &warps[i]))).collect();
+        found(frame, Step { pos: &points, warps: &warps, scores: &scores });
         out.frames += 1;
         progress.done.fetch_add(1, Ordering::Relaxed);
     }
@@ -423,6 +442,18 @@ pub fn box_sizes(params: &Value) -> Vec<[f32; 2]> {
     let p = ops::params_with_defaults("tracker", params);
     let size = |name: String, shared: &str| p.get(&name).and_then(Value::as_f64).or(p[shared].as_f64()).unwrap_or(31.0) as f32;
     (1..=TRACKS).map(|i| [size(format!("track{i}_pattern"), "pattern"), size(format!("track{i}_search"), "search")]).collect()
+}
+
+/// Each track's offset from its point to the feature its pattern follows
+/// (`track<i>_offset`, set by Ctrl-dragging a box in the viewer): for a
+/// point that gets covered, or that has no texture of its own.
+pub fn offsets(params: &Value) -> Vec<Pt> {
+    (1..=TRACKS)
+        .map(|i| {
+            let v = crate::anim::sample(params.get(format!("track{i}_offset")).unwrap_or(&Value::Null), 0.0);
+            if v.len() >= 2 { [v[0] as f32, v[1] as f32] } else { [0.0, 0.0] }
+        })
+        .collect()
 }
 
 /// Below this a match counts as weak: halfway from `min_score` (where a
@@ -777,7 +808,7 @@ mod tests {
     fn tracks_motion_over_frames_and_reports_lost_tracks() {
         // Moves 2.5 px right and 1 px down per frame.
         let frame = |f: i64| Ok(blobs(128, 128, [2.5 * (f - 1) as f32, (f - 1) as f32]));
-        let settings = Settings { pattern: 21, search: 41, sizes: vec![], min_score: 0.8, update: false, motion: Solve::Rotate };
+        let settings = Settings { pattern: 21, search: 41, sizes: vec![], offsets: vec![], min_score: 0.8, update: false, motion: Solve::Rotate };
         let mut seen = Vec::new();
         // The second track sits on a flat corner and can't be followed.
         let start = [Some([30.0, 40.0]), Some([5.0, 120.0]), None];
@@ -794,7 +825,7 @@ mod tests {
     #[test]
     fn tracks_backward() {
         let frame = |f: i64| Ok(blobs(128, 128, [2.0 * f as f32, 0.0]));
-        let settings = Settings { pattern: 21, search: 41, sizes: vec![], min_score: 0.8, update: true, motion: Solve::Rotate };
+        let settings = Settings { pattern: 21, search: 41, sizes: vec![], offsets: vec![], min_score: 0.8, update: true, motion: Solve::Rotate };
         let mut last = None;
         track(frame, &[Some([70.0, 30.0])], 5, 2, &settings, &Progress::default(), |_, s| last = s.pos[0]).unwrap();
         let p = last.unwrap();
@@ -806,6 +837,11 @@ mod tests {
     /// tracking the point (50, 40), or `None` once it is lost, the track's
     /// warp at the last frame and its lowest match score.
     fn track_turning(deg: f32, grow: f32, motion: Solve, update: bool) -> (Vec<Option<f32>>, Warp, f32) {
+        track_turning_from([50.0, 40.0], [0.0, 0.0], deg, grow, motion, update)
+    }
+
+    /// [`track_turning`] for the point `p`, its pattern placed `offset` away.
+    fn track_turning_from(p: Pt, offset: Pt, deg: f32, grow: f32, motion: Solve, update: bool) -> (Vec<Option<f32>>, Warp, f32) {
         let at = |f: i64| {
             let t = (f - 1) as f32;
             let (s, c) = (deg * t).to_radians().sin_cos();
@@ -815,10 +851,10 @@ mod tests {
             [a, b, 60.0 + t - (a * 60.0 + b * 55.0), d, e, 55.0 - (d * 60.0 + e * 55.0)]
         };
         let frame = |f: i64| Ok(blobs_moved(128, 128, &at(f)));
-        let settings = Settings { pattern: 25, search: 45, sizes: vec![], min_score: 0.8, update, motion };
+        let settings = Settings { pattern: 25, search: 45, sizes: vec![], offsets: vec![offset], min_score: 0.8, update, motion };
         let (mut errors, mut warp, mut worst) = (Vec::new(), Warp::default(), 1.0f32);
-        track(frame, &[Some([50.0, 40.0])], 1, 21, &settings, &Progress::default(), |f, s| {
-            let truth = apply(&at(f), [50.0, 40.0]);
+        track(frame, &[Some(p)], 1, 21, &settings, &Progress::default(), |f, s| {
+            let truth = apply(&at(f), p);
             errors.push(s.pos[0].map(|p| ((p[0] - truth[0]).powi(2) + (p[1] - truth[1]).powi(2)).sqrt()));
             worst = worst.min(s.scores[0]);
             warp = s.warps[0];
@@ -841,6 +877,16 @@ mod tests {
         // Matching shifts only can't follow it.
         let (errors, ..) = track_turning(2.0, 1.0, Solve::Translate, false);
         assert!(errors.iter().any(|e| e.is_none_or(|e| e > 1.0)), "{errors:?}");
+    }
+
+    #[test]
+    fn an_offset_point_turns_with_the_feature() {
+        // The point (40, 46) follows the pattern at (50, 40) as it turns 40°.
+        let (errors, ..) = track_turning_from([40.0, 46.0], [10.0, -6.0], 2.0, 1.0, Solve::Rotate, false);
+        let worst = errors.iter().map(|e| e.expect("never lost")).fold(0.0, f32::max);
+        assert!(worst < 0.15, "worst error {worst} px");
+        let s = Settings::from_params(&json!({ "track2_offset": [3, 4] }));
+        assert_eq!(s.offsets[..2], [[0.0, 0.0], [3.0, 4.0]]);
     }
 
     #[test]

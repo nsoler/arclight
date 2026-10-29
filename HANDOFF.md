@@ -16,7 +16,7 @@ Last updated 2026-10-28 (session 5). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~12,300 lines of Rust + Python. Tests: 63 library + 10 CLI + 25 GUI
+- ~12,300 lines of Rust + Python. Tests: 64 library + 10 CLI + 25 GUI
   (`cargo test --release`) and 8 Python (see "Working tips"), all passing.
   Clippy is clean apart from two old style lints (`Graph::from_str` name,
   `chunks_exact_mut(4)` in media.rs).
@@ -69,8 +69,10 @@ order of value:
      docs wanted another product's scheme copied; declined), `import_nuke`
      (originality rule).
 
-1. **Tracker follow-ups** (small to medium, builds on fresh code):
-   - An offset point (track one spot, place the result at another).
+1. **Tracker follow-ups:** the session-4 list is done. Possible later:
+   per-track box sizes and offsets in the panel (viewer-only now); a
+   "From = image corners" button on Corner Pin; filtering for warps that
+   shrink the image (Transform, Tracker output, Corner Pin).
 2. **Phase 2 extras for Roto/Polygon:** box-select of vertices, select all
    (Ctrl+A in the viewer), move/scale/rotate a whole shape (a transform box
    around the selection), motion blur later.
@@ -235,6 +237,14 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   (built on the private `scores`, shared with `weakest`) feeds a new `weak`
   argument of `Transport::ui`, drawn as an orange band behind the key
   diamonds while a Tracker is selected.
+- **Session 5, part 8**: offset points. Hidden `track<i>_offset` (static
+  Vec2, `track::offsets`; `Settings::offsets`) puts a track's boxes away
+  from its point. `track()` follows the feature at point + offset and
+  reports point = feature − W·offset, W being the run's warp so far (the
+  offset turns and scales with the feature). Overlay: Ctrl-drag inside a
+  box → `Part::TrackOffset(i)`; boxes and corner sizing use point +
+  offset; a dashed line ties the boxes to the point. Panel: "Clear
+  offsets" while any is set.
 
 ## Architecture in one page
 

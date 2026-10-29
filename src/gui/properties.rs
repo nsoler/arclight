@@ -548,6 +548,12 @@ impl Properties {
             if ui.button("Clear ▶").on_hover_text(format!("Remove the enabled tracks' keys after frame {frame}")).clicked() {
                 clear_track_keys(doc, id, frame, true);
             }
+            let offset = doc.node(id).is_some_and(|n| track::offsets(&n.params).iter().any(|o| *o != [0.0, 0.0]));
+            if offset && ui.button("Clear offsets").on_hover_text("Put every track's boxes back on its point (Ctrl-drag a box to offset it)").clicked() {
+                for i in 1..=track::TRACKS {
+                    doc.remove_param(id, &format!("track{i}_offset"));
+                }
+            }
         });
         if ui.button("Reference = this frame").on_hover_text("Solve the output transform relative to the current frame").clicked() {
             doc.set_param(id, "reference_frame", json!(frame));

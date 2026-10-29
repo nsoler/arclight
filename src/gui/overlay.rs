@@ -105,6 +105,8 @@ enum Part {
     /// A corner of track `i`'s pattern (or search) box: sizes that box for
     /// every track.
     TrackBox { i: usize, search: bool },
+    /// Track `i`'s boxes alone, away from its point (Ctrl-drag): its offset.
+    TrackOffset(usize),
     /// Corner `i` of a corner pin's To quad, or of its From quad.
     Corner { i: usize, from: bool },
 }
@@ -128,8 +130,9 @@ enum Geo {
     /// in `tan`; other point lists leave it empty.
     Points { param: &'static str, stride: usize, pts: Vec<Vec2>, tan: Vec<[Vec2; 2]> },
     /// Tracker boxes: each track's position (`None` when it is off) and its
-    /// `[pattern, search]` box sizes, in image pixels.
-    Tracker { names: [&'static str; 2], pos: Vec<Option<Vec2>>, sizes: Vec<[f32; 2]> },
+    /// `[pattern, search]` box sizes and its boxes' offset from its point,
+    /// in image pixels.
+    Tracker { names: [&'static str; 2], pos: Vec<Option<Vec2>>, sizes: Vec<[f32; 2]>, offsets: Vec<Vec2> },
     /// Corner pin quads, in image pixels.
     CornerPin { names: [[&'static str; 4]; 2], to: [Vec2; 4], from: [Vec2; 4] },
 }
@@ -224,6 +227,7 @@ fn geo(doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
             names: [pattern, search],
             pos: track::positions(&doc.node(id)?.params, frame).into_iter().map(|p| p.map(|[x, y]| Vec2::new(x, y))).collect(),
             sizes: track::box_sizes(&doc.node(id)?.params),
+            offsets: track::offsets(&doc.node(id)?.params).into_iter().map(Vec2::from).collect(),
         },
         Overlay::CornerPin { to, from } => Geo::CornerPin {
             names: [to, from],
@@ -410,11 +414,12 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
             }
             (xf.screen(center).distance(p) < GRAB * 1.5).then_some(Part::Move)
         }
-        Geo::Tracker { ref pos, ref sizes, .. } => {
+        Geo::Tracker { ref pos, ref sizes, ref offsets, .. } => {
             // Later tracks draw on top, so they take the pointer first.
-            for (i, c) in pos.iter().enumerate().rev() {
-                let Some(c) = *c else { continue };
+            for (i, point) in pos.iter().enumerate().rev() {
+                let Some(point) = *point else { continue };
                 let [pattern, search] = sizes[i];
+                let c = point + offsets[i];
                 // The nearer corner, as the boxes' corners can nearly meet.
                 let corner = [(pattern, false), (search, true)]
                     .into_iter()
@@ -425,7 +430,7 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
                     return Some(Part::TrackBox { i, search: is_search });
                 }
                 // The box may be turned when shown through the tracker's output.
-                if in_quad(p, &square(xf, c, pattern)) || xf.screen(c).distance(p) < GRAB {
+                if in_quad(p, &square(xf, c, pattern)) || xf.screen(point).distance(p) < GRAB {
                     return Some(Part::Track(i));
                 }
             }
@@ -525,6 +530,9 @@ impl Overlays {
         let xf = &xf.for_node(doc, &id, frame);
         self.points.retain(|&i| matches!(&g, Geo::Points { pts, .. } if i < pts.len()));
         let mut part = hit(&g, xf, o, &self.points);
+        if let (Some(Part::Track(i)), true) = (part, mods.command) {
+            part = Some(Part::TrackOffset(i));
+        }
         if let Geo::Points { param, stride, ref pts, .. } = g {
             let spline = stride == SPLINE;
             match part {
@@ -734,11 +742,12 @@ impl Overlays {
                     painter.text(t + Vec2::new(7.0, -7.0), egui::Align2::LEFT_BOTTOM, format!("{}", i + 1), egui::FontId::proportional(12.0), col);
                 }
             }
-            Geo::Tracker { pos, sizes, .. } => {
+            Geo::Tracker { pos, sizes, offsets, .. } => {
                 let node = doc.node(id);
-                for (i, c) in pos.iter().enumerate() {
-                    let Some(c) = *c else { continue };
+                for (i, point) in pos.iter().enumerate() {
+                    let Some(point) = *point else { continue };
                     let [pattern, search] = sizes[i];
+                    let c = point + offsets[i];
                     // The tracked path: the position at every keyed frame.
                     let p = node.map(|n| ops::params_with_defaults(&n.op, &n.params)).unwrap_or_default();
                     let (raw, scores) = (&p[TRACK_PARAMS[i]], &p[format!("track{}_score", i + 1)]);
@@ -756,7 +765,7 @@ impl Overlays {
                             }
                         }
                     }
-                    let hot_track = hot == Some(Part::Track(i));
+                    let hot_track = hot == Some(Part::Track(i)) || hot == Some(Part::TrackOffset(i));
                     let col = if hot_track { HOT } else { HANDLE };
                     let sbox = square(xf, c, search);
                     let mut ring = sbox.to_vec();
@@ -770,8 +779,12 @@ impl Overlays {
                             painter.rect(Rect::from_center_size(q, Vec2::splat(6.0)), 1.0, fill, outline, egui::StrokeKind::Middle);
                         }
                     }
-                    let center = xf.screen(c);
-                    crosshair(painter, center, 5.0, Stroke::new(1.0, col));
+                    if offsets[i] != Vec2::ZERO {
+                        // The point the track reports, tied to the feature it follows.
+                        painter.add(Shape::dashed_line(&[xf.screen(c), xf.screen(point)], Stroke::new(1.0, col), 4.0, 3.0));
+                        crosshair(painter, xf.screen(c), 3.0, Stroke::new(1.0, Color32::from_white_alpha(150)));
+                    }
+                    crosshair(painter, xf.screen(point), 5.0, Stroke::new(1.0, col));
                     let label = pbox[0] + Vec2::new(0.0, -3.0);
                     painter.text(label, egui::Align2::LEFT_BOTTOM, format!("{}", i + 1), egui::FontId::proportional(12.0), col);
                 }
@@ -962,14 +975,18 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
             }
             _ => {}
         },
-        Geo::Tracker { names, pos, sizes } => match drag.part {
+        Geo::Tracker { names, pos, sizes, offsets } => match drag.part {
+            Part::TrackOffset(i) => {
+                let o = offsets[i] + if shift { constrain(delta) } else { delta };
+                doc.set_param(&id, &format!("track{}_offset", i + 1), json!([o.x, o.y]));
+            }
             Part::Track(i) => {
                 let Some(c) = pos.get(i).copied().flatten() else { return };
                 let q = c + if shift { constrain(delta) } else { delta };
                 doc.edit_param(&id, TRACK_PARAMS[i], frame, json!([q.x, q.y]));
             }
             Part::TrackBox { i, search: is_search } => {
-                let Some(c) = pos.get(i).copied().flatten() else { return };
+                let Some(c) = pos.get(i).copied().flatten().map(|p| p + offsets[i]) else { return };
                 let [pattern, search] = sizes[i];
                 // Symmetric about the track: the corner follows the pointer.
                 let d = (p - c).abs();
@@ -1032,7 +1049,7 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
 
 fn cursor(part: Part) -> CursorIcon {
     match part {
-        Part::Point | Part::Move | Part::Vertex(_) | Part::Tangent { .. } | Part::Pull(_) | Part::Track(_) | Part::Corner { .. } => CursorIcon::Move,
+        Part::Point | Part::Move | Part::Vertex(_) | Part::Tangent { .. } | Part::Pull(_) | Part::Track(_) | Part::TrackOffset(_) | Part::Corner { .. } => CursorIcon::Move,
         Part::TrackBox { .. } => CursorIcon::ResizeNwSe,
         Part::Edge(..) => CursorIcon::Crosshair,
         Part::Size { x: true, y: true } => CursorIcon::ResizeNwSe,
@@ -1170,6 +1187,14 @@ mod tests {
         let part = gesture(&mut Overlays::default(), &mut d, Pos2::new(170.0, 70.0), Pos2::new(172.0, 72.0), 1, shift);
         assert_eq!(part, Some(Part::TrackBox { i: 1, search: false }));
         assert_eq!(track::box_sizes(&d.node("n").unwrap().params)[..2], [[24.0, 60.0], [24.0, 40.0]]);
+        // Ctrl-dragging a box moves it away from its point: the offset. Its
+        // corners and inside then follow the box.
+        let ctrl = Mods { command: true, ..Mods::default() };
+        let part = gesture(&mut Overlays::default(), &mut d, Pos2::new(50.0, 50.0), Pos2::new(60.0, 45.0), 1, ctrl);
+        assert_eq!(part, Some(Part::TrackOffset(0)));
+        assert_eq!((d.param("n", "track1_offset"), vec2(&d.param("n", "track1"))), (json!([10.0, -5.0]), Vec2::new(50.0, 50.0)));
+        assert_eq!(drag(&mut d, Pos2::new(62.0, 47.0), Pos2::new(64.0, 47.0), 1), Part::Track(0));
+        assert_eq!(vec2(&d.param("n", "track1")), Vec2::new(52.0, 50.0));
         // Tracks that are off have no handles.
         let mut d = doc("tracker", json!({ "track1_on": false, "track1": [50, 50] }));
         let missed = gesture(&mut Overlays::default(), &mut d, Pos2::new(50.0, 50.0), Pos2::new(60.0, 50.0), 1, Mods::default());
