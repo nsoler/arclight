@@ -16,9 +16,8 @@ done), `docs/help.md` (the in-app help) and
 - **Latest release: v0.9.46** (marked **Latest**;
   github.com/nsoler/arclight/releases/latest): Linux x86_64 tarball,
   macOS universal DMG, `arclt` wheels + sdist. Earlier: v0.9.33, v0.9.32,
-  v0.9.31, v0.9.30, v0.9.27, v0.9.11. A stray **draft** release on tag
-  v0.9.7 ("Arclight Compositor - ALPHA") was left alone (not ours); ask
-  the user before deleting.
+  v0.9.31, v0.9.30, v0.9.27, v0.9.11. The stray v0.9.7 draft release was deleted
+  at the user's request (the published v0.9.7 release and tag remain).
 - **Ask the user first:** how 0.9.34–0.9.46 test: node graph Tab /
   ⇧R / ⇧T / ⇧M; Area Light, falloff, radius, exposure, Look at; light
   handles and Look through selected (0); shadows and the shadow pass;
