@@ -16,6 +16,7 @@ mod properties;
 mod script_jobs;
 mod transport;
 mod viewer;
+mod viewport3d;
 mod worker;
 
 use arclight::bridge;

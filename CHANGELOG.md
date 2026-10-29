@@ -11,6 +11,22 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.3 — 2026-10-29
+
+- 3D viewport (in progress): the viewer's 3D mode will show the viewed
+  scene from a free camera with Blender-style navigation (middle-drag
+  orbit, Shift pan, scroll / Ctrl+middle zoom toward the pointer;
+  trackpad two-finger orbit, Shift pan, pinch / Ctrl zoom; optional
+  emulate-3-button Alt+left-drag), views on 1/3/7 (Ctrl: opposite), 5
+  perspective/ortho, 0 look through the scene camera (its film frame,
+  outside darkened), 2/4/6/8 orbit 15°, . / F frame, Home frame all, and
+  a navigation gizmo (axis ball; pan, zoom, camera, ortho buttons). It
+  draws the ground grid and axes, cards textured by the CPU renderer (on
+  a worker, at half or quarter resolution while the view moves), card
+  outlines, camera frusta and animated cameras' paths, point clouds and
+  locators. Scene objects now carry their node's name. (Shown in the
+  viewer once it's wired into the 2D / 3D toggle.)
+
 ## 0.9.2 — 2026-10-29
 
 - Groundwork for moving, rotating and scaling in the 3D view (no UI

@@ -250,7 +250,7 @@ mod tests {
     }
 
     fn card(img: Image, translate: [f64; 3], rotate: [f64; 3], size: [f64; 2]) -> Card {
-        Card { image: Arc::new(img), world: geom::trs(translate, rotate, [1.0; 3]), size }
+        Card { image: Arc::new(img), world: geom::trs(translate, rotate, [1.0; 3]), size, node: String::new() }
     }
 
     #[test]

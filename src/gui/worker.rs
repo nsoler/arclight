@@ -157,3 +157,111 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
         repaint.request_repaint();
     }
 }
+
+/// What the 3D viewport asks for: the scene a node shows at a frame, and
+/// optionally its cards rendered through a camera.
+pub struct SceneRequest {
+    pub graph: Arc<Graph>,
+    pub node: String,
+    pub frame: i64,
+    /// Render the cards through this camera into a frame this size.
+    pub render: Option<(arclight::geom::Camera, arclight::image::Size)>,
+    /// Where the render goes on screen (echoed back).
+    pub rect: Option<eframe::egui::Rect>,
+}
+
+pub struct SceneResponse {
+    pub node: String,
+    /// The node's scene: None when it shows none (an image node).
+    pub scene: Result<Option<Arc<arclight::scene::Scene>>, String>,
+    pub render: Option<Arc<Image>>,
+    pub rect: Option<eframe::egui::Rect>,
+    pub millis: f32,
+}
+
+/// The 3D viewport's own background thread (so orbiting doesn't queue
+/// behind 2D frames). Requests coalesce: only the newest is served.
+pub struct SceneWorker {
+    tx: Sender<SceneRequest>,
+    rx: Receiver<SceneResponse>,
+}
+
+impl SceneWorker {
+    pub fn spawn(repaint: eframe::egui::Context) -> SceneWorker {
+        let (req_tx, req_rx) = channel::<SceneRequest>();
+        let (resp_tx, resp_rx) = channel::<SceneResponse>();
+        std::thread::Builder::new()
+            .name("arclight-viewport".into())
+            .spawn(move || {
+                let mut eval = Evaluator::new();
+                while let Ok(mut req) = req_rx.recv() {
+                    while let Ok(newer) = req_rx.try_recv() {
+                        req = newer;
+                    }
+                    let t0 = Instant::now();
+                    let scene = scene_of(&mut eval, &req.graph, &req.node, req.frame);
+                    // Only the cards are textured; the viewport draws the rest.
+                    let render = match (&scene, &req.render) {
+                        (Ok(Some(s)), Some((cam, format))) if !s.cards.is_empty() => {
+                            let cards = arclight::scene::Scene { cards: s.cards.clone(), ..Default::default() };
+                            Some(Arc::new(arclight::render3d::render(&cards, cam, *format, 1, None)))
+                        }
+                        _ => None,
+                    };
+                    let resp = SceneResponse { node: req.node, scene, render, rect: req.rect, millis: t0.elapsed().as_secs_f32() * 1000.0 };
+                    if resp_tx.send(resp).is_err() {
+                        break;
+                    }
+                    repaint.request_repaint();
+                }
+            })
+            .expect("spawn viewport thread");
+        SceneWorker { tx: req_tx, rx: resp_rx }
+    }
+
+    pub fn request(&self, req: SceneRequest) {
+        let _ = self.tx.send(req);
+    }
+
+    pub fn poll(&self) -> Option<SceneResponse> {
+        self.rx.try_iter().last()
+    }
+}
+
+/// The scene node `id` shows at `frame`: its own output for 3D nodes, a
+/// Scanline Render's scene and camera inputs together, a Camera Tracker's
+/// solved camera and points; None for nodes that show no scene.
+pub fn scene_of(eval: &mut Evaluator, graph: &Graph, id: &str, frame: i64) -> Result<Option<Arc<arclight::scene::Scene>>, String> {
+    use arclight::scene::Scene;
+    let Some(node) = graph.node(id) else { return Ok(None) };
+    let ctx = EvalContext { frame, write_outputs: false };
+    let mut out_of = |src: &str| -> Result<Option<Arc<Scene>>, String> {
+        if src.is_empty() {
+            return Ok(None);
+        }
+        Ok(eval.evaluate(graph, src, &ctx).map_err(|e| e.to_string())?.scene.clone())
+    };
+    if arclight::ops::output_kind(&node.op) == arclight::ops::Kind::Scene {
+        return out_of(id);
+    }
+    match node.op.as_str() {
+        "scanline_render" => {
+            let input = |i: usize| node.inputs.get(i).cloned().unwrap_or_default();
+            let mut all = Scene::default();
+            for src in [input(0), input(1)] {
+                if let Some(s) = out_of(&src)? {
+                    all.extend(&s);
+                }
+            }
+            Ok(Some(Arc::new(all)))
+        }
+        "camera_tracker" => {
+            let Some(sol) = arclight::camtrack::Solution::from_params(&node.params) else { return Ok(Some(Arc::new(Scene::default()))) };
+            let mut s = Scene { points: sol.points(), ..Scene::default() };
+            s.cameras.extend(sol.camera(frame));
+            s.tag(id);
+            Ok(Some(Arc::new(s)))
+        }
+        _ => Ok(None),
+    }
+}

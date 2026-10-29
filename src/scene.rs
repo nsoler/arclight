@@ -18,6 +18,11 @@ pub struct Scene {
     pub cards: Vec<Card>,
     /// A point cloud (a camera tracker's), drawn as dots.
     pub points: Vec<Vec3>,
+    /// The node each camera and point came from, in the same order (filled
+    /// in by the graph after each node renders, see [`Scene::tag`]): the
+    /// 3D viewport selects objects by node.
+    pub camera_nodes: Vec<String>,
+    pub point_nodes: Vec<String>,
 }
 
 /// An image on a flat rectangle in 3D: `size` wide and high in its own
@@ -27,6 +32,8 @@ pub struct Card {
     pub image: Arc<Image>,
     pub world: Mat4,
     pub size: [f64; 2],
+    /// The Card node it came from ("" until tagged).
+    pub node: String,
 }
 
 impl Card {
@@ -41,9 +48,41 @@ impl Card {
 impl Scene {
     /// Everything in `self`, then everything in `other`.
     pub fn extend(&mut self, other: &Scene) {
+        self.fill_nodes();
         self.cameras.extend(other.cameras.iter().cloned());
         self.cards.extend(other.cards.iter().cloned());
         self.points.extend(other.points.iter().copied());
+        let mut other = other.clone();
+        other.fill_nodes();
+        self.camera_nodes.extend(other.camera_nodes);
+        self.point_nodes.extend(other.point_nodes);
+    }
+
+    /// Pad the node lists to the cameras and points ("" for unknown).
+    fn fill_nodes(&mut self) {
+        self.camera_nodes.resize(self.cameras.len(), String::new());
+        self.point_nodes.resize(self.points.len(), String::new());
+    }
+
+    /// Mark everything not yet marked as coming from node `id` (what a
+    /// node made itself; what it gathered from upstream is marked already).
+    pub fn tag(&mut self, id: &str) {
+        self.fill_nodes();
+        for n in self.camera_nodes.iter_mut().chain(self.point_nodes.iter_mut()).chain(self.cards.iter_mut().map(|c| &mut c.node)) {
+            if n.is_empty() {
+                *n = id.to_string();
+            }
+        }
+    }
+
+    /// The node camera `i` came from ("" when unknown).
+    pub fn camera_node(&self, i: usize) -> &str {
+        self.camera_nodes.get(i).map_or("", String::as_str)
+    }
+
+    /// The node point `i` came from ("" when unknown).
+    pub fn point_node(&self, i: usize) -> &str {
+        self.point_nodes.get(i).map_or("", String::as_str)
     }
 
     /// "1 camera, 2 cards", for the viewer and stats.
@@ -88,7 +127,7 @@ pub fn card(p: &Value, image: &Image) -> Card {
         Some(_) => numbers::<2>(&p["size"], 1.0),
         None => [1.0, image.format.height as f64 / image.format.width.max(1) as f64],
     };
-    Card { image: Arc::new(image.clone()), world: placement(p), size }
+    Card { image: Arc::new(image.clone()), world: placement(p), size, node: String::new() }
 }
 
 #[cfg(test)]
@@ -136,6 +175,7 @@ mod tests {
         let s = out.scene.as_ref().unwrap();
         assert_eq!((s.describe(), s.cameras[0].focal), ("1 camera, 1 card".to_string(), 50.0));
         assert_eq!(s.cards[0].size, [1.0, 0.5], "the plate's aspect");
+        assert_eq!((s.camera_node(0), s.cards[0].node.as_str()), ("cam", "card1"), "each object knows its node");
         assert_eq!(s.cards[0].image.format, crate::image::Size { width: 64, height: 32 });
         assert!(out.window().is_empty() && out.bytes() > 64 * 32 * 16, "no pixels, but the card's texture counts");
         let e = ev.evaluate(&g, "bad", &ctx).err().unwrap();

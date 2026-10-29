@@ -54,6 +54,19 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
     → local → free; typed values win over the pointer; Ctrl snaps 1 /
     15° / 0.1; `cancel()`, `Trs::reset`, `describe()` for the header.
     Parented params handled. 8 tests.
+  - **0.9.3 (3DWorker steps a + c):** `src/gui/viewport3d.rs`: `ViewCam`
+    (center, yaw, pitch, distance, ortho, auto_ortho; orbit / pan /
+    zoom_at / view_axis / frame, pure and tested), `Projector`
+    (perspective, ortho, `Projector::through(scene camera, format,
+    rect)` for look-through; project / ray / segment / pixels_per_unit /
+    view_dir), `Viewport3d::ui(ui, rect, resp, doc, frame, blocked)` plus
+    `projector()` / `has_scene()` / `object_world(node)` for the gizmos.
+    Scene objects carry their node ids (`Card.node`,
+    `Scene.camera_nodes` / `point_nodes`, `Scene::tag`, run by the graph
+    after eval). worker.rs: `SceneWorker` renders only the cards through
+    the view (ortho as a 1000×-away long lens), at half / quarter
+    resolution while moving. Not yet: picking / selection (step b),
+    viewport-camera persistence, point error coloring.
 - **Next work, in order:** (1) anything from the Mac test; (2) the
   hand checks listed below for session 8's GUI work; (3) **M9, the 3D
   viewport** (fully specified in `docs/phase-4-plan.md`, "Milestone 9 in
@@ -111,7 +124,7 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.2**.
+  in the same commit as the change. Current: **0.9.3**.
 - ~23,200 lines of Rust + Python. Tests: 134 library + 10 CLI + 46 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

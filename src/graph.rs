@@ -368,8 +368,12 @@ impl Evaluator {
                     inputs.push(Some(img));
                 }
             }
-            let out = ops::eval(&node.op, &params, &inputs, ctx)
+            let mut out = ops::eval(&node.op, &params, &inputs, ctx)
                 .map_err(|e| node_err(id, format!("{e:#}")))?;
+            // What a node made in 3D carries its name (for the viewport).
+            if let Some(scene) = out.scene.as_mut() {
+                Arc::make_mut(scene).tag(id);
+            }
             self.cache.insert(id.clone(), (key, Arc::new(out)));
         }
         Ok(())
