@@ -64,9 +64,12 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   `com.github.nsoler.arclight`, .icns via iconutil from both SVGs, the
   example clip, the CLI), signs ad hoc, and makes a UDZO DMG with an
   Applications link. `.github/workflows/macos.yml` runs it on macos-14
-  (workflow_dispatch or `v*` tags) and uploads the DMG. **Not yet run on
-  a Mac**: the first workflow run is the real test (expect to fix small
-  things). No Developer ID signing / notarization (needs a paid Apple
+  (workflow_dispatch or `v*` tags) and uploads the DMG. Run 40825211063
+  (third try; fixes: no `…` right after a `$var` under macOS bash 3.2,
+  no `$([[ … ]] && …)` in assignments under `set -e`) passed tests on the
+  runner and produced `Arclight-0.1.0-arm64.dmg` (15.5 MB; checked: arm64
+  Mach-O GUI + CLI, .icns, Info.plist, signature, example clip). The GUI
+  hasn't been opened on a real Mac yet: that's the next check. No Developer ID signing / notarization (needs a paid Apple
   account); ffmpeg not bundled (GPL builds; Homebrew instead).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
