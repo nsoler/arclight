@@ -137,6 +137,29 @@ pub struct Graph {
     /// Group boxes in the node editor, back to front.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub backdrops: Vec<Backdrop>,
+    /// How the GUI's views were left (the 3D viewport's camera), saved with
+    /// the project but not part of it (see [`ViewState`]).
+    #[serde(default, skip_serializing_if = "ViewState::is_empty")]
+    pub view: ViewState,
+}
+
+/// View settings saved with a project that aren't part of its content:
+/// they always compare equal, so changing them is no edit (no undo step,
+/// no unsaved-changes mark) and undo leaves them alone.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ViewState(pub serde_json::Map<String, Value>);
+
+impl PartialEq for ViewState {
+    fn eq(&self, _: &ViewState) -> bool {
+        true
+    }
+}
+
+impl ViewState {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 /// An evaluation failure, attributed to a node where possible.
@@ -423,6 +446,16 @@ fn node_key(node: &NodeSpec, params: &Value, keys: &HashMap<&str, u64>, ctx: &Ev
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn view_state_saves_but_is_never_a_difference() {
+        let mut g = Graph::default();
+        assert!(!g.to_json().contains("\"view\""), "nothing saved when empty");
+        let before = g.clone();
+        g.view.0.insert("viewport3d".into(), serde_json::json!({ "yaw": 30 }));
+        assert_eq!(g, before, "not a change");
+        let back: Graph = serde_json::from_str(&g.to_json()).unwrap();
+        assert_eq!(back.view.0["viewport3d"]["yaw"], 30);
+    }
     use super::*;
 
     #[test]
