@@ -1,6 +1,6 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-29, end of session 10 (herdr multi-agent sessions:
+Last updated 2026-10-29, during session 11 (herdr multi-agent sessions:
 one master + workers; see "Several agent sessions" below). Read this,
 then `README.md` (user-facing features, file format, shortcuts,
 scripting, the "3D view" section), `docs/phase-4-plan.md` (3D plan: M1–M11
@@ -9,26 +9,53 @@ done, M12 lights and M13 particles specified), `docs/help.md` (the in-app help) 
 
 ## Start here (next session)
 
-- **State:** version **0.9.33** on branch **`wip-ns-3dwork`** (commit
-  the 0.9.33 commit), merged to `main`; the tree is clean and
-  both workers (mathwiz, worker3d) are idle. The local build
-  (`target/release`) is 0.9.33, so the Omarchy launcher entry runs 0.9.33. (The Python `.so`
-  in `python/` is older; rebuild with `python/build.sh` if needed.)
+- **State:** version **0.9.40** on branch **`wip-ns-3dwork`**, merged to
+  `main`. **M12 (lights) and M13 (particles) are in progress**; the user
+  asked to **test, commit, merge and release only once both are done**
+  (no releases in between). The local build (`target/release`) is still
+  **0.9.33** (the last release); rebuild before the user tests.
 - **Latest release: v0.9.33** (marked **Latest**;
   github.com/nsoler/arclight/releases/latest): Linux x86_64 tarball,
-  macOS universal DMG `Arclight-0.9.33-universal.dmg`, `arclt` wheels +
-  sdist. Earlier this session: v0.9.32, v0.9.31, v0.9.30 (Latest before it), v0.9.27,
-  v0.9.11. A stray **draft** release on tag v0.9.7 ("Arclight Compositor
-  - ALPHA") was left alone (not ours); ask the user before deleting.
-- **Ask the user first:** (00) Merge Swap A / B, Mask channel / Invert, the centered playback strip and the node graph Fit button (0.9.33); (0) whether `musicmen.MP4` now reads and plays
-  through Read / Media In from the GUI (0.9.32); (1) whether the file-dialog fix (0.9.31) holds
-  when navigating folders in the portal picker (the worker could only
-  check that the picker stays up without a Not Responding dialog);
-  (2) how 0.9.30 / 0.9.31 behave: Fit to project, Project Settings, the
-  3D camera setup on wires, the 3D ● badge, the bigger node browser;
-  (3) the Mac DMG on the M4 Pro.
-- **Then:** M12 lights, then M13 particles (both specified in
-  `docs/phase-4-plan.md`); see "Next work, in order" below.
+  macOS universal DMG, `arclt` wheels + sdist. Earlier: v0.9.32, v0.9.31,
+  v0.9.30, v0.9.27, v0.9.11. A stray **draft** release on tag v0.9.7
+  ("Arclight Compositor - ALPHA") was left alone (not ours); ask the
+  user before deleting.
+- **M12 status (3DWorker):** done (a) Area Light, falloff, radius,
+  exposure / enabled, look at (0.9.35); (b) 3D view handles + Look
+  through selected (0.9.37); (d) shadows + shadow pass (0.9.40); engine
+  for (c) Light 2D by MathWiz (0.9.38). **Remaining:** (c) the Light 2D
+  node + viewer handles on `light2d.rs` (3DWorker, in progress at this
+  update: ops.rs, gui/overlay.rs, gui/viewer.rs, gui/properties.rs,
+  README, help); (e) MCP / Python check (`create_node` types,
+  `scene_objects` lists lights), README rows, help text.
+- **M13 status (MathWiz):** engine `particles.rs` (0.9.36) and render
+  engine `particles_render.rs` (0.9.39) committed. Node plan approved:
+  a lazy `ParticleStream` riding in `Scene.particles` (only consumers
+  simulate), `ops::Kind::Particles`, nodes in NEW `src/particle_nodes.rs`
+  (Particle Emitter with geometry / mask inputs; modifier nodes Gravity,
+  Wind, Turbulence, Attractor, Vortex, Bounce, Kill, Speed Limit;
+  Particle Render: points / sprites / objects; Particles 2D), per-frame
+  param sampling via an Evaluator snapshot (keys, links, expressions
+  work at every frame), Scanline Render growable inputs (`ops::port`,
+  doc.rs keeps one spare port), particles drawn as dots in the viewport
+  (capped). **Order:** (A) `particle_nodes.rs` alone (in progress at
+  this update, uncommitted in the tree with its lib.rs line); (B) hooks
+  in graph.rs, scene.rs, render3d.rs, gui/doc.rs, gui/node_editor.rs,
+  gui/viewport3d.rs (while 3DWorker is in ops.rs), then ops.rs hooks
+  after the Light 2D node is committed; (C) MCP `particles(node, frame)`
+  + Python, help / README.
+- **After M12 + M13:** rebuild locally, full tests on a clean copy,
+  release (tarball + universal DMG + wheels, `--latest`), then ask the
+  user to test everything since 0.9.33 (node graph Tab / ⇧R / ⇧T / ⇧M,
+  area lights, light handles, look through, shadows, Light 2D,
+  particles).
+- **Still unanswered from earlier:** whether `musicmen.MP4` plays from
+  the GUI (0.9.32), the file-dialog fix when navigating folders (0.9.31),
+  0.9.30 features (Fit to project, Project Settings, 3D setup), 0.9.33
+  (Merge swap, mask channel, centered transport, Fit), and the Mac DMG.
+- **Constructors:** use `scene::Model::new(mesh, world, material)`
+  (+ `.flags(params)`) and `scene::Card::new(image, world, size)`, not
+  struct literals.
 - **Release tips learned in session 10:** create releases with
   `--latest` (user wants /releases/latest to work); GitHub's macOS arm64
   runners sometimes aren't acquired ("capacity constraints", the job
