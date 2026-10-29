@@ -1,6 +1,6 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-28 (end of session 5). Read this, then `README.md`
+Last updated 2026-10-28 (end of session 6). Read this, then `README.md`
 (user-facing features, file format, shortcuts, scripting) and
 `docs/spec-coverage.md` (what the planning docs ask for vs. what exists).
 
@@ -16,8 +16,19 @@ Last updated 2026-10-28 (end of session 5). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~13,300 lines of Rust + Python. Tests: 71 library + 10 CLI + 34 GUI
+- ~14,400 lines of Rust + Python. Tests: 71 library + 10 CLI + 34 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
+- **Release build (end of session 6):** `cargo build --release --workspace`
+  and `python/build.sh` were run at the final commit, so
+  `target/release/arclight-gui` (GUI), `target/release/arclight` (CLI /
+  MCP server), `target/release/libarclight_plugin_example.so` and
+  `python/arclt/_arclt.abi3.so` are current. Run the GUI with
+  `./target/release/arclight-gui [project.json]`. The user asked for the
+  build to try the session's work by hand; these were only exercised
+  headlessly (tests / screenshots), so they're the things to check:
+  node-graph insert-into-wire, shake-to-disconnect, minimap, wiring a
+  Merge's inputs; viewer box select / Ctrl+A / transform box on Roto and
+  Polygon; the data-window outline, overscan and Format field.
   Clippy is clean apart from two old style lints (`Graph::from_str` name,
   `chunks_exact_mut(4)` in media.rs).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
