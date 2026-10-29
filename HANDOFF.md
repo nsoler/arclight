@@ -69,7 +69,12 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   no `$([[ … ]] && …)` in assignments under `set -e`) passed tests on the
   runner and produced `Arclight-0.1.0-arm64.dmg` (15.5 MB; checked: arm64
   Mach-O GUI + CLI, .icns, Info.plist, signature, example clip). The GUI
-  hasn't been opened on a real Mac yet: that's the next check. No Developer ID signing / notarization (needs a paid Apple
+  hasn't been opened on a real Mac yet: that's the next check.
+- **Session 7, part 23** (user request): viewer toolbar color picker
+  (`Viewer::color_picker`, rightmost in `status`): swatch + R/G/B/A
+  (`{:>6.3}`, monospace, tinted labels); `Viewer::picked` is set while
+  hovering and re-read from each frame at the same pixel afterwards. The
+  old bottom-left hover readout (x, y, RGBA to 4 places) is kept. No Developer ID signing / notarization (needs a paid Apple
   account); ffmpeg not bundled (GPL builds; Homebrew instead).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2

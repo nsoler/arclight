@@ -8,8 +8,8 @@ use crate::overlay::{Overlays, Xf};
 use arclight::color;
 use arclight::image::{IRect, Image};
 use eframe::egui::{
-    self, Align2, Color32, ColorImage, FontId, Pos2, Rect, Sense, TextureHandle, TextureOptions,
-    Vec2,
+    self, Align2, Color32, ColorImage, FontId, Pos2, Rect, Sense, Stroke, TextureHandle,
+    TextureOptions, Vec2,
 };
 use rayon::prelude::*;
 use std::sync::Arc;
@@ -52,7 +52,20 @@ pub struct Viewer {
     /// The toolbar's status text width last frame, to tell whether it fits
     /// beside the controls or needs a row of its own.
     status_w: f32,
+    /// The pixel last under the pointer, for the toolbar's color picker:
+    /// position, value (linear, premultiplied) and color as displayed. When
+    /// the pointer leaves, the same position keeps being read from each new
+    /// frame, so it can be read at leisure (and follows playback).
+    picked: Option<Picked>,
     pub rect: Rect,
+}
+
+#[derive(Clone, Copy)]
+struct Picked {
+    x: i32,
+    y: i32,
+    px: [f32; 4],
+    shown: Color32,
 }
 
 impl Default for Viewer {
@@ -67,6 +80,7 @@ impl Default for Viewer {
             zoom: 1.0,
             pan: Vec2::ZERO,
             status_w: 0.0,
+            picked: None,
             fit_pending: true,
             overlays: Overlays::default(),
             rect: Rect::NOTHING,
@@ -182,6 +196,7 @@ impl Viewer {
             let (x, y) = (p.x.floor() as i32, p.y.floor() as i32);
             if self.region.contains(x, y) {
                 let px = img.at(x, y);
+                self.picked = Some(Picked { x, y, px, shown: Color32::BLACK });
                 let text = format!(
                     "x {:<5} y {:<5}   R {:.4}  G {:.4}  B {:.4}  A {:.4}",
                     x, y, px[0], px[1], px[2], px[3]
@@ -192,6 +207,14 @@ impl Viewer {
                 painter.rect_filled(r.expand(4.0), 3.0, Color32::from_black_alpha(160));
                 painter.galley(r.min, galley, Color32::from_gray(220));
             }
+        }
+        // The picker's pixel, read from this frame (also after the pointer
+        // left), shown as displayed: exposure applied, over black.
+        if let Some(p) = &mut self.picked {
+            p.px = img.at(p.x, p.y);
+            let gain = 2f32.powf(self.exposure);
+            let enc = |v: f32| (color::linear_to_srgb(v * gain).clamp(0.0, 1.0) * 255.0).round() as u8;
+            p.shown = Color32::from_rgb(enc(p.px[0]), enc(p.px[1]), enc(p.px[2]));
         }
         if let Some(err) = d.error {
             let pos = rect.left_top() + Vec2::new(8.0, 8.0);
@@ -234,6 +257,8 @@ impl Viewer {
     fn status(&mut self, ui: &mut egui::Ui, d: &Display<'_>) {
         self.status_w = ui
             .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.color_picker(ui);
+                ui.separator();
                 if let Some(img) = d.image {
                     ui.label(format!("{}x{}  ·  frame {}  ·  {:.1} ms", img.format.width, img.format.height, d.frame, d.millis));
                     let w = img.window();
@@ -254,6 +279,35 @@ impl Viewer {
                 ui.min_rect().width()
             })
             .inner;
+    }
+
+    /// The hovered pixel: a swatch as displayed, then its R, G, B and A
+    /// (linear, premultiplied, as the comp sees them). Laid out right to
+    /// left, so the swatch ends the toolbar. Fixed-width figures keep the
+    /// toolbar from shifting as values change.
+    fn color_picker(&self, ui: &mut egui::Ui) {
+        let p = self.picked;
+        let (rect, resp) = ui.allocate_exact_size(Vec2::new(26.0, 16.0), Sense::hover());
+        match p {
+            Some(p) => {
+                ui.painter().rect_filled(rect, 2.0, p.shown);
+                let [r, g, b] = [p.shown.r(), p.shown.g(), p.shown.b()];
+                resp.on_hover_text(format!(
+                    "Pixel {}, {}\nAs displayed: {r}, {g}, {b} (8-bit sRGB) · #{r:02X}{g:02X}{b:02X}\nValues: linear, premultiplied",
+                    p.x, p.y
+                ));
+            }
+            None => {
+                resp.on_hover_text("Hover over the image to read a pixel's color");
+            }
+        }
+        ui.painter().rect_stroke(rect, 2.0, Stroke::new(1.0, Color32::from_gray(110)), egui::StrokeKind::Outside);
+        let channels = [("A", Color32::from_gray(200)), ("B", Color32::from_rgb(110, 150, 255)), ("G", Color32::from_rgb(110, 210, 110)), ("R", Color32::from_rgb(240, 95, 90))];
+        for (i, (name, tint)) in channels.into_iter().enumerate() {
+            let text = p.map_or("  —   ".to_string(), |p| format!("{:>6.3}", p.px[3 - i]));
+            ui.label(egui::RichText::new(text).monospace().color(Color32::from_gray(225)));
+            ui.label(egui::RichText::new(name).monospace().strong().color(tint));
+        }
     }
 
     fn upload(&mut self, ctx: &egui::Context, img: &Arc<Image>) {
