@@ -993,6 +993,11 @@ Card here / Place locator; MCP/Python `place_on_points`), user request.
 ("Milestone 9 in detail": orbit/pan/dolly, look-through, ortho views,
 picking and shared selection, move/rotate/scale gizmos, point cloud and
 camera path); it's for a later session.
+**M10, 3D objects and render passes (AOVs), is specified** there too
+("Milestone 10 in detail": primitives, OBJ / glTF import, materials and
+lights; Scanline Render writes passes as image planes: depth, P, N, uv,
+motion, id, per-object mattes, lighting breakdown; a Shuffle node; EXR
+multi-layer out); later session, after M9.
 
 - 3D needs a scene system first: Camera (focal length, film back, transform,
   animatable), Card / geometry nodes, a Scene node, and a **scanline renderer**

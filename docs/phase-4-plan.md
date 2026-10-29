@@ -288,6 +288,10 @@ then poses of in-between frames by PnP and a final pass).
 9. **3D viewport (D5)**, specified below, and the remaining follow-ups
    (nodal solve, distortion solve, mask input, motion blur in Scanline
    Render).
+10. **3D objects and render passes (AOVs)**, specified below (added
+    2026-10-29, user request): geometry beyond cards (primitives and
+    imported meshes), simple lights and shading, and Scanline Render
+    writing render passes as image planes.
 
 ## Milestone 9 in detail: the 3D viewport
 
@@ -401,3 +405,98 @@ points, look-through; (b) picking and shared selection; (c) textured
 cards via the CPU renderer with resolution fallback; (d) move / rotate /
 scale gizmos with keys and undo; (e) camera path, error coloring, view
 cube, ortho views.
+
+## Milestone 10 in detail: 3D objects and render passes (AOVs)
+
+Specified 2026-10-29 at the user's request: when 3D objects come into a
+scene, Scanline Render can write **render passes**, also called AOVs
+(arbitrary output variables), so each part of the render can be graded
+and composited on its own. Built after M9 (the viewport shows objects
+and passes too), in a later session.
+
+**3D objects.**
+- **Primitives** (new nodes in the 3D category): Cube, Sphere,
+  Cylinder, Plane (subdivided), each with translate / rotate / scale like
+  Card, a size and segment counts, and an optional texture input.
+- **Read Geo:** imports meshes. OBJ first (with its MTL colors and
+  texture paths, UVs and normals); glTF 2.0 next (open, carries
+  hierarchy, materials and animation); Alembic later for animated caches.
+  Its own translate / rotate / scale on top of the file's.
+- **Scene data:** `Scene` gains `meshes: Vec<Mesh>` (positions, normals,
+  UVs, triangle indices, a world matrix, a material, a name and an
+  object ID); a Card becomes a two-triangle mesh internally, so one
+  render path draws both.
+- **Materials:** Unlit (the default, as cards render today), Lambert and
+  Phong/Blinn (color or texture, specular amount and roughness),
+  emission. **Lights** (new nodes, scenes like the rest): Ambient,
+  Directional, Point, Spot (color, intensity, falloff); without lights
+  the render stays unlit, so existing comps don't change.
+- **Per-object flags:** visible to the camera, holdout (renders nothing
+  but cuts out what is behind it, with alpha 0), casts / receives
+  shadows (shadows are a later follow-up), and included in mattes.
+
+**Render passes (AOVs).** Scanline Render gets a **Passes** list
+(checkboxes in the panel, a list param for scripts); each chosen pass
+becomes a named plane on the output image (D1's planes), next to RGBA,
+which is always the beauty:
+- `depth`: distance in front of the camera (exists today).
+- `P` (world position, xyz), `N` (world normal, xyz), `uv` (texture
+  coordinates): for relighting and texture work in 2D.
+- `motion` (screen-space vectors to the next frame, from the camera's
+  and objects' animation): for vector motion blur in 2D.
+- `id` (an object ID per pixel) and **mattes**: one `matte.<node>`
+  plane per object (or per chosen object), antialiased coverage, so any
+  object can be isolated without re-rendering.
+- Lighting breakdown, once lights exist: `diffuse`, `specular`,
+  `emission`, `ambient` (each an RGB plane), adding up to the beauty;
+  per-light passes (`light.<node>`) as an option.
+- Each pass is filtered the way it should be: coverage-weighted for
+  color passes and mattes, nearest sample for `depth`, `P`, `N`, `id`
+  (averaging positions across an edge would make values that don't
+  exist).
+
+**Using passes in the comp.**
+- A **Shuffle** node (Channel category): copies any plane (or one
+  component of it) into R, G, B or A, or back into a named plane, so a
+  pass can be graded, blurred or keyed with every existing node; plus a
+  **Remove planes** option to drop passes once they're used.
+- The Viewer's plane buttons (M1) already show any pass; vector passes
+  (`P`, `N`, `motion`) show as color.
+- **Write / Media Out:** EXR writes every plane with standard channel
+  names (`P.x`, `N.x`, `depth.Z`, `motion.u`, `matte.card1.A`, …), so
+  passes open as layers in other compositing and 3D apps; other formats
+  write the beauty only (as now).
+- A **Merge** option to combine by depth (zmerge, already a follow-up of
+  M4) uses the `depth` passes of both inputs.
+- The 3D viewport (M9) can show any pass of the scene it draws.
+
+**Built on what exists.** Image planes (M1) carry the passes through
+warps, crops and merges already. The renderer's per-sample hits (M4)
+gain the hit's triangle, barycentrics and material, from which every pass
+is computed in the same loop, so passes cost little when asked for and
+nothing when not. Mesh rendering needs a depth-sorted hit list per
+sample (as cards have now) plus per-row binning of triangles, or a BVH,
+for meshes with many triangles.
+
+**Tests.**
+- Primitives: a unit cube seen face-on renders a square of the right
+  size; normals point outward; UVs map a texture without seams on a
+  sphere's sides.
+- OBJ import: a known file's vertex count, bounds, UVs and normals; MTL
+  colors.
+- Passes: `P` at a pixel equals the unprojected `depth` there; `N` of a
+  plane equals the plane's normal; `motion` matches the camera's move
+  between frames; `matte.<node>` is 1 inside the object, 0 outside,
+  fractional on edges, and the mattes of non-overlapping objects add up
+  to the beauty's alpha; `diffuse + specular + emission + ambient`
+  equals the beauty.
+- A holdout cuts out what's behind it; mattes still work through it.
+- Shuffle: a pass copied to RGBA and back is unchanged; EXR round trip
+  of a multi-pass render keeps every plane and its names.
+- Performance: 1080p, a 100k-triangle mesh, beauty + 4 passes at 3×3
+  samples under a second on this machine.
+
+**Order inside M10:** (a) meshes in `Scene`, primitives, cards as
+meshes; (b) `P`, `N`, `uv`, `id`, mattes and Shuffle; (c) OBJ import;
+(d) materials, lights and the lighting passes; (e) `motion`, zmerge,
+glTF.
