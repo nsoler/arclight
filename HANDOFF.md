@@ -16,7 +16,7 @@ Last updated 2026-10-28 (end of session 5). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~13,300 lines of Rust + Python. Tests: 64 library + 10 CLI + 26 GUI
+- ~13,300 lines of Rust + Python. Tests: 64 library + 10 CLI + 27 GUI
   (`cargo test --release`) and 8 Python (see "Working tips"), all passing.
   Clippy is clean apart from two old style lints (`Graph::from_str` name,
   `chunks_exact_mut(4)` in media.rs).
@@ -30,8 +30,7 @@ Last updated 2026-10-28 (end of session 5). Read this, then `README.md`
   drawn through the tracker's output, match scores (weak frames on the
   path, timeline and panel), clear keys before/after, per-track box sizes,
   offset points. See "Progress log".
-- **Not done:** Phase 2 extras for Roto/Polygon (next), Phase 0.6
-  (bounding boxes / format), small UX debts, session-4 follow-ups,
+- **Not done:** Phase 0.6 (bounding boxes / format; next), small UX debts, session-4 follow-ups,
   Phase 4 (3D). See "Next steps".
 - Development is on Linux (Omarchy/Hyprland): use `sed -i` (not
   `sed -i ''`); ffmpeg/ffprobe are in `/usr/bin`. Hyprland tiles the window
@@ -65,31 +64,20 @@ steps": take them in this order, one milestone at a time (commit, push and
 fast-forward `main` after each, per the standing instruction above), and
 report back after a few milestones.
 
-1. **Phase 2 extras for Roto/Polygon** (next; medium). All in
-   `gui/overlay.rs` (`Geo::Points`, `Overlays::points` = the selected
-   vertex indices, `press` / `apply` / `draw`) plus shortcuts in
-   `gui/main.rs`:
-   - **Transform box:** with 2+ vertices selected, draw their bounding box
-     with corner/edge scale handles, a rotate handle and a center to move.
-     Apply through `anim::edit_all`-style edits at the current frame
-     (positions and, on splines, tangent offsets: rotate and scale those
-     too, but don't translate them). Shift = uniform scale / 15° snaps,
-     like the Transform gizmo.
-   - Tests in `overlay.rs` (`gesture` / `drag` helpers) for each.
-   - Motion blur for shapes: later.
-2. **Phase 0.6 bounding boxes / format** (large, foundational). Images are
+1. **Phase 0.6 bounding boxes / format** (large, foundational; next). Images are
    always full frame from origin 0,0. Overlays assume a node's input is
    the viewed image's size (Transform's pivot and layer frame, Tracker
    boxes, the Transform export's pivot), which is wrong for a smaller layer
    over a bigger background. Also matters for performance and Crop/Reformat
    semantics. Plan it before starting (data model in `image.rs`, every op,
    overlays, media I/O).
-3. **Small UX debts:** viewer toolbar overlap at narrow widths; no warning
+2. **Small UX debts:** viewer toolbar overlap at narrow widths; no warning
    when closing the window with unsaved changes; Corner Pin's default
    From/To is a 512 square (add "From = image corners"); per-track tracker
    box sizes and offsets are only editable in the viewer; no filtering when
-   Transform / Tracker output / Corner Pin shrink the image (aliasing).
-4. **Session-4 follow-ups** (small to medium):
+   Transform / Tracker output / Corner Pin shrink the image (aliasing);
+   shape motion blur.
+3. **Session-4 follow-ups** (small to medium):
    - Python plugins (custom ops written in Python): embed Python in the
      host via the `python/` crate, or run them out of process.
    - Plugin process isolation: a crashing native plugin kills the app.
@@ -98,7 +86,7 @@ report back after a few milestones.
    - Not planned: OpenFX hosting (large; its own project), licensing (the
      docs wanted another product's scheme copied; declined), `import_nuke`
      (originality rule).
-5. **Phase 4: 3D** — plan separately (see below). A 3D camera tracker
+4. **Phase 4: 3D** — plan separately (see below). A 3D camera tracker
    would build on the 2D tracker.
 
 ## Session 4: automation, plugins, Python
@@ -268,6 +256,15 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   selection when Shift was held, else empty). Left-drag no longer pans
   with a shape selected; middle-drag does. ⌘A → `select_all_points`
   (`gui/main.rs` shortcuts, skipped while a text field has focus).
+- **Session 6, part 2**: transform box for selected vertices (2+).
+  `sel_box` (selected vertices' bounds padded by `BOX_PAD` screen points,
+  so handles don't sit on vertices) and `sel_box_handles`;
+  `Part::SelBox(BoxHandle::{Move, Rotate, Scale { x, y }})`. Hit order:
+  tangents, vertices, box handles, curve edges (insert), inside the box
+  (move). `apply` maps each selected vertex through one function (move /
+  scale about the box center / rotate about it via `Drag::pivot`, the new
+  field `turn` now uses) and its tangent offsets through the same map's
+  linear part. The box re-fits the vertices as they change.
 
 ## Architecture in one page
 

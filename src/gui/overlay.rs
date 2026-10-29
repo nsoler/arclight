@@ -110,8 +110,46 @@ enum Part {
     /// A selection rectangle over a point list's vertices, dragged from
     /// empty space.
     Marquee,
+    /// The transform box around two or more selected vertices.
+    SelBox(BoxHandle),
     /// Corner `i` of a corner pin's To quad, or of its From quad.
     Corner { i: usize, from: bool },
+}
+
+/// A handle of the selected vertices' transform box.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum BoxHandle {
+    /// Inside the box: move the vertices.
+    Move,
+    /// The stem above the top edge: turn them about the box center.
+    Rotate,
+    /// A corner (`x` and `y` both ±1) or an edge (one of them 0): scale
+    /// about the box center.
+    Scale { x: i8, y: i8 },
+}
+
+/// Gap between the selected vertices and their transform box, in screen
+/// points, so the box's handles don't sit on the vertices.
+const BOX_PAD: f32 = 12.0;
+
+/// The transform box around selected vertices `sel` of `pts`, in image
+/// pixels (padded), or `None` with fewer than two selected.
+fn sel_box(xf: &Xf, pts: &[Vec2], sel: &[usize]) -> Option<Rect> {
+    let mut chosen = sel.iter().filter_map(|&i| pts.get(i));
+    let first = *chosen.next()?;
+    chosen.next()?;
+    let r = sel.iter().filter_map(|&i| pts.get(i)).fold(Rect::from_min_max(first.to_pos2(), first.to_pos2()), |r, p| r.union(Rect::from_min_max(p.to_pos2(), p.to_pos2())));
+    Some(r.expand(BOX_PAD / xf.zoom))
+}
+
+/// The transform box's scale handles (screen position, handle) and the tip
+/// of its rotation stem.
+fn sel_box_handles(xf: &Xf, r: Rect) -> (Vec<(Pos2, BoxHandle)>, Pos2) {
+    let c = r.center();
+    let at = |x: i8, y: i8| xf.screen(Vec2::new(c.x + x as f32 * r.width() / 2.0, c.y + y as f32 * r.height() / 2.0));
+    let sides = [(-1, -1), (1, -1), (1, 1), (-1, 1), (0, -1), (1, 0), (0, 1), (-1, 0)];
+    let handles = sides.iter().map(|&(x, y)| (at(x, y), BoxHandle::Scale { x, y })).collect();
+    (handles, at(0, -1) - Vec2::new(0.0, STEM))
 }
 
 /// The selected node's overlay, resolved at the current frame.
@@ -167,6 +205,8 @@ struct Drag {
     xf: Xf,
     /// Pointer now, in image pixels.
     now: Vec2,
+    /// What rotation turns about.
+    pivot: Vec2,
 }
 
 #[derive(Default)]
@@ -458,6 +498,16 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
             if let Some(i) = nearest.filter(|&i| s[i].distance(p) < GRAB) {
                 return Some(Part::Vertex(i));
             }
+            let sbox = sel_box(xf, pts, sel);
+            if let Some(r) = sbox {
+                let (handles, stem) = sel_box_handles(xf, r);
+                if stem.distance(p) < GRAB {
+                    return Some(Part::SelBox(BoxHandle::Rotate));
+                }
+                if let Some(&(_, h)) = handles.iter().find(|(q, _)| q.distance(p) < GRAB) {
+                    return Some(Part::SelBox(h));
+                }
+            }
             if s.len() < 2 {
                 return None;
             }
@@ -473,6 +523,8 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
                 .filter(|&(.., d)| d < GRAB * 0.8)
                 .min_by(|a, b| a.2.total_cmp(&b.2))
                 .map(|(i, t, _)| Part::Edge(i, t))
+                // Anywhere else inside the transform box moves the selection.
+                .or_else(|| sbox.filter(|r| r.contains(xf.image(p).to_pos2())).map(|_| Part::SelBox(BoxHandle::Move)))
         }
     }
 }
@@ -604,8 +656,12 @@ impl Overlays {
         // Inserting changed the geometry: start from the new one.
         let Some(g) = geo(doc, &id, frame, size) else { return };
         let start = xf.image(o);
-        let d = start - g.pivot();
-        self.drag = Some(Drag { node: id, part, start, geo: g, angle: d.y.atan2(d.x), turned: 0.0, xf: *xf, now: start });
+        let pivot = match (&g, part) {
+            (Geo::Points { pts, .. }, Part::SelBox(_)) => sel_box(xf, pts, &self.points).map_or(Vec2::ZERO, |r| r.center().to_vec2()),
+            _ => g.pivot(),
+        };
+        let d = start - pivot;
+        self.drag = Some(Drag { node: id, part, start, geo: g, angle: d.y.atan2(d.x), turned: 0.0, xf: *xf, now: start, pivot });
     }
 
     fn drag_to(&mut self, doc: &mut Doc, frame: i64, p: Vec2, mods: Mods) {
@@ -845,6 +901,21 @@ impl Overlays {
                         painter.circle(tip, 3.5, col, outline);
                     }
                 }
+                // The transform box, while no box selection is being drawn.
+                if let (Some(r), false) = (sel_box(xf, &pts, self.selection(doc)), self.drag.as_ref().is_some_and(|d| d.part == Part::Marquee)) {
+                    let corners = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()].map(|q| xf.screen(q.to_vec2()));
+                    let mut ring = corners.to_vec();
+                    ring.push(corners[0]);
+                    painter.add(Shape::dashed_line(&ring, Stroke::new(1.0, color(Part::SelBox(BoxHandle::Move), Color32::from_white_alpha(170))), 5.0, 4.0));
+                    let (handles, stem) = sel_box_handles(xf, r);
+                    let top = xf.screen(Vec2::new(r.center().x, r.top()));
+                    painter.line_segment([top, stem], Stroke::new(1.0, Color32::from_white_alpha(170)));
+                    painter.circle(stem, 4.5, color(Part::SelBox(BoxHandle::Rotate), HANDLE), outline);
+                    for (q, h) in handles {
+                        painter.rect(Rect::from_center_size(q, Vec2::splat(6.0)), 1.0, color(Part::SelBox(h), HANDLE), outline, egui::StrokeKind::Middle);
+                    }
+                    crosshair(painter, xf.screen(r.center().to_vec2()), 5.0, Stroke::new(1.0, Color32::from_white_alpha(170)));
+                }
                 for (i, &p) in s.iter().enumerate() {
                     let selected = self.points_node == doc.selected && self.points.contains(&i);
                     let fill = if selected { HOT } else if hot == Some(Part::Vertex(i)) { HANDLE } else { Color32::from_black_alpha(160) };
@@ -886,7 +957,7 @@ fn split_spline(v: &[f64], i: usize, t: f32) -> Vec<f64> {
 /// Rotation accumulated over `drag` with the pointer at `p`, in degrees.
 /// Wrapped steps are summed so crossing ±180° doesn't jump.
 fn turn(drag: &mut Drag, p: Vec2) -> f32 {
-    let d = p - drag.geo.pivot();
+    let d = p - drag.pivot;
     let a = d.y.atan2(d.x);
     let mut step = a - drag.angle;
     step -= std::f32::consts::TAU * (step / std::f32::consts::TAU).round();
@@ -1068,11 +1139,41 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
                 doc.edit_param(&id, param, frame, json!(v));
                 return;
             }
-            let d = if shift { constrain(delta) } else { delta };
+            // Where each selected vertex goes, and what its tangent offsets
+            // (a vector, so never moved) become.
+            let to: Box<dyn Fn(Vec2) -> Vec2> = match drag.part {
+                Part::SelBox(BoxHandle::Rotate) => {
+                    let deg = turn(drag, p);
+                    let deg = if shift { (deg / 15.0).round() * 15.0 } else { deg };
+                    let c = drag.pivot;
+                    Box::new(move |q| c + rot(q - c, deg))
+                }
+                Part::SelBox(BoxHandle::Scale { x, y }) => {
+                    let c = drag.pivot;
+                    let (from, now) = (drag.start - c, p - c);
+                    let ratio = |a: f32, b: f32| if a.abs() > 1e-3 { b / a } else { 1.0 };
+                    let f = if x != 0 && y != 0 && !shift {
+                        // Corners scale uniformly (Shift: each axis freely).
+                        Vec2::splat(ratio(from.length(), now.length()))
+                    } else {
+                        Vec2::new(if x != 0 { ratio(from.x, now.x) } else { 1.0 }, if y != 0 { ratio(from.y, now.y) } else { 1.0 })
+                    };
+                    Box::new(move |q| c + (q - c) * f)
+                }
+                _ => {
+                    let d = if shift { constrain(delta) } else { delta };
+                    Box::new(move |q| q + d)
+                }
+            };
+            let linear = |t: Vec2| to(t) - to(Vec2::ZERO);
             for &i in selected.iter().filter(|&&i| i < pts.len()) {
-                let q = pts[i] + d;
+                let q = to(pts[i]);
                 if let Some(c) = v.get_mut(i * stride..i * stride + 2) {
                     c.copy_from_slice(&[q.x as f64, q.y as f64]);
+                }
+                if let (Some(c), Some(&[hi, ho])) = (v.get_mut(i * stride + 2..i * stride + 6).filter(|_| stride == SPLINE), tan.get(i)) {
+                    let (hi, ho) = (linear(hi), linear(ho));
+                    c.copy_from_slice(&[hi.x, hi.y, ho.x, ho.y].map(|x| x as f64));
                 }
             }
             doc.edit_param(&id, param, frame, json!(v));
@@ -1084,6 +1185,14 @@ fn cursor(part: Part) -> CursorIcon {
     match part {
         Part::Point | Part::Move | Part::Vertex(_) | Part::Tangent { .. } | Part::Pull(_) | Part::Track(_) | Part::TrackOffset(_) | Part::Corner { .. } => CursorIcon::Move,
         Part::Marquee => CursorIcon::Crosshair,
+        Part::SelBox(BoxHandle::Move) => CursorIcon::Move,
+        Part::SelBox(BoxHandle::Rotate) => CursorIcon::Alias,
+        Part::SelBox(BoxHandle::Scale { x, y }) => match (x, y) {
+            (0, _) => CursorIcon::ResizeVertical,
+            (_, 0) => CursorIcon::ResizeHorizontal,
+            _ if x == y => CursorIcon::ResizeNwSe,
+            _ => CursorIcon::ResizeNeSw,
+        },
         Part::TrackBox { .. } => CursorIcon::ResizeNwSe,
         Part::Edge(..) => CursorIcon::Crosshair,
         Part::Size { x: true, y: true } => CursorIcon::ResizeNwSe,
@@ -1390,6 +1499,47 @@ mod tests {
 
     /// SQUARE as a spline: corners with horizontal handles 20 px long, so
     /// the top and bottom edges stay straight and the sides bulge out.
+    #[test]
+    fn the_transform_box_moves_scales_and_turns_the_selection() {
+        // All four selected: the box is the square (50, 25)–(150, 75)
+        // padded by BOX_PAD, around the center (100, 50).
+        let all = |d: &Doc| {
+            let mut ov = Overlays::default();
+            assert!(ov.select_all_points(d));
+            ov
+        };
+        let close = |a: Vec<f32>, b: [f32; 8]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-3);
+        let mut d = doc("polygon", json!({ "points": SQUARE }));
+        let part = gesture(&mut all(&d), &mut d, Pos2::new(100.0, 50.0), Pos2::new(110.0, 55.0), 1, Mods::default());
+        assert_eq!(part, Some(Part::SelBox(BoxHandle::Move)));
+        assert_eq!(points(&d, 1), [60.0, 30.0, 160.0, 30.0, 160.0, 80.0, 60.0, 80.0]);
+        // A corner doubles it about the center; an edge stretches one axis.
+        let corner = Pos2::new(150.0 + BOX_PAD, 75.0 + BOX_PAD);
+        let mut d = doc("polygon", json!({ "points": SQUARE }));
+        let part = gesture(&mut all(&d), &mut d, corner, Pos2::new(100.0, 50.0) + (corner - Pos2::new(100.0, 50.0)) * 2.0, 1, Mods::default());
+        assert_eq!(part, Some(Part::SelBox(BoxHandle::Scale { x: 1, y: 1 })));
+        assert!(close(points(&d, 1), [0.0, 0.0, 200.0, 0.0, 200.0, 100.0, 0.0, 100.0]), "{:?}", points(&d, 1));
+        let mut d = doc("polygon", json!({ "points": SQUARE }));
+        let edge = Pos2::new(150.0 + BOX_PAD, 50.0);
+        gesture(&mut all(&d), &mut d, edge, Pos2::new(100.0 + 2.0 * (50.0 + BOX_PAD), 70.0), 1, Mods::default());
+        assert!(close(points(&d, 1), [0.0, 25.0, 200.0, 25.0, 200.0, 75.0, 0.0, 75.0]), "{:?}", points(&d, 1));
+        // The stem above the box turns it 90° clockwise about the center.
+        let mut d = doc("polygon", json!({ "points": SQUARE }));
+        let stem = Pos2::new(100.0, 25.0 - BOX_PAD - STEM);
+        let part = gesture(&mut all(&d), &mut d, stem, Pos2::new(200.0, 50.0), 1, Mods::default());
+        assert_eq!(part, Some(Part::SelBox(BoxHandle::Rotate)));
+        assert!(close(points(&d, 1), [125.0, 0.0, 125.0, 100.0, 75.0, 100.0, 75.0, 0.0]), "{:?}", points(&d, 1));
+        // On a spline the tangents turn too, without moving.
+        let mut d = doc("roto", json!({ "points": spline_square() }));
+        gesture(&mut all(&d), &mut d, stem, Pos2::new(200.0, 50.0), 1, Mods::default());
+        let v = points(&d, 1);
+        assert!(v[2..6].iter().zip([0.0, -20.0, 0.0, 20.0]).all(|(a, b)| (a - b).abs() < 1e-3), "{:?}", &v[..6]);
+        // One vertex selected: no box.
+        let mut ov = Overlays::default();
+        select(&mut ov, &mut d, Pos2::new(125.0, 0.0));
+        assert!(matches!(hit(&geo(&d, "n", 1, SIZE).unwrap(), &XF, Pos2::new(100.0, 50.0), &ov.points), None | Some(Part::Edge(..))));
+    }
+
     fn spline_square() -> Vec<f32> {
         SQUARE.as_chunks::<2>().0.iter().enumerate().flat_map(|(i, &[x, y])| {
             // Clockwise: the top edge runs right, the bottom edge runs left.
