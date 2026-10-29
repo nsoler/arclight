@@ -140,6 +140,12 @@ done, M10 specified), `docs/help.md` (the in-app help) and
     `camtrack::Solution.point_rms` (`#[serde(default)]`),
     `Scene.point_errors` (negative = unknown). Also mathwiz's small
     `with_constraint` cleanup and the README "3D view" section.
+  - **0.9.8 (MathWiz): M11 (c)+(d), tripod solve engine.** `src/nodal.rs`:
+    `nodal::detect` (homographies over up to 8 frame pairs, nodal when
+    median transfer error <= 2*max_error and `K⁻¹HK` within 0.02 of a
+    rotation) and `nodal::solve` (chained rotations, rotation-only LM with
+    Schur, optional focal, points at `distance`). Returns `sfm::Solution`
+    (built in one place). Not wired into the tracker yet.
   - **0.9.7 (3DWorker): Help window.** `src/gui/help.rs`: `HELP =
     include_str!("../../docs/help.md")`, `Help {open, cache}` with
     `shortcuts(ctx)` (F1 opens, Esc closes and consumes the key; called
@@ -213,7 +219,7 @@ done, M10 specified), `docs/help.md` (the in-app help) and
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.7**.
+  in the same commit as the change. Current: **0.9.8**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

@@ -11,6 +11,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.8 — 2026-10-29
+
+- Tripod (nodal) solve, engine side (`src/nodal.rs`): detects a camera
+  that only turns (homographies between frames that are pure rotations,
+  `K⁻¹ H K`) and solves it: a rotation per frame about a fixed center,
+  the focal length optionally, and points on a sphere at a chosen
+  distance. Not yet wired into the Camera Tracker (M11 step e).
+
 ## 0.9.7 — 2026-10-29
 
 - Help → Arclight Help… (or F1) opens a help window: scrollable,

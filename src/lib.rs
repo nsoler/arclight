@@ -20,6 +20,7 @@ pub mod link;
 pub mod media;
 #[cfg(unix)]
 pub mod mcp;
+pub mod nodal;
 pub mod ops;
 pub mod plugin;
 pub mod render;
