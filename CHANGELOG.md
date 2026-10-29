@@ -11,6 +11,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.43 — 2026-10-29
+
+- MCP / Python: new **scene_objects** tool (`Node.scene_objects(frame)`)
+  lists what a 3D node's scene holds: cameras, cards and meshes with
+  their node and world position, and lights with type, position,
+  direction, color, intensity, decay, enabled, shadows and their type's
+  settings. `create_node` makes every light and Light 2D. Completes
+  **M12, lights** (0.9.35–0.9.43).
+
 ## 0.9.42 — 2026-10-29
 
 - New **Light 2D** node (Color category): spot, area, point or

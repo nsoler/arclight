@@ -24,6 +24,24 @@ class ArcltTest(unittest.TestCase):
     def setUp(self):
         arclt.new()
 
+    def test_lights_and_scene_objects(self):
+        target = arclt.create_node("locator", name="target", translate=[3, 0, 0])
+        key = arclt.create_node("light_spot", target, name="key", translate=[0, 4, 0], cone=30)
+        soft = arclt.create_node("light_area", name="soft", translate=[1, 2, 3], size=[2, 1])
+        box = arclt.create_node("cube", name="box")
+        scene = arclt.create_node("scene", key, soft, box)
+        objs = scene.scene_objects()
+        self.assertEqual([l["type"] for l in objs["lights"]], ["spot", "area"])
+        self.assertEqual(objs["lights"][0]["position"], [0.0, 4.0, 0.0])
+        self.assertAlmostEqual(objs["lights"][0]["direction"][0], 0.6, places=9)
+        self.assertEqual(objs["lights"][1]["size"], [2.0, 1.0])
+        self.assertEqual(objs["meshes"][0]["node"], "box")
+        plate = arclt.create_node("constant", width=32, height=16, color=[0.1, 0.1, 0.1, 1])
+        with self.assertRaises(arclt.ArcltError):
+            plate.scene_objects()
+        lamp = arclt.create_node("light_2d", plate, type="point", position=[16, 8], radius=40)
+        self.assertGreater(mean_rgba(lamp)[0], 0.1)
+
     def test_build_render_and_edit(self):
         bg = arclt.create_node("constant", name="bg", width=32, height=16, color=[0, 0, 1, 1])
         fg = arclt.create_node("constant", width=32, height=16, color=[1, 0, 0, 0.5])

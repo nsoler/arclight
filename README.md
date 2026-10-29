@@ -27,7 +27,7 @@ Python wheels). All releases: [Releases](https://github.com/nsoler/arclight/rele
 
 ## Build
 
-Version **0.9.42** (alpha); see `CHANGELOG.md`.
+Version **0.9.43** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -411,7 +411,7 @@ arclight mcp --attach [PID]               # drive the newest (or given) running 
 
 Register it with an MCP client, e.g. `claude mcp add arclight -- /path/to/arclight mcp`.
 Tools: `list_ops`, `describe_op`, `get_graph`, `describe_node`, `create_node`,
-`delete_node`, `rename_node`, `set_params`, `set_key`, `export_tracker` (a Tracker's motion as a keyed Transform or Corner Pin), `track_camera`, `camera_points`, `orient_camera`, `export_camera`, `place_on_points` (the Camera Tracker: solve, read the points, set origin/ground/scale, export, place cards and locators), `connect`, `disconnect`,
+`delete_node`, `rename_node`, `set_params`, `set_key`, `export_tracker` (a Tracker's motion as a keyed Transform or Corner Pin), `track_camera`, `camera_points`, `orient_camera`, `export_camera`, `place_on_points` (the Camera Tracker: solve, read the points, set origin/ground/scale, export, place cards and locators), `scene_objects` (what a 3D node's scene holds: cameras, cards, meshes, and lights with their type, world position and direction, color, intensity and settings), `connect`, `disconnect`,
 `set_project`, `render_frame` (stats, optional file and PNG preview the model can
 see), `render_output`, `probe_media`, `new_graph`, `load_graph`, `save_graph`,
 `undo`, `redo`, `list_plugins`, `list_instances`, `attach_instance`,
@@ -458,7 +458,12 @@ info), `graph`, `plugins`, `instances`, `detach`, and, when attached,
 `params`, `set`, `input(s)`, `set_input`, `outputs`, `rename`, `render`,
 `select`, `view`, `to_transform` / `to_corner_pin` (for a Tracker),
 `track_camera`, `camera_points`, `orient_camera`, `export_camera`,
-`place_on_points` (for a Camera Tracker).
+`place_on_points` (for a Camera Tracker), `scene_objects(frame=None)` (for
+any 3D node: its cameras, cards, meshes and lights, as the MCP tool lists
+them). Lights are nodes like any other: `create_node("light_spot",
+target, cone=30)` (a Locator, Card or Camera in its `look at` input aims
+it), `light_area`, `light_point`, `light_directional`, `light_ambient`;
+`light_2d` lights an image.
 Errors raise `arclt.ArcltError`. Tests:
 `PYTHONPATH=python python3 -m unittest discover -s python/tests`.
 

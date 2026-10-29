@@ -20,10 +20,10 @@ done, M12 lights and M13 particles specified), `docs/help.md` (the in-app help) 
   v0.9.30, v0.9.27, v0.9.11. A stray **draft** release on tag v0.9.7
   ("Arclight Compositor - ALPHA") was left alone (not ours); ask the
   user before deleting.
-- **M12 status (3DWorker):** done (a) Area Light, falloff, radius,
+- **M12 status (3DWorker): DONE (0.9.35–0.9.43).** Done (a) Area Light, falloff, radius,
   exposure / enabled, look at (0.9.35); (b) 3D view handles + Look
   through selected (0.9.37); (d) shadows + shadow pass (0.9.40); engine
-  for (c) Light 2D by MathWiz (0.9.38). (c) Light 2D node (0.9.42). **Remaining:** (e) MCP / Python check (`create_node` types,
+  for (c) Light 2D by MathWiz (0.9.38). (c) Light 2D node (0.9.42); (e) scene_objects for MCP / Python (0.9.43). Formerly remaining: (e) MCP / Python check (`create_node` types,
   `scene_objects` lists lights), README rows, help text.
 - **M13 status (MathWiz):** engine `particles.rs` (0.9.36) and render
   engine `particles_render.rs` (0.9.39) committed. Node plan approved:
@@ -190,7 +190,9 @@ done, M12 lights and M13 particles specified), `docs/help.md` (the in-app help) 
   `Geo::Box` [position, size, rotation]), overlay handles, properties
   shows the type's params. Note: `Normals::Pass` treats missing N.x / N.y
   planes as non-zero.
-  - Next version: **0.9.43**. Both workers (mathwiz, worker3d) were
+  0.9.43 (3DWorker) M12 (e): `Session::scene_objects`, MCP `scene_objects`,
+  Python `Node.scene_objects(frame)`. **M12 done.**
+  - Next version: **0.9.44**. Both workers (mathwiz, worker3d) were
     idle at the end of session 10; nothing uncommitted. (CHANGELOG has one entry per version.)
 - Mac: also ask whether anyone tried an Intel Mac. Mac-only bugs come
   first.
@@ -402,7 +404,7 @@ done, M12 lights and M13 particles specified), `docs/help.md` (the in-app help) 
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.42**.
+  in the same commit as the change. Current: **0.9.43**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

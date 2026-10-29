@@ -480,6 +480,61 @@ impl Session {
         Ok(self.eval.evaluate(&self.graph, id, &ctx)?)
     }
 
+    /// What node `id`'s 3D scene holds at `frame`: its cameras, cards,
+    /// meshes and lights (each with the node it came from and where it is in
+    /// the scene; lights also their type, direction, color and settings),
+    /// and how many points. Err if the node outputs an image, not a scene.
+    pub fn scene_objects(&mut self, id: &str, frame: i64) -> Result<Value> {
+        use crate::shade::LightKind;
+        let img = self.render(id, frame)?;
+        let scene = img.scene.as_ref().ok_or_else(|| anyhow!("'{id}' outputs an image, not a 3D scene"))?;
+        let origin = |m: &crate::geom::Mat4| -> [f64; 3] { crate::geom::transform_point(m, &crate::geom::Vec3::zeros()).into() };
+        let facing = |m: &crate::geom::Mat4| -> [f64; 3] { (m.fixed_view::<3, 3>(0, 0) * -crate::geom::Vec3::z()).try_normalize(1e-12).unwrap_or_else(|| -crate::geom::Vec3::z()).into() };
+        let cameras: Vec<Value> = scene.cameras.iter().enumerate().map(|(i, c)| json!({"node": scene.camera_node(i), "position": origin(&c.world), "direction": facing(&c.world), "focal": c.focal})).collect();
+        let cards: Vec<Value> = scene.cards.iter().map(|c| json!({"node": c.node, "position": origin(&c.world), "size": c.size, "casts_shadows": c.casts_shadows})).collect();
+        let meshes: Vec<Value> = scene
+            .meshes
+            .iter()
+            .map(|m| {
+                let bounds = m.bounds().map(|(lo, hi)| [<[f64; 3]>::from(lo), hi.into()]);
+                json!({"node": m.node, "name": m.name, "position": origin(&m.world), "bounds": bounds, "holdout": m.holdout, "casts_shadows": m.casts_shadows, "receives_shadows": m.receives_shadows})
+            })
+            .collect();
+        let lights: Vec<Value> = scene
+            .lights
+            .iter()
+            .map(|l| {
+                let mut v = json!({
+                    "node": l.node, "position": <[f64; 3]>::from(l.position()), "direction": <[f64; 3]>::from(l.direction()),
+                    "color": l.color, "intensity": l.intensity, "decay": l.decay, "enabled": l.enabled, "shadows": l.shadows,
+                });
+                v["type"] = json!(match l.kind {
+                    LightKind::Ambient => "ambient",
+                    LightKind::Directional => "directional",
+                    LightKind::Point => "point",
+                    LightKind::Spot { cone, penumbra, falloff } => {
+                        v["cone"] = json!(cone);
+                        v["penumbra"] = json!(penumbra);
+                        v["falloff"] = json!(falloff);
+                        "spot"
+                    }
+                    LightKind::Area { size, disk, two_sided, samples } => {
+                        v["size"] = json!(size);
+                        v["shape"] = json!(if disk { "disk" } else { "rectangle" });
+                        v["two_sided"] = json!(two_sided);
+                        v["quality"] = json!(samples);
+                        "area"
+                    }
+                });
+                if l.radius > 0.0 {
+                    v["radius"] = json!(l.radius);
+                }
+                v
+            })
+            .collect();
+        Ok(json!({"node": id, "frame": frame, "cameras": cameras, "cards": cards, "meshes": meshes, "lights": lights, "points": scene.points.len()}))
+    }
+
     /// Render node `id` at `frame` and write it to `path` (EXR keeps float;
     /// other formats are 8-bit sRGB).
     pub fn render_to_file(&mut self, id: &str, frame: i64, path: &Path) -> Result<Arc<Image>> {

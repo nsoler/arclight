@@ -274,6 +274,9 @@ selected object.
   casts, where its image is mostly opaque); turn one off to keep, say, a
   background plate from shadowing the scene. Shadows are off until you
   turn them on, so older projects render as before.
+- Scripts and AI agents (MCP, Python) make lights with **create_node**
+  (`light_spot`, `light_area`, …) and list them, with where they are and
+  which way they point, with **scene_objects**.
 - Wire lights into a Scene like objects. Without any lights, everything
   renders unlit (as cards always do); with lights, Lambert and Blinn objects
   are lit and unlit ones and cards keep their color.

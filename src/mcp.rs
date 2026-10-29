@@ -85,6 +85,8 @@ static TOOLS: &[Tool] = &[
             "mode": {"type": "string", "enum": ["auto", "free move", "free", "tripod"], "description": "'free move' (or 'free') for a camera that travels; 'tripod' for one that only turns about its center; 'auto' picks tripod when the camera only turns. Default: the node's Solve setting (auto). Kept on the node."},
             "distance": {"type": "number", "description": "How far from the camera a tripod solve puts its points (they have no depth). Default: the node's Tripod distance (10). Kept on the node."}
         }, "required": ["node"]}),
+    tool!("scene_objects", "What a 3D node's scene holds at 'frame' (default 1): cameras, cards and meshes (node, world position; meshes their bounds) and lights (node, type ambient/directional/point/spot/area, world position and direction, color, intensity, enabled, shadows, and the type's own settings: cone/penumbra/falloff, size/shape/two_sided/quality, radius), and the number of points. Lights are made with create_node (light_ambient, light_directional, light_point, light_spot, light_area; light_2d lights an image in 2D).",
+        {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}}, "required": ["node"]}),
     tool!("camera_points", "A Camera Tracker's solved points: index, position in 3D, and where each lands in the frame at 'frame' (default: the first solved frame), to pick points for place_on_points or orient_camera; also the solve's mode ('free move' or 'tripod') and the frames placed by PnP.",
         {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}}, "required": ["node"]}),
     tool!("orient_camera", "Move a Camera Tracker's solve (arbitrary until then): 'ground' (3+ point indices) becomes level at height 0 with the camera above, 'origin' (a point index) goes to 0,0,0, and 'scale' ({points: [a, b], distance}) sets the distance between two points. Applied in that order; any may be left out.",
@@ -297,6 +299,7 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
             out
         }
         "track_camera" => s.track_camera(str_arg(args, "node")?, opt_str(args, "mode"), args.get("distance").and_then(Value::as_f64), progress)?,
+        "scene_objects" => s.scene_objects(str_arg(args, "node")?, args.get("frame").and_then(Value::as_i64).unwrap_or(1))?,
         "camera_points" => {
             let sol = s.camera_solution(str_arg(args, "node")?)?;
             let frame = args.get("frame").and_then(Value::as_i64).or_else(|| sol.frames.first().copied()).unwrap_or(1);
@@ -853,6 +856,45 @@ mod tests {
         let bad = call(&mut s, "set_params", json!({"node": "comp", "params": {"operation": "explode"}}));
         assert_eq!(bad["isError"], true);
         assert!(bad["content"][0]["text"].as_str().unwrap().contains("not a choice"));
+    }
+
+    /// Lights made with create_node, listed by scene_objects with their type
+    /// and world position; Light 2D lights an image.
+    #[test]
+    fn lights_are_created_and_listed() {
+        let mut s = Server::new(Session::default());
+        let ops = call(&mut s, "list_ops", json!({"category": "scene"}))["content"][0]["text"].to_string();
+        for op in ["light_ambient", "light_directional", "light_point", "light_spot", "light_area"] {
+            assert!(ops.contains(op), "{op} listed");
+        }
+        call(&mut s, "create_node", json!({"op": "locator", "name": "target", "params": {"translate": [3, 0, 0]}}));
+        call(&mut s, "create_node", json!({"op": "light_spot", "name": "key", "inputs": ["target"], "params": {"translate": [0, 4, 0], "cone": 30, "shadows": true}}));
+        call(&mut s, "create_node", json!({"op": "light_area", "name": "soft", "params": {"translate": [1, 2, 3], "size": [2, 1], "shape": "disk", "exposure": 1}}));
+        call(&mut s, "create_node", json!({"op": "light_ambient", "name": "fill", "params": {"intensity": 0.2}}));
+        call(&mut s, "create_node", json!({"op": "cube", "name": "box"}));
+        call(&mut s, "create_node", json!({"op": "scene", "name": "all", "inputs": ["key", "soft", "fill", "box"]}));
+        let r = call(&mut s, "scene_objects", json!({"node": "all"}));
+        assert_eq!(r["isError"], false, "{r}");
+        let o = &r["structuredContent"];
+        let lights = o["lights"].as_array().unwrap();
+        let types: Vec<&str> = lights.iter().map(|l| l["type"].as_str().unwrap()).collect();
+        assert_eq!(types, ["spot", "area", "ambient"]);
+        let key = &lights[0];
+        assert_eq!((key["node"].as_str(), key["position"].clone(), key["cone"].clone(), key["shadows"].clone()), (Some("key"), json!([0.0, 4.0, 0.0]), json!(30.0), json!(true)));
+        let d: Vec<f64> = key["direction"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+        assert!((d[0] - 0.6).abs() < 1e-9 && (d[1] + 0.8).abs() < 1e-9, "aims at the locator: {d:?}");
+        assert_eq!((lights[1]["position"].clone(), lights[1]["shape"].as_str(), lights[1]["intensity"].clone()), (json!([1.0, 2.0, 3.0]), Some("disk"), json!(2.0)));
+        assert_eq!(o["meshes"][0]["node"], "box");
+        assert_eq!(call(&mut s, "scene_objects", json!({"node": "fill"}))["structuredContent"]["lights"][0]["type"], "ambient");
+        // An image node has no scene.
+        call(&mut s, "create_node", json!({"op": "constant", "name": "plate", "params": {"width": 32, "height": 16, "color": [0.1, 0.1, 0.1, 1]}}));
+        assert_eq!(call(&mut s, "scene_objects", json!({"node": "plate"}))["isError"], true);
+        // Light 2D: a point light at a pixel brightens it.
+        call(&mut s, "create_node", json!({"op": "light_2d", "name": "lamp", "inputs": ["plate"], "params": {"type": "point", "position": [8, 8], "radius": 6}}));
+        let r = call(&mut s, "render_frame", json!({"node": "lamp"}));
+        assert_eq!(r["isError"], false, "{r}");
+        let img = s.session.render("lamp", 1).unwrap();
+        assert!(img.get(8, 8)[0] > 0.9 && (img.get(20, 8)[0] - 0.1).abs() < 1e-6);
     }
 
     #[test]

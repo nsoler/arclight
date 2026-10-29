@@ -121,6 +121,14 @@ class Node:
         and the ``pnp_frames``."""
         return _call("track_camera", node=self._name, mode=mode, distance=distance)
 
+    def scene_objects(self, frame: int | None = None) -> dict:
+        """What this 3D node's scene holds at ``frame``: ``cameras``,
+        ``cards``, ``meshes`` and ``lights`` (each with its ``node`` and
+        world ``position``; lights also ``type``, ``direction``, ``color``,
+        ``intensity``, ``enabled``, ``shadows`` and their type's settings),
+        and the number of ``points``."""
+        return _call("scene_objects", node=self._name, frame=frame)
+
     def camera_points(self, frame: int | None = None) -> list[dict]:
         """For a solved Camera Tracker: its points (``index``,
         ``position`` in 3D, ``frame_position`` in ``frame`` or None)."""

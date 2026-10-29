@@ -315,7 +315,7 @@ then poses of in-between frames by PnP and a final pass).
     only turns, which the solver refuses today ("the camera may only be
     turning, not moving"). Suggested before M10, since it makes the
     tracker work on more real shots.
-12. **Lights: area lights, lights in the 3D view, and 2D lights**,
+12. **Lights: area lights, lights in the 3D view, and 2D lights** — done in 0.9.35–0.9.43;
     specified below (added 2026-10-29, user request): builds on M10's
     lights (Ambient, Directional, Point, Spot) with Area lights, lights as
     objects the 3D view can select and move with G / R / S and gizmos, and
