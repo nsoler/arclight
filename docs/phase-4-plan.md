@@ -2,7 +2,7 @@
 
 Status: **agreed** (2026-10-29). The user chose the proposed option for
 D1–D4; D5 (viewport) and D6 (order) stand as proposed until milestone 9.
-Milestone 1 done. The work goes one milestone at a time, as in
+Milestones 1–2 done. The work goes one milestone at a time, as in
 `phase-0.6-plan.md`.
 
 ## Goal
@@ -198,7 +198,10 @@ then poses of in-between frames by PnP and a final pass).
    and named channels in and out; viewer shows a chosen plane; MCP /
    Python stats list planes. Tests: EXR round trip with depth; a
    transformed depth plane moves with its color; color ops keep it.
-2. **Camera maths and Lens Distort.** `src/geom.rs`: camera model
+2. **Done (2026-10-29).** **Camera maths and Lens Distort.** (As built:
+   the film back's width spans the frame's width, pixels square;
+   distortion r is in half frame widths; Lens Distort has undistort /
+   distort modes, K1, K2 and a center, a mask and mix.) `src/geom.rs`: camera model
    (world matrix from translate / rotate / scale, projection, film back
    ↔ focal ↔ field of view), Brown radial distortion and its inverse.
    Lens Distort op (2D, useful on its own). Tests: project / unproject

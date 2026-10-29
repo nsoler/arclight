@@ -9,6 +9,7 @@
 
 use crate::anim;
 use crate::color::{self, Rgba};
+use crate::geom;
 use crate::image::{IRect, Image, Size};
 use crate::media;
 use crate::shape::{self, FillRule, Pt};
@@ -564,6 +565,26 @@ pub static OPS: &[OpInfo] = &[
                the frame (with transparent bars); fill covers it and crops.",
     },
     OpInfo {
+        name: "lens_distort",
+        label: "Lens Distort",
+        category: Category::Transform,
+        inputs: &[IN, MASK],
+        params: &[
+            fixed!("mode", "Mode", ParamKind::Choice(&["undistort", "distort"]), "undistort"),
+            p!("k1", "K1", ParamKind::Float { min: -1.0, max: 1.0 }, 0.0),
+            p!("k2", "K2", ParamKind::Float { min: -1.0, max: 1.0 }, 0.0),
+            // Null: the frame's center.
+            p!("center", "Center", ParamKind::Vec2, Value::Null),
+            MIX,
+        ],
+        overlay: Overlay::None,
+        mask_base: Some(0),
+        help: "Removes or adds a lens's radial distortion (Brown model: a point r from the center, \
+               in half frame widths, moves to r × (1 + K1 r² + K2 r⁴)). Negative K1 is barrel \
+               distortion (wide lenses), positive pincushion. Undistort straightens a plate's lines \
+               (for tracking or adding CG); Distort, with the same values, bends CG to match the plate.",
+    },
+    OpInfo {
         name: "rectangle",
         label: "Rectangle",
         category: Category::Shape,
@@ -1093,6 +1114,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "keyer" => keyer(params, inputs),
         "crop" => crop(params, inputs),
         "resize" => resize(params, inputs),
+        "lens_distort" => lens_distort(params, inputs),
         "tracker" => tracker(params, inputs),
         "corner_pin" => corner_pin(params, inputs),
         "rectangle" | "ellipse" | "polygon" | "roto" => shape_op(op, params, inputs),
@@ -2024,6 +2046,69 @@ fn resize(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
 }
 
 // ---------------------------------------------------------------------------
+// Lens distort
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct LensDistort {
+    mode: String,
+    k1: f64,
+    k2: f64,
+    #[serde(default)]
+    center: Option<[f64; 2]>,
+}
+
+fn lens_distort(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
+    let p: LensDistort = parse(params, "lens_distort")?;
+    let src = input(inputs, 0, "lens_distort")?;
+    let f = src.format;
+    let center = p.center.unwrap_or([f.width as f64 / 2.0, f.height as f64 / 2.0]);
+    let lens = geom::Distortion::new(p.k1, p.k2, center, f);
+    let undistort = match p.mode.as_str() {
+        "undistort" => true,
+        "distort" => false,
+        other => bail!("unknown lens distort mode '{other}'"),
+    };
+    // Each output pixel reads where it came from: undistorting reads the
+    // plate where the lens put it. `geom` puts pixel centers at +0.5,
+    // sampling on integers.
+    let map = |to_plate: bool, [x, y]: [f32; 2]| {
+        let q = [x as f64 + 0.5, y as f64 + 0.5];
+        let r = if to_plate { Some(lens.distort(q)) } else { lens.undistort(q) };
+        r.map(|[u, v]| [(u - 0.5) as f32, (v - 0.5) as f32])
+    };
+    let inverse = |o: [f32; 2]| map(undistort, o);
+    let window = bent_window(src.window(), f, |q| map(!undistort, q));
+    let mut out = generate(f, window, |x, y| sample_warped(src, x, y, inverse));
+    out.carry_planes(src, |x, y| inverse([x as f32, y as f32]));
+    Ok(out)
+}
+
+/// [`moved_window`] for a map that bends straight lines (a lens), whose
+/// extremes needn't be at the corners: points along every edge, rounded out
+/// by a pixel.
+fn bent_window(window: IRect, format: Size, f: impl Fn([f32; 2]) -> Option<[f32; 2]>) -> IRect {
+    if window.is_empty() {
+        return window;
+    }
+    const STEPS: usize = 32;
+    let (x0, y0, x1, y1) = (window.x0 as f32 - 1.0, window.y0 as f32 - 1.0, window.x1 as f32, window.y1 as f32);
+    let mut bounds = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+    for i in 0..=STEPS {
+        let t = i as f32 / STEPS as f32;
+        let (x, y) = (x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+        for q in [[x, y0], [x, y1], [x0, y], [x1, y]] {
+            match f(q).filter(|p| p.iter().all(|v| v.is_finite())) {
+                Some([u, v]) => bounds = [bounds[0].min(u), bounds[1].min(v), bounds[2].max(u), bounds[3].max(v)],
+                None => return overscan(format),
+            }
+        }
+    }
+    let clamp = |v: f32| v.clamp(-1e8, 1e8) as i32;
+    IRect::new(clamp(bounds[0].floor()) - 1, clamp(bounds[1].floor()) - 1, clamp(bounds[2].ceil()) + 1, clamp(bounds[3].ceil()) + 1).intersect(&overscan(format))
+}
+
+// ---------------------------------------------------------------------------
 // Shapes
 // ---------------------------------------------------------------------------
 
@@ -2457,6 +2542,37 @@ mod tests {
         assert_eq!((blurred.plane_at("depth", 31, 11), blurred.plane_at("depth", 11, 11)), (5.0, 0.0));
         // A source drops nothing it never had; an op that can't know keeps none.
         assert!(run("constant", json!({}), &[]).planes.is_empty());
+    }
+
+    #[test]
+    fn lens_distort_moves_points_radially_and_undoes_itself() {
+        let ramp = generate(Size { width: 200, height: 100 }, IRect::new(0, 0, 200, 100), |x, y| [x as f32 / 200.0, y as f32 / 100.0, 0.5, 1.0]);
+        let run = |img: &Image, p: Value| eval("lens_distort", &p, &[Some(img), None], &CTX).unwrap();
+        // No distortion: the same pixels.
+        let same = run(&ramp, json!({ "k1": 0, "k2": 0 }));
+        assert_eq!(same.flat().pixels, ramp.pixels);
+        // A dot 90.5 px right of the center (r = 0.905 half-widths), with
+        // K1 = 0.1, lands at 100 + 90.5 × (1 + 0.1 × 0.905²) ≈ 197.9.
+        let dot = patch(200, 100, 190, 50, 1, 1, [1.0; 4]);
+        let bent = run(&dot, json!({ "mode": "distort", "k1": 0.1 }));
+        let brightest = (150..220).max_by(|&a, &b| bent.at(a, 50)[3].total_cmp(&bent.at(b, 50)[3])).unwrap();
+        assert!((197..=198).contains(&brightest), "{brightest}");
+        // Undistort after distort (and the other way) gets the image back,
+        // to within resampling, where it stays in the frame.
+        for k1 in [0.08, -0.08] {
+            let back = run(&run(&ramp, json!({ "mode": "distort", "k1": k1, "k2": 0.01 })), json!({ "mode": "undistort", "k1": k1, "k2": 0.01 }));
+            for (x, y) in [(100, 50), (30, 20), (170, 80), (10, 50)] {
+                let (a, b) = (back.at(x, y), ramp.at(x, y));
+                assert!((0..4).all(|c| (a[c] - b[c]).abs() < 0.01), "{k1} at {x},{y}: {a:?} vs {b:?}");
+            }
+        }
+        // Undistorting barrel distortion pushes the corners out: kept as
+        // overscan. Planes go along.
+        let mut plate = ramp.clone();
+        *plate.plane_mut("depth") = vec![3.0; 200 * 100];
+        let flat = run(&plate, json!({ "k1": -0.1 }));
+        assert!(flat.window().x0 < 0 && flat.window().x1 > 200, "{:?}", flat.window());
+        assert_eq!(flat.plane_at("depth", 100, 50), 3.0);
     }
 
     #[test]

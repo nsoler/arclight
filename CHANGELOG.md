@@ -7,6 +7,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.24 — 2026-10-29
+
+- Lens Distort node (Transform): removes or adds radial lens distortion
+  (Brown model, K1/K2 about a center, r in half frame widths); undistort
+  straightens a plate's lines, distort bends CG to match; keeps overscan,
+  carries planes, has mask/mix. Under it, `src/geom.rs`: 3D placement
+  (translate/rotate/scale, X-Y-Z degrees), a pinhole camera (focal, film
+  back, project/unproject to frame pixels), lens distortion and its
+  inverse. Adds the nalgebra dependency. Phase 4 milestone 2.
+
 ## 0.0.23 — 2026-10-29
 
 - Images can carry extra named planes beside RGBA (a 3D render's depth,

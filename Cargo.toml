@@ -1,6 +1,6 @@
 [package]
 name = "arclight"
-version = "0.0.23"
+version = "0.0.24"
 edition = "2021"
 description = "Arclight — an original node-graph image compositor"
 license = "MIT OR Apache-2.0"
@@ -34,6 +34,7 @@ rayon = "1"
 libloading = "0.9"
 eframe = { version = "0.37.0", optional = true }
 rfd = { version = "0.17.2", optional = true }
+nalgebra = "0.33"
 
 [profile.release]
 opt-level = 3

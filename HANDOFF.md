@@ -37,7 +37,7 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.23**.
+  in the same commit as the change. Current: **0.0.24**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -873,7 +873,19 @@ base's); motion blur keeps the middle sample's. EXR: `read_exr_planes`
 lists planes. Not checked by hand: the viewer's plane buttons (no 3D
 renderer yet; an EXR with Z shows them). Tests:
 `image::exr_keeps_extra_planes`, `ops::planes_follow_their_pixels`.
-Next: M2, `src/geom.rs` camera maths + Lens Distort op (adds nalgebra).
+**M2 done (v0.0.24): camera maths + Lens Distort.** `src/geom.rs`:
+right-handed, Y up, camera looks down -Z; `rotation(r)`/`angles(R)` (X
+then Y then Z, nalgebra `from_euler_angles`), `trs`, `transform_point`,
+`fov`/`focal_for_fov`, `Camera {focal, film_back, world, near, far}` with
+`view`/`focal_pixels`/`project` (-> pixel, depth)/`project_camera`/
+`unproject` (frame pixels, pixel i spans i..i+1, film width fits frame
+width), `Distortion {k1, k2, center, scale = w/2}` `distort`/`undistort`
+(Newton, None past the fold). ops.rs: `lens_distort` op, `bent_window`
+(samples the edges, since a lens map's extremes aren't at the corners).
+Tests: geom rotations/projection/distortion round trips,
+`ops::lens_distort_moves_points_radially_and_undoes_itself`.
+Next: M3 (scene data: `Output` enum Image|Scene, port kinds,
+Camera/Card/Scene nodes).
 
 - 3D needs a scene system first: Camera (focal length, film back, transform,
   animatable), Card / geometry nodes, a Scene node, and a **scanline renderer**

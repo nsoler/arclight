@@ -10,6 +10,7 @@ pub mod color;
 pub mod config;
 pub mod dpx;
 pub mod expr;
+pub mod geom;
 pub mod graph;
 pub mod image;
 pub mod link;
