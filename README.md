@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.0.20** (alpha); see `CHANGELOG.md`.
+Version **0.0.21** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -105,6 +105,10 @@ cargo run --release --bin arclight-gui -- comp.json    # open a graph
 Shortcuts: **Space** play/pause · **J/K/L** back/stop/forward · **←/→** step ·
 **⌥←/⌥→** previous/next keyframe · **Home/End** · **⌘Z/⇧⌘Z** undo/redo ·
 **⌘O/⌘S/⇧⌘S/⌘N** open/save/save as/new · **⇧E** node browser.
+
+**Help** lists these shortcuts; **Help → About Arclight Compositor…** shows
+the version and when the binary was built (UTC; `build.rs` stamps it, or
+uses `SOURCE_DATE_EPOCH` when set).
 
 **Keyframes.** Every numeric parameter has a ◇ next to its name: grey = static,
 orange outline = animated, filled = key on this frame. Click it to set or remove

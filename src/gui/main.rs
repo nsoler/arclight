@@ -117,6 +117,10 @@ struct App {
     scripts: ScriptJobs,
     /// Unsaved changes were dealt with; let the next close request through.
     closing: bool,
+    /// Help > About is open.
+    about: bool,
+    /// The window icon as a texture, for the About dialog (made on first use).
+    logo: Option<egui::TextureHandle>,
 }
 
 impl App {
@@ -152,6 +156,8 @@ impl App {
             bridge,
             scripts: ScriptJobs::default(),
             closing: false,
+            about: false,
+            logo: None,
         }
     }
 
@@ -575,6 +581,53 @@ impl App {
         }
     }
 
+    /// Help > About: logo, name, author, build time, version, OK.
+    fn about_dialog(&mut self, ctx: &egui::Context) {
+        if !self.about {
+            return;
+        }
+        let logo = self
+            .logo
+            .get_or_insert_with(|| {
+                let icon = app_icon();
+                let size = [icon.width as usize, icon.height as usize];
+                let img = egui::ColorImage::from_rgba_unmultiplied(size, &icon.rgba);
+                ctx.load_texture("about-logo", img, egui::TextureOptions::LINEAR)
+            })
+            .clone();
+        let modal = egui::Modal::new(egui::Id::unique("about")).show(ctx, |ui| {
+            ui.set_width(320.0);
+            ui.vertical_centered(|ui| {
+                ui.add_space(4.0);
+                // Square artwork; keep its proportions.
+                let side = 160.0;
+                let [w, h] = logo.size_vec2().into();
+                ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(side, side * h / w)));
+                ui.add_space(8.0);
+                ui.heading("Arclight Compositor");
+                ui.add_space(6.0);
+                egui::Grid::new("about-grid").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+                    ui.label(egui::RichText::new("Created by:").weak());
+                    ui.label("Nelson Soler");
+                    ui.end_row();
+                    ui.label(egui::RichText::new("Version:").weak());
+                    ui.label(concat!(env!("CARGO_PKG_VERSION"), " (alpha)"));
+                    ui.end_row();
+                    ui.label(egui::RichText::new("Built:").weak());
+                    ui.label(env!("ARCLIGHT_BUILD_TIME"));
+                    ui.end_row();
+                });
+                ui.add_space(10.0);
+                if ui.add(egui::Button::new("OK").min_size(egui::vec2(80.0, 0.0))).clicked() {
+                    ui.close();
+                }
+            });
+        });
+        if modal.should_close() {
+            self.about = false;
+        }
+    }
+
     fn update_title(&mut self, ctx: &egui::Context) {
         let name = self
             .doc
@@ -655,6 +708,11 @@ impl App {
                 }
             });
             ui.menu_button("Help", |ui| {
+                if ui.button("About Arclight Compositor…").clicked() {
+                    self.about = true;
+                    ui.close();
+                }
+                ui.separator();
                 ui.strong(concat!("Arclight ", env!("CARGO_PKG_VERSION"), " (alpha)"));
                 ui.separator();
                 ui.label(
@@ -722,6 +780,7 @@ impl eframe::App for App {
         self.maybe_screenshot(&ctx);
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
+        self.about_dialog(&ctx);
         egui::Panel::right("properties")
             .default_size(380.0)
             .min_size(280.0)

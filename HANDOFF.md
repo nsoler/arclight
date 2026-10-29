@@ -37,7 +37,7 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.20**.
+  in the same commit as the change. Current: **0.0.21**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -92,6 +92,16 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   runner and produced `Arclight-0.1.0-arm64.dmg` (15.5 MB; checked: arm64
   Mach-O GUI + CLI, .icns, Info.plist, signature, example clip). The GUI
   hasn't been opened on a real Mac yet: that's the next check.
+- **About dialog (0.0.21, worker wD:p3):** Help → About Arclight
+  Compositor… (`App::about_dialog`, `egui::Modal`; logo texture made on
+  first open from `app_icon()`; OK, Esc or a backdrop click close it).
+  `build.rs` (pure Rust) sets `ARCLIGHT_BUILD_TIME` ("YYYY-MM-DD HH:MM
+  UTC", Hinnant's `civil_from_days`; `SOURCE_DATE_EPOCH` wins). It reruns
+  only on build.rs, `SOURCE_DATE_EPOCH`, `.git/HEAD` and the current branch
+  ref (only paths that exist: in a `git worktree` `.git` is a file, and a
+  missing path would rerun every build), so the stamp is the time of the
+  first build after a commit. `rustc-env` is package-wide, so the lib sees
+  it too.
 - **Releases (session 7, user request):** GitHub releases, marked
   pre-release, tagged `v<version>`. First: `v0.0.19`. To make one at the
   current commit: tag it (`git tag -a v0.0.N -m "Arclight 0.0.N (alpha)"`)

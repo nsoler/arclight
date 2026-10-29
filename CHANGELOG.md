@@ -7,6 +7,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.21 — 2026-10-29
+
+- Help → About Arclight Compositor… opens a dialog with the logo, the
+  product name, Created by: Nelson Soler, the version and the build
+  date/time (UTC), and an OK button.
+
 ## 0.0.20 — 2026-10-29
 
 - Maths on links: a linked value can be multiplied and offset
