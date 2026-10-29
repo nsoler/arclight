@@ -43,6 +43,10 @@ pub(crate) struct Surface<'a> {
     pub wrap: bool,
     /// Shade by a light at the camera (the 3D viewport's solid view).
     pub headlight: bool,
+    /// Draws nothing, but hides what is behind it (alpha 0 there).
+    pub holdout: bool,
+    /// The node it came from: its object id and matte.
+    pub node: &'a str,
 }
 
 /// Card `card` as two triangles (top left, top right, bottom right; top
@@ -60,6 +64,8 @@ fn card_surface(card: &crate::scene::Card) -> Surface<'_> {
         wrap: false,
         v_up: false,
         headlight: false,
+        holdout: false,
+        node: &card.node,
     }
 }
 
@@ -79,6 +85,8 @@ fn model_surface(m: &crate::scene::Model) -> Surface<'_> {
         wrap: true,
         v_up: true,
         headlight: false,
+        holdout: m.holdout,
+        node: &m.node,
     }
 }
 
@@ -196,12 +204,14 @@ fn triangles(surfs: &[Surface], cam: &Camera, format: Size) -> Vec<Tri> {
     tris
 }
 
-/// One surface seen at one sample: how far, through which triangle, and
-/// its color there (premultiplied).
+/// One surface seen at one sample: how far, through which triangle, where
+/// on it (perspective-correct barycentric coordinates), and its color
+/// there (premultiplied).
 #[derive(Clone, Copy)]
 struct Hit {
     depth: f64,
     tri: usize,
+    bary: [f64; 3],
     color: Rgba,
 }
 
@@ -276,7 +286,59 @@ fn bin_rows(tris: &[Tri], height: usize) -> Vec<Vec<u32>> {
 /// frame and data outside the render are kept). The result has a `depth`
 /// plane over the frame.
 pub fn render(scene: &Scene, cam: &Camera, format: Size, samples: usize, background: Option<&Image>) -> Image {
-    let out = draw(&surfaces(scene), &scene.points, cam, format, samples);
+    render_passes(scene, cam, format, samples, background, Passes::DEPTH)
+}
+
+/// The extra planes a render writes besides the beauty (RGBA).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Passes {
+    /// `depth`: distance in front of the camera, 0 where nothing is.
+    pub depth: bool,
+    /// `P.x` `P.y` `P.z`: the scene position seen.
+    pub position: bool,
+    /// `N.x` `N.y` `N.z`: the surface's (unit) normal in the scene.
+    pub normal: bool,
+    /// `uv.u` `uv.v`: texture coordinates (v up, as OBJ has them; a card's
+    /// image runs from (0, 1) at its top left to (1, 0) at its bottom right).
+    pub uv: bool,
+    /// `id`: which object (1, 2, … by node, in the scene's order; 0 none).
+    pub id: bool,
+    /// `matte.<node>`: each object node's coverage.
+    pub mattes: bool,
+}
+
+impl Passes {
+    /// What a plain render writes.
+    pub const DEPTH: Passes = Passes { depth: true, position: false, normal: false, uv: false, id: false, mattes: false };
+    /// The pass names, as a Scanline Render's Passes list holds them.
+    pub const NAMES: [&'static str; 6] = ["depth", "P", "N", "uv", "id", "mattes"];
+
+    /// The passes named in `names` (others are ignored).
+    pub fn from_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Passes {
+        let mut p = Passes::default();
+        for n in names {
+            match n {
+                "depth" => p.depth = true,
+                "P" => p.position = true,
+                "N" => p.normal = true,
+                "uv" => p.uv = true,
+                "id" => p.id = true,
+                "mattes" => p.mattes = true,
+                _ => {}
+            }
+        }
+        p
+    }
+}
+
+/// [`render`] writing `passes`: depth, `P`, `N`, `uv` and `id` from the
+/// nearest surface any sample sees in each pixel (averaging them across an
+/// edge would make values no surface has), mattes as coverage (adding up,
+/// with the other objects', to the beauty's alpha). Over a background,
+/// where the render shows nothing each pass is the background's plane of
+/// that name, if it has one; its other planes are kept.
+pub fn render_passes(scene: &Scene, cam: &Camera, format: Size, samples: usize, background: Option<&Image>, passes: Passes) -> Image {
+    let out = draw_passes(&surfaces(scene), &scene.points, cam, format, samples, passes);
     match background {
         Some(bg) => over_background(out, bg),
         None => out,
@@ -295,86 +357,157 @@ pub fn render_preview(scene: &Scene, cam: &Camera, format: Size) -> Image {
 }
 
 /// Surfaces `surfs` and dots at `points` through `cam` into a frame of
-/// `format` (see [`render`]).
+/// `format`, with depth (see [`render`]).
 fn draw(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, samples: usize) -> Image {
+    draw_passes(surfs, points, cam, format, samples, Passes::DEPTH)
+}
+
+/// The object nodes of `surfs` in order (each once, unnamed ones left out):
+/// object ids are 1 + an index into it.
+fn object_nodes<'a>(surfs: &[Surface<'a>]) -> Vec<&'a str> {
+    let mut nodes: Vec<&str> = Vec::new();
+    for s in surfs {
+        if !s.node.is_empty() && !nodes.contains(&s.node) {
+            nodes.push(s.node);
+        }
+    }
+    nodes
+}
+
+/// [`draw`] writing `passes` (see [`render_passes`]).
+fn draw_passes(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes) -> Image {
     let n = samples.clamp(1, 16);
     let tris = triangles(surfs, cam, format);
     let rows = bin_rows(&tris, format.height);
     let eye = geom::transform_point(&cam.world, &Vec3::zeros());
     let frame = IRect::frame(format);
     let (w, h) = (format.width, format.height);
+    let nodes = object_nodes(surfs);
+    let object: Vec<Option<usize>> = surfs.iter().map(|s| nodes.iter().position(|n| *n == s.node)).collect();
+    // Per pixel, the extra channels: P (3), N (3), uv (2), id, then a matte
+    // per node, as asked for.
+    let (p_at, n_at, uv_at, id_at) = (0, 3 * passes.position as usize, 3 * (passes.position as usize + passes.normal as usize), 0);
+    let uv_end = uv_at + 2 * passes.uv as usize;
+    let id_at = if passes.id { uv_end } else { id_at };
+    let matte_at = uv_end + passes.id as usize;
+    let k = matte_at + if passes.mattes { nodes.len() } else { 0 };
     let mut color = vec![color::TRANSPARENT; w * h];
     let mut depth = vec![0.0f32; w * h];
-    color.par_chunks_mut(w.max(1)).zip(depth.par_chunks_mut(w.max(1))).enumerate().for_each(|(y, (crow, drow))| {
-        let row = &rows[y];
-        if row.is_empty() {
-            return;
-        }
-        let y = y as i32;
-        let mut hits: Vec<Hit> = Vec::new();
-        // The triangles under the current pixel: those whose columns
-        // reach it, added as the sweep passes their left edge.
-        let (mut next, mut here): (usize, Vec<u32>) = (0, Vec::new());
-        for (x, (out, dout)) in crow.iter_mut().zip(drow.iter_mut()).enumerate() {
-            let x = x as i32;
-            while next < row.len() && tris[row[next] as usize].bounds.x0 <= x {
-                here.push(row[next]);
-                next += 1;
+    // (At least one channel, so every row has its chunk.)
+    let stride = k.max(1);
+    let mut extra = vec![0.0f32; w * h * stride];
+    color
+        .par_chunks_mut(w.max(1))
+        .zip(depth.par_chunks_mut(w.max(1)))
+        .zip(extra.par_chunks_mut((w * stride).max(1)))
+        .enumerate()
+        .for_each(|(y, ((crow, drow), xrow))| {
+            let row = &rows[y];
+            if row.is_empty() {
+                return;
             }
-            here.retain(|&i| tris[i as usize].bounds.x1 > x);
-            if here.is_empty() {
-                continue;
-            }
-            let mut sum = [0.0f32; 4];
-            let mut nearest = f64::INFINITY;
-            for j in 0..n {
-                for i in 0..n {
-                    let q = [x as f64 + (i as f64 + 0.5) / n as f64, y as f64 + (j as f64 + 0.5) / n as f64];
-                    hits.clear();
-                    for &ti in &here {
-                        let t = &tris[ti as usize];
-                        let Some((d, bary)) = t.cover(q, cam.near, cam.far) else { continue };
-                        // One hit where two triangles of a surface meet.
-                        if hits.iter().any(|h| tris[h.tri].surf == t.surf && (h.depth - d).abs() <= 1e-9 * d) {
+            let y = y as i32;
+            let mut hits: Vec<Hit> = Vec::new();
+            let mut mattes = vec![0.0f32; nodes.len()];
+            // The triangles under the current pixel: those whose columns
+            // reach it, added as the sweep passes their left edge.
+            let (mut next, mut here): (usize, Vec<u32>) = (0, Vec::new());
+            for (x, (out, dout)) in crow.iter_mut().zip(drow.iter_mut()).enumerate() {
+                let xi = x as i32;
+                while next < row.len() && tris[row[next] as usize].bounds.x0 <= xi {
+                    here.push(row[next]);
+                    next += 1;
+                }
+                here.retain(|&i| tris[i as usize].bounds.x1 > xi);
+                if here.is_empty() {
+                    continue;
+                }
+                let mut sum = [0.0f32; 4];
+                // The nearest surface seen, for depth and the other
+                // nearest-sample passes.
+                let mut nearest: Option<Hit> = None;
+                mattes.iter_mut().for_each(|m| *m = 0.0);
+                for j in 0..n {
+                    for i in 0..n {
+                        let q = [xi as f64 + (i as f64 + 0.5) / n as f64, y as f64 + (j as f64 + 0.5) / n as f64];
+                        hits.clear();
+                        for &ti in &here {
+                            let t = &tris[ti as usize];
+                            let Some((d, bary)) = t.cover(q, cam.near, cam.far) else { continue };
+                            // One hit where two triangles of a surface meet.
+                            if hits.iter().any(|h| tris[h.tri].surf == t.surf && (h.depth - d).abs() <= 1e-9 * d) {
+                                continue;
+                            }
+                            let s = &surfs[t.surf];
+                            let mut color = shade(s, t.uv(&bary));
+                            if s.headlight {
+                                let at = |f: fn(&Vert) -> Vec3| t.v.iter().zip(&bary).map(|(v, b)| f(v) * *b).sum::<Vec3>();
+                                let (n, p) = (at(|v| v.n), at(|v| v.world));
+                                let facing = n.try_normalize(1e-300).zip((eye - p).try_normalize(1e-300)).map_or(1.0, |(n, v)| n.dot(&v).abs());
+                                let k = (0.25 + 0.75 * facing) as f32;
+                                (0..3).for_each(|c| color[c] *= k);
+                            }
+                            hits.push(Hit { depth: d, tri: ti as usize, bary, color });
+                        }
+                        if hits.is_empty() {
                             continue;
                         }
-                        let s = &surfs[t.surf];
-                        let mut color = shade(s, t.uv(&bary));
-                        if s.headlight {
-                            let at = |f: fn(&Vert) -> Vec3| t.v.iter().zip(&bary).map(|(v, b)| f(v) * *b).sum::<Vec3>();
-                            let (n, p) = (at(|v| v.n), at(|v| v.world));
-                            let facing = n.try_normalize(1e-300).zip((eye - p).try_normalize(1e-300)).map_or(1.0, |(n, v)| n.dot(&v).abs());
-                            let k = (0.25 + 0.75 * facing) as f32;
-                            (0..3).for_each(|c| color[c] *= k);
+                        hits.sort_by(|a, b| a.depth.total_cmp(&b.depth).then(a.tri.cmp(&b.tri)));
+                        // Front to back, premultiplied; a holdout takes its
+                        // share of what's left without adding to it.
+                        let mut acc = [0.0f32; 4];
+                        let mut held = 0.0f32;
+                        for hit in &hits {
+                            let surf = tris[hit.tri].surf;
+                            if hit.color[3] > 0.0 && nearest.is_none_or(|h| hit.depth < h.depth) {
+                                nearest = Some(*hit);
+                            }
+                            let k = 1.0 - acc[3] - held;
+                            if let Some(o) = object[surf].filter(|_| passes.mattes) {
+                                mattes[o] += hit.color[3] * k;
+                            }
+                            if surfs[surf].holdout {
+                                held += hit.color[3] * k;
+                            } else {
+                                (0..4).for_each(|c| acc[c] += hit.color[c] * k);
+                            }
+                            if acc[3] + held >= 1.0 {
+                                break;
+                            }
                         }
-                        hits.push(Hit { depth: d, tri: ti as usize, color });
+                        (0..4).for_each(|c| sum[c] += acc[c]);
                     }
-                    if hits.is_empty() {
-                        continue;
+                }
+                let norm = 1.0 / (n * n) as f32;
+                *out = sum.map(|v| v * norm);
+                let Some(hit) = nearest else { continue };
+                *dout = hit.depth as f32;
+                let px = &mut xrow[x * stride..x * stride + k];
+                let t = &tris[hit.tri];
+                let at = |f: fn(&Vert) -> Vec3| t.v.iter().zip(&hit.bary).map(|(v, b)| f(v) * *b).sum::<Vec3>();
+                if passes.position {
+                    let p = at(|v| v.world);
+                    px[p_at..p_at + 3].copy_from_slice(&[p.x as f32, p.y as f32, p.z as f32]);
+                }
+                if passes.normal {
+                    let nv = at(|v| v.n).try_normalize(1e-300).unwrap_or_else(Vec3::zeros);
+                    px[n_at..n_at + 3].copy_from_slice(&[nv.x as f32, nv.y as f32, nv.z as f32]);
+                }
+                if passes.uv {
+                    let uv = t.uv(&hit.bary);
+                    px[uv_at] = uv[0] as f32;
+                    px[uv_at + 1] = (1.0 - uv[1]) as f32;
+                }
+                if passes.id {
+                    px[id_at] = object[t.surf].map_or(0.0, |o| (o + 1) as f32);
+                }
+                if passes.mattes {
+                    for (o, m) in mattes.iter().enumerate() {
+                        px[matte_at + o] = m * norm;
                     }
-                    hits.sort_by(|a, b| a.depth.total_cmp(&b.depth).then(a.tri.cmp(&b.tri)));
-                    // Front to back, premultiplied.
-                    let mut acc = [0.0f32; 4];
-                    for hit in &hits {
-                        if hit.color[3] > 0.0 {
-                            nearest = nearest.min(hit.depth);
-                        }
-                        let k = 1.0 - acc[3];
-                        (0..4).for_each(|c| acc[c] += hit.color[c] * k);
-                        if acc[3] >= 1.0 {
-                            break;
-                        }
-                    }
-                    (0..4).for_each(|c| sum[c] += acc[c]);
                 }
             }
-            let norm = 1.0 / (n * n) as f32;
-            *out = sum.map(|v| v * norm);
-            if nearest.is_finite() {
-                *dout = nearest as f32;
-            }
-        }
-    });
+        });
     // Points: a one-pixel dot each, where nothing nearer is.
     for p in points {
         if let Some((q, d)) = cam.project(p, format) {
@@ -390,30 +523,65 @@ fn draw(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, samples:
     }
     let mut out = Image::blank(format, frame);
     out.pixels = color;
-    *out.plane_mut("depth") = depth;
+    if passes.depth {
+        *out.plane_mut("depth") = depth;
+    }
+    let mut plane = |name: String, c: usize| *out.plane_mut(&name) = (0..w * h).map(|i| extra[i * stride + c]).collect();
+    if passes.position {
+        ["x", "y", "z"].iter().enumerate().for_each(|(i, a)| plane(format!("P.{a}"), p_at + i));
+    }
+    if passes.normal {
+        ["x", "y", "z"].iter().enumerate().for_each(|(i, a)| plane(format!("N.{a}"), n_at + i));
+    }
+    if passes.uv {
+        plane("uv.u".into(), uv_at);
+        plane("uv.v".into(), uv_at + 1);
+    }
+    if passes.id {
+        plane("id".into(), id_at);
+    }
+    if passes.mattes {
+        nodes.iter().enumerate().for_each(|(o, node)| plane(format!("matte.{node}"), matte_at + o));
+    }
     out
 }
 
-/// `fg` (frame-sized, with depth) over `bg`: the union of both windows;
-/// where the render shows nothing, the background's depth (if it has one).
+/// `fg` (frame-sized) over `bg`: the union of both windows. Each of the
+/// render's planes, where it shows nothing (no depth there), is the
+/// background's plane of that name if it has one; the background's other
+/// planes are kept.
 fn over_background(fg: Image, bg: &Image) -> Image {
     let window = fg.window().union(&bg.window());
     let mut out = Image::blank(fg.format, window);
     let ww = window.width().max(1);
-    let fg_depth = fg.plane("depth").expect("rendered with depth");
-    let bg_depth = bg.plane("depth");
+    let xy = |i: usize| (window.x0 + (i % ww) as i32, window.y0 + (i / ww) as i32);
     out.pixels.par_iter_mut().enumerate().for_each(|(i, px)| {
-        let (x, y) = (window.x0 + (i % ww) as i32, window.y0 + (i / ww) as i32);
+        let (x, y) = xy(i);
         let (f, b) = (fg.at(x, y), bg.at(x, y));
         *px = std::array::from_fn(|c| f[c] + b[c] * (1.0 - f[3]));
     });
-    let mut d = vec![0.0f32; out.width * out.height];
-    d.par_iter_mut().enumerate().for_each(|(i, v)| {
-        let (x, y) = (window.x0 + (i % ww) as i32, window.y0 + (i / ww) as i32);
-        let near = fg.plane_value(fg_depth, x, y);
-        *v = if near != 0.0 { near } else { bg_depth.map_or(0.0, |p| bg.plane_value(p, x, y)) };
+    // Where the render saw a surface: it has depth there, or (without a
+    // depth pass) any alpha.
+    let fg_depth = fg.plane("depth");
+    let shows = |x: i32, y: i32| fg_depth.map_or(fg.at(x, y)[3] > 0.0, |d| fg.plane_value(d, x, y) != 0.0);
+    let names: Vec<String> = fg.planes.iter().chain(&bg.planes).map(|p| p.name.clone()).fold(Vec::new(), |mut v, n| {
+        if !v.contains(&n) {
+            v.push(n);
+        }
+        v
     });
-    *out.plane_mut("depth") = d;
+    for name in names {
+        let (f, b) = (fg.plane(&name), bg.plane(&name));
+        let mut d = vec![0.0f32; out.width * out.height];
+        d.par_iter_mut().enumerate().for_each(|(i, v)| {
+            let (x, y) = xy(i);
+            *v = match f {
+                Some(f) if shows(x, y) => fg.plane_value(f, x, y),
+                _ => b.map_or(0.0, |b| bg.plane_value(b, x, y)),
+            };
+        });
+        *out.plane_mut(&name) = d;
+    }
     out
 }
 
@@ -500,7 +668,7 @@ mod tests {
 
     /// A mesh from its corners and triangles, flat-shaded, in one color.
     fn mesh(positions: Vec<Vec3>, triangles: Vec<[u32; 3]>, world: Mat4, color: Rgba) -> Surface<'static> {
-        Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: Cow::Owned(Vec::new()), triangles: triangles.into(), color, texture: None, wrap: false, v_up: false, headlight: false }
+        Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: Cow::Owned(Vec::new()), triangles: triangles.into(), color, texture: None, wrap: false, v_up: false, headlight: false, holdout: false, node: "" }
     }
 
     /// A cube `s` across, centered on the origin, its faces wound
@@ -557,7 +725,7 @@ mod tests {
         let at = |i: usize, j: usize| (j * (n + 1) + i) as u32;
         let triangles: Vec<[u32; 3]> = (0..n).flat_map(|j| (0..n).flat_map(move |i| [[at(i, j), at(i, j + 1), at(i + 1, j + 1)], [at(i, j), at(i + 1, j + 1), at(i + 1, j)]])).collect();
         let world = geom::trs([0.0, 0.0, -5.0], [0.0; 3], [1.0; 3]);
-        let plane = Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: uvs.clone().into(), triangles: triangles.clone().into(), color: [1.0; 4], texture: Some(&img), wrap: false, v_up: false, headlight: false };
+        let plane = Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: uvs.clone().into(), triangles: triangles.clone().into(), color: [1.0; 4], texture: Some(&img), wrap: false, v_up: false, headlight: false, holdout: false, node: "" };
         let card = card_surface_of(&img, world);
         for samples in [1, 3] {
             let (a, b) = (draw(&[plane_ref(&plane)], &[], &camera(), FMT, samples), draw(&[card_surface(&card)], &[], &camera(), FMT, samples));
@@ -566,7 +734,7 @@ mod tests {
         }
         // Twice the coordinates, repeating: the checker twice over.
         let doubled: Vec<[f64; 2]> = uvs.iter().map(|uv| [uv[0] * 2.0, uv[1] * 2.0]).collect();
-        let tiled = Surface { world, positions: plane.positions.clone(), normals: Cow::Owned(Vec::new()), uvs: doubled.into(), triangles: triangles.into(), color: [1.0; 4], texture: Some(&img), wrap: true, v_up: false, headlight: false };
+        let tiled = Surface { world, positions: plane.positions.clone(), normals: Cow::Owned(Vec::new()), uvs: doubled.into(), triangles: triangles.into(), color: [1.0; 4], texture: Some(&img), wrap: true, v_up: false, headlight: false, holdout: false, node: "" };
         let out = draw(&[tiled], &[], &camera(), FMT, 1);
         assert!((0..32).all(|y| (0..32).all(|x| out.at(x, y) == out.at(x + 32, y))), "repeats across");
     }
@@ -578,7 +746,7 @@ mod tests {
 
     /// A borrowed copy of `s`.
     fn plane_ref<'a>(s: &'a Surface) -> Surface<'a> {
-        Surface { world: s.world, positions: Cow::Borrowed(&s.positions), normals: Cow::Borrowed(&s.normals), uvs: Cow::Borrowed(&s.uvs), triangles: Cow::Borrowed(&s.triangles), color: s.color, texture: s.texture, wrap: s.wrap, v_up: s.v_up, headlight: s.headlight }
+        Surface { world: s.world, positions: Cow::Borrowed(&s.positions), normals: Cow::Borrowed(&s.normals), uvs: Cow::Borrowed(&s.uvs), triangles: Cow::Borrowed(&s.triangles), color: s.color, texture: s.texture, wrap: s.wrap, v_up: s.v_up, headlight: s.headlight, holdout: s.holdout, node: s.node }
     }
 
     /// Primitives and Read Geo through the graph, each at 5 in front of the
@@ -670,6 +838,149 @@ mod tests {
         let front = crate::scene::Model { world: geom::trs([0.0, 0.0, -5.0], [0.0; 3], [1.0; 3]), ..sphere };
         let out = render(&Scene { meshes: vec![front], ..Scene::default() }, &camera(), FMT, 3, None);
         assert!(out.at(32, 16)[0] < 0.1 && out.at(32, 16)[3] > 0.999);
+    }
+
+    /// A model of primitive `op` from `params`, named `node`.
+    fn model(op: &str, params: serde_json::Value, node: &str) -> crate::scene::Model {
+        crate::scene::Model { node: node.into(), ..crate::scene::primitive_model(op, &params, None).unwrap() }
+    }
+
+    const ALL: Passes = Passes { depth: true, position: true, normal: true, uv: true, id: true, mattes: true };
+
+    #[test]
+    fn position_normal_uv_and_id_passes() {
+        use serde_json::json;
+        // A floor seen from above at an angle, a ball on it, and a card
+        // standing behind; through a camera that isn't at the origin.
+        let cam = Camera { focal: 18.0, world: geom::trs([0.5, 2.0, 3.0], [-25.0, 5.0, 0.0], [1.0; 3]), ..Camera::default() };
+        let floor = model("plane", json!({ "size": [20, 20], "rotate": [-90, 0, 0] }), "floor");
+        let ball = model("sphere", json!({ "radius": 0.7, "translate": [0, 0.7, -2] }), "ball");
+        let mut back = card(checker(), [0.0, 2.0, -6.0], [0.0; 3], [8.0, 4.0]);
+        back.node = "back".into();
+        let scene = Scene { cards: vec![back], meshes: vec![floor, ball], ..Scene::default() };
+        let out = render_passes(&scene, &cam, FMT, 1, None, ALL);
+        let names: Vec<&str> = out.planes.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["depth", "P.x", "P.y", "P.z", "N.x", "N.y", "N.z", "uv.u", "uv.v", "id", "matte.back", "matte.floor", "matte.ball"]);
+        let at = |n: &str, x: i32, y: i32| out.plane_at(n, x, y) as f64;
+        let p = |x: i32, y: i32| Vec3::new(at("P.x", x, y), at("P.y", x, y), at("P.z", x, y));
+        let nrm = |x: i32, y: i32| Vec3::new(at("N.x", x, y), at("N.y", x, y), at("N.z", x, y));
+        let mut seen = [0usize; 4];
+        for y in 0..32 {
+            for x in 0..64 {
+                let id = at("id", x, y) as usize;
+                seen[id] += 1;
+                if id == 0 {
+                    assert_eq!((at("depth", x, y), p(x, y)), (0.0, Vec3::zeros()), "nothing there");
+                    continue;
+                }
+                // P is the point at the pixel's depth along its ray (one
+                // sample, at the pixel's center).
+                let want = cam.unproject([x as f64 + 0.5, y as f64 + 0.5], at("depth", x, y), FMT);
+                assert!((p(x, y) - want).norm() < 1e-4 * want.norm().max(1.0), "({x}, {y}): {} vs {want}", p(x, y));
+                let n = nrm(x, y);
+                assert!((n.norm() - 1.0).abs() < 1e-5);
+                match id {
+                    // The card faces +Z, the floor up; P on them lies in
+                    // their planes.
+                    1 => assert!((n - Vec3::z()).norm() < 1e-5 && (p(x, y).z + 6.0).abs() < 1e-4),
+                    2 => assert!((n - Vec3::y()).norm() < 1e-5 && p(x, y).y.abs() < 1e-4),
+                    // The ball's normal points from its center out to P.
+                    _ => assert!((n - (p(x, y) - Vec3::new(0.0, 0.7, -2.0)).normalize()).norm() < 0.02, "{n}"),
+                }
+            }
+        }
+        assert!(seen.iter().all(|&c| c > 20), "each object shows, and the sky: {seen:?}");
+        // uv on the card: its texture coordinates, v up (its top edge at 1).
+        let card_px = (0..32).flat_map(|y| (0..64).map(move |x| (x, y))).filter(|&(x, y)| at("id", x, y) == 1.0);
+        for (x, y) in card_px {
+            let q = p(x, y);
+            let (u, v) = ((q.x + 4.0) / 8.0, (q.y - 0.0) / 4.0);
+            assert!((at("uv.u", x, y) - u).abs() < 1e-4 && (at("uv.v", x, y) - v).abs() < 1e-4, "({x}, {y})");
+        }
+        // Without passes asked for, none are written (depth as before).
+        let plain = render(&scene, &cam, FMT, 1, None);
+        assert_eq!(plain.planes.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["depth"]);
+        assert_eq!(plain.pixels, out.pixels, "the beauty doesn't change");
+    }
+
+    #[test]
+    fn mattes_cover_their_objects_and_add_up_to_alpha() {
+        use serde_json::json;
+        // Two cubes side by side, apart, and a card behind (not overlapping
+        // them), anti-aliased.
+        let a = model("cube", json!({ "translate": [-1.5, 0, -5], "rotate": [10, 30, 0] }), "a");
+        let b = model("cube", json!({ "translate": [1.5, 0, -5], "color": [1, 1, 1, 0.5] }), "b");
+        let mut far = card(Image::filled(4, 4, [1.0; 4]), [0.0, 0.0, -9.0], [0.0; 3], [2.0, 1.0]);
+        far.node = "far".into();
+        let scene = Scene { cards: vec![far], meshes: vec![a, b], ..Scene::default() };
+        let out = render_passes(&scene, &camera(), FMT, 4, None, Passes { mattes: true, ..Passes::default() });
+        let m = |n: &str, x: i32, y: i32| out.plane_at(&format!("matte.{n}"), x, y);
+        let (mut fractional, mut worst) = (0, 0.0f32);
+        for y in 0..32 {
+            for x in 0..64 {
+                let total = m("a", x, y) + m("b", x, y) + m("far", x, y);
+                worst = worst.max((total - out.at(x, y)[3]).abs());
+                fractional += (m("a", x, y) > 0.01 && m("a", x, y) < 0.99) as usize;
+            }
+        }
+        assert!(worst < 1e-5, "the mattes add up to alpha: {worst}");
+        assert!(fractional > 8, "soft edges: {fractional}");
+        // 1 inside the opaque cube, 0 outside; the half-transparent one
+        // covers three quarters (its front face, then its back); the card
+        // shows between.
+        assert_eq!((m("a", 22, 16), m("a", 42, 16), m("a", 2, 2)), (1.0, 0.0, 0.0));
+        assert!((m("b", 42, 16) - 0.75).abs() < 1e-6);
+        assert_eq!(m("far", 32, 16), 1.0);
+        // No depth pass asked for: none written.
+        assert!(out.plane("depth").is_none());
+    }
+
+    #[test]
+    fn a_holdout_cuts_out_what_is_behind_it() {
+        use serde_json::json;
+        // A big red card at the back, a holdout cube in front of its
+        // middle, and a small blue card in front of the cube's edge.
+        let mut back = card(Image::filled(4, 4, [1.0, 0.0, 0.0, 1.0]), [0.0, 0.0, -8.0], [0.0; 3], [20.0, 10.0]);
+        back.node = "back".into();
+        let mut front = card(Image::filled(4, 4, [0.0, 0.0, 1.0, 1.0]), [0.6, 0.0, -3.0], [0.0; 3], [0.5, 0.5]);
+        front.node = "front".into();
+        let hold = crate::scene::Model { holdout: true, ..model("cube", json!({ "translate": [0, 0, -5], "size": [2, 2, 2] }), "hold") };
+        let scene = Scene { cards: vec![back, front], meshes: vec![hold], ..Scene::default() };
+        let out = render_passes(&scene, &camera(), FMT, 2, None, ALL);
+        // Inside the cube's outline: nothing (alpha 0), where only the
+        // back card would show; outside it, the back card; in front of it,
+        // the blue card.
+        assert_eq!(out.at(28, 16), [0.0; 4], "cut out");
+        assert_eq!(out.at(4, 4), [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(out.at(38, 16), [0.0, 0.0, 1.0, 1.0], "in front of the holdout");
+        // Mattes still work: the back card's is 0 where it's hidden, the
+        // holdout's is its coverage; depth and id are the holdout's there.
+        let m = |n: &str, x: i32, y: i32| out.plane_at(&format!("matte.{n}"), x, y);
+        assert_eq!((m("back", 28, 16), m("hold", 28, 16), m("back", 4, 4), m("front", 38, 16)), (0.0, 1.0, 1.0, 1.0));
+        assert!((out.plane_at("depth", 28, 16) - 4.0).abs() < 1e-4);
+        assert_eq!(out.plane_at("id", 28, 16), 3.0, "back, front, hold");
+    }
+
+    #[test]
+    fn passes_over_a_background_keep_its_planes() {
+        let mut bg = Image::filled(64, 32, [0.0, 0.5, 0.0, 1.0]);
+        *bg.plane_mut("depth") = vec![50.0; 64 * 32];
+        *bg.plane_mut("id") = vec![7.0; 64 * 32];
+        *bg.plane_mut("other") = vec![3.0; 64 * 32];
+        let mut red = card(Image::filled(4, 4, [1.0, 0.0, 0.0, 1.0]), [0.0, 0.0, -3.0], [0.0; 3], [1.0, 1.0]);
+        red.node = "red".into();
+        let out = render_passes(&Scene { cards: vec![red], ..Scene::default() }, &camera(), FMT, 1, Some(&bg), Passes { id: true, mattes: true, ..Passes::DEPTH });
+        let v = |n: &str, x: i32, y: i32| out.plane_at(n, x, y);
+        assert_eq!((v("id", 32, 16), v("id", 2, 2)), (1.0, 7.0), "the render's id, else the background's");
+        assert_eq!((v("matte.red", 32, 16), v("matte.red", 2, 2)), (1.0, 0.0));
+        assert_eq!((v("other", 32, 16), v("other", 2, 2), v("depth", 2, 2)), (3.0, 3.0, 50.0), "the background's other planes kept");
+    }
+
+    #[test]
+    fn pass_names_parse() {
+        assert_eq!(Passes::from_names(Passes::NAMES), ALL);
+        assert_eq!(Passes::from_names(["depth", "nonsense"]), Passes::DEPTH);
+        assert_eq!(Passes::from_names([]), Passes::default());
     }
 
     /// Through the graph: a plate on a card, an animated camera, the

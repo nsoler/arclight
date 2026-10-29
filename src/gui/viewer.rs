@@ -47,7 +47,8 @@ pub struct Viewer {
     region: IRect,
     nearest: bool,
     pub channel: Channel,
-    /// The plane shown with [`Channel::Plane`].
+    /// The layer shown with [`Channel::Plane`]: one plane (`depth`), or
+    /// several (`P`: `P.x`, `P.y`, `P.z`).
     pub plane: String,
     /// Exposure in stops.
     pub exposure: f32,
@@ -380,7 +381,7 @@ impl Viewer {
                     "x {:<5} y {:<5}   R {:.4}  G {:.4}  B {:.4}  A {:.4}",
                     x, y, px[0], px[1], px[2], px[3]
                 );
-                if let Some(plane) = self.shown_plane(img) {
+                for plane in self.shown_planes(img) {
                     text += &format!("   {} {:.4}", plane.name, img.plane_value(plane, x, y));
                 }
                 let pos = rect.left_bottom() + Vec2::new(8.0, -8.0);
@@ -465,12 +466,18 @@ impl Viewer {
             for (ch, label) in Channel::ALL {
                 ui.selectable_value(&mut self.channel, ch, label);
             }
-            // The image's extra planes (a 3D render's depth), if any.
-            for plane in d.image.map_or(&[][..], |img| &img.planes[..]) {
-                let on = self.channel == Channel::Plane && self.plane == plane.name;
-                if ui.selectable_label(on, &plane.name).on_hover_text(format!("Show the {} plane as gray, lowest to highest value", plane.name)).clicked() {
+            // The image's extra planes (a 3D render's depth and passes), a
+            // button a layer.
+            for (layer, planes) in d.image.map_or(Vec::new(), |img| img.layers()) {
+                let on = self.channel == Channel::Plane && self.plane == layer;
+                let tip = if planes.len() == 1 {
+                    format!("Show the {layer} plane as gray, lowest to highest value")
+                } else {
+                    format!("Show the {layer} layer as color ({} as red, green, blue)", planes.join(", "))
+                };
+                if ui.selectable_label(on, &layer).on_hover_text(tip).clicked() {
                     self.channel = Channel::Plane;
-                    self.plane = plane.name.clone();
+                    self.plane = layer;
                 }
             }
             ui.separator();
@@ -555,9 +562,13 @@ impl Viewer {
         }
     }
 
-    /// The plane shown, when [`Channel::Plane`] is on and `img` has it.
-    fn shown_plane<'a>(&self, img: &'a Image) -> Option<&'a Plane> {
-        (self.channel == Channel::Plane).then(|| img.plane(&self.plane)).flatten()
+    /// The planes shown, when [`Channel::Plane`] is on and `img` has the
+    /// layer (else none).
+    fn shown_planes<'a>(&self, img: &'a Image) -> Vec<&'a Plane> {
+        if self.channel != Channel::Plane {
+            return Vec::new();
+        }
+        img.layer(&self.plane).iter().filter_map(|n| img.plane(n)).collect()
     }
 
     fn upload(&mut self, ctx: &egui::Context, img: &Arc<Image>) {
@@ -576,9 +587,11 @@ impl Viewer {
         // resolution (the readout still reads full-resolution pixels).
         let max_side = ctx.input(|i| i.max_texture_side).max(1);
         let step = self.region.width().max(self.region.height()).div_ceil(max_side).max(1);
-        let ci = match self.shown_plane(img) {
-            Some(plane) => plane_image(img, plane, self.region, step),
-            None => to_color_image(img, self.region, self.channel, self.exposure, step),
+        let planes = self.shown_planes(img);
+        let ci = match planes[..] {
+            [] => to_color_image(img, self.region, self.channel, self.exposure, step),
+            [plane] => plane_image(img, plane, self.region, step),
+            _ => layer_image(img, &planes, self.region, self.exposure, step),
         };
         let filter = if self.nearest { TextureOptions::NEAREST } else { TextureOptions::LINEAR };
         match &mut self.texture {
@@ -654,6 +667,23 @@ fn plane_image(img: &Image, plane: &Plane, region: IRect, step: usize) -> ColorI
     ColorImage::from_rgba_unmultiplied([tw, th], &bytes)
 }
 
+/// A layer of two to four planes (`P`, `N`, `uv`, …) as color: its first
+/// three planes as red, green and blue, values as they are (with exposure),
+/// over `region` (frame pixels; overscan dimmed), sampled every `step`.
+fn layer_image(img: &Image, planes: &[&Plane], region: IRect, exposure: f32, step: usize) -> ColorImage {
+    let gain = 2f32.powf(exposure);
+    let (tw, th) = (region.width().div_ceil(step).max(1), region.height().div_ceil(step).max(1));
+    let frame = img.frame();
+    let mut bytes = vec![0u8; tw * th * 4];
+    bytes.par_chunks_exact_mut(4).enumerate().for_each(|(i, out)| {
+        let (x, y) = (region.x0 + ((i % tw) * step) as i32, region.y0 + ((i / tw) * step) as i32);
+        let gain = if frame.contains(x, y) { gain } else { gain * 0.35 };
+        let c = |k: usize| planes.get(k).map_or(0, |p| (color::linear_to_srgb(img.plane_value(p, x, y) * gain).clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+        out.copy_from_slice(&[c(0), c(1), c(2), 255]);
+    });
+    ColorImage::from_rgba_unmultiplied([tw, th], &bytes)
+}
+
 /// The node whose 3D scene viewing `node` shows: `node` itself when it
 /// outputs a scene (Camera, Card, Scene, …) or solves one (a Camera
 /// Tracker: its camera and points), else what feeds its first scene input
@@ -676,6 +706,27 @@ pub fn scene_of(doc: &Doc, node: &str) -> Option<String> {
 mod tests {
     use super::*;
     use arclight::graph::Graph;
+
+    #[test]
+    fn passes_show_a_button_a_layer_vectors_as_color() {
+        let mut img = Image::filled(4, 2, [0.0, 0.0, 0.0, 1.0]);
+        *img.plane_mut("depth") = vec![5.0; 8];
+        for (n, v) in [("N.x", 1.0), ("N.y", 0.0), ("N.z", 0.5)] {
+            *img.plane_mut(n) = vec![v; 8];
+        }
+        *img.plane_mut("matte.ball") = vec![1.0; 8];
+        assert_eq!(img.layers().iter().map(|l| l.0.as_str()).collect::<Vec<_>>(), ["depth", "N", "matte.ball"]);
+        let mut v = Viewer { channel: Channel::Plane, plane: "N".into(), ..Viewer::default() };
+        assert_eq!(v.shown_planes(&img).iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["N.x", "N.y", "N.z"]);
+        let planes = v.shown_planes(&img);
+        let ci = layer_image(&img, &planes, img.frame(), 0.0, 1);
+        let px = ci.pixels[0];
+        assert!(px.r() == 255 && px.g() == 0 && px.b() > 150 && px.b() < 200, "{px:?}");
+        v.plane = "depth".into();
+        assert_eq!(v.shown_planes(&img).len(), 1);
+        v.channel = Channel::Rgb;
+        assert!(v.shown_planes(&img).is_empty());
+    }
 
     #[test]
     fn the_scene_of_a_node_is_its_own_or_its_scene_input() {

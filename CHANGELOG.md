@@ -11,6 +11,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.21 — 2026-10-29
+
+- Render passes, engine side: Scanline Render can write `P`, `N`, `uv`,
+  object `id` and a `matte.<node>` per object (nearest sample for
+  depth / P / N / uv / id, coverage for mattes, which add up to alpha),
+  and holdout objects cut out what is behind them. Over a background,
+  the background's other planes are kept. The viewer shows one button
+  per pass layer, vectors as color. Not yet a Scanline Render setting
+  (M10 step b).
+
 ## 0.9.20 — 2026-10-29
 
 - **Shuffle** node: brings a render pass into the color (to grade, blur
