@@ -12,8 +12,9 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Instant;
 
-/// Memory budget for finished viewer frames.
-const FRAME_CACHE_BYTES: usize = 1536 * 1024 * 1024;
+/// Memory budget for finished viewer frames (`frame_cache_mb` in settings).
+static FRAME_CACHE_BYTES: std::sync::LazyLock<usize> =
+    std::sync::LazyLock::new(|| arclight::config::Settings::load().frame_cache_mb.max(64) * 1024 * 1024);
 
 pub struct Request {
     pub graph: Arc<Graph>,
@@ -77,7 +78,7 @@ impl FrameCache {
     fn insert(&mut self, key: u64, img: Arc<Image>) {
         self.bytes += size_of_image(&img);
         self.entries.push_back((key, img));
-        while self.bytes > FRAME_CACHE_BYTES && self.entries.len() > 1 {
+        while self.bytes > *FRAME_CACHE_BYTES && self.entries.len() > 1 {
             if let Some((_, old)) = self.entries.pop_front() {
                 self.bytes -= size_of_image(&old);
             }

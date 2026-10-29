@@ -1,27 +1,33 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-27 (end of session 3). Read this, then `README.md`
-(user-facing features, file format, shortcuts).
+Last updated 2026-10-28 (end of session 4). Read this, then `README.md`
+(user-facing features, file format, shortcuts, scripting) and
+`docs/spec-coverage.md` (what the planning docs ask for vs. what exists).
 
 ## Where things stand
 
 - Repo: `github.com/nsoler/arclight` (private). Local:
-  `~/Projects/arclight-compund/arclight/` (the parent folder name really is
-  spelled `compund`).
+  `~/Projects/arclight-compound/arclight/`. The planning docs (C++/Qt
+  "Linux port" plans that session 4 implemented in Rust) are in
+  `~/Projects/arclight-compound/Archlight-Development-Documentationm/`.
 - **Branches:** work happens on `wip-ns-effects` (tracks
-  `origin/wip-ns-effects`). At the end of session 3 everything was pushed
-  and `main` fast-forwarded to match it, so `main`, `wip-ns-effects` and
-  both remotes are at the same commit. Push and fast-forward `main` only
-  when the user asks (they have asked after each milestone so far).
-- ~9,600 lines of Rust, 69 tests passing (`cargo test`), clippy clean apart
-  from two old style lints (`Graph::from_str` name, `chunks_exact_mut(4)` in
-  media.rs).
+  `origin/wip-ns-effects`). At the end of session 4 everything was
+  committed and pushed and `main` fast-forwarded to match, so `main`,
+  `wip-ns-effects` and both remote branches are at the same commit. Commit,
+  push and fast-forward `main` only when the user asks (they have asked
+  after each milestone so far).
+- ~12,100 lines of Rust + Python. Tests: 53 library + 10 CLI + 20 GUI
+  (`cargo test --release`) and 6 Python (see "Working tips"), all passing.
+  Clippy is clean apart from two old style lints (`Graph::from_str` name,
+  `chunks_exact_mut(4)` in media.rs).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
   (Rectangle, Ellipse, Polygon, Roto), Transform layer dragging in the viewer,
   and Phase 3's 2D Tracker (NCC with rotation/scale, match-move, stabilize).
+  Session 4: MCP server, Python `arclt` module, live GUI scripting bridge,
+  native plugin host, XDG config (from the planning docs).
 - **Not done:** Phase 0.6 (bounding boxes / format), tracker follow-ups,
-  Phase 2 extras, Phase 4 (3D). See "Next steps".
+  Phase 2 extras, Phase 4 (3D), session-4 follow-ups. See "Next steps".
 - Development is on Linux (Omarchy/Hyprland): use `sed -i` (not
   `sed -i ''`); ffmpeg/ffprobe are in `/usr/bin`. Hyprland tiles the window
   narrower than its 1600 px default, so screenshots come out ~920–1030 px
@@ -33,9 +39,12 @@ cargo run --release --bin arclight-gui        # GUI with the animated starter pr
 cargo run --release --bin arclight-gui g.json # GUI with a project file
 cargo test                                    # engine + GUI unit tests
 cargo run --release -- render graph.json      # CLI render (media_out ranges, write frames)
+cargo run --release -- mcp [--http ADDR] [--attach [PID]]   # MCP server
+cargo run --release -- plugins                # plugin search path + what loaded
+cargo build --release -p arclight-plugin-example && python/build.sh  # plugin + Python module
 ```
 
-**Originality rule.** The parent folder `arclight-compund/` holds a Nuke
+**Originality rule.** The parent folder `arclight-compound/` holds a Nuke
 disassembly. It is not to be used as a reference or copied from, and it is
 not in the repo. Build every new node from public, standard algorithms
 (Porter-Duff, NCC template matching, scanline rasterization, etc.). Prefer
@@ -45,8 +54,25 @@ node names and panel layouts. The goal is comparable *capability*, not a clone.
 ## Next steps (suggested order)
 
 The user's overall goal is a full compositing toolkit: 2D/3D trackers, masks,
-roto, shapes, channel tools, switches. Ask which of these to take next; in
-rough order of value:
+roto, shapes, channel tools, switches, now also scriptable and extensible
+as the planning docs describe. Ask which of these to take next; in rough
+order of value:
+
+0. **Session-4 follow-ups** (small to medium):
+   - Run bridged renders (`render_frame`/`render_output` from MCP or
+     Python into the GUI) on a worker thread. They run on the GUI thread
+     today and freeze the UI for long ranges. Possibly reuse `RenderJob`
+     from `gui/properties.rs`.
+   - Python plugins (custom ops written in Python): embed Python in the
+     host via the `python/` crate, or run them out of process.
+   - Plugin process isolation: a crashing native plugin kills the app.
+   - A `select`/`view` bridge tool so scripts can show a node in the GUI's
+     viewer (the GUI-only state `Doc::selected` / `view_node`).
+   - Package the Python module as a wheel (`maturin build` from `python/`,
+     `pyproject.toml` is ready). maturin isn't installed on this machine.
+   - Not planned: OpenFX hosting (large; its own project), licensing (the
+     docs wanted another product's scheme copied; declined), `import_nuke`
+     (originality rule).
 
 1. **Tracker follow-ups** (small to medium, builds on fresh code):
    - **Export to a Transform node**: copy the solved per-frame transform
@@ -74,6 +100,37 @@ rough order of value:
 4. **Small UX debts:** viewer toolbar overlap at narrow widths; no warning
    when closing the window with unsaved changes.
 5. **Phase 4: 3D** — plan separately (see below).
+
+## Session 4: automation, plugins, Python
+
+Built from the planning docs in `../Archlight-Development-Documentationm/`
+(coverage map: `docs/spec-coverage.md`).
+
+- **`session.rs`**: headless editing API (validated `create_node`/`set_params`/
+  `set_key`/`connect`/…, undo/redo, render, save/load). MCP, Python and the
+  GUI bridge all go through it.
+- **`mcp.rs`**: MCP server (`arclight mcp`, stdio or `--http`), 24 tools.
+  `call_tool(&mut Session, tool, args)` is the shared tool dispatcher.
+  `render_frame` with `preview` returns a PNG image content block.
+- **`bridge.rs`**: each GUI listens on `$XDG_RUNTIME_DIR/arclight/gui-<pid>.sock`
+  and registers in `instances/<pid>.json`. `App::bridge_call` runs a tool on a
+  `Session` over a copy of `doc.graph`, then swaps the graph back in as one
+  undo step and places new nodes with `Doc::place_new_nodes`. `undo`/`redo`
+  map to the Doc's own history. `load_graph`/`new_graph` refuse while the
+  window has unsaved changes. Renders run on the GUI thread, so a long
+  `render_output` freezes the UI until it finishes (a TODO).
+- **`plugin.rs`** + `include/arclight_plugin.h`: C ABI v1. Ops are
+  registered at runtime (`ops::info` falls back to the plugin registry;
+  `ops::all()` replaces direct `OPS` iteration in the GUI). Plugin param
+  defaults use `DefaultValue::Static`. Libraries are leaked (never unloaded).
+  Only files named `libarclight_plugin_*.so` / `*.arclight.so` are loaded.
+- **`config.rs`**: XDG dirs; `settings.json` (`plugin_paths`,
+  `frame_cache_mb`, `mcp_http_addr`).
+- **`python/`**: workspace crate `arclt` (pyo3 0.30, abi3-py310) exposing
+  `_arclt.call(tool, json)` and `_arclt.pixels`. The public API is plain
+  Python in `python/arclt/__init__.py`. Build with `python/build.sh`.
+- The root `Cargo.toml` is now also a workspace (`.`, `plugins/example`,
+  `python`); a plain `cargo build`/`cargo test` still builds only the root crate.
 
 ## Progress log
 
@@ -125,6 +182,14 @@ rough order of value:
   translation-only version drifted ~6 px over 48 frames on a corner turning
   25° ("every frame") or lost it after ~8° ("first frame"); now within
   ~0.1 px on that shot.
+- **Session 4**: implemented the planning docs' automation,
+  plugin and platform layers in Rust: `session.rs`, `mcp.rs`, `bridge.rs`,
+  `plugin.rs`, `config.rs`, `python/`, `plugins/example/`,
+  `include/arclight_plugin.h`, `docs/spec-coverage.md`. Also changed:
+  `ops.rs` (`DefaultValue`, `ops::all()`, plugin fallbacks), `image.rs`
+  (`to_rgba8`), `main.rs` (CLI `mcp`/`plugins`/`ops`), `gui/main.rs`
+  (bridge), `gui/doc.rs` (`place_new_nodes`), `gui/node_editor.rs`
+  (`ops::all()`), `gui/worker.rs` (cache size from settings).
 
 ## Architecture in one page
 
@@ -140,6 +205,11 @@ Engine (`src/`, library crate `arclight`):
 | `track.rs` | 2D tracking: `Luma`, `Pattern`, `Warp`, `find`, `track` (a run), `input_frames`, `positions`, and the similarity `solve` / `Affine` helpers. |
 | `media.rs` | Sequence patterns (`####`, `%04d`), range detection, ffmpeg decode (persistent per-file decoder, frame-accurate seek) and encode. |
 | `render.rs` | Frame-range rendering of `media_out`; `Progress` (done/total/cancel) is shared with tracking. |
+| `session.rs` | `Session`: headless graph + validated edits (`create_node`, `set_params`, `set_key`, `connect`, `port_index` for labels like "B"), whole-graph undo/redo, render/save/load. `validate_param` normalizes values against `ParamSpec`s; `op_schema` describes an op as JSON; `image_stats` gives size + mean/min/max. |
+| `mcp.rs` | MCP server. `TOOLS` table (name, description, JSON Schema) and `call_tool(&mut Session, tool, args)`, the one tool dispatcher shared by MCP, Python and the bridge. `Server` routes to the local session or an attached GUI (`list/attach/detach_instance` are handled there). `serve_stdio` (line-delimited) and `serve_http` (hand-rolled HTTP/1.1, POST only). A `preview_png_base64` field in a result becomes an MCP image block. |
+| `bridge.rs` | Running-GUI registry (`$XDG_RUNTIME_DIR/arclight/instances/<pid>.json`, stale entries pruned by a connect test) and Unix-socket server/client. Protocol: one JSON line `{"tool", "arguments"}` → `{"ok"}` / `{"error"}`. The GUI polls `Server::poll()` each frame; a request wakes it with `request_repaint`. |
+| `plugin.rs` | Native plugin host for the C ABI in `include/arclight_plugin.h`. `init()` (once; called by CLI, GUI, Python) scans `config::plugin_dirs()` for `libarclight_plugin_*.so` / `*.arclight.so`, parses each library's JSON op descriptors into leaked `&'static OpInfo`s, and registers them. `ops::info`/`ops::all`/`eval_op`/`is_time_varying` fall back to it. |
+| `config.rs` | XDG dirs (`config_dir`, `data_dir`, `cache_dir`, `runtime_dir`), `plugin_dirs()`, `Settings` (`settings.json`: `plugin_paths`, `frame_cache_mb`, `mcp_http_addr`). |
 
 GUI (`src/gui/`, binary `arclight-gui`, eframe/egui 0.37):
 
@@ -151,7 +221,34 @@ GUI (`src/gui/`, binary `arclight-gui`, eframe/egui 0.37):
 | `properties.rs` | Property panels generated from `ParamSpec`s; keyframe diamonds; media extras; render jobs (`RenderJob`); tracking (`tracker_extras`, `TrackJob`, `collect_tracks`). |
 | `viewer.rs` | Shows the image; pan/zoom; channels; exposure; pixel readout. Hosts the overlays. |
 | `overlay.rs` | Handles for the selected node's `Overlay` kind: `Xf` (image↔screen), `geo` (resolve at the frame), `hit`, `press`, `apply` (drag → `edit_param`), `draw`. Add new handle kinds here. Positions use the viewed image's size (no bbox yet). |
-| `transport.rs`, `curve_editor.rs`, `worker.rs` | Player + timeline; keyframe curves with tangent handles; background eval thread + 1.5 GB frame LRU. |
+| `transport.rs`, `curve_editor.rs`, `worker.rs` | Player + timeline; keyframe curves with tangent handles; background eval thread + frame LRU (`frame_cache_mb`, default 1536). |
+
+The GUI starts a `bridge::Server` in `App::new`. `App::bridge_call` runs a
+tool on a `Session` over a *copy* of `doc.graph`, then, if the graph
+changed, commits pending edits, swaps the graph in, places new nodes
+(`Doc::place_new_nodes`: right of their input, moved down until clear) and
+commits again, so each script call is one undo step. `undo`/`redo` use the
+Doc's history; `load_graph`/`new_graph` refuse while the window is dirty.
+
+Other crates in the workspace (root `Cargo.toml` is package + workspace; a
+plain `cargo build` builds only the root crate):
+
+| Path | Role |
+|------|------|
+| `python/` | Crate `arclt` → `_arclt` extension (pyo3 0.30, abi3-py310): `call(tool, args_json)` (runs `mcp::Server::call` on a global server, GIL released) and `pixels(node, frame)`. The public API is plain Python in `python/arclt/__init__.py` (`Node` handle class plus module functions, all built on tool calls). `build.sh` sets `PYO3_BUILD_EXTENSION_MODULE=1` and copies the `.so` into the package. |
+| `plugins/example/` | Example plugin (cdylib, no arclight dependency): `vignette`, `film_grain` (time-varying). |
+| `include/arclight_plugin.h` | Plugin ABI v1: `arclight_plugin_entry()` → `{abi_version, ops_json, render}`; the host passes an `alloc` callback for the output. `render` must be thread-safe. |
+
+### Adding a tool (MCP + Python + bridge at once)
+
+1. Add the edit/query to `Session` if it changes the graph (call
+   `checkpoint()` before mutating, *after* validating, so a refused edit
+   leaves no undo step).
+2. Add a `tool!` entry to `TOOLS` and a match arm in `call_tool`.
+3. Add a Python wrapper in `python/arclt/__init__.py` (`_call("tool", ...)`).
+4. If the tool touches GUI-only state (selection, viewer, file dialogs),
+   special-case it in `App::bridge_call`.
+5. Tests: `mcp.rs` tests (`call` helper), `python/tests/test_arclt.py`.
 
 ### Adding a node today (checklist)
 
@@ -256,6 +353,16 @@ rather than the viewed image's (Transform pivot/frame, Tracker boxes).
 - Viewer display conversion is on the CPU (rayon); fine to ~4K.
 - Video decode is sequential-friendly: playing backward re-seeks every frame
   (slow for long-GOP files; the frame cache hides it on second pass).
+- Bridged renders block the GUI thread (see Next steps 0).
+- Bridged edits in the GUI were checked with Python + screenshot, not by
+  hand mid-gesture. A script edit during a user drag commits the partial
+  drag as its own undo step.
+- The GUI's screenshot hook exits with `process::exit`, so it leaves a stale
+  registry file. `list_instances` prunes it on the next call.
+- Plugins are never unloaded; there's no hot reload, so restart to pick up a
+  rebuilt plugin.
+- MCP HTTP has no auth and no SSE stream. Bind it to localhost only.
+- No Python plugin support, no OpenFX, no GPU path (CPU/rayon only).
 
 ## Working tips
 
@@ -276,6 +383,18 @@ rather than the viewed image's (Transform pivot/frame, Tracker boxes).
   `App::ui(&mut self, ui, frame)`, `Id::unique`, `ui.close()`,
   `MenuBar::new().ui(...)`. When unsure, read the source under
   `~/.cargo/registry/src/*/egui-0.37.0/src/`.
+- **Python tests:** `python/build.sh && cargo build --release -p
+  arclight-plugin-example && ARCLIGHT_PLUGIN_PATH=target/release
+  PYTHONPATH=python python3 -m unittest discover -s python/tests -v`
+  (the plugin test is skipped without the plugin path). Rebuild the `.so`
+  with `build.sh` after any engine change, or Python runs stale code.
+- **MCP by hand:** pipe JSON lines into `arclight mcp`, e.g.
+  `printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_ops","arguments":{}}}' | ./target/release/arclight mcp`;
+  HTTP: `arclight mcp --http 127.0.0.1:7899` + `curl -X POST localhost:7899/mcp -d '...'`.
+- **Bridge end to end:** start the GUI with the screenshot hook and a
+  ~6 s delay, run a Python script that calls `arclt.attach()` and edits,
+  then look at the screenshot (python3 has no PIL here; crop with
+  `magick in.png -gravity south -crop 80%x24%+0+0 out.png`).
 - Keyboard shortcuts must skip when a text field has focus
   (`ctx.text_edit_focused()`), and `consume_shortcut` ignores an extra Shift:
   check Shift variants before plain ones.

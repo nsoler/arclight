@@ -1,0 +1,579 @@
+//! Model Context Protocol server: JSON-RPC 2.0 over stdio (one message per
+//! line) or HTTP (`POST`), exposing graph editing and rendering as tools so
+//! AI agents can build and render composites.
+//!
+//! Tools run against a local headless [`Session`], or — after
+//! `attach_instance` or with `arclight mcp --attach` — against a running GUI
+//! through the [`crate::bridge`], where the user watches the edits happen.
+
+use crate::bridge::{self, Instance};
+use crate::media;
+use crate::ops;
+use crate::plugin;
+use crate::render::Progress;
+use crate::session::{self, Session};
+use anyhow::{anyhow, Context, Result};
+use serde_json::{json, Map, Value};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+pub const PROTOCOL_VERSION: &str = "2025-06-18";
+
+// JSON-RPC 2.0 error codes.
+const PARSE_ERROR: i64 = -32700;
+const INVALID_REQUEST: i64 = -32600;
+const METHOD_NOT_FOUND: i64 = -32601;
+const INVALID_PARAMS: i64 = -32602;
+
+const INSTRUCTIONS: &str = "Arclight is a node-graph compositor (linear float RGBA, premultiplied alpha). \
+Build a graph with create_node/connect/set_params, inspect ops with list_ops/describe_op, and check \
+results with render_frame (preview=true returns a PNG). Merge composites input A over B. Params that \
+are numeric can be keyframed with set_key. Colors are straight linear RGBA.";
+
+/// One tool's name, description and JSON Schema for its arguments.
+struct Tool {
+    name: &'static str,
+    description: &'static str,
+    schema: fn() -> Value,
+}
+
+macro_rules! tool {
+    ($name:literal, $desc:literal, $schema:tt) => {
+        Tool { name: $name, description: $desc, schema: || json!($schema) }
+    };
+}
+
+
+static TOOLS: &[Tool] = &[
+    tool!("list_ops", "List every node type (op) with its label and category, including plugin ops.",
+        {"type": "object", "properties": {"category": {"type": "string", "description": "Only this category (source, color, channel, merge, shape, transform, filter, output)."}}}),
+    tool!("describe_op", "Inputs, params (kind, range, default) and help for one op.",
+        {"type": "object", "properties": {"op": {"type": "string"}}, "required": ["op"]}),
+    tool!("get_graph", "The whole graph as JSON, plus file path, unsaved state and undo availability.",
+        {"type": "object", "properties": {}}),
+    tool!("describe_node", "A node's op, connected inputs, downstream nodes and params (defaults filled in).",
+        {"type": "object", "properties": {"node": {"type": "string"}}, "required": ["node"]}),
+    tool!("create_node", "Add a node. Returns its name. 'inputs' lists upstream node names by port order (A, B, mask for merge).",
+        {"type": "object", "properties": {
+            "op": {"type": "string"},
+            "name": {"type": "string", "description": "Node name; defaults to op + number."},
+            "params": {"type": "object"},
+            "inputs": {"type": "array", "items": {"type": "string"}}
+        }, "required": ["op"]}),
+    tool!("delete_node", "Remove a node; nodes it fed are reconnected to its first input.",
+        {"type": "object", "properties": {"node": {"type": "string"}}, "required": ["node"]}),
+    tool!("rename_node", "Rename a node, updating connections.",
+        {"type": "object", "properties": {"node": {"type": "string"}, "new_name": {"type": "string"}}, "required": ["node", "new_name"]}),
+    tool!("set_params", "Set one or more params of a node (validated; one undo step).",
+        {"type": "object", "properties": {"node": {"type": "string"}, "params": {"type": "object"}}, "required": ["node", "params"]}),
+    tool!("set_key", "Set a keyframe on a numeric param at a frame, animating it.",
+        {"type": "object", "properties": {"node": {"type": "string"}, "param": {"type": "string"}, "frame": {"type": "integer"}, "value": {}}, "required": ["node", "param", "frame", "value"]}),
+    tool!("connect", "Connect node 'from' to input 'port' (index or label like \"B\"/\"mask\", default 0) of node 'to'.",
+        {"type": "object", "properties": {"from": {"type": "string"}, "to": {"type": "string"}, "port": {"type": ["integer", "string"]}}, "required": ["from", "to"]}),
+    tool!("disconnect", "Disconnect input 'port' (index or label) of a node.",
+        {"type": "object", "properties": {"node": {"type": "string"}, "port": {"type": ["integer", "string"]}}, "required": ["node", "port"]}),
+    tool!("set_project", "Set the timeline: first/last frame and fps.",
+        {"type": "object", "properties": {"first_frame": {"type": "integer"}, "last_frame": {"type": "integer"}, "fps": {"type": "number"}}}),
+    tool!("render_frame", "Render a node at a frame. Returns size and mean/min/max color; 'path' also writes the image (.exr keeps float); 'preview' returns a PNG.",
+        {"type": "object", "properties": {
+            "node": {"type": "string"},
+            "frame": {"type": "integer"},
+            "path": {"type": "string"},
+            "preview": {"type": "boolean"},
+            "preview_size": {"type": "integer", "description": "Longest side of the preview in pixels (default 512)."}
+        }, "required": ["node"]}),
+    tool!("render_output", "Render the whole frame range of a media_out node to its file(s).",
+        {"type": "object", "properties": {"node": {"type": "string"}}, "required": ["node"]}),
+    tool!("probe_media", "Metadata of an image, image sequence (####) or video file: size, frame range, fps.",
+        {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}),
+    tool!("new_graph", "Start an empty graph (undoable).", {"type": "object", "properties": {}}),
+    tool!("load_graph", "Open a graph JSON file (undoable).",
+        {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}),
+    tool!("save_graph", "Save the graph, to 'path' or to where it was loaded from.",
+        {"type": "object", "properties": {"path": {"type": "string"}}}),
+    tool!("undo", "Undo the last edit.", {"type": "object", "properties": {}}),
+    tool!("redo", "Redo the last undone edit.", {"type": "object", "properties": {}}),
+    tool!("list_plugins", "Plugin libraries found at startup and the ops each added (or why it failed).",
+        {"type": "object", "properties": {}}),
+    tool!("list_instances", "Running Arclight GUI windows that tools can be sent to.", {"type": "object", "properties": {}}),
+    tool!("attach_instance", "Send all further tools to a running GUI (by pid, default the newest).",
+        {"type": "object", "properties": {"pid": {"type": "integer"}}}),
+    tool!("detach_instance", "Go back to the local headless graph.", {"type": "object", "properties": {}}),
+];
+
+/// The `tools/list` result.
+pub fn tool_list() -> Value {
+    let tools: Vec<Value> = TOOLS
+        .iter()
+        .map(|t| json!({"name": t.name, "description": t.description, "inputSchema": (t.schema)()}))
+        .collect();
+    json!({ "tools": tools })
+}
+
+// ---------------------------------------------------------------------------
+// Tool implementations (shared with the GUI bridge and Python)
+// ---------------------------------------------------------------------------
+
+fn str_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str> {
+    args.get(name).and_then(Value::as_str).ok_or_else(|| anyhow!("missing string argument '{name}'"))
+}
+
+fn opt_str<'a>(args: &'a Value, name: &str) -> Option<&'a str> {
+    args.get(name).and_then(Value::as_str)
+}
+
+fn obj_arg(args: &Value, name: &str) -> Result<Map<String, Value>> {
+    match args.get(name) {
+        None | Some(Value::Null) => Ok(Map::new()),
+        Some(Value::Object(m)) => Ok(m.clone()),
+        Some(_) => Err(anyhow!("'{name}' must be an object")),
+    }
+}
+
+/// Run one graph tool against `s`. Returns the tool's JSON result. A
+/// requested preview comes back as `preview_png_base64`.
+pub fn call_tool(s: &mut Session, tool: &str, args: &Value) -> Result<Value> {
+    let ok = || json!({"ok": true});
+    Ok(match tool {
+        "list_ops" => {
+            let cat = opt_str(args, "category");
+            let list: Vec<Value> = ops::all()
+                .into_iter()
+                .map(session::op_schema)
+                .filter(|o| cat.is_none_or(|c| o["category"] == c))
+                .map(|o| json!({"name": o["name"], "label": o["label"], "category": o["category"]}))
+                .collect();
+            json!(list)
+        }
+        "describe_op" => session::op_schema(session::op_info(str_arg(args, "op")?)?),
+        "get_graph" => json!({
+            "graph": s.graph,
+            "path": s.path,
+            "dirty": s.dirty,
+            "can_undo": s.can_undo(),
+            "can_redo": s.can_redo(),
+        }),
+        "describe_node" => s.describe_node(str_arg(args, "node")?)?,
+        "create_node" => {
+            let inputs: Vec<String> = match args.get("inputs") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(v) => serde_json::from_value(v.clone()).context("'inputs' must be a list of node names")?,
+            };
+            let id = s.create_node(str_arg(args, "op")?, opt_str(args, "name"), &obj_arg(args, "params")?, &inputs)?;
+            json!({"node": id})
+        }
+        "delete_node" => {
+            s.delete_node(str_arg(args, "node")?)?;
+            ok()
+        }
+        "rename_node" => {
+            s.rename(str_arg(args, "node")?, str_arg(args, "new_name")?)?;
+            ok()
+        }
+        "set_params" => {
+            s.set_params(str_arg(args, "node")?, &obj_arg(args, "params")?)?;
+            ok()
+        }
+        "set_key" => {
+            let frame = args.get("frame").and_then(Value::as_i64).ok_or_else(|| anyhow!("missing integer 'frame'"))?;
+            let value = args.get("value").ok_or_else(|| anyhow!("missing 'value'"))?;
+            s.set_key(str_arg(args, "node")?, str_arg(args, "param")?, frame, value)?;
+            ok()
+        }
+        "connect" => {
+            let to = str_arg(args, "to")?;
+            let port = s.port_index(to, args.get("port").unwrap_or(&json!(0)))?;
+            s.connect(str_arg(args, "from")?, to, port)?;
+            ok()
+        }
+        "disconnect" => {
+            let node = str_arg(args, "node")?;
+            let port = s.port_index(node, args.get("port").ok_or_else(|| anyhow!("missing 'port'"))?)?;
+            s.disconnect(node, port)?;
+            ok()
+        }
+        "set_project" => {
+            let int = |k| args.get(k).and_then(Value::as_i64);
+            s.set_project(int("first_frame"), int("last_frame"), args.get("fps").and_then(Value::as_f64))?;
+            json!(s.graph.project)
+        }
+        "render_frame" => {
+            let node = str_arg(args, "node")?;
+            let frame = args.get("frame").and_then(Value::as_i64).unwrap_or(s.graph.project.first_frame);
+            let img = match opt_str(args, "path") {
+                Some(p) => s.render_to_file(node, frame, Path::new(p))?,
+                None => s.render(node, frame)?,
+            };
+            let mut out = session::image_stats(&img);
+            out["frame"] = json!(frame);
+            if let Some(p) = opt_str(args, "path") {
+                out["path"] = json!(p);
+            }
+            if args.get("preview").and_then(Value::as_bool).unwrap_or(false) {
+                let size = args.get("preview_size").and_then(Value::as_u64).unwrap_or(512).clamp(16, 4096) as u32;
+                out["preview_png_base64"] = json!(base64(&preview_png(&img, size)?));
+            }
+            out
+        }
+        "render_output" => {
+            let node = str_arg(args, "node")?;
+            let frames = s.render_output(node, &Progress::default())?;
+            json!({"frames": frames, "path": s.node(node).and_then(|n| n.params.get("path")).cloned()})
+        }
+        "probe_media" => probe_media(Path::new(str_arg(args, "path")?))?,
+        "new_graph" => {
+            s.clear();
+            ok()
+        }
+        "load_graph" => {
+            s.load(Path::new(str_arg(args, "path")?))?;
+            json!({"nodes": s.graph.nodes.len()})
+        }
+        "save_graph" => json!({"path": s.save(opt_str(args, "path").map(Path::new))?}),
+        "undo" => json!({"undone": s.undo()}),
+        "redo" => json!({"redone": s.redo()}),
+        "list_plugins" => json!(plugin::reports()
+            .into_iter()
+            .map(|r| match r.result {
+                Ok(ops) => json!({"path": r.path, "ops": ops}),
+                Err(e) => json!({"path": r.path, "error": e}),
+            })
+            .collect::<Vec<_>>()),
+        other => return Err(anyhow!("unknown tool '{other}'")),
+    })
+}
+
+/// Metadata for a media file: stills report their size, sequences their
+/// range too, videos their fps and frame count.
+pub fn probe_media(path: &Path) -> Result<Value> {
+    let s = path.to_string_lossy();
+    if media::is_video(path) {
+        let v = media::probe_video(path)?;
+        return Ok(json!({"kind": "video", "width": v.width, "height": v.height, "fps": v.fps, "frames": v.frames}));
+    }
+    let (pattern, range) = if media::is_sequence_pattern(&s) {
+        (s.to_string(), media::detect_sequence_range(&s))
+    } else {
+        match media::sequence_from_file(path) {
+            Some((p, a, b)) if a != b => (p, Some((a, b))),
+            _ => (s.to_string(), None),
+        }
+    };
+    let first = match range {
+        Some((a, _)) => media::frame_path(&pattern, a),
+        None => path.to_path_buf(),
+    };
+    let img = crate::image::Image::read(&first)?;
+    let mut out = json!({"kind": if range.is_some() { "sequence" } else { "still" }, "width": img.width, "height": img.height});
+    if let Some((a, b)) = range {
+        out["pattern"] = json!(pattern);
+        out["first_frame"] = json!(a);
+        out["last_frame"] = json!(b);
+    }
+    Ok(out)
+}
+
+fn preview_png(img: &crate::image::Image, size: u32) -> Result<Vec<u8>> {
+    let rgba = img.to_rgba8();
+    let rgba = if rgba.width().max(rgba.height()) > size {
+        let scale = size as f64 / rgba.width().max(rgba.height()) as f64;
+        let (w, h) = ((rgba.width() as f64 * scale).round().max(1.0) as u32, (rgba.height() as f64 * scale).round().max(1.0) as u32);
+        image::imageops::thumbnail(&rgba, w, h)
+    } else {
+        rgba
+    };
+    let mut buf = std::io::Cursor::new(Vec::new());
+    rgba.write_to(&mut buf, image::ImageFormat::Png)?;
+    Ok(buf.into_inner())
+}
+
+pub fn base64(data: &[u8]) -> String {
+    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ABC[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Server
+// ---------------------------------------------------------------------------
+
+/// Protocol state: the local session, or the GUI instance tools go to.
+pub struct Server {
+    pub session: Session,
+    pub attached: Option<Instance>,
+}
+
+impl Server {
+    pub fn new(session: Session) -> Server {
+        Server { session, attached: None }
+    }
+
+    /// Run a tool, routing to the attached GUI if there is one.
+    pub fn call(&mut self, tool: &str, args: &Value) -> Result<Value> {
+        match tool {
+            "list_instances" => Ok(json!(bridge::list_instances())),
+            "attach_instance" => {
+                let pid = args.get("pid").and_then(Value::as_u64).map(|p| p as u32);
+                let inst = bridge::find_instance(pid)?;
+                let out = json!({"attached": inst});
+                self.attached = Some(inst);
+                Ok(out)
+            }
+            "detach_instance" => Ok(json!({"detached": self.attached.take()})),
+            _ => match &self.attached {
+                Some(inst) => bridge::call(inst, tool, args),
+                None => call_tool(&mut self.session, tool, args),
+            },
+        }
+    }
+
+    /// Handle one JSON-RPC message (or batch). Returns `None` when nothing
+    /// should be sent back (notifications).
+    pub fn handle(&mut self, msg: &Value) -> Option<Value> {
+        if let Value::Array(batch) = msg {
+            if batch.is_empty() {
+                return Some(error(Value::Null, INVALID_REQUEST, "empty batch"));
+            }
+            let replies: Vec<Value> = batch.iter().filter_map(|m| self.handle(m)).collect();
+            return (!replies.is_empty()).then_some(Value::Array(replies));
+        }
+        let Some(method) = msg.get("method").and_then(Value::as_str) else {
+            // A response from the client (we send no requests) or garbage.
+            return msg.get("id").filter(|_| msg.get("result").is_none() && msg.get("error").is_none()).map(|id| {
+                error(id.clone(), INVALID_REQUEST, "missing method")
+            });
+        };
+        let id = msg.get("id").cloned()?; // notifications get no reply
+        let params = msg.get("params").cloned().unwrap_or(json!({}));
+        Some(match method {
+            "initialize" => {
+                let version = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL_VERSION);
+                result(id, json!({
+                    "protocolVersion": version,
+                    "capabilities": {"tools": {"listChanged": false}},
+                    "serverInfo": {"name": "arclight", "title": "Arclight Compositor", "version": env!("CARGO_PKG_VERSION")},
+                    "instructions": INSTRUCTIONS,
+                }))
+            }
+            "ping" => result(id, json!({})),
+            "tools/list" => result(id, tool_list()),
+            "tools/call" => {
+                let Some(name) = params.get("name").and_then(Value::as_str) else {
+                    return Some(error(id, INVALID_PARAMS, "missing tool name"));
+                };
+                if !TOOLS.iter().any(|t| t.name == name) {
+                    return Some(error(id, INVALID_PARAMS, &format!("unknown tool '{name}'")));
+                }
+                let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                result(id, tool_result(self.call(name, &args)))
+            }
+            _ => error(id, METHOD_NOT_FOUND, &format!("method '{method}' not found")),
+        })
+    }
+}
+
+/// An MCP `CallToolResult`: errors are reported in-band so the model sees them.
+fn tool_result(r: Result<Value>) -> Value {
+    match r {
+        Ok(mut v) => {
+            let mut content = Vec::new();
+            if let Some(png) = v.as_object_mut().and_then(|m| m.remove("preview_png_base64")) {
+                content.push(json!({"type": "image", "data": png, "mimeType": "image/png"}));
+            }
+            content.insert(0, json!({"type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default()}));
+            let mut out = json!({"content": content, "isError": false});
+            if v.is_object() {
+                out["structuredContent"] = v;
+            }
+            out
+        }
+        Err(e) => json!({"content": [{"type": "text", "text": format!("{e:#}")}], "isError": true}),
+    }
+}
+
+fn result(id: Value, result: Value) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "result": result})
+}
+
+fn error(id: Value, code: i64, message: &str) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
+}
+
+fn parse_message(text: &str) -> Result<Value, Value> {
+    serde_json::from_str(text).map_err(|e| error(Value::Null, PARSE_ERROR, &format!("parse error: {e}")))
+}
+
+/// Serve MCP over stdin/stdout, one JSON message per line, until EOF.
+pub fn serve_stdio(server: &mut Server) -> Result<()> {
+    let stdin = std::io::stdin();
+    let mut stdout = std::io::stdout().lock();
+    for line in stdin.lock().lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let reply = match parse_message(&line) {
+            Ok(msg) => server.handle(&msg),
+            Err(e) => Some(e),
+        };
+        if let Some(reply) = reply {
+            writeln!(stdout, "{reply}")?;
+            stdout.flush()?;
+        }
+    }
+    Ok(())
+}
+
+/// Serve MCP over HTTP: each `POST` carries one JSON-RPC message and gets the
+/// reply as `application/json` (202 for notifications).
+pub fn serve_http(server: Server, addr: &str) -> Result<()> {
+    let listener = TcpListener::bind(addr).with_context(|| format!("binding {addr}"))?;
+    eprintln!("arclight: MCP server on http://{}/mcp", listener.local_addr()?);
+    let server = Arc::new(Mutex::new(server));
+    for stream in listener.incoming().flatten() {
+        let server = server.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = serve_http_client(stream, &server) {
+                eprintln!("arclight: http: {e:#}");
+            }
+        });
+    }
+    Ok(())
+}
+
+fn serve_http_client(stream: TcpStream, server: &Mutex<Server>) -> Result<()> {
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut out = stream;
+    loop {
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line)? == 0 {
+            return Ok(());
+        }
+        let mut content_length = 0usize;
+        let mut keep_alive = !request_line.ends_with("HTTP/1.0\r\n");
+        loop {
+            let mut h = String::new();
+            reader.read_line(&mut h)?;
+            let h = h.trim_end();
+            if h.is_empty() {
+                break;
+            }
+            if let Some((k, v)) = h.split_once(':') {
+                match k.trim().to_ascii_lowercase().as_str() {
+                    "content-length" => content_length = v.trim().parse().context("bad Content-Length")?,
+                    "connection" => keep_alive = !v.trim().eq_ignore_ascii_case("close"),
+                    _ => {}
+                }
+            }
+        }
+        let mut body = vec![0u8; content_length.min(64 << 20)];
+        reader.read_exact(&mut body)?;
+        let method = request_line.split_whitespace().next().unwrap_or("");
+        let (status, payload) = if method != "POST" {
+            ("405 Method Not Allowed", String::new())
+        } else {
+            let reply = match parse_message(&String::from_utf8_lossy(&body)) {
+                Ok(msg) => server.lock().unwrap().handle(&msg),
+                Err(e) => Some(e),
+            };
+            match reply {
+                Some(r) => ("200 OK", r.to_string()),
+                None => ("202 Accepted", String::new()),
+            }
+        };
+        let mut head = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\n", payload.len());
+        if !payload.is_empty() {
+            head.push_str("Content-Type: application/json\r\n");
+        }
+        if method != "POST" {
+            head.push_str("Allow: POST\r\n");
+        }
+        head.push_str(if keep_alive { "\r\n" } else { "Connection: close\r\n\r\n" });
+        out.write_all(head.as_bytes())?;
+        out.write_all(payload.as_bytes())?;
+        out.flush()?;
+        if !keep_alive {
+            return Ok(());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rpc(server: &mut Server, id: i64, method: &str, params: Value) -> Value {
+        server.handle(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})).unwrap()
+    }
+
+    fn call(server: &mut Server, name: &str, args: Value) -> Value {
+        rpc(server, 1, "tools/call", json!({"name": name, "arguments": args}))["result"].clone()
+    }
+
+    #[test]
+    fn handshake_and_tool_listing() {
+        let mut s = Server::new(Session::default());
+        let init = rpc(&mut s, 1, "initialize", json!({"protocolVersion": "2025-03-26", "capabilities": {}}));
+        assert_eq!(init["result"]["protocolVersion"], "2025-03-26");
+        assert!(s.handle(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).is_none());
+        let tools = rpc(&mut s, 2, "tools/list", json!({}));
+        let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"create_node") && names.contains(&"render_frame"));
+        assert_eq!(rpc(&mut s, 3, "nope", json!({}))["error"]["code"], METHOD_NOT_FOUND);
+    }
+
+    #[test]
+    fn agent_builds_and_renders_a_comp() {
+        let mut s = Server::new(Session::default());
+        let r = call(&mut s, "create_node", json!({"op": "constant", "name": "bg", "params": {"width": 64, "height": 32, "color": [0, 0, 1, 1]}}));
+        assert_eq!(r["isError"], false, "{r}");
+        call(&mut s, "create_node", json!({"op": "ellipse", "name": "dot", "params": {"width": 64, "height": 32, "center": [32, 16], "size": [20, 20]}}));
+        call(&mut s, "create_node", json!({"op": "merge", "name": "comp"}));
+        assert_eq!(call(&mut s, "connect", json!({"from": "dot", "to": "comp", "port": "A"}))["isError"], false);
+        assert_eq!(call(&mut s, "connect", json!({"from": "bg", "to": "comp", "port": "B"}))["isError"], false);
+
+        let r = call(&mut s, "render_frame", json!({"node": "comp", "preview": true, "preview_size": 32}));
+        assert_eq!(r["isError"], false, "{r}");
+        assert_eq!(r["structuredContent"]["width"], 64);
+        assert_eq!(r["content"][1]["type"], "image");
+
+        let bad = call(&mut s, "set_params", json!({"node": "comp", "params": {"operation": "explode"}}));
+        assert_eq!(bad["isError"], true);
+        assert!(bad["content"][0]["text"].as_str().unwrap().contains("not a choice"));
+    }
+
+    #[test]
+    fn batches_and_parse_errors() {
+        let mut s = Server::new(Session::default());
+        let reply = s
+            .handle(&json!([
+                {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                {"jsonrpc": "2.0", "id": 2, "method": "ping"}
+            ]))
+            .unwrap();
+        assert_eq!(reply.as_array().unwrap().len(), 2);
+        assert_eq!(parse_message("{nope").unwrap_err()["error"]["code"], PARSE_ERROR);
+    }
+
+    #[test]
+    fn base64_matches_rfc4648() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
+}

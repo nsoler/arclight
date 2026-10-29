@@ -30,6 +30,7 @@ anyhow = "1"
 image = "0.25"
 exr = "1.73"
 rayon = "1"
+libloading = "0.9"
 eframe = { version = "0.37.0", optional = true }
 rfd = { version = "0.17.2", optional = true }
 
@@ -37,3 +38,6 @@ rfd = { version = "0.17.2", optional = true }
 opt-level = 3
 lto = "thin"
 
+
+[workspace]
+members = [".", "plugins/example", "python"]

@@ -6,7 +6,7 @@
 //! searchable node browser, to add nodes. Optional ports draw hollow.
 
 use crate::doc::{Doc, NODE_H, NODE_W};
-use arclight::ops::{self, Category, OPS};
+use arclight::ops::{self, Category};
 use arclight::ops::OpInfo;
 use eframe::egui::{
     self, epaint::CubicBezierShape, Align2, Color32, FontId, Id, Key, Modifiers, Pos2, Rect, Sense, Stroke, Vec2,
@@ -97,7 +97,7 @@ fn browse(query: &str) -> Vec<&'static OpInfo> {
     let words: Vec<&str> = q.split_whitespace().collect();
     let mut hits: Vec<(bool, usize, &'static OpInfo)> = CATEGORIES
         .iter()
-        .flat_map(|(cat, _)| OPS.iter().filter(move |o| o.category == *cat))
+        .flat_map(|(cat, _)| ops::all().into_iter().filter(move |o| o.category == *cat))
         .enumerate()
         .filter_map(|(order, op)| {
             let hay = format!("{} {} {}", op.label, op.name, category_name(op.category)).to_lowercase();
@@ -492,7 +492,7 @@ impl NodeEditor {
     fn add_menu(&mut self, ui: &mut egui::Ui, doc: &mut Doc) {
         for (cat, name) in CATEGORIES {
             ui.menu_button(name, |ui| {
-                for op in OPS.iter().filter(|o| o.category == cat) {
+                for op in ops::all().into_iter().filter(|o| o.category == cat) {
                     if ui.button(op.label).on_hover_text(op.help).clicked() {
                         self.place(doc, op, self.menu_at);
                         ui.close();

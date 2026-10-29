@@ -4,11 +4,18 @@
 //! graph. This is original work, not derived from any existing product.
 
 pub mod anim;
+#[cfg(unix)]
+pub mod bridge;
 pub mod color;
+pub mod config;
 pub mod graph;
 pub mod image;
 pub mod media;
+#[cfg(unix)]
+pub mod mcp;
 pub mod ops;
+pub mod plugin;
 pub mod render;
+pub mod session;
 pub mod shape;
 pub mod track;

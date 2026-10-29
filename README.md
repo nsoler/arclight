@@ -26,6 +26,8 @@ compositing product.
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
 cargo test                 # unit + graph tests
 cargo build --release --no-default-features   # CLI only, no GUI dependencies
+cargo build --release -p arclight-plugin-example  # example native plugin
+python/build.sh                                   # Python `arclt` module (needs Python ≥ 3.10 headers)
 ```
 
 Video input/output needs `ffmpeg` and `ffprobe` on `PATH` (e.g. `brew install ffmpeg`).
@@ -149,6 +151,85 @@ the background; `subtract` cuts it out of the background). Edges are
 anti-aliased from the signed distance to the outline, so the alpha is a
 clean matte for any `mask` input.
 
+## Scripting and automation
+
+Every front end edits graphs through one engine API (`session.rs`), so
+validation, undo/redo and error messages are the same everywhere. A running
+GUI also listens on a local socket (`bridge.rs`), so scripts and AI agents can
+**attach** to it and edit the open project live. Their edits land in the GUI's
+undo history.
+
+### MCP server (AI agents)
+
+```sh
+arclight mcp [graph.json]                 # JSON-RPC 2.0 over stdio, one message per line
+arclight mcp --http 127.0.0.1:7878        # JSON-RPC over HTTP POST (/mcp)
+arclight mcp --attach [PID]               # drive the newest (or given) running GUI
+```
+
+Register it with an MCP client, e.g. `claude mcp add arclight -- /path/to/arclight mcp`.
+Tools: `list_ops`, `describe_op`, `get_graph`, `describe_node`, `create_node`,
+`delete_node`, `rename_node`, `set_params`, `set_key`, `connect`, `disconnect`,
+`set_project`, `render_frame` (stats, optional file and PNG preview the model can
+see), `render_output`, `probe_media`, `new_graph`, `load_graph`, `save_graph`,
+`undo`, `redo`, `list_plugins`, `list_instances`, `attach_instance`,
+`detach_instance`. Invalid calls come back as tool errors (`isError: true`) with
+a message naming the bad param or node. Protocol errors use the standard
+JSON-RPC codes.
+
+### Python (`arclt`)
+
+```sh
+python/build.sh
+PYTHONPATH=python python3
+```
+
+```python
+import arclt
+
+bg   = arclt.create_node("checkerboard", width=960, height=540)
+sun  = arclt.create_node("ellipse", width=960, height=540, center=[480, 270],
+                         size=[260, 260], color=[1, 0.45, 0.1, 1], feather=30)
+comp = arclt.create_node("merge", sun, bg)          # inputs by port: A, B
+comp["operation"] = "screen"                         # params validated on set
+sun.set_key("center", 1, [200, 270]).set_key("center", 48, [760, 270])
+arclt.render(comp, frame=24, path="/tmp/comp.exr")  # -> size + mean/min/max color
+img = arclt.to_numpy(comp, 24)                      # (h, w, 4) float32, needs numpy
+arclt.save("/tmp/comp.json")
+
+arclt.attach()        # from now on, edit the project open in the GUI
+```
+
+Also: `node`, `nodes`, `delete`, `connect`, `disconnect`, `load`, `new`,
+`pixels`, `ops`, `op_info`, `project`, `undo`, `redo`, `metadata` (media file
+info), `graph`, `plugins`, `instances`, `detach`; `Node` has `info`,
+`params`, `set`, `input(s)`, `set_input`, `outputs`, `rename`, `render`.
+Errors raise `arclt.ArcltError`. Tests:
+`PYTHONPATH=python python3 -m unittest discover -s python/tests`.
+
+### Native plugins
+
+Plugins are shared libraries with a small C ABI
+([`include/arclight_plugin.h`](include/arclight_plugin.h)). A plugin declares its ops
+as JSON (ports, typed params, category, whether it varies per frame) and gets
+float RGBA buffers to process. Plugin ops show up in the node menus with
+generated property panels, can be keyframed, are cached, and can be scripted.
+`plugins/example` (Rust) adds **Vignette** and **Film Grain**.
+
+Files must be named `libarclight_plugin_*.so` or `*.arclight.so`. Arclight
+searches `$ARCLIGHT_PLUGIN_PATH`, the `plugin_paths` setting,
+`~/.local/share/arclight/plugins`, `/usr/local/lib/arclight/plugins` and
+`/usr/lib/arclight/plugins`. Run `arclight plugins` to see the search path and
+what loaded, and `arclight ops [OP]` to see the op catalog.
+
+### Settings and files (XDG)
+
+| What | Where |
+|------|-------|
+| Settings | `$XDG_CONFIG_HOME/arclight/settings.json`: `plugin_paths`, `frame_cache_mb` (GUI frame cache, default 1536), `mcp_http_addr` |
+| User plugins | `$XDG_DATA_HOME/arclight/plugins/` |
+| Running-GUI registry and sockets | `$XDG_RUNTIME_DIR/arclight/` |
+
 ## I/O formats
 
 - **EXR**: full 32-bit float, assumed linear + premultiplied.
@@ -170,6 +251,11 @@ src/
   shape.rs         polygon coverage (anti-aliasing, feather, fill rules), shape outlines, bezier flattening/splitting
   image.rs         Image raster type, bilinear sampling, file I/O
   color.rs         Rgba pixel, sRGB and premultiply conversions
+  session.rs       headless editing API: validated edits, undo/redo, rendering
+  mcp.rs           MCP server (JSON-RPC 2.0 over stdio / HTTP) and its tools
+  bridge.rs        running-GUI registry + Unix-socket bridge for live scripting
+  plugin.rs        native plugin host (C ABI, dynamic op registration)
+  config.rs        XDG paths and settings.json
   gui/
     main.rs        app shell: layout, menus, shortcuts, file drop
     doc.rs         document model, graph edits, undo/redo history
@@ -180,6 +266,9 @@ src/
     transport.rs   player controls + timeline
     properties.rs  per-node property panels, render jobs
     worker.rs      background evaluation thread + frame cache
+include/arclight_plugin.h  plugin C ABI
+plugins/example/  example native plugin (Vignette, Film Grain)
+python/           `arclt` Python module: Rust core (src/lib.rs) + Python API (arclt/)
 examples/
   basic.json        a small sample graph
   media/testsrc.mp4 5 s test clip used by the GUI starter project

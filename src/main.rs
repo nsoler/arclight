@@ -42,14 +42,89 @@ enum Command {
         #[arg(default_value = ".")]
         dir: PathBuf,
     },
+    /// Run a Model Context Protocol server for AI agents: JSON-RPC 2.0 over
+    /// stdio, or over HTTP with --http.
+    Mcp {
+        /// Graph to start from (otherwise an empty one).
+        graph: Option<PathBuf>,
+        /// Listen for HTTP on this address (e.g. 127.0.0.1:7878) instead of stdio.
+        #[arg(long, value_name = "ADDR", num_args = 0..=1, default_missing_value = "")]
+        http: Option<String>,
+        /// Send tools to a running GUI (the newest, or the one with this pid).
+        #[arg(long, value_name = "PID", num_args = 0..=1, default_missing_value = "0")]
+        attach: Option<u32>,
+    },
+    /// List the plugin search path and the plugins found on it.
+    Plugins,
+    /// List every op (node type), or describe one as JSON.
+    Ops {
+        /// Op to describe.
+        op: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    arclight::plugin::init();
     match cli.command {
         Command::Render { graph, frame, verbose } => render(graph, frame, verbose),
         Command::Demo { dir } => demo(dir),
+        Command::Mcp { graph, http, attach } => mcp(graph, http, attach),
+        Command::Plugins => plugins(),
+        Command::Ops { op } => list_ops(op),
     }
+}
+
+fn mcp(graph: Option<PathBuf>, http: Option<String>, attach: Option<u32>) -> Result<()> {
+    use arclight::mcp::{self, Server};
+    use arclight::session::Session;
+    let session = match &graph {
+        Some(path) => Session::open(path)?,
+        None => Session::default(),
+    };
+    let mut server = Server::new(session);
+    if let Some(pid) = attach {
+        server.attached = Some(arclight::bridge::find_instance((pid != 0).then_some(pid))?);
+    }
+    match http {
+        Some(addr) => {
+            let addr = if addr.is_empty() { arclight::config::Settings::load().mcp_http_addr } else { addr };
+            mcp::serve_http(server, &addr)
+        }
+        None => mcp::serve_stdio(&mut server),
+    }
+}
+
+fn plugins() -> Result<()> {
+    println!("Plugin search path:");
+    for dir in arclight::config::plugin_dirs() {
+        println!("  {}{}", dir.display(), if dir.is_dir() { "" } else { "  (missing)" });
+    }
+    let reports = arclight::plugin::reports();
+    if reports.is_empty() {
+        println!("No plugins found.");
+    }
+    for r in reports {
+        match r.result {
+            Ok(ops) => println!("{}: {}", r.path.display(), ops.join(", ")),
+            Err(e) => println!("{}: FAILED: {e}", r.path.display()),
+        }
+    }
+    Ok(())
+}
+
+fn list_ops(op: Option<String>) -> Result<()> {
+    use arclight::session;
+    match op {
+        Some(op) => println!("{}", serde_json::to_string_pretty(&session::op_schema(session::op_info(&op)?))?),
+        None => {
+            for info in arclight::ops::all() {
+                let cat = format!("{:?}", info.category).to_lowercase();
+                println!("{:<16} {:<10} {}", info.name, cat, info.label);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn render(path: PathBuf, frame: i64, verbose: bool) -> Result<()> {

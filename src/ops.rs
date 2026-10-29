@@ -63,16 +63,23 @@ pub enum ParamKind {
 }
 
 impl ParamKind {
-    const fn is_numeric(self) -> bool {
+    pub const fn is_numeric(self) -> bool {
         matches!(self, ParamKind::Float { .. } | ParamKind::Int { .. } | ParamKind::Vec2 | ParamKind::Vec3 | ParamKind::Color | ParamKind::Points { .. })
     }
+}
+
+/// A param's default value: built in, or read from a plugin's descriptor.
+#[derive(Clone, Copy)]
+pub enum DefaultValue {
+    Fn(fn() -> Value),
+    Static(&'static Value),
 }
 
 pub struct ParamSpec {
     pub name: &'static str,
     pub label: &'static str,
     pub kind: ParamKind,
-    pub default: fn() -> Value,
+    pub default: DefaultValue,
     /// Can be keyframed. True for numeric params, except ones that define
     /// the timeline itself (frame ranges, rates).
     pub animatable: bool,
@@ -137,14 +144,14 @@ const MERGE_OPS: &[&str] = &["over", "under", "add", "multiply", "screen", "min"
 
 macro_rules! p {
     ($name:literal, $label:literal, $kind:expr, $default:expr) => {
-        ParamSpec { name: $name, label: $label, kind: $kind, default: || json!($default), animatable: $kind.is_numeric() }
+        ParamSpec { name: $name, label: $label, kind: $kind, default: DefaultValue::Fn(|| json!($default)), animatable: $kind.is_numeric() }
     };
 }
 
 /// A param that can't be keyframed.
 macro_rules! fixed {
     ($name:literal, $label:literal, $kind:expr, $default:expr) => {
-        ParamSpec { name: $name, label: $label, kind: $kind, default: || json!($default), animatable: false }
+        ParamSpec { name: $name, label: $label, kind: $kind, default: DefaultValue::Fn(|| json!($default)), animatable: false }
     };
 }
 
@@ -604,8 +611,23 @@ pub static OPS: &[OpInfo] = &[
     },
 ];
 
+impl ParamSpec {
+    pub fn default_value(&self) -> Value {
+        match self.default {
+            DefaultValue::Fn(f) => f(),
+            DefaultValue::Static(v) => v.clone(),
+        }
+    }
+}
+
+/// A built-in op or one registered by a loaded plugin.
 pub fn info(op: &str) -> Option<&'static OpInfo> {
-    OPS.iter().find(|o| o.name == op)
+    OPS.iter().find(|o| o.name == op).or_else(|| crate::plugin::info(op))
+}
+
+/// Every op: the built-ins followed by plugin ops.
+pub fn all() -> Vec<&'static OpInfo> {
+    OPS.iter().chain(crate::plugin::infos()).collect()
 }
 
 /// `params` with every missing key filled in from the op's declared defaults.
@@ -616,7 +638,7 @@ pub fn params_with_defaults(op: &str, params: &Value) -> Value {
     };
     if let Some(info) = info(op) {
         for spec in info.params {
-            obj.entry(spec.name).or_insert_with(spec.default);
+            obj.entry(spec.name).or_insert_with(|| spec.default_value());
         }
     }
     Value::Object(obj)
@@ -669,7 +691,7 @@ pub fn is_time_varying(op: &str, params: &Value) -> bool {
     match op {
         "media_in" => true,
         "read" | "write" => media::is_sequence_pattern(path),
-        _ => false,
+        _ => crate::plugin::is_time_varying(op),
     }
 }
 
@@ -765,7 +787,10 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "write" => write(params, inputs, ctx),
         // Rendering to disk is driven by `render`; in the graph these pass through.
         "media_out" | "viewer" => Ok(input(inputs, 0, op)?.clone()),
-        other => bail!("unknown op '{other}'"),
+        other => match crate::plugin::eval(other, params, inputs, ctx) {
+            Some(result) => result,
+            None => bail!("unknown op '{other}'"),
+        },
     }
 }
 

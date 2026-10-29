@@ -349,6 +349,33 @@ impl Doc {
         }
     }
 
+    /// Place nodes added without a position (e.g. by a script) into a graph
+    /// that's already laid out: right of their rightmost input, or below
+    /// everything for sources, then moved down until clear of other nodes.
+    pub fn place_new_nodes(&mut self) {
+        if self.graph.nodes.iter().all(|n| n.pos.is_none()) {
+            return self.auto_layout();
+        }
+        for i in 0..self.graph.nodes.len() {
+            if self.graph.nodes[i].pos.is_some() {
+                continue;
+            }
+            let placed = || self.graph.nodes.iter().filter_map(|n| n.pos);
+            let feeds = self.graph.nodes[i].inputs.iter().filter_map(|id| self.node(id).and_then(|n| n.pos));
+            let mut p = match feeds.max_by(|a, b| a[0].total_cmp(&b[0])) {
+                Some(q) => [q[0] + NODE_W + 50.0, q[1]],
+                None => [
+                    placed().map(|q| q[0]).fold(f32::INFINITY, f32::min),
+                    placed().map(|q| q[1]).fold(f32::NEG_INFINITY, f32::max) + NODE_H + 40.0,
+                ],
+            };
+            while placed().any(|q| (q[0] - p[0]).abs() < NODE_W + 20.0 && (q[1] - p[1]).abs() < NODE_H + 20.0) {
+                p[1] += NODE_H + 40.0;
+            }
+            self.graph.nodes[i].pos = Some(p);
+        }
+    }
+
     /// Place nodes that have no position (e.g. from a hand-written JSON
     /// graph): one column per depth from the sources, left to right.
     pub fn auto_layout(&mut self) {
@@ -392,6 +419,21 @@ impl Doc {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn scripted_nodes_are_placed_clear_of_existing_ones() {
+        let mut d = Doc::new(Graph::default(), None);
+        let a = d.add_node("constant", [0.0, 0.0]);
+        d.add_node("constant", [NODE_W + 50.0, 0.0]);
+        let new = |id: &str, op: &str, inputs: Vec<String>| NodeSpec { id: id.into(), op: op.into(), inputs, params: json!({}), pos: None };
+        d.graph.nodes.push(new("src", "constant", vec![]));
+        d.graph.nodes.push(new("b", "blur", vec![a.clone()]));
+        d.place_new_nodes();
+        let pos = |id: &str| d.node(id).unwrap().pos.unwrap();
+        assert!(pos("src")[1] > 0.0, "a new source goes below the graph");
+        assert_eq!(pos("b")[0], NODE_W + 50.0, "right of its input");
+        assert!(pos("b")[1] > 0.0, "moved down off the occupied spot");
+    }
 
     fn doc() -> Doc {
         let mut d = Doc::new(Graph::default(), None);

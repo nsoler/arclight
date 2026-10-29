@@ -13,7 +13,9 @@ mod transport;
 mod viewer;
 mod worker;
 
+use arclight::bridge;
 use arclight::graph::{Graph, NodeError};
+use arclight::session::Session;
 use arclight::image::Image;
 use curve_editor::CurveEditor;
 use doc::Doc;
@@ -21,7 +23,7 @@ use eframe::egui::{self, Key, KeyboardShortcut, Modifiers};
 use node_editor::NodeEditor;
 use properties::Properties;
 use rfd::{MessageButtons, MessageDialog, MessageDialogResult};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Arc;
 use transport::{Play, Transport};
@@ -38,6 +40,7 @@ const REDO_ALT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key
 const NODE_BROWSER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::SHIFT, Key::E);
 
 fn main() -> eframe::Result {
+    arclight::plugin::init();
     let doc = match std::env::args_os().nth(1).map(PathBuf::from) {
         Some(path) => match Graph::from_file(&path) {
             Ok(g) => Doc::new(g, Some(path)),
@@ -89,10 +92,17 @@ struct App {
     /// `ARCLIGHT_SCREENSHOT=<png>`: save one screenshot of the window after
     /// `ARCLIGHT_SCREENSHOT_DELAY` seconds (default 2), then quit. For docs/CI.
     screenshot: Option<(PathBuf, std::time::Instant, f32)>,
+    /// Socket that MCP servers and Python scripts (`arclt.attach()`) drive
+    /// this window through.
+    bridge: Option<bridge::Server>,
 }
 
 impl App {
     fn new(ctx: egui::Context, doc: Doc) -> App {
+        let wake = ctx.clone();
+        let bridge = bridge::Server::start(move || wake.request_repaint())
+            .inspect_err(|e| eprintln!("arclight-gui: scripting bridge disabled: {e:#}"))
+            .ok();
         let mut transport = Transport::default();
         transport.frame = doc.graph.project.first_frame;
         App {
@@ -116,7 +126,58 @@ impl App {
                 let delay = std::env::var("ARCLIGHT_SCREENSHOT_DELAY").ok().and_then(|d| d.parse().ok()).unwrap_or(2.0);
                 (PathBuf::from(p), std::time::Instant::now(), delay)
             }),
+            bridge,
         }
+    }
+
+    /// Run tool calls that arrived over the bridge.
+    fn handle_bridge(&mut self) {
+        let Some(server) = &self.bridge else { return };
+        for req in server.poll() {
+            let result = self.bridge_call(&req.tool, &req.arguments).map_err(|e| format!("{e:#}"));
+            req.reply(result);
+        }
+    }
+
+    /// Apply one bridged tool to the document: the tool runs on a session
+    /// over a copy of the graph, and a changed graph comes back as one undo step.
+    fn bridge_call(&mut self, tool: &str, args: &Value) -> anyhow::Result<Value> {
+        match tool {
+            "undo" | "redo" => {
+                self.doc.commit(false);
+                let able = if tool == "undo" { self.doc.can_undo() } else { self.doc.can_redo() };
+                if tool == "undo" { self.undo() } else { self.redo() }
+                return Ok(json!({ if tool == "undo" { "undone" } else { "redone" }: able }));
+            }
+            "load_graph" | "new_graph" if self.doc.dirty => {
+                anyhow::bail!("the Arclight window has unsaved changes; save them first (save_graph)")
+            }
+            _ => {}
+        }
+        let mut session = Session::new(self.doc.graph.clone());
+        session.path = self.doc.path.clone();
+        session.dirty = self.doc.dirty;
+        let out = arclight::mcp::call_tool(&mut session, tool, args)?;
+        match tool {
+            "load_graph" | "new_graph" => self.load(Doc::new(session.graph, session.path)),
+            "save_graph" => {
+                self.doc.path = session.path;
+                self.doc.dirty = false;
+            }
+            _ if session.graph != self.doc.graph => {
+                self.doc.commit(false);
+                self.doc.graph = session.graph;
+                if self.doc.selected.as_ref().is_some_and(|id| self.doc.node(id).is_none()) {
+                    self.doc.selected = None;
+                }
+                self.doc.place_new_nodes();
+                self.doc.changed();
+                self.doc.commit(false);
+                self.props.invalidate();
+            }
+            _ => {}
+        }
+        Ok(out)
     }
 
     fn maybe_screenshot(&mut self, ctx: &egui::Context) {
@@ -497,6 +558,7 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.handle_bridge();
         self.handle_drops(&ctx);
         self.shortcuts(&ctx);
         if self.transport.play != Play::Stopped {

@@ -143,6 +143,14 @@ impl Image {
     }
 
     fn write_ldr(&self, path: &Path) -> Result<()> {
+        self.to_rgba8()
+            .save(path)
+            .with_context(|| format!("writing image {}", path.display()))?;
+        Ok(())
+    }
+
+    /// 8-bit straight-alpha sRGB, as written to PNG/JPEG.
+    pub fn to_rgba8(&self) -> image::RgbaImage {
         let mut buf = image::RgbaImage::new(self.width as u32, self.height as u32);
         for (i, px) in buf.pixels_mut().enumerate() {
             let straight = color::unpremultiply(self.pixels[i]);
@@ -153,9 +161,7 @@ impl Image {
                 (straight[3].clamp(0.0, 1.0) * 255.0).round() as u8,
             ];
         }
-        buf.save(path)
-            .with_context(|| format!("writing image {}", path.display()))?;
-        Ok(())
+        buf
     }
 
     fn write_exr(&self, path: &Path) -> Result<()> {
