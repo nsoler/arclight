@@ -507,6 +507,7 @@ pub fn op_schema(info: &OpInfo) -> Value {
 /// Size and average/min/max color of an image, for reporting a render
 /// without shipping its pixels.
 pub fn image_stats(img: &Image) -> Value {
+    let img = img.flat();
     let n = img.pixels.len().max(1) as f64;
     let mut sum = [0f64; 4];
     let mut lo = [f32::INFINITY; 4];

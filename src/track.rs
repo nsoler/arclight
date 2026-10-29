@@ -29,6 +29,7 @@ pub struct Luma {
 impl Luma {
     /// Rec. 709 luminance of the (premultiplied) colour.
     pub fn new(img: &Image) -> Luma {
+        let img = img.flat();
         let px = img.pixels.par_iter().map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]).collect();
         Luma { width: img.width, height: img.height, px }
     }
@@ -741,7 +742,7 @@ pub fn export(graph: &Graph, node: &str, op: &str, stabilize: bool) -> Result<Ma
         "transform" => {
             let reference = ops::params_with_defaults("tracker", &n.params)["reference_frame"].as_i64().unwrap_or(1);
             let img = input_frames(graph, node)?(reference)?;
-            transform_params(&n.params, [img.width, img.height], stabilize)
+            transform_params(&n.params, [img.format.width, img.format.height], stabilize)
         }
         "corner_pin" => corner_pin_params(&n.params, stabilize),
         other => bail!("can't export a tracker to '{other}' (transform or corner_pin)"),

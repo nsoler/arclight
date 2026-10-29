@@ -174,7 +174,9 @@ fn render(entry: &ArclightPlugin, op: &str, params: &Value, inputs: &[Option<&Im
     let params = ops::params_with_defaults(op, params);
     let c_op = CString::new(op)?;
     let c_params = CString::new(params.to_string())?;
-    let images: Vec<ArclightImage> = inputs
+    // ABI v1 has no data windows: plugins see whole frames.
+    let frames: Vec<Option<std::borrow::Cow<Image>>> = inputs.iter().map(|i| i.map(Image::flat)).collect();
+    let images: Vec<ArclightImage> = frames
         .iter()
         .map(|i| match i {
             Some(img) => ArclightImage { width: img.width as u32, height: img.height as u32, pixels: img.pixels.as_ptr() as *const f32 },

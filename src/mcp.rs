@@ -321,7 +321,7 @@ pub fn probe_media(path: &Path) -> Result<Value> {
 }
 
 fn preview_png(img: &crate::image::Image, size: u32) -> Result<Vec<u8>> {
-    let rgba = img.to_rgba8();
+    let rgba = img.flat().to_rgba8();
     let rgba = if rgba.width().max(rgba.height()) > size {
         let scale = size as f64 / rgba.width().max(rgba.height()) as f64;
         let (w, h) = ((rgba.width() as f64 * scale).round().max(1.0) as u32, (rgba.height() as f64 * scale).round().max(1.0) as u32);

@@ -40,6 +40,7 @@ fn pixels(py: Python<'_>, node: &str, frame: i64) -> PyResult<(usize, usize, Py<
         }
         server.session.render(node, frame).map_err(|e| err(format!("{e:#}")))
     })?;
+    let img = img.flat();
     let bytes: Vec<u8> = img.pixels.iter().flat_map(|p| p.iter().flat_map(|c| c.to_ne_bytes())).collect();
     Ok((img.width, img.height, PyBytes::new(py, &bytes).unbind()))
 }

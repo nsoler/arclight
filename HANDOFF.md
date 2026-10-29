@@ -16,7 +16,7 @@ Last updated 2026-10-28 (end of session 5). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~13,300 lines of Rust + Python. Tests: 64 library + 10 CLI + 27 GUI
+- ~13,300 lines of Rust + Python. Tests: 66 library + 10 CLI + 27 GUI
   (`cargo test --release`) and 8 Python (see "Working tips"), all passing.
   Clippy is clean apart from two old style lints (`Graph::from_str` name,
   `chunks_exact_mut(4)` in media.rs).
@@ -268,6 +268,12 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   scale about the box center / rotate about it via `Drag::pivot`, the new
   field `turn` now uses) and its tangent offsets through the same map's
   linear part. The box re-fits the vertices as they change.
+- **Session 6, part 3**: Phase 0.6 milestone 1 (see the plan doc).
+  `image.rs`: `Size`, `IRect`, `Image { format, x0, y0, width, height,
+  pixels }`, `blank`, `window`, `frame`, `at`, `flat`. Boundaries go
+  through `flat()`: file writes, video encode, `image_stats`, previews,
+  Python `pixels`, plugin inputs (ABI v1), tracker `Luma`, the viewer.
+  Every op still outputs window = frame.
 
 ## Architecture in one page
 

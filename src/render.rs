@@ -64,7 +64,7 @@ pub fn render_media_out(graph: &Graph, out_id: &str, progress: &Progress) -> Res
         if video {
             let w = match writer.as_mut() {
                 Some(w) => w,
-                None => writer.insert(VideoWriter::new(path, img.width, img.height, p.fps)?),
+                None => writer.insert(VideoWriter::new(path, img.format.width, img.format.height, p.fps)?),
             };
             w.push(&img)?;
         } else {

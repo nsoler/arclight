@@ -348,6 +348,7 @@ impl VideoWriter {
     }
 
     pub fn push(&mut self, img: &Image) -> Result<()> {
+        let img = img.flat();
         if img.width != self.width || img.height != self.height {
             bail!(
                 "frame size changed mid-render ({}x{} -> {}x{})",

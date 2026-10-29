@@ -104,7 +104,7 @@ impl Viewer {
             return;
         };
         self.upload(ui.ctx(), img);
-        let size = Vec2::new(img.width as f32, img.height as f32);
+        let size = Vec2::new(img.format.width as f32, img.format.height as f32);
 
         if self.fit_pending {
             let s = (rect.width() / size.x).min(rect.height() / size.y) * 0.95;
@@ -153,8 +153,8 @@ impl Viewer {
         if let Some(hover) = resp.hover_pos() {
             let p = (hover - img_rect.min) / self.zoom;
             let (x, y) = (p.x.floor(), p.y.floor());
-            if x >= 0.0 && y >= 0.0 && (x as usize) < img.width && (y as usize) < img.height {
-                let px = img.get(x as usize, y as usize);
+            if x >= 0.0 && y >= 0.0 && (x as usize) < img.format.width && (y as usize) < img.format.height {
+                let px = img.at(x as i32, y as i32);
                 let text = format!(
                     "x {:<5} y {:<5}   R {:.4}  G {:.4}  B {:.4}  A {:.4}",
                     x as usize, y as usize, px[0], px[1], px[2], px[3]
@@ -194,7 +194,7 @@ impl Viewer {
             ui.label(format!("{:.0}%", self.zoom * 100.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(img) = d.image {
-                    ui.label(format!("{}x{}  ·  frame {}  ·  {:.1} ms", img.width, img.height, d.frame, d.millis));
+                    ui.label(format!("{}x{}  ·  frame {}  ·  {:.1} ms", img.format.width, img.format.height, d.frame, d.millis));
                 }
                 if let Some(t) = d.target {
                     ui.strong(t);
@@ -212,10 +212,10 @@ impl Viewer {
             return;
         }
         // A resolution change (e.g. a new clip) re-fits the view.
-        if self.shown.as_ref().is_none_or(|(s, ..)| (s.width, s.height) != (img.width, img.height)) {
+        if self.shown.as_ref().is_none_or(|(s, ..)| s.format != img.format) {
             self.fit_pending = true;
         }
-        let ci = to_color_image(img, self.channel, self.exposure);
+        let ci = to_color_image(&img.flat(), self.channel, self.exposure);
         let filter = if self.nearest { TextureOptions::NEAREST } else { TextureOptions::LINEAR };
         match &mut self.texture {
             Some(t) => t.set(ci, filter),

@@ -41,8 +41,13 @@ pub struct Image {
 - `Image::full(format)` is today's behavior (window = frame);
   `flatten()` returns a window = frame copy (cropping overscan) for code
   that wants a plain buffer.
-- `width`/`height` fields go away; the compiler then lists every call site
-  (~80) to decide frame vs window for each.
+- As built (milestone 1): `width`/`height` stayed, meaning the *data
+  window's* size (what `pixels` holds), with `x0`/`y0` for its corner and
+  `format` for the frame, so existing code kept working while windows
+  equal the frame. `get`/`set` index the window; `at(x, y)` and
+  `sample_bilinear` take frame coordinates. Milestones 2–3 review each op's
+  use of `width`/`height`/`get` (frame vs window) as they make it
+  window-aware.
 
 ## Per-op rules
 
@@ -101,7 +106,7 @@ export don't change.
 
 ## Milestones
 
-1. **Data model, no behavior change.** New `Image` (format, window),
+1. **Done (session 6).** **Data model, no behavior change.** New `Image` (format, window),
    accessors, `full`, `flatten`. Every op still outputs window = frame.
    Boundaries (viewer, I/O, Python, plugins, tracker) go through `flatten`.
    All existing tests pass unchanged; add model tests.
