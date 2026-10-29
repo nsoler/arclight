@@ -288,6 +288,14 @@ impl NodeEditor {
         Pos2::new(r.right(), r.center().y)
     }
 
+    /// How far (screen points) from one of a node's `n` input ports it can
+    /// be grabbed: within half the gap to the next port, so neighbors (a
+    /// Merge's A, B and mask) never overlap.
+    fn port_reach(r: Rect, n: usize) -> f32 {
+        let gap = r.height() / (n + 1) as f32;
+        (PORT_R * 1.5).min(gap * 0.5)
+    }
+
     pub fn ui(&mut self, ui: &mut egui::Ui, doc: &mut Doc, error_node: Option<&str>) {
         let (rect, bg) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         self.rect = rect;
@@ -396,7 +404,8 @@ impl NodeEditor {
         for (id, op, r, n_in) in &geo {
             for i in 0..*n_in {
                 let p = Self::in_port(*r, i, *n_in);
-                let resp = ui.interact(Rect::from_center_size(p, Vec2::splat(PORT_R * 3.0)), Id::unique(("in", id, i)), Sense::drag());
+                let reach = Self::port_reach(*r, *n_in);
+                let resp = ui.interact(Rect::from_center_size(p, Vec2::splat(reach * 2.0)), Id::unique(("in", id, i)), Sense::drag());
                 if resp.drag_started() {
                     let upstream = doc.node(id).map(|n| n.inputs[i].clone()).unwrap_or_default();
                     if upstream.is_empty() {
@@ -441,19 +450,27 @@ impl NodeEditor {
         }
         if self.wire.is_some() && ui.input(|i| i.pointer.any_released()) {
             if let (Some(wire), Some(ptr)) = (self.wire.take(), pointer) {
-                let near = |p: Pos2| p.distance(ptr) < PORT_R * 2.5;
                 match wire {
                     Wire::FromOutput(src) => {
-                        let hit = geo.iter().find_map(|(id, _, r, n)| {
-                            (0..*n).find(|&i| near(Self::in_port(*r, i, *n))).map(|i| (id.clone(), i))
-                        });
-                        if let Some((dst, i)) = hit {
-                            doc.connect(&src, &dst, i);
+                        // The nearest input in reach, not the first: a Merge's
+                        // ports sit closer together than the reach.
+                        let hit = geo
+                            .iter()
+                            .flat_map(|(id, _, r, n)| (0..*n).map(move |i| (id, i, Self::in_port(*r, i, *n).distance(ptr))))
+                            .filter(|&(.., d)| d < PORT_R * 2.5)
+                            .min_by(|a, b| a.2.total_cmp(&b.2));
+                        if let Some((dst, i, _)) = hit {
+                            doc.connect(&src, dst, i);
                         }
                     }
                     Wire::FromInput(dst, i) => {
-                        let hit = geo.iter().find(|(_, op, r, _)| has_output(op) && near(Self::out_port(*r)));
-                        if let Some((src, ..)) = hit {
+                        let hit = geo
+                            .iter()
+                            .filter(|(_, op, ..)| has_output(op))
+                            .map(|(id, _, r, _)| (id, Self::out_port(*r).distance(ptr)))
+                            .filter(|&(_, d)| d < PORT_R * 2.5)
+                            .min_by(|a, b| a.1.total_cmp(&b.1));
+                        if let Some((src, _)) = hit {
                             doc.connect(src, &dst, i);
                         }
                     }
@@ -745,6 +762,135 @@ fn port_dot(painter: &egui::Painter, p: Pos2, zoom: f32, hot: bool, optional: bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use arclight::graph::Graph;
+
+    /// Drives a `NodeEditor` headlessly with pointer events, one egui pass
+    /// per frame.
+    struct Harness {
+        ctx: egui::Context,
+        ed: NodeEditor,
+        time: f64,
+    }
+
+    impl Harness {
+        /// At 1:1 zoom (where a Merge's three ports sit 11.5 points apart).
+        fn new() -> Harness {
+            let ed = NodeEditor { zoom: 1.0, fit_pending: false, ..NodeEditor::default() };
+            Harness { ctx: egui::Context::default(), ed, time: 0.0 }
+        }
+
+        fn frame(&mut self, doc: &mut Doc, events: Vec<egui::Event>) {
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 700.0))),
+                time: Some(self.time),
+                events,
+                ..Default::default()
+            };
+            self.time += 1.0 / 60.0;
+            let ed = &mut self.ed;
+            let _ = self.ctx.run_ui(raw, |ui| ed.ui(ui, doc, None));
+        }
+
+        fn button(pos: Pos2, pressed: bool) -> egui::Event {
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE }
+        }
+
+        /// Press at `from`, move to `to` in steps, release.
+        fn drag(&mut self, doc: &mut Doc, from: Pos2, to: Pos2) {
+            self.frame(doc, vec![egui::Event::PointerMoved(from)]);
+            self.frame(doc, vec![Self::button(from, true)]);
+            for i in 1..=8 {
+                self.frame(doc, vec![egui::Event::PointerMoved(from.lerp(to, i as f32 / 8.0))]);
+            }
+            self.frame(doc, vec![Self::button(to, false)]);
+            self.frame(doc, vec![]);
+        }
+
+        fn rect(&self, doc: &Doc, id: &str) -> Rect {
+            self.ed.node_rect(doc.node(id).unwrap().pos.unwrap())
+        }
+    }
+
+    #[test]
+    fn an_inserted_merge_takes_more_inputs() {
+        // At these zooms a Merge's three ports are 11.5 to 5.75 points apart.
+        for zoom in [1.0, 0.7, 0.5] {
+            let mut doc = Doc::new(Graph::default(), None);
+            let src = doc.add_node("constant", [0.0, 0.0]);
+            let blur = doc.add_node("blur", [500.0, 0.0]);
+            let other = doc.add_node("constant", [0.0, 200.0]);
+            let third = doc.add_node("constant", [0.0, 400.0]);
+            let merge = doc.add_node("merge", [250.0, 100.0]);
+            doc.connect(&src, &blur, 0);
+            assert!(doc.insert_on_wire(&merge, &src, &blur, 0));
+            let mut h = Harness::new();
+            h.ed.zoom = zoom;
+            h.frame(&mut doc, vec![]);
+            // From the other constant's output to the merge's B input…
+            let from = NodeEditor::out_port(h.rect(&doc, &other));
+            let to = NodeEditor::in_port(h.rect(&doc, &merge), 1, 3);
+            h.drag(&mut doc, from, to);
+            let inputs = |doc: &Doc| doc.node(&merge).unwrap().inputs.clone();
+            assert_eq!(inputs(&doc)[..2], [src.clone(), other.clone()], "zoom {zoom}: B takes it, A keeps its input");
+            // …and a third onto A, replacing what the wire brought in.
+            let from = NodeEditor::out_port(h.rect(&doc, &third));
+            let to = NodeEditor::in_port(h.rect(&doc, &merge), 0, 3);
+            h.drag(&mut doc, from, to);
+            assert_eq!(inputs(&doc)[..2], [third.clone(), other.clone()], "zoom {zoom}");
+        }
+    }
+
+    #[test]
+    fn a_merge_dropped_on_a_wire_takes_more_inputs() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let src = doc.add_node("constant", [0.0, 0.0]);
+        let blur = doc.add_node("blur", [500.0, 0.0]);
+        let other = doc.add_node("constant", [0.0, 200.0]);
+        let merge = doc.add_node("merge", [250.0, 250.0]);
+        doc.connect(&src, &blur, 0);
+        let mut h = Harness::new();
+        h.frame(&mut doc, vec![]);
+        h.frame(&mut doc, vec![]);
+        // Drag the merge by its title onto the middle of the wire.
+        let grab = h.rect(&doc, &merge).center_top() + Vec2::new(0.0, 8.0);
+        let (a, b) = (NodeEditor::out_port(h.rect(&doc, &src)), NodeEditor::in_port(h.rect(&doc, &blur), 0, 2));
+        h.drag(&mut doc, grab, a.lerp(b, 0.5));
+        let m = doc.node(&merge).unwrap().inputs.clone();
+        assert_eq!((m[0].as_str(), doc.node(&blur).unwrap().inputs[0].as_str()), (src.as_str(), merge.as_str()), "spliced");
+        // Then B from another node, both ways.
+        let to = NodeEditor::in_port(h.rect(&doc, &merge), 1, 3);
+        let out = NodeEditor::out_port(h.rect(&doc, &other));
+        h.drag(&mut doc, out, to);
+        assert_eq!(doc.node(&merge).unwrap().inputs[1], other, "output → B");
+        doc.disconnect(&merge, 1);
+        h.frame(&mut doc, vec![]);
+        h.drag(&mut doc, to, out);
+        assert_eq!(doc.node(&merge).unwrap().inputs[1], other, "B → output");
+    }
+
+    #[test]
+    fn a_merge_added_on_a_wire_from_the_menu_takes_more_inputs() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let src = doc.add_node("constant", [0.0, 0.0]);
+        let blur = doc.add_node("blur", [500.0, 0.0]);
+        let other = doc.add_node("constant", [0.0, 200.0]);
+        doc.connect(&src, &blur, 0);
+        let mut h = Harness::new();
+        h.frame(&mut doc, vec![]);
+        h.frame(&mut doc, vec![]);
+        let (a, b) = (NodeEditor::out_port(h.rect(&doc, &src)), NodeEditor::in_port(h.rect(&doc, &blur), 0, 2));
+        h.ed.target_wire = h.ed.wire_at(&doc, a.lerp(b, 0.5), None);
+        assert!(h.ed.target_wire.is_some());
+        let at = h.ed.to_graph(a.lerp(b, 0.5) + Vec2::new(0.0, 60.0));
+        h.ed.place(&mut doc, ops::info("merge").unwrap(), at);
+        let merge = doc.selected.clone().unwrap();
+        h.frame(&mut doc, vec![]);
+        let to = NodeEditor::in_port(h.rect(&doc, &merge), 1, 3);
+        let out = NodeEditor::out_port(h.rect(&doc, &other));
+        h.drag(&mut doc, out, to);
+        assert_eq!(doc.node(&merge).unwrap().inputs[1], other, "output → B");
+    }
 
     #[test]
     fn shaking_needs_quick_reversals() {

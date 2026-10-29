@@ -16,7 +16,7 @@ Last updated 2026-10-28 (end of session 5). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~13,300 lines of Rust + Python. Tests: 71 library + 10 CLI + 31 GUI
+- ~13,300 lines of Rust + Python. Tests: 71 library + 10 CLI + 34 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Clippy is clean apart from two old style lints (`Graph::from_str` name,
   `chunks_exact_mut(4)` in media.rs).
@@ -327,6 +327,16 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   identical. **Phase 0.6 is done.** Follow-ups: ROI (render only what a
   downstream crop/viewer needs) and tiling are now possible on top of
   windows; Merge could intersect for `in`/`mask`-type operations.
+- **Session 6, part 10** (user bug report): wires couldn't be connected
+  to a Merge's B input (or reliably to any closely spaced input) at
+  normal zoom; it showed up after inserting a Merge into a wire. Cause:
+  a dropped wire took the *first* input within 13.75 points, and a
+  Merge's ports are 11.5 apart at 1:1 (so B's drop landed on A), and the
+  ports' 16.5-point grab squares overlapped. Now the nearest port wins
+  and grab areas are capped at half the gap (`NodeEditor::port_reach`).
+  `node_editor.rs` tests gained a `Harness` that drives the editor
+  headlessly with egui pointer events (`Context::run_ui`), at a chosen
+  zoom: use it for any node-graph gesture.
 
 ## Architecture in one page
 
