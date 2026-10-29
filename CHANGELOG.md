@@ -11,6 +11,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.24 — 2026-10-29
+
+- 3D view: lights show as icons (a star for point lights, a cone with
+  its penumbra for spots, parallel arrows for directional lights, a ring
+  for ambient light) and can be picked, box-selected, framed and moved
+  with the gizmos and G / R / S like other objects (M10 step d).
+
 ## 0.9.23 — 2026-10-29
 
 - **Ambient, Directional, Point** and **Spot Light** nodes (color,

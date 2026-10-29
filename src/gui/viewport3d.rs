@@ -2,7 +2,10 @@
 //! to the viewer, with Blender-style navigation (the conventions only; no
 //! Blender code), picking and selection shared with the node graph, and the
 //! cards textured and meshes shaded by the CPU renderer on a worker thread
-//! (meshes lit from the view, or drawn as wireframes).
+//! (meshes lit from the view, or drawn as wireframes). Lights show as
+//! icons (a star for a point light, a cone for a spot, parallel arrows for
+//! a directional light, the rectangle for an area light, a ring for
+//! ambient light) and are picked, selected, framed and moved like cameras.
 //!
 //! Navigation: middle-drag orbits (turntable: yaw about world Y, pitch
 //! short of the poles), ⇧ + middle-drag pans, scroll or ⌃ + middle-drag
@@ -24,6 +27,7 @@ use crate::worker::{SceneRequest, SceneWorker};
 use arclight::geom::{self, Mat4, Vec3};
 use arclight::image::{Image, Size};
 use arclight::scene::Scene;
+use arclight::shade::{Light, LightKind};
 use eframe::egui::{self, Align2, Color32, FontId, PointerButton, Pos2, Rect, Response, Sense, Stroke, TextureHandle, TextureOptions, Vec2};
 use nalgebra::Rotation3;
 use std::sync::Arc;
@@ -250,8 +254,8 @@ impl Projector {
     }
 }
 
-/// The scene's extent: a center and radius holding its cameras, cards and
-/// points (None when it's empty).
+/// The scene's extent: a center and radius holding its cameras, cards,
+/// meshes, lights and points (None when it's empty).
 fn bounds(scene: &Scene, only: Option<&dyn Fn(&str) -> bool>) -> Option<(Vec3, f64)> {
     let keep = |n: &str| only.is_none_or(|f| f(n));
     let mut pts: Vec<Vec3> = Vec::new();
@@ -265,6 +269,9 @@ fn bounds(scene: &Scene, only: Option<&dyn Fn(&str) -> bool>) -> Option<(Vec3, f
     }
     for (lo, hi) in scene.meshes.iter().filter(|m| keep(&m.node)).filter_map(|m| m.bounds()) {
         pts.extend([lo, hi]);
+    }
+    for l in scene.lights.iter().filter(|l| keep(&l.node)) {
+        pts.push(l.position());
     }
     for (i, p) in scene.points.iter().enumerate() {
         if keep(scene.point_node(i)) {
@@ -288,10 +295,72 @@ fn frustum(cam: &geom::Camera, size: f64, aspect: f64) -> (Vec3, [Vec3; 4]) {
     (geom::transform_point(&cam.world, &Vec3::zeros()), [corner(-w, h), corner(w, h), corner(w, -h), corner(-w, -h)])
 }
 
+/// A light's icon as line segments in the scene, `size` across (none for
+/// ambient light, drawn as a ring instead):
+/// - point: a star of eight rays round it;
+/// - spot: a cone `2 size` long down its −Z, a ring at the cone's edge, a
+///   second inside where the penumbra starts, and four sides;
+/// - directional: three parallel arrows down its −Z;
+/// - area: its rectangle and an arrow out of its middle the way it shines.
+fn light_lines(l: &Light, size: f64) -> Vec<(Vec3, Vec3)> {
+    let at = l.position();
+    let dir = l.direction();
+    // Two directions across the light's axis (its own X and Y).
+    let axis = |k: usize| -> Vec3 { l.world.fixed_view::<3, 1>(0, k).into_owned().try_normalize(1e-12).unwrap_or(if k == 0 { Vec3::x() } else { Vec3::y() }) };
+    let (u, v) = (axis(0), axis(1));
+    let ring = |center: Vec3, r: f64| -> Vec<(Vec3, Vec3)> {
+        let pt = |i: usize| {
+            let a = std::f64::consts::TAU * i as f64 / 24.0;
+            center + (u * a.cos() + v * a.sin()) * r
+        };
+        (0..24).map(|i| (pt(i), pt(i + 1))).collect()
+    };
+    let arrow = |from: Vec3, to: Vec3| -> Vec<(Vec3, Vec3)> {
+        let back = (from - to) * 0.25;
+        vec![(from, to), (to, to + back + u * back.norm() * 0.5), (to, to + back - u * back.norm() * 0.5)]
+    };
+    match l.kind {
+        LightKind::Ambient => Vec::new(),
+        LightKind::Point => {
+            let r = size * 0.5;
+            let d = std::f64::consts::FRAC_1_SQRT_2;
+            [u, v, dir, (u + v) * d, (u - v) * d, (u + dir) * d, (v + dir) * d, (u - dir) * d].iter().map(|a| (at - a * r, at + a * r)).collect()
+        }
+        LightKind::Spot { cone, penumbra } => {
+            let len = size * 2.0;
+            let end = at + dir * len;
+            let half = (cone / 2.0).clamp(0.0, 89.0).to_radians();
+            let inner = (cone / 2.0 - penumbra.max(0.0)).clamp(0.0, 89.0).to_radians();
+            let (r, ri) = (len * half.tan(), len * inner.tan());
+            let mut out = ring(end, r);
+            if penumbra > 0.0 && ri > 0.0 {
+                out.extend(ring(end, ri));
+            }
+            out.extend([u, v, -u, -v].iter().map(|a| (at, end + a * r)));
+            out
+        }
+        LightKind::Directional => {
+            let len = size * 1.5;
+            let mut out = Vec::new();
+            for off in [Vec3::zeros(), u * size * 0.4, -u * size * 0.4] {
+                out.extend(arrow(at + off, at + off + dir * len));
+            }
+            out
+        }
+        LightKind::Area { size: wh } => {
+            let c = |x: f64, y: f64| geom::transform_point(&l.world, &Vec3::new(x * wh[0] / 2.0, y * wh[1] / 2.0, 0.0));
+            let k = [c(-1.0, 1.0), c(1.0, 1.0), c(1.0, -1.0), c(-1.0, -1.0)];
+            let mut out: Vec<(Vec3, Vec3)> = (0..4).map(|i| (k[i], k[(i + 1) % 4])).collect();
+            out.extend(arrow(at, at + dir * size));
+            out
+        }
+    }
+}
+
 /// What a click picked.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Hit {
-    /// A card, mesh, camera or locator: its node.
+    /// A card, mesh, camera, light or locator: its node.
     Object(String),
     /// Point `.1` of the point cloud (or Camera Tracker) node `.0`.
     Point(String, usize),
@@ -301,7 +370,7 @@ pub enum Hit {
 const PICK_RADIUS: f32 = 7.0;
 
 /// What's under screen point `s` in `scene` seen through `p`: the nearest
-/// point, locator or camera within reach, else the nearest card or mesh
+/// point, locator, camera or light within reach, else the nearest card or mesh
 /// the ray through `s` hits. `is_locator` tells a locator's point from a
 /// cloud's.
 pub fn pick(scene: &Scene, p: &Projector, s: Pos2, is_locator: &dyn Fn(&str) -> bool) -> Option<Hit> {
@@ -320,6 +389,9 @@ pub fn pick(scene: &Scene, p: &Projector, s: Pos2, is_locator: &dyn Fn(&str) -> 
     }
     for (i, cam) in scene.cameras.iter().enumerate() {
         consider(geom::transform_point(&cam.world, &Vec3::zeros()), Hit::Object(scene.camera_node(i).to_string()));
+    }
+    for l in scene.lights.iter().filter(|l| !l.node.is_empty()) {
+        consider(l.position(), Hit::Object(l.node.clone()));
     }
     if let Some((_, _, hit)) = best {
         return Some(hit);
@@ -412,7 +484,7 @@ fn mesh_edges(m: &arclight::mesh::Mesh) -> Vec<[u32; 2]> {
 }
 
 /// What a box from `a` to `b` (screen) holds: objects whose centers fall
-/// inside (cards, meshes, cameras, locators) and points.
+/// inside (cards, meshes, cameras, lights, locators) and points.
 pub fn box_pick(scene: &Scene, p: &Projector, a: Pos2, b: Pos2, is_locator: &dyn Fn(&str) -> bool) -> (Vec<String>, Vec<(String, usize)>) {
     let r = Rect::from_two_pos(a, b);
     let inside = |x: Vec3| p.project(x).is_some_and(|(q, _)| r.contains(q));
@@ -432,6 +504,9 @@ pub fn box_pick(scene: &Scene, p: &Projector, a: Pos2, b: Pos2, is_locator: &dyn
         if inside(geom::transform_point(&cam.world, &Vec3::zeros())) {
             add(scene.camera_node(i));
         }
+    }
+    for l in scene.lights.iter().filter(|l| inside(l.position())) {
+        add(&l.node);
     }
     let mut points = Vec::new();
     for (i, pt) in scene.points.iter().enumerate() {
@@ -581,6 +656,7 @@ const MESH: Color32 = Color32::from_rgb(150, 170, 190);
 const MAX_EDGES: usize = 40_000;
 const POINT: Color32 = Color32::from_rgb(90, 175, 225);
 const SELECTED: Color32 = Color32::from_rgb(255, 160, 40);
+const LIGHT: Color32 = Color32::from_rgb(250, 225, 120);
 
 // `projector`, `has_scene` and `object_world` are the seam for the
 // transform gizmos (gizmo3d.rs) and the viewer.
@@ -597,7 +673,7 @@ impl Viewport3d {
     }
 
     /// The world matrix of node `node`'s object in the viewed scene (a
-    /// card, mesh, camera or locator; no parenting yet, so it's the node's own
+    /// card, mesh, camera, light or locator; no parenting yet, so it's the node's own
     /// translate / rotate / scale).
     pub fn object_world(&self, node: &str) -> Option<Mat4> {
         let s = self.scene.as_ref()?;
@@ -609,6 +685,9 @@ impl Viewport3d {
         }
         if let Some(i) = (0..s.cameras.len()).find(|&i| s.camera_node(i) == node) {
             return Some(s.cameras[i].world);
+        }
+        if let Some(l) = s.lights.iter().find(|l| l.node == node) {
+            return Some(l.world);
         }
         let i = (0..s.points.len()).find(|&i| s.point_node(i) == node)?;
         Some(Mat4::new_translation(&s.points[i]))
@@ -938,7 +1017,14 @@ impl Viewport3d {
     fn select_everything(&mut self, doc: &mut Doc) {
         let Some(s) = self.scene.clone() else { return };
         let is_locator = Self::locator(doc);
-        let mut objects: Vec<String> = s.cards.iter().map(|c| c.node.clone()).chain(s.meshes.iter().map(|m| m.node.clone())).chain((0..s.cameras.len()).map(|i| s.camera_node(i).to_string())).collect();
+        let mut objects: Vec<String> = s
+            .cards
+            .iter()
+            .map(|c| c.node.clone())
+            .chain(s.meshes.iter().map(|m| m.node.clone()))
+            .chain((0..s.cameras.len()).map(|i| s.camera_node(i).to_string()))
+            .chain(s.lights.iter().map(|l| l.node.clone()))
+            .collect();
         self.points.clear();
         for i in 0..s.points.len() {
             let n = s.point_node(i);
@@ -1095,6 +1181,7 @@ impl Viewport3d {
         let only = |n: &str| sel.iter().any(|s| s == n);
         picked.cards = s.cards.iter().filter(|c| only(&c.node)).cloned().collect();
         picked.meshes = s.meshes.iter().filter(|m| only(&m.node)).cloned().collect();
+        picked.lights = s.lights.iter().filter(|l| only(&l.node)).cloned().collect();
         for (i, c) in s.cameras.iter().enumerate() {
             if only(s.camera_node(i)) {
                 picked.cameras.push(c.clone());
@@ -1114,7 +1201,8 @@ impl Viewport3d {
         }
     }
 
-    /// The grid, axes, cards, cameras, paths, points and locators.
+    /// The grid, axes, cards, meshes, cameras, paths, lights, points and
+    /// locators.
     fn draw(&mut self, ui: &egui::Ui, painter: &egui::Painter, p: &Projector, doc: &Doc, frame: i64) {
         let line = |a: Vec3, b: Vec3, stroke: Stroke| {
             if let Some((sa, sb)) = p.segment(a, b) {
@@ -1199,6 +1287,23 @@ impl Viewport3d {
             line(k[0], up, stroke);
             line(up, k[1], stroke);
             self.draw_path(painter, p, doc, node, frame);
+        }
+        for l in &scene.lights {
+            let on = selected(&l.node);
+            let stroke = Stroke::new(if on { 2.0 } else { 1.2 }, if on { SELECTED } else { LIGHT });
+            for (a, b) in light_lines(l, size) {
+                line(a, b, stroke);
+            }
+            if let Some((s, _)) = p.project(l.position()) {
+                // A dot at the light itself (a ring for ambient light),
+                // what a click picks.
+                if l.kind == LightKind::Ambient {
+                    painter.circle_stroke(s, 5.0, stroke);
+                    painter.circle_stroke(s, 2.0, stroke);
+                } else {
+                    painter.circle_filled(s, 2.5, stroke.color);
+                }
+            }
         }
         for (i, pt) in scene.points.iter().enumerate() {
             let node = scene.point_node(i);
@@ -1607,6 +1712,62 @@ mod tests {
         // A cube's edges: 12 sides and a diagonal across each face, once
         // each though every face has its own corners.
         assert_eq!(mesh_edges(&arclight::mesh::cube([1.0; 3], [1; 3])).len(), 18);
+    }
+
+    #[test]
+    fn lights_are_picked_framed_and_drawn() {
+        let (mut s, p, _) = picking_scene();
+        let loc = |_: &str| false;
+        let at = |x: Vec3| p.project(x).unwrap().0;
+        let light = |node: &str, kind: LightKind, t: [f64; 3], r: [f64; 3]| Light { node: node.into(), ..Light::new(kind, geom::trs(t, r, [1.0; 3])) };
+        s.lights = vec![
+            light("bulb", LightKind::Point, [1.0, 2.0, -6.0], [0.0; 3]),
+            light("spot", LightKind::Spot { cone: 60.0, penumbra: 10.0 }, [-1.5, 2.0, -7.0], [-90.0, 0.0, 0.0]),
+            light("sun", LightKind::Directional, [3.0, 3.0, -9.0], [-45.0, 0.0, 0.0]),
+            light("panel", LightKind::Area { size: [2.0, 1.0] }, [-3.0, -1.5, -8.0], [0.0, 0.0, 0.0]),
+            light("fill", LightKind::Ambient, [0.0, 3.5, -8.0], [0.0; 3]),
+        ];
+        // A click on (or near) each light picks it, over the cards behind.
+        for l in &s.lights {
+            assert_eq!(pick(&s, &p, at(l.position()) + Vec2::new(2.0, 2.0), &loc), Some(Hit::Object(l.node.clone())), "{}", l.node);
+        }
+        // A box round the left half takes the spot and the panel.
+        let (objects, _) = box_pick(&s, &p, Pos2::new(0.0, 0.0), Pos2::new(rect().center().x - 30.0, rect().max.y), &loc);
+        assert!(objects.contains(&"spot".to_string()) && objects.contains(&"panel".to_string()) && !objects.contains(&"bulb".to_string()), "{objects:?}");
+        // Framing one centers on it; its world is its placement (what the
+        // gizmo and G / R / S move).
+        let mut v = Viewport3d { scene: Some(Arc::new(s.clone())), ..Viewport3d::default() };
+        assert_eq!(v.object_world("spot"), Some(s.lights[1].world));
+        v.frame_selected(Some(&["sun".to_string()]));
+        assert!((Vec3::from(v.view.center) - Vec3::new(3.0, 3.0, -9.0)).norm() < 1e-6);
+        let (c, r) = bounds(&Scene { lights: s.lights.clone(), ..Scene::default() }, None).unwrap();
+        assert!(r > 3.0 && (c.y - 1.0).abs() < 1e-9, "{c} {r}");
+        // Icons. A point light: a star of rays through it, each `size` long.
+        let star = light_lines(&s.lights[0], 1.0);
+        assert_eq!(star.len(), 8);
+        assert!(star.iter().all(|(a, b)| ((a + b) / 2.0 - s.lights[0].position()).norm() < 1e-9 && ((b - a).norm() - 1.0).abs() < 1e-9));
+        // A spot: a cone 2 long down (its −Z), the outer ring at its 30°
+        // edge, the inner where the 10° penumbra starts (20°).
+        let cone = light_lines(&s.lights[1], 1.0);
+        let apex = s.lights[1].position();
+        let ring_radius = |lines: &[(Vec3, Vec3)]| lines.iter().map(|(a, _)| (a - (apex - Vec3::y() * 2.0)).norm()).collect::<Vec<_>>();
+        let radii = ring_radius(&cone[..48]);
+        assert!(radii[..24].iter().all(|r| (r - 2.0 * 30f64.to_radians().tan()).abs() < 1e-9), "{radii:?}");
+        assert!(radii[24..].iter().all(|r| (r - 2.0 * 20f64.to_radians().tan()).abs() < 1e-9));
+        assert!(cone[48..].iter().all(|(a, b)| *a == apex && (b - apex).normalize().dot(&-Vec3::y()) > 0.8));
+        // A hard-edged spot has no inner ring.
+        assert_eq!(light_lines(&Light { kind: LightKind::Spot { cone: 60.0, penumbra: 0.0 }, ..s.lights[1].clone() }, 1.0).len(), 24 + 4);
+        // Directional: three arrows, their shafts parallel to the light.
+        let sun = light_lines(&s.lights[2], 1.0);
+        let dir = s.lights[2].direction();
+        assert!(sun.iter().step_by(3).all(|(a, b)| (b - a).normalize().dot(&dir) > 1.0 - 1e-9) && sun.len() == 9);
+        // Area: its rectangle, 2 × 1, and an arrow down its −Z.
+        let panel = light_lines(&s.lights[3], 1.0);
+        let corners: Vec<Vec3> = panel[..4].iter().map(|(a, _)| *a).collect();
+        assert!(((corners[0] - corners[1]).norm() - 2.0).abs() < 1e-9 && ((corners[1] - corners[2]).norm() - 1.0).abs() < 1e-9);
+        assert!((panel[4].1 - panel[4].0).normalize().dot(&-Vec3::z()) > 1.0 - 1e-9);
+        // Ambient light has no icon lines (a ring is drawn instead).
+        assert!(light_lines(&s.lights[4], 1.0).is_empty());
     }
 
     #[test]
