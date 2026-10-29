@@ -496,6 +496,13 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   video_codecs_keep_their_depth` round-trips a 1024-step ramp through
   each. Also fixed the old `chunks_exact_mut(4)` clippy lint (now
   `as_chunks_mut`); only `Graph::from_str` remains.
+- **Session 7, part 21** (user request): video-coded DPX output.
+  `dpx::Encoding` (Log10 default, Video10, Video16; `dpx::ENCODINGS`
+  choices) as a `dpx` param on media_out and write; `Image::write_as`
+  (`write` = default log). Video: sRGB-coded full range, transfer and
+  colorimetric 6 (Rec. 709), ref codes 0/max; 10-bit filled method A,
+  16-bit packing 0 with lines padded to words. Checked: ImageMagick and
+  ffmpeg read both back to the source color.
 - **CorridorKey** (AI keyer, github.com/nikopueringer/CorridorKey; the
   OFX port gitcapoom/corridorkey_ofx is Windows/Resolve-only): the user
   deferred it. If revisited: run upstream's PyTorch engine (Linux OK; the

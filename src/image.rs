@@ -245,6 +245,11 @@ impl Image {
     /// sRGB with alpha; other extensions are 8-bit sRGB after
     /// unpremultiplying (JPEG, which has no alpha, over black).
     pub fn write(&self, path: &Path) -> Result<()> {
+        self.write_as(path, crate::dpx::Encoding::default())
+    }
+
+    /// [`write`](Self::write), choosing how a `.dpx` is encoded.
+    pub fn write_as(&self, path: &Path, dpx: crate::dpx::Encoding) -> Result<()> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent).ok();
@@ -258,7 +263,7 @@ impl Image {
         if ext == "exr" {
             self.write_exr(path)
         } else if ext == "dpx" {
-            crate::dpx::write(self, path)
+            crate::dpx::write(self, path, dpx)
         } else {
             self.write_ldr(path)
         }

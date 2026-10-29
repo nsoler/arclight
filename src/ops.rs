@@ -747,13 +747,16 @@ pub static OPS: &[OpInfo] = &[
             fixed!("last_frame", "Last frame", FRAME, 100),
             fixed!("fps", "FPS (video)", ParamKind::Float { min: 1.0, max: 240.0 }, 24.0),
             fixed!("codec", "Codec (video)", ParamKind::Choice(crate::media::VIDEO_CODECS), "auto"),
+            fixed!("dpx", "DPX encoding", ParamKind::Choice(crate::dpx::ENCODINGS), "10-bit log"),
         ],
         overlay: Overlay::None,
         mask_base: None,
         help: "Renders a frame range to an image sequence (shot.####.exr) or a \
                video. Codec: auto (.mov = ProRes 422 HQ, others H.264), H.264 8-bit, \
                HEVC 10-bit, ProRes 422 HQ 10-bit, or ProRes 4444 with alpha (ProRes \
-               needs .mov or .mkv). The 10-bit codecs get the full 10 bits.",
+               needs .mov or .mkv). The 10-bit codecs get the full 10 bits. DPX \
+               encoding (for .dpx sequences): 10-bit log (keeps values above 1.0), \
+               or 10/16-bit video (sRGB-coded, full range, marked Rec. 709).",
     },
     OpInfo {
         name: "viewer",
@@ -770,10 +773,14 @@ pub static OPS: &[OpInfo] = &[
         label: "Write (still)",
         category: Category::Output,
         inputs: &[IN],
-        params: &[p!("path", "File", ParamKind::Path { save: true }, "")],
+        params: &[
+            p!("path", "File", ParamKind::Path { save: true }, ""),
+            fixed!("dpx", "DPX encoding", ParamKind::Choice(crate::dpx::ENCODINGS), "10-bit log"),
+        ],
         overlay: Overlay::None,
         mask_base: None,
-        help: "Writes its input when the graph is rendered from the command line.",
+        help: "Writes its input when the graph is rendered from the command line. \
+               DPX encoding (for .dpx files): 10-bit log, or 10/16-bit video.",
     },
 ];
 
@@ -2027,6 +2034,7 @@ fn shade(cov: impl Fn(i32, i32) -> f32 + Sync + Send, reach: IRect, format: Size
 #[derive(Deserialize)]
 struct WriteParams {
     path: PathBuf,
+    dpx: String,
 }
 
 /// Write input[0] to disk (when the context allows) and pass it through
@@ -2038,7 +2046,7 @@ fn write(params: &Value, inputs: &[Option<&Image>], ctx: &EvalContext) -> Result
         if p.path.as_os_str().is_empty() {
             bail!("no output file set");
         }
-        src.write(&media::frame_path(&p.path.to_string_lossy(), ctx.frame))?;
+        src.write_as(&media::frame_path(&p.path.to_string_lossy(), ctx.frame), crate::dpx::Encoding::from_choice(&p.dpx))?;
     }
     Ok(src.clone())
 }

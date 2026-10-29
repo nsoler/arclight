@@ -164,7 +164,7 @@ result is blended back toward the main input (B for merge/keymix) by
 | `roto` | background (optional) | `points` [x, y, in dx, in dy, out dx, out dy, …], `fill_rule`, + shape params | one closed bezier; handles are offsets from their vertex, so moving a vertex carries them; the whole list animates as one value |
 | `tracker` | 1 | `track1`–`track4` [2] + `track<i>_on`, `pattern`, `search` (box sizes, px), `min_score`, `update` (`first frame`/`every frame`), `motion` (`translate`/`translate, rotate`/`translate, rotate, scale`: what the matcher follows besides position), `output` (`input`/`match-move`/`stabilize`), `solve` (`translate`/`translate, rotate`/`translate, rotate, scale`), `reference_frame` | the panel's Track buttons key each track's position per frame (and, when Track motion follows rotation, its turn and growth in `track<i>_warp` = [degrees, scale], so one track can solve rotation and scale) (NCC on luminance, sub-pixel); the output applies or removes the motion relative to the reference frame; **To Transform: Match-move / Stabilize** adds a Transform keyed with that motion on every tracked frame, to move another layer with the shot (or steady it); with all four tracks on, **To Corner Pin** adds a Corner Pin that follows them in perspective; `motion_blur`, `shutter`, `shutter_offset` blur the match-move/stabilize output over the shutter, as for Transform |
 | `write` | 1 | `path` | `.exr` = float; others = 8-bit sRGB |
-| `media_out` | 1 | `path`, `first_frame`, `last_frame`, `fps`, `codec` (`auto`/`H.264 8-bit`/`HEVC 10-bit`/`ProRes 422 HQ 10-bit`/`ProRes 4444 + alpha`) | renders a range to a sequence or a video; `auto` = ProRes 422 HQ for `.mov`, H.264 otherwise; ProRes needs `.mov`/`.mkv`; the 10-bit codecs are fed 16-bit frames, ProRes 4444 keeps alpha |
+| `media_out` | 1 | `path`, `first_frame`, `last_frame`, `fps`, `dpx` (DPX encoding), `codec` (`auto`/`H.264 8-bit`/`HEVC 10-bit`/`ProRes 422 HQ 10-bit`/`ProRes 4444 + alpha`) | renders a range to a sequence or a video; `auto` = ProRes 422 HQ for `.mov`, H.264 otherwise; ProRes needs `.mov`/`.mkv`; the 10-bit codecs are fed 16-bit frames, ProRes 4444 keeps alpha |
 | `viewer` | 1 | — | pass-through; marks what the GUI viewer shows |
 
 Shape params, shared by `rectangle`, `ellipse`, `polygon` and `roto`: `width`,
@@ -272,8 +272,11 @@ what loaded, and `arclight ops [OP]` to see the op catalog.
   luma; 10/12-bit filled or packed; either byte order; any orientation).
   Log (printing density) DPX is converted to linear with the Cineon curve
   (black 95, white 685, gamma 0.6), linear DPX is taken as is, and
-  video-coded DPX is decoded like the 8/16-bit formats. Written as 10-bit
-  log RGB (alpha dropped, color over black), which keeps values above 1.0.
+  video-coded DPX is decoded like the 8/16-bit formats. Written as RGB
+  (alpha dropped, color over black) per the **DPX encoding** setting on
+  Media Out and Write: `10-bit log` (default; keeps values above 1.0),
+  `10-bit video` or `16-bit video` (sRGB-coded, full range, marked
+  Rec. 709; values above 1.0 clip).
 - **TIFF** (`.tif`/`.tiff`): read at 8, 16 or 32-bit (any common
   compression); written as 16-bit sRGB with straight alpha (tagged as
   alpha), LZW-compressed.

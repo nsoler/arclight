@@ -6,8 +6,9 @@
 //! order; any orientation. Log data (printing density) is converted to
 //! linear with the Cineon curve (black 95, white 685 on the 10-bit scale),
 //! linear data is taken as is, and video-coded data is decoded like the
-//! other 8/16-bit formats (sRGB). Writing is 10-bit log RGB, the usual film
-//! deliverable: values above 1.0 survive it.
+//! other 8/16-bit formats (sRGB). Writing is RGB (see [`Encoding`]): 10-bit
+//! log, the usual film deliverable (values above 1.0 survive it), or 10- or
+//! 16-bit video-coded (sRGB, full range, marked Rec. 709).
 
 use crate::color;
 use crate::image::Image;
@@ -31,6 +32,32 @@ const ENCODING: usize = 26;
 const ELEMENT_OFFSET: usize = 28;
 /// Where the image data starts in files we write (headers end at 2048).
 const HEADER_SIZE: usize = 2048;
+
+/// Media Out's and Write's DPX choices.
+pub const ENCODINGS: &[&str] = &["10-bit log", "10-bit video", "16-bit video"];
+
+/// How DPX is written.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Encoding {
+    /// Printing density (Cineon log), 10-bit: keeps values above 1.0.
+    #[default]
+    Log10,
+    /// sRGB-coded video, full range, 10-bit.
+    Video10,
+    /// sRGB-coded video, full range, 16-bit.
+    Video16,
+}
+
+impl Encoding {
+    /// The encoding for an [`ENCODINGS`] choice (anything else: log).
+    pub fn from_choice(choice: &str) -> Encoding {
+        match choice {
+            "10-bit video" => Encoding::Video10,
+            "16-bit video" => Encoding::Video16,
+            _ => Encoding::Log10,
+        }
+    }
+}
 
 /// Cineon printing density: code values for black and white.
 const LOG_BLACK: f32 = 95.0;
@@ -220,12 +247,16 @@ fn unpack(data: &[u8], big: bool, bits: u32, packing: u16, per_row: usize, rows:
     Ok(out)
 }
 
-/// Write `img` (its frame) as 10-bit log RGB, big-endian, filled method A.
-/// DPX keeps no alpha here, so the color is written over black.
-pub fn write(img: &Image, path: &Path) -> Result<()> {
+/// Write `img` (its frame) as RGB DPX, big-endian: 10-bit filled method A
+/// (one word a pixel) or 16-bit. DPX keeps no alpha here, so the color is
+/// written over black.
+pub fn write(img: &Image, path: &Path, encoding: Encoding) -> Result<()> {
     let flat = img.flat();
     let (w, h) = (flat.width, flat.height);
-    let mut out = vec![0u8; HEADER_SIZE + w * h * 4];
+    let deep = encoding == Encoding::Video16;
+    // 16-bit lines are padded to whole 32-bit words.
+    let line = if deep { (w * 6).div_ceil(4) * 4 } else { w * 4 };
+    let mut out = vec![0u8; HEADER_SIZE + line * h];
     let size = out.len() as u32;
     let put32 = |out: &mut Vec<u8>, at: usize, v: u32| out[at..at + 4].copy_from_slice(&v.to_be_bytes());
     let put16 = |out: &mut Vec<u8>, at: usize, v: u16| out[at..at + 2].copy_from_slice(&v.to_be_bytes());
@@ -248,21 +279,38 @@ pub fn write(img: &Image, path: &Path) -> Result<()> {
     put32(&mut out, WIDTH, w as u32);
     put32(&mut out, HEIGHT, h as u32);
     let el = |field: usize| ELEMENT + field;
-    put32(&mut out, el(4), LOG_BLACK as u32); // reference low data code
-    put32(&mut out, el(12), LOG_WHITE as u32); // reference high data code
+    let max = if deep { 65535 } else { 1023 };
+    let (low, high) = if encoding == Encoding::Log10 { (LOG_BLACK as u32, LOG_WHITE as u32) } else { (0, max) };
+    put32(&mut out, el(4), low); // reference low data code
+    put32(&mut out, el(12), high); // reference high data code
     out[el(DESCRIPTOR)] = 50; // RGB
-    out[el(TRANSFER)] = 1; // printing density
-    out[el(22)] = 1; // colorimetric: printing density
-    out[el(BIT_DEPTH)] = 10;
-    put16(&mut out, el(PACKING), 1); // filled, method A
+    // Printing density, or Rec. 709 video.
+    let (transfer, colorimetric) = if encoding == Encoding::Log10 { (1, 1) } else { (6, 6) };
+    out[el(TRANSFER)] = transfer;
+    out[el(22)] = colorimetric;
+    out[el(BIT_DEPTH)] = if deep { 16 } else { 10 };
+    put16(&mut out, el(PACKING), if deep { 0 } else { 1 }); // 10-bit: filled, method A
     put16(&mut out, el(ENCODING), 0);
     put32(&mut out, el(ELEMENT_OFFSET), HEADER_SIZE as u32);
     // The other seven elements and the orientation/film/TV headers stay zero.
-    // Pixels: R, G, B in one word each.
+    let code = |v: f32| -> u32 {
+        match encoding {
+            Encoding::Log10 => linear_to_log(v).round() as u32,
+            _ => (color::linear_to_srgb(v).clamp(0.0, 1.0) * max as f32).round() as u32,
+        }
+    };
     for (i, px) in flat.pixels.iter().enumerate() {
-        let code = |v: f32| linear_to_log(v).round() as u32;
-        let word = (code(px[0]) << 22) | (code(px[1]) << 12) | (code(px[2]) << 2);
-        put32(&mut out, HEADER_SIZE + i * 4, word);
+        if deep {
+            // R, G, B as 16-bit halves.
+            let at = HEADER_SIZE + (i / w) * line + (i % w) * 6;
+            for c in 0..3 {
+                put16(&mut out, at + c * 2, code(px[c]) as u16);
+            }
+        } else {
+            // R, G, B in one word each.
+            let word = (code(px[0]) << 22) | (code(px[1]) << 12) | (code(px[2]) << 2);
+            put32(&mut out, HEADER_SIZE + i * 4, word);
+        }
     }
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).ok();
@@ -292,13 +340,38 @@ mod tests {
         }
         let dir = std::env::temp_dir().join(format!("arclight_dpx_{}", std::process::id()));
         let path = dir.join("frame.dpx");
-        write(&img, &path).unwrap();
+        write(&img, &path, Encoding::Log10).unwrap();
         let back = read(&path).unwrap();
         assert_eq!((back.width, back.height), (5, 3));
         for (a, b) in img.pixels.iter().zip(&back.pixels) {
             for c in 0..3 {
                 // A 10-bit log step is about 1% of the value.
                 assert!((a[c] - b[c]).abs() <= 0.012 * a[c].max(0.05), "{a:?} vs {b:?}");
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn video_coded_dpx_round_trips_and_clips_highlights() {
+        let mut img = Image::new(7, 2); // odd width: 16-bit lines get padded
+        for (i, p) in img.pixels.iter_mut().enumerate() {
+            let v = i as f32 / 13.0;
+            *p = [v, 0.18, 1.0 - v * 0.5, 1.0];
+        }
+        img.pixels[13] = [3.0, 0.5, 0.0, 1.0]; // a highlight video can't hold
+        let dir = std::env::temp_dir().join(format!("arclight_dpxv_{}", std::process::id()));
+        for (enc, bits, tol) in [(Encoding::Video10, 10, 2e-3), (Encoding::Video16, 16, 1e-4)] {
+            let path = dir.join(format!("v{bits}.dpx"));
+            write(&img, &path, enc).unwrap();
+            let data = std::fs::read(&path).unwrap();
+            assert_eq!((data[ELEMENT + TRANSFER], data[ELEMENT + BIT_DEPTH]), (6, bits), "Rec. 709 video, {bits}-bit");
+            let back = read(&path).unwrap();
+            for (i, (a, b)) in img.pixels.iter().zip(&back.pixels).enumerate() {
+                let want = if i == 13 { [1.0, 0.5, 0.0] } else { [a[0], a[1], a[2]] };
+                // Compare in the coded (sRGB) domain, where the steps are even.
+                let err = (0..3).map(|c| (color::linear_to_srgb(want[c]) - color::linear_to_srgb(b[c])).abs()).fold(0.0, f32::max);
+                assert!(err < tol, "{bits}-bit pixel {i}: {a:?} vs {b:?}");
             }
         }
         std::fs::remove_dir_all(&dir).ok();

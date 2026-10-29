@@ -30,6 +30,7 @@ struct MediaOut {
     last_frame: i64,
     fps: f64,
     codec: String,
+    dpx: String,
 }
 
 /// Render the frame range of `media_out` node `out_id` to its file(s).
@@ -72,7 +73,7 @@ pub fn render_media_out(graph: &Graph, out_id: &str, progress: &Progress) -> Res
             };
             w.push(&img)?;
         } else {
-            img.write(&media::frame_path(&p.path, frame))?;
+            img.write_as(&media::frame_path(&p.path, frame), crate::dpx::Encoding::from_choice(&p.dpx))?;
         }
         progress.done.fetch_add(1, Ordering::Relaxed);
     }
