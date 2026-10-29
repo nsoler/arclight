@@ -11,6 +11,19 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.30 — 2026-10-29
+
+- Wires can be selected (click; Delete disconnects) and right-clicked
+  for **Insert 3D Camera Setup**, **Insert Node…** or **Delete
+  connection**; **Edit ▸ Add 3D Camera Setup** adds a wired Camera,
+  Scene and Scanline Render in a "3D Setup" backdrop (into the selected
+  wire, after the selected node, or on its own). The first one in a
+  project switches the viewer to 3D with a hint ("Tab switches 2D /
+  3D"), and the toolbar's **3D ●** shows whenever the viewed node has a
+  scene.
+- The node browser (right-click) is bigger (340 wide, up to 560 tall)
+  and shows a line of help for each node.
+
 ## 0.9.29 — 2026-10-29
 
 - Read and Media In **fit what they read to the project's format**

@@ -780,6 +780,24 @@ impl App {
                     ui.close();
                 }
                 ui.separator();
+                let target = if self.doc.selected_wire.is_some() {
+                    "into the selected wire"
+                } else if sel.is_some() {
+                    "after the selected node"
+                } else {
+                    "on its own"
+                };
+                let tip = format!(
+                    "A Camera, a Scene and a Scanline Render, wired up, in a \"3D Setup\" backdrop ({target}): on a wire, its picture becomes \
+                     the render's background and the render goes on to where the wire went. Add Cards, meshes and lights to the Scene. \
+                     (Right-click a wire for the same.)"
+                );
+                if ui.button("Add 3D Camera Setup").on_hover_text(tip).clicked() {
+                    let at = self.editor.view_center();
+                    self.doc.add_camera_setup(at);
+                    ui.close();
+                }
+                ui.separator();
                 if ui.add_enabled(sel.is_some(), egui::Button::new("View node").shortcut_text("V")).clicked() {
                     self.doc.view_node(sel.as_deref().unwrap());
                     ui.close();
@@ -848,6 +866,11 @@ impl eframe::App for App {
         self.handle_bridge(&ctx);
         self.handle_drops(&ctx);
         self.shortcuts(&ctx);
+        // A first 3D setup in this project: show it in the 3D view.
+        if let Some(render) = self.doc.show_3d.take() {
+            self.doc.view_node(&render);
+            self.viewer.announce_3d(ctx.input(|i| i.time));
+        }
         if self.transport.play != Play::Stopped {
             self.transport.tick(&self.doc.graph.project);
             ctx.request_repaint();

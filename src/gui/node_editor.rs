@@ -42,6 +42,27 @@ const SHAKE_FLIPS: usize = 3;
 const SHAKE_SECS: f64 = 0.7;
 const MINIMAP: Vec2 = Vec2::new(190.0, 120.0);
 
+/// What a wire's right-click menu offers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum WireAction {
+    CameraSetup,
+    InsertNode,
+    Delete,
+}
+
+impl WireAction {
+    const ALL: [(WireAction, &'static str, &'static str); 3] = [
+        (
+            WireAction::CameraSetup,
+            "Insert 3D Camera Setup",
+            "Add a Camera, a Scene and a Scanline Render here: the picture on this wire becomes the render's background, \
+             and the render goes on to where the wire went. Add Cards, meshes and lights to the Scene.",
+        ),
+        (WireAction::InsertNode, "Insert Node…", "Pick a node to put into this wire"),
+        (WireAction::Delete, "Delete connection", "Disconnect this wire (⌫ with it selected)"),
+    ];
+}
+
 /// A wire: `src`'s output into input `port` of `dst`.
 #[derive(Clone, Debug, PartialEq)]
 struct WireRef {
@@ -88,6 +109,8 @@ pub struct NodeEditor {
     /// A backdrop's title being edited in place: id, text, and whether the
     /// field still needs focus.
     title_edit: Option<(String, String, bool)>,
+    /// A wire's right-click menu: the wire, and where it opened (screen).
+    wire_menu: Option<(WireRef, Pos2)>,
     pub rect: Rect,
 }
 
@@ -104,6 +127,31 @@ fn content_bounds(doc: &Doc) -> Rect {
 /// A backdrop's smallest size (graph units).
 const BACKDROP_MIN: Vec2 = Vec2::new(120.0, 60.0);
 const SELECTED: Color32 = Color32::from_rgb(250, 190, 70);
+
+/// The node browser's width, its list's tallest, and the room its search
+/// field and margins take (points).
+const BROWSER_WIDTH: f32 = 340.0;
+const BROWSER_LIST_MAX: f32 = 560.0;
+const BROWSER_CHROME: f32 = 120.0;
+
+/// A node browser row: the node's name, then the start of its help (its
+/// first sentence, cut to fit), smaller and dimmer.
+fn browser_row(ui: &egui::Ui, op: &OpInfo) -> egui::text::LayoutJob {
+    let style = ui.style();
+    let mut job = egui::text::LayoutJob::default();
+    egui::RichText::new(op.label).size(14.0).append_to(&mut job, style, egui::FontSelection::Default, egui::Align::Center);
+    let first = op.help.split(". ").next().unwrap_or("").trim_end_matches('.');
+    // Roughly what fits beside the name (characters).
+    let room = ((BROWSER_WIDTH - 40.0 - op.label.chars().count() as f32 * 7.5) / 5.6).max(0.0) as usize;
+    let mut text: String = first.chars().take(room).collect();
+    if first.chars().count() > room {
+        text = text.trim_end().to_string() + "…";
+    }
+    if !text.is_empty() {
+        egui::RichText::new(format!("   {text}")).size(11.0).color(style.visuals.weak_text_color()).append_to(&mut job, style, egui::FontSelection::Default, egui::Align::Center);
+    }
+    job
+}
 
 /// The Shift+E node browser: a search field over every op.
 struct Browser {
@@ -131,6 +179,7 @@ impl Default for NodeEditor {
             select_box: None,
             backdrop_drag: None,
             title_edit: None,
+            wire_menu: None,
             rect: Rect::NOTHING,
         }
     }
@@ -232,6 +281,13 @@ impl NodeEditor {
         self.pan = self.rect.size() / 2.0 - node.center().to_vec2() * self.zoom;
     }
 
+    /// The middle of the view, in graph coordinates (where a node added from
+    /// a menu goes).
+    pub fn view_center(&self) -> [f32; 2] {
+        let c = if self.rect.is_positive() { self.to_graph(self.rect.center()) } else { Pos2::new(200.0, 200.0) };
+        [c.x - NODE_W / 2.0, c.y - NODE_H / 2.0]
+    }
+
     /// The node browser is open (it takes Esc and the arrow keys).
     pub fn browser_open(&self) -> bool {
         self.browser.is_some()
@@ -248,15 +304,14 @@ impl NodeEditor {
     /// one; else, with a node selected, the new node takes it as its first
     /// input.
     ///
-    /// A Camera comes with what it needs (`Doc::add_camera_rig`): a Scene
-    /// and a Scanline Render, which goes where the node would have; the
-    /// Camera is selected. `bare` (Shift held): just the Camera.
+    /// A Camera comes with what it needs (`Doc::add_camera_setup`): a
+    /// Scene and a Scanline Render, which goes where the node would have;
+    /// the Camera is selected. `bare` (Shift held): just the Camera.
     fn place(&mut self, doc: &mut Doc, op: &OpInfo, at: Pos2, bare: bool) {
         let upstream = doc.selected.clone();
         if op.name == "camera" && !bare {
-            let w = self.target_wire.take();
-            let (camera, ..) = doc.add_camera_rig([at.x, at.y], w.as_ref().map(|w| (w.src.as_str(), w.dst.as_str(), w.port)), upstream.as_deref());
-            doc.selected = Some(camera);
+            doc.selected_wire = self.target_wire.take().map(|w| (w.src, w.dst, w.port));
+            doc.add_camera_setup([at.x, at.y]);
             return;
         }
         let id = doc.add_node(op.name, [at.x, at.y]);
@@ -295,16 +350,22 @@ impl NodeEditor {
         let mut chosen = enter.then(|| hits.get(b.sel).copied()).flatten();
         let mut close = esc || enter;
 
+        // Grow upward in the lower half of the screen so the list fits; as
+        // tall as there's room for from the pointer, up to a limit.
+        let screen = ctx.content_rect();
+        let upward = b.at.y > screen.center().y;
+        let room = if upward { b.at.y - screen.top() } else { screen.bottom() - b.at.y };
+        let list_height = (room - BROWSER_CHROME).clamp(160.0, BROWSER_LIST_MAX);
         let area = egui::Area::new(Id::unique("node_browser"))
             .order(egui::Order::Foreground)
             .fixed_pos(b.at)
-            // Grow upward in the lower half of the screen so the list fits.
-            .pivot(if b.at.y > ctx.content_rect().center().y { Align2::LEFT_BOTTOM } else { Align2::LEFT_TOP })
+            .pivot(if upward { Align2::LEFT_BOTTOM } else { Align2::LEFT_TOP })
             .constrain(true)
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_width(230.0);
-                    let edit = ui.add(egui::TextEdit::singleline(&mut b.query).hint_text("Search nodes…"));
+                    ui.set_width(BROWSER_WIDTH);
+                    ui.spacing_mut().item_spacing.y = 3.0;
+                    let edit = ui.add(egui::TextEdit::singleline(&mut b.query).hint_text("Search nodes…").desired_width(f32::INFINITY));
                     if b.just_opened {
                         edit.request_focus();
                         b.just_opened = false;
@@ -319,7 +380,7 @@ impl NodeEditor {
                     if hits.is_empty() {
                         ui.weak("No matching nodes");
                     }
-                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    egui::ScrollArea::vertical().max_height(list_height).min_scrolled_height(list_height).show(ui, |ui| {
                         let mut last_cat = None;
                         for (i, op) in hits.iter().enumerate() {
                             if last_cat != Some(op.category) {
@@ -331,7 +392,7 @@ impl NodeEditor {
                             } else {
                                 op.help.to_string()
                             };
-                            let resp = ui.selectable_label(i == b.sel, op.label).on_hover_text(help);
+                            let resp = ui.selectable_label(i == b.sel, browser_row(ui, op)).on_hover_text(help);
                             if i == b.sel && (down || up) {
                                 resp.scroll_to_me(None);
                             }
@@ -402,13 +463,25 @@ impl NodeEditor {
         self.draw_grid(&painter);
 
         let mods = ui.input(|i| i.modifiers);
-        if bg.clicked() && !mods.shift && !mods.command {
-            doc.clear_selection();
+        // (Before this frame's clicks, so the one opening it doesn't close it.)
+        self.wire_menu_ui(ui.ctx(), doc);
+        // A click on a wire selects it; elsewhere it deselects.
+        if bg.clicked() {
+            match bg.interact_pointer_pos().and_then(|p| self.wire_at(doc, p, None)) {
+                Some(w) => doc.select_wire(&w.src, &w.dst, w.port),
+                None if !mods.shift && !mods.command => doc.clear_selection(),
+                None => {}
+            }
         }
-        // Right-click opens the node browser there (over a wire, its node
-        // goes into the wire).
+        // Right-click on a wire: its menu; elsewhere the node browser.
         if bg.secondary_clicked() {
-            self.open_browser(bg.interact_pointer_pos());
+            match bg.interact_pointer_pos().and_then(|p| Some((self.wire_at(doc, p, None)?, p))) {
+                Some((w, p)) => {
+                    doc.select_wire(&w.src, &w.dst, w.port);
+                    self.wire_menu = Some((w, p));
+                }
+                None => self.open_browser(bg.interact_pointer_pos()),
+            }
         }
         if let Some(at) = self.browser.as_ref().filter(|b| b.just_opened).map(|b| b.at) {
             self.target_wire = self.wire_at(doc, at, None);
@@ -446,8 +519,10 @@ impl NodeEditor {
                     let a = Self::out_port(from);
                     let b = Self::in_port(to, i, n.inputs.len());
                     let on = lit.is_some_and(|w| w.src == *src && w.dst == n.id && w.port == i);
+                    let picked = doc.selected_wire.as_ref().is_some_and(|(s, d, p)| s == src && *d == n.id && *p == i);
                     let plain = if is_scene(doc, src) { Stroke::new(wire_stroke.width, SCENE_COLOR) } else { wire_stroke };
-                    painter.add(bezier(a, b, if on { Stroke::new(3.0, Color32::from_rgb(250, 190, 70)) } else { plain }));
+                    let stroke = if on || picked { Stroke::new(3.0 * self.zoom.sqrt().max(1.0), SELECTED) } else { plain };
+                    painter.add(bezier(a, b, stroke));
                 }
             }
         }
@@ -616,6 +691,53 @@ impl NodeEditor {
             let hit: Vec<String> = geo.iter().filter(|g| g.2.intersects(r)).map(|g| g.0.clone()).collect();
             if !hit.is_empty() || !add {
                 doc.select_nodes(&hit, add);
+            }
+        }
+    }
+
+    /// A wire's right-click menu (see [`WireAction`]); it closes on a
+    /// choice, Esc or a click elsewhere.
+    fn wire_menu_ui(&mut self, ctx: &egui::Context, doc: &mut Doc) {
+        let Some((w, at)) = self.wire_menu.clone() else { return };
+        if !doc.wire_exists(&(w.src.clone(), w.dst.clone(), w.port)) || ctx.input(|i| i.key_pressed(Key::Escape)) {
+            self.wire_menu = None;
+            return;
+        }
+        let mut chosen = None;
+        let area = egui::Area::new(Id::unique(("wire_menu", &w.src, &w.dst, w.port))).fixed_pos(at).order(egui::Order::Foreground).show(ctx, |ui| {
+            egui::Frame::menu(ui.style()).show(ui, |ui| {
+                ui.set_min_width(200.0);
+                ui.weak(format!("{} → {}", w.src, w.dst));
+                for (action, label, tip) in WireAction::ALL {
+                    if ui.button(label).on_hover_text(tip).clicked() {
+                        chosen = Some(action);
+                    }
+                }
+            });
+        });
+        if let Some(action) = chosen {
+            self.wire_menu = None;
+            self.wire_action(doc, &w, at, action);
+        } else if area.response.clicked_elsewhere() {
+            self.wire_menu = None;
+        }
+    }
+
+    /// Do `action` to wire `w` (its menu opened at screen point `at`).
+    fn wire_action(&mut self, doc: &mut Doc, w: &WireRef, at: Pos2, action: WireAction) {
+        match action {
+            WireAction::CameraSetup => {
+                doc.select_wire(&w.src, &w.dst, w.port);
+                let g = self.to_graph(at);
+                doc.add_camera_setup([g.x, g.y]);
+            }
+            WireAction::InsertNode => {
+                self.open_browser(Some(at));
+                self.target_wire = Some(w.clone());
+            }
+            WireAction::Delete => {
+                doc.disconnect(&w.dst, w.port);
+                doc.selected_wire = None;
             }
         }
     }
@@ -1125,6 +1247,46 @@ mod tests {
     }
 
     #[test]
+    fn wires_are_picked_and_have_a_menu() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let plate = doc.add_node("checkerboard", [100.0, 100.0]);
+        let grade = doc.add_node("grade", [100.0, 300.0]);
+        doc.connect(&plate, &grade, 0);
+        let mut h = Harness::new();
+        h.frame(&mut doc, vec![]);
+        // Halfway down the wire (from the plate's output to the grade's input).
+        let (a, b) = (h.rect(&doc, &plate), h.rect(&doc, &grade));
+        let mid = NodeEditor::out_port(a).lerp(NodeEditor::in_port(b, 0, 2), 0.5);
+        let click = |h: &mut Harness, doc: &mut Doc, at: Pos2, button: egui::PointerButton| {
+            h.frame(doc, vec![egui::Event::PointerMoved(at)]);
+            for pressed in [true, false] {
+                h.frame(doc, vec![egui::Event::PointerButton { pos: at, button, pressed, modifiers: Modifiers::NONE }]);
+            }
+            h.frame(doc, vec![]);
+        };
+        click(&mut h, &mut doc, mid, egui::PointerButton::Primary);
+        assert_eq!(doc.selected_wire, Some((plate.clone(), grade.clone(), 0)), "a click selects it");
+        click(&mut h, &mut doc, mid + Vec2::new(300.0, 0.0), egui::PointerButton::Primary);
+        assert_eq!(doc.selected_wire, None, "a click on nothing deselects");
+        // Right-click: its menu.
+        click(&mut h, &mut doc, mid, egui::PointerButton::Secondary);
+        assert!(h.ed.wire_menu.is_some() && doc.selected_wire.is_some() && !h.ed.browser_open());
+        // Its actions: a camera setup into it; a node browser aimed at it;
+        // disconnecting it.
+        let w = h.ed.wire_menu.clone().unwrap().0;
+        h.ed.wire_action(&mut doc, &w, mid, WireAction::InsertNode);
+        assert!(h.ed.browser_open() && h.ed.target_wire.as_ref() == Some(&w));
+        h.ed.browser = None;
+        h.ed.wire_action(&mut doc, &w, mid, WireAction::CameraSetup);
+        let render = doc.node(&grade).unwrap().inputs[0].clone();
+        assert_eq!(doc.node(&render).map(|n| n.op.as_str()), Some("scanline_render"));
+        assert_eq!(doc.node(&render).unwrap().inputs[2], plate);
+        let into = WireRef { src: render.clone(), dst: grade.clone(), port: 0 };
+        h.ed.wire_action(&mut doc, &into, mid, WireAction::Delete);
+        assert_eq!(doc.node(&grade).unwrap().inputs[0], "");
+    }
+
+    #[test]
     fn an_inserted_merge_takes_more_inputs() {
         // At these zooms a Merge's three ports are 11.5 to 5.75 points apart.
         for zoom in [1.0, 0.7, 0.5] {
@@ -1239,7 +1401,7 @@ mod tests {
     }
 
     #[test]
-    fn right_click_opens_the_node_browser_and_targets_a_wire_under_it() {
+    fn right_click_opens_the_node_browser_or_a_wires_menu() {
         let mut doc = Doc::new(Graph::default(), None);
         let src = doc.add_node("constant", [0.0, 0.0]);
         let blur = doc.add_node("blur", [500.0, 0.0]);
@@ -1258,10 +1420,15 @@ mod tests {
         click(&mut h, &mut doc, empty);
         assert_eq!(h.ed.browser.as_ref().map(|b| b.at), Some(empty));
         assert!(h.ed.target_wire.is_none());
-        // On the wire: placing from it splices the new node in.
+        // On the wire: its menu, whose Insert Node… opens the browser aimed
+        // at it; placing from it splices the new node in.
         h.ed.browser = None;
         let mid = NodeEditor::out_port(h.rect(&doc, &src)).lerp(NodeEditor::in_port(h.rect(&doc, &blur), 0, 2), 0.5);
         click(&mut h, &mut doc, mid);
+        assert!(h.ed.browser.is_none() && h.ed.wire_menu.is_some());
+        let w = h.ed.wire_menu.take().unwrap().0;
+        h.ed.wire_action(&mut doc, &w, mid, WireAction::InsertNode);
+        h.frame(&mut doc, vec![]);
         assert!(h.ed.browser.is_some());
         assert_eq!(h.ed.target_wire, Some(WireRef { src: src.clone(), dst: blur.clone(), port: 0 }));
         h.ed.place(&mut doc, ops::info("grade").unwrap(), h.ed.to_graph(mid), false);

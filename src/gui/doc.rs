@@ -38,6 +38,15 @@ pub struct Doc {
     selection_for: Option<String>,
     /// A selected backdrop (selecting one deselects the nodes).
     pub selected_backdrop: Option<String>,
+    /// A selected wire: `src`'s output into input `port` of `dst`
+    /// (selecting one deselects the nodes and backdrop).
+    pub selected_wire: Option<(String, String, usize)>,
+    /// A 3D setup was just added for the first time in this project: the
+    /// app shows its render (this node) in the viewer's 3D view, once.
+    pub show_3d: Option<String>,
+    /// Whether that has happened (also kept in the project's view state;
+    /// this survives undoing the setup).
+    intro_3d: bool,
     /// A node shown in place of the Viewer node's input (double-click, V),
     /// until the Viewer is viewed again. View state: not saved or undone.
     pub view_override: Option<String>,
@@ -57,7 +66,7 @@ pub struct Doc {
 impl Doc {
     pub fn new(graph: Graph, path: Option<PathBuf>) -> Doc {
         let history = History { undo: Vec::new(), redo: Vec::new(), committed: Graph::default(), committed_edits: 0 };
-        let mut doc = Doc { graph, selected: None, selection: Vec::new(), selection_for: None, selected_backdrop: None, view_override: None, view_format: None, revision: 1, path, dirty: false, edits: 0, history };
+        let mut doc = Doc { graph, selected: None, selection: Vec::new(), selection_for: None, selected_backdrop: None, selected_wire: None, show_3d: None, intro_3d: false, view_override: None, view_format: None, revision: 1, path, dirty: false, edits: 0, history };
         doc.normalize();
         doc.auto_layout();
         doc.history.committed = doc.graph.clone();
@@ -129,6 +138,9 @@ impl Doc {
         if self.selected_backdrop.as_ref().is_some_and(|b| self.graph.backdrop(b).is_none()) {
             self.selected_backdrop = None;
         }
+        if self.selected_wire.as_ref().is_some_and(|w| !self.wire_exists(w)) {
+            self.selected_wire = None;
+        }
     }
 
     // ---- Selection ----
@@ -158,7 +170,21 @@ impl Doc {
         self.selection = ids;
         if self.selected.is_some() {
             self.selected_backdrop = None;
+            self.selected_wire = None;
         }
+    }
+
+    /// Select the wire from `src` into input `port` of `dst` (and nothing
+    /// else).
+    pub fn select_wire(&mut self, src: &str, dst: &str, port: usize) {
+        self.set_selection(Vec::new());
+        self.selected_backdrop = None;
+        self.selected_wire = Some((src.to_string(), dst.to_string(), port));
+    }
+
+    /// Whether `src` still feeds input `port` of `dst`.
+    pub fn wire_exists(&self, (src, dst, port): &(String, String, usize)) -> bool {
+        self.node(dst).is_some_and(|n| n.inputs.get(*port) == Some(src))
     }
 
     /// Just `id`.
@@ -200,12 +226,14 @@ impl Doc {
     pub fn clear_selection(&mut self) {
         self.set_selection(Vec::new());
         self.selected_backdrop = None;
+        self.selected_wire = None;
     }
 
     /// Select backdrop `id` (and no nodes).
     pub fn select_backdrop(&mut self, id: &str) {
         self.set_selection(Vec::new());
         self.selected_backdrop = Some(id.to_string());
+        self.selected_wire = None;
     }
 
     /// Move nodes `ids` by `d` (graph units).
@@ -227,6 +255,12 @@ impl Doc {
         if !sel.is_empty() {
             for id in &sel {
                 self.delete_node(id);
+            }
+            return true;
+        }
+        if let Some(w) = self.selected_wire.take() {
+            if self.wire_exists(&w) {
+                self.disconnect(&w.1, w.2);
             }
             return true;
         }
@@ -378,6 +412,74 @@ impl Doc {
                 self.connect(up, &render, 2);
                 self.changed();
             }
+        }
+        (camera, scene, render)
+    }
+
+    /// Add a 3D camera setup (a Camera into a Scene into a Scanline Render,
+    /// see [`add_camera_rig`](Self::add_camera_rig)) where it fits what's
+    /// selected: into the selected wire (its picture becomes the render's
+    /// background, and the render feeds where the wire went), else after
+    /// the selected node, else on its own at `free_at`. The three stand in a
+    /// column beside the wire or node (moved right until clear of other
+    /// nodes) inside a "3D Setup" backdrop; the Camera is selected. The
+    /// first setup in a project asks the app to show it in 3D
+    /// ([`show_3d`](Self::show_3d)). Returns (camera, scene, render).
+    pub fn add_camera_setup(&mut self, free_at: [f32; 2]) -> (String, String, String) {
+        let wire = self.selected_wire.take().filter(|w| self.wire_exists(w));
+        let up = if wire.is_none() { self.selected.clone().filter(|u| self.node(u).is_some()) } else { None };
+        let pos = |d: &Doc, id: &str| d.node(id).and_then(|n| n.pos).unwrap_or([0.0, 0.0]);
+        // Beside what it attaches to: right of the wire's middle or of the
+        // node, level with it.
+        let (dx, dy) = (NODE_W + 60.0, NODE_H + 40.0);
+        let anchor = match (&wire, &up) {
+            (Some((src, dst, _)), _) => {
+                let (a, b) = (pos(self, src), pos(self, dst));
+                [a[0].max(b[0]) + dx, (a[1] + b[1]) / 2.0]
+            }
+            (None, Some(u)) => {
+                let p = pos(self, u);
+                [p[0] + dx, p[1] + dy]
+            }
+            _ => free_at,
+        };
+        let (camera, scene, render) = self.add_camera_rig(anchor, wire.as_ref().map(|(s, d, p)| (s.as_str(), d.as_str(), *p)), up.as_deref());
+        let ours = [camera.clone(), scene.clone(), render.clone()];
+        // A column, render at the anchor's height: camera, scene, render.
+        let column = |x: f32| [[x, anchor[1] - 2.0 * dy], [x, anchor[1] - dy], [x, anchor[1]]];
+        let boxes = |x: f32| column(x).map(|p| (p, [p[0] + NODE_W, p[1] + NODE_H]));
+        let clear = |d: &Doc, x: f32| {
+            let Some(b) = Backdrop::around("", "", boxes(x)) else { return true };
+            !d.graph.nodes.iter().filter(|n| !ours.contains(&n.id)).any(|n| {
+                let (a, c) = Self::node_box(n);
+                a[0] < b.pos[0] + b.size[0] && c[0] > b.pos[0] && a[1] < b.pos[1] + b.size[1] && c[1] > b.pos[1]
+            })
+        };
+        let mut x = anchor[0];
+        for _ in 0..40 {
+            if clear(self, x) {
+                break;
+            }
+            x += dx / 2.0;
+        }
+        for (id, p) in ours.iter().zip(column(x)) {
+            if let Some(n) = self.node_mut(id) {
+                n.pos = Some(p);
+            }
+        }
+        let id = self.graph.new_backdrop_id();
+        if let Some(mut b) = Backdrop::around(&id, "3D Setup", boxes(x)) {
+            b.color = Backdrop::COLORS[7];
+            self.graph.backdrops.push(b);
+        }
+        self.touched();
+        self.select_only(&camera);
+        // The first in this project: show it in 3D (once; remembered with
+        // the project's view settings, so it's no edit).
+        if !self.intro_3d && !self.graph.view.0.contains_key("intro_3d") {
+            self.graph.view.0.insert("intro_3d".into(), serde_json::Value::Bool(true));
+            self.intro_3d = true;
+            self.show_3d = Some(render.clone());
         }
         (camera, scene, render)
     }
@@ -864,6 +966,62 @@ mod tests {
         let (_, scene2, _) = d.add_camera_rig([900.0, 200.0], Some((&card, &scene, 1)), None);
         assert_eq!(inputs(&d, &scene)[1], card);
         assert_eq!(inputs(&d, &scene2)[1], "");
+    }
+
+    #[test]
+    fn a_3d_camera_setup_goes_where_the_selection_is_in_a_backdrop() {
+        let mut d = Doc::new(Graph::default(), None);
+        let plate = d.add_node("checkerboard", [0.0, 0.0]);
+        let grade = d.add_node("grade", [0.0, 100.0]);
+        let viewer = d.add_node("viewer", [0.0, 200.0]);
+        d.connect(&plate, &grade, 0);
+        d.connect(&grade, &viewer, 0);
+        d.commit(false);
+        let before = d.graph.clone();
+        // A selected wire: picked, it deselects the nodes; the setup goes
+        // into it.
+        d.select_only(&grade);
+        d.select_wire(&plate, &grade, 0);
+        assert!(d.selection().is_empty() && d.selected_wire.is_some());
+        let (cam, scene, render) = d.add_camera_setup([500.0, 500.0]);
+        d.commit(false);
+        assert_eq!((inputs(&d, &render)[2].as_str(), inputs(&d, &grade)[0].as_str(), inputs(&d, &render)[0].as_str()), (plate.as_str(), render.as_str(), scene.as_str()));
+        assert_eq!((d.selected.as_deref(), d.selected_wire.as_ref()), (Some(cam.as_str()), None), "the Camera selected");
+        // A column beside the wire, in a "3D Setup" backdrop holding just
+        // the three.
+        let pos = |d: &Doc, id: &str| d.node(id).unwrap().pos.unwrap();
+        assert!(pos(&d, &cam)[0] == pos(&d, &render)[0] && pos(&d, &cam)[1] < pos(&d, &scene)[1] && pos(&d, &scene)[1] < pos(&d, &render)[1]);
+        let b = d.graph.backdrops.iter().find(|b| b.title == "3D Setup").unwrap().clone();
+        let inside = |id: &str| {
+            let (a, c) = Doc::node_box(d.node(id).unwrap());
+            b.contains(a, c)
+        };
+        assert!(inside(&cam) && inside(&scene) && inside(&render));
+        assert!(![&plate, &grade, &viewer].iter().any(|n| {
+            let (a, c) = Doc::node_box(d.node(n).unwrap());
+            a[0] < b.pos[0] + b.size[0] && c[0] > b.pos[0] && a[1] < b.pos[1] + b.size[1] && c[1] > b.pos[1]
+        }), "clear of the other nodes");
+        // The first in the project asks to be shown in 3D; later ones don't.
+        assert_eq!(d.show_3d.take(), Some(render.clone()));
+        d.undo();
+        assert_eq!(d.graph, before, "one undo step");
+        // After the selected node; then on its own at the given spot.
+        d.select_only(&grade);
+        let (_, _, render) = d.add_camera_setup([500.0, 500.0]);
+        assert_eq!((inputs(&d, &render)[2].as_str(), inputs(&d, &viewer)[0].as_str()), (grade.as_str(), render.as_str()));
+        assert_eq!(d.show_3d, None, "the project has had its first (kept in its view state)");
+        d.clear_selection();
+        let (cam, _, render) = d.add_camera_setup([800.0, 300.0]);
+        assert_eq!((inputs(&d, &render)[2].as_str(), pos(&d, &render)), ("", [800.0, 300.0]));
+        assert_eq!(pos(&d, &cam)[1], 300.0 - 2.0 * (NODE_H + 40.0));
+        // A selected wire is deleted by Delete, like a node; selecting a
+        // node drops it.
+        d.select_wire(&plate, &grade, 0);
+        assert!(d.delete_selection());
+        assert_eq!((inputs(&d, &grade)[0].as_str(), d.selected_wire.as_ref()), ("", None));
+        d.select_wire(&grade, &render, 2);
+        d.select_only(&plate);
+        assert!(d.selected_wire.is_none());
     }
 
     #[test]

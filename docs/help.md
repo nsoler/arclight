@@ -8,8 +8,10 @@ selected node in **Properties** on the right. On macOS, ⌘ stands for Ctrl.
 
 | Action | How |
 |---|---|
-| Add a node | Right-click (the node browser; type to search), or over a wire to insert it there |
+| Add a node | Right-click (the node browser; type to search) |
 | Connect | Drag from an output (circle) to an input (square), or the other way |
+| Select a wire | Click it (it lights up); **⌫** disconnects it |
+| Wire menu | Right-click a wire: **Insert 3D Camera Setup**, **Insert Node…**, **Delete connection** |
 | Disconnect / reroute | Drag a connected input away |
 | View a node | Double-click it, or **V** |
 | Delete | **⌫** (Backspace) or **Delete** |
@@ -17,8 +19,22 @@ selected node in **Properties** on the right. On macOS, ⌘ stands for Ctrl.
 | Pan | Middle-drag or **⌥**-drag (Alt) |
 | Zoom | Scroll or pinch |
 
-Adding a **Camera** brings a Scene and a Scanline Render with it, wired in;
-hold **⇧** (Shift) when choosing it for the Camera alone.
+### 3D camera setup
+
+To put a picture into 3D, add a **3D Camera Setup**: right-click the wire
+the picture travels on and choose **Insert 3D Camera Setup**, or use
+**Edit ▸ Add 3D Camera Setup** (into the selected wire, else after the
+selected node, else on its own). It adds a **Camera**, a **Scene** and a
+**Scanline Render**, wired up, in a **3D Setup** backdrop beside the wire:
+the picture on the wire becomes the render's background, and the render
+goes on to where the wire went. Then add Cards, meshes and lights to the
+Scene's free inputs. Choosing **Camera** in the node browser does the same
+(hold **⇧** for the Camera alone).
+
+The first setup in a project switches the viewer to its **3D** view,
+framed on the new scene, and says how to switch back (**Tab**). The
+viewer's **3D** button shows a dot whenever the viewed node has a 3D
+scene, and is dimmed when it hasn't.
 
 ## Selecting nodes
 
@@ -32,7 +48,8 @@ hold **⇧** (Shift) when choosing it for the Camera alone.
 - Drag (or middle-drag) to pan; scroll or pinch to zoom.
 - Double-click or **F** to fit.
 - **Tab** (with the pointer over the viewer) switches between **2D** (the
-  image) and **3D** (the scene); so do the **2D / 3D** buttons.
+  image) and **3D** (the scene); so do the **2D / 3D** buttons (**3D ●**
+  when the viewed node has a scene).
 - The selected node's handles draw over the image: drag them to edit (a
   Transform's gizmo, shape boxes and vertices, tracker boxes, corner pins).
   **⌘**-click (or **⌘**-drag) in a Keyer picks the screen color.

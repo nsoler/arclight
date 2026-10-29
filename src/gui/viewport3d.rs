@@ -667,6 +667,14 @@ impl Viewport3d {
         self.last
     }
 
+    /// Frame the next scene the viewer shows (when it arrives from the
+    /// worker), as for a project opened without a saved view.
+    pub fn frame_next_scene(&mut self) {
+        self.frame_first_scene = true;
+        self.scene = None;
+        self.asked = None;
+    }
+
     /// Whether the viewed node shows a scene.
     pub fn has_scene(&self) -> bool {
         self.scene.is_some()

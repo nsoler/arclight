@@ -39,6 +39,14 @@ impl Channel {
     ];
 }
 
+/// The 3D button's mark when there's a scene to see, and its glow.
+const SCENE_3D: Color32 = Color32::from_rgb(90, 175, 235);
+/// How long the 3D button glows, and the hint shows, after a first 3D
+/// setup (seconds).
+const PULSE_SECONDS: f64 = 4.0;
+const HINT_SECONDS: f64 = 7.0;
+const HINT_3D: &str = "3D view: Tab switches 2D / 3D (pointer over the viewer)";
+
 pub struct Viewer {
     texture: Option<TextureHandle>,
     /// The image currently uploaded, and the display settings it used.
@@ -80,6 +88,12 @@ pub struct Viewer {
     dragged: Option<Handle>,
     /// A message for the 3D view (why G / R / S can't), and when it was shown.
     notice: Option<(String, f64)>,
+    /// The viewed node has a 3D scene (the 3D button shows it).
+    has_scene: bool,
+    /// The 3D button glows until this time (seconds), and a hint about
+    /// the 3D view shows from this time: after a first 3D setup.
+    pulse_until: f64,
+    hint_since: Option<f64>,
     pub rect: Rect,
 }
 
@@ -114,6 +128,9 @@ impl Default for Viewer {
             space: Space::default(),
             dragged: None,
             notice: None,
+            has_scene: false,
+            pulse_until: 0.0,
+            hint_since: None,
             rect: Rect::NOTHING,
         }
     }
@@ -150,6 +167,21 @@ impl Viewer {
     /// Switch between the image (2D) and the scene (3D).
     pub fn toggle_3d(&mut self) {
         self.mode3d = !self.mode3d;
+    }
+
+    /// A first 3D setup was added (`now`: the time, seconds): show the 3D
+    /// view framed on the scene, make the 3D button glow for a few seconds
+    /// and say how to switch.
+    pub fn announce_3d(&mut self, now: f64) {
+        self.mode3d = true;
+        self.viewport3d.frame_next_scene();
+        self.pulse_until = now + PULSE_SECONDS;
+        self.hint_since = Some(now);
+    }
+
+    /// The hint after a first 3D setup, while it shows (`now`: seconds).
+    fn hint(&self, now: f64) -> Option<&'static str> {
+        self.hint_since.filter(|t| now - t < HINT_SECONDS).map(|_| HINT_3D)
     }
 
     /// G / R / S is running: it takes the keys and the pointer, and its
@@ -301,6 +333,11 @@ impl Viewer {
     /// `doc` and `frame` drive the selected node's overlay handles; edits
     /// key animated params at `frame`.
     pub fn ui(&mut self, ui: &mut egui::Ui, d: Display<'_>, doc: &mut Doc, frame: i64) {
+        self.has_scene = d.target.is_some_and(|t| scene_of(doc, t).is_some());
+        let now = ui.input(|i| i.time);
+        if self.pulse_until > now || self.hint(now).is_some() {
+            ui.ctx().request_repaint();
+        }
         if self.mode3d {
             self.toolbar_3d(ui, &d);
         } else {
@@ -312,6 +349,7 @@ impl Viewer {
         painter.rect_filled(rect, 0.0, Color32::from_gray(24));
         if self.mode3d {
             self.ui_3d(ui, rect, &resp, &d, doc, frame);
+            self.draw_hint(ui, rect, now);
             return;
         }
 
@@ -445,16 +483,45 @@ impl Viewer {
         }
     }
 
-    /// The 2D / 3D switch, at the left of either toolbar.
+    /// The 2D / 3D switch, at the left of either toolbar. 3D is marked
+    /// (a dot, in the scene color) when the viewed node has a 3D scene and
+    /// dimmed when it hasn't; after a first 3D setup it glows for a while.
     fn mode_switch(&mut self, ui: &mut egui::Ui) {
         let tip = "Show the viewed node's image (2D) or its 3D scene (3D). Tab switches while the pointer is over the viewer.";
         if ui.selectable_label(!self.mode3d, "2D").on_hover_text(tip).clicked() {
             self.mode3d = false;
         }
-        if ui.selectable_label(self.mode3d, "3D").on_hover_text(tip).clicked() {
+        let label = if self.has_scene {
+            egui::RichText::new("3D ●").color(SCENE_3D)
+        } else {
+            egui::RichText::new("3D").color(ui.visuals().weak_text_color())
+        };
+        let tip3 = if self.has_scene { format!("{tip}\n\nThis node has a 3D scene.") } else { format!("{tip}\n\nThis node has no 3D scene.") };
+        let r = ui.selectable_label(self.mode3d, label).on_hover_text(tip3);
+        if r.clicked() {
             self.mode3d = true;
         }
+        let now = ui.input(|i| i.time);
+        if self.pulse_until > now {
+            // A glow breathing about once a second.
+            let k = 0.5 + 0.5 * ((self.pulse_until - now) * std::f64::consts::TAU).cos() as f32;
+            let glow = SCENE_3D.gamma_multiply(0.35 + 0.65 * k);
+            ui.painter().rect_stroke(r.rect.expand(2.0 + 2.0 * k), 4.0, Stroke::new(2.0, glow), egui::StrokeKind::Outside);
+        }
         ui.separator();
+    }
+
+    /// The hint after a first 3D setup, across the top of the view.
+    fn draw_hint(&self, ui: &egui::Ui, rect: Rect, now: f64) {
+        let Some(text) = self.hint(now) else { return };
+        let t = now - self.hint_since.unwrap_or(now);
+        // Fade out over the last second.
+        let alpha = (HINT_SECONDS - t).clamp(0.0, 1.0) as f32;
+        let painter = ui.painter_at(rect);
+        let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(15.0), Color32::WHITE.gamma_multiply(alpha));
+        let r = Align2::CENTER_TOP.anchor_size(rect.center_top() + Vec2::new(0.0, 14.0), galley.size()).expand2(Vec2::new(14.0, 8.0));
+        painter.rect(r, 6.0, Color32::from_black_alpha((200.0 * alpha) as u8), Stroke::new(1.5, SCENE_3D.gamma_multiply(alpha)), egui::StrokeKind::Inside);
+        painter.galley(r.min + Vec2::new(14.0, 8.0), galley, Color32::WHITE);
     }
 
     fn toolbar_3d(&mut self, ui: &mut egui::Ui, d: &Display<'_>) {
@@ -721,6 +788,16 @@ pub fn scene_of(doc: &Doc, node: &str) -> Option<String> {
 mod tests {
     use super::*;
     use arclight::graph::Graph;
+
+    #[test]
+    fn a_first_3d_setup_switches_to_3d_and_says_how() {
+        let mut v = Viewer::default();
+        assert!(!v.mode3d && v.hint(0.0).is_none());
+        v.announce_3d(10.0);
+        assert!(v.mode3d && v.pulse_until > 10.0);
+        assert_eq!(v.hint(12.0), Some(HINT_3D));
+        assert!(v.hint(10.0 + HINT_SECONDS + 0.1).is_none(), "and then it goes");
+    }
 
     #[test]
     fn passes_show_a_button_a_layer_vectors_as_color() {
