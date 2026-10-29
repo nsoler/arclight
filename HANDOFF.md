@@ -22,46 +22,49 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
   workflows passed. Earlier: v0.9.7, v0.9.5, v0.8.4, v0.8.3 and the
   0.0.x pre-releases.
 - **In progress (session 10): M10, 3D objects and render passes**
-  ("Milestone 10 in detail" in `docs/phase-4-plan.md`). **The user asked
-  for a release (Linux tarball + universal DMG + wheels) when all of M10
-  lands**, steps (a)–(e).
-  - **mathwiz** (wD:p3) owns new `src/mesh.rs` (+ `pub mod mesh;` in
-    lib.rs): step 1 = `Mesh { name, positions: Vec<Vec3>, normals, uvs:
-    Vec<[f64;2]>, triangles: Vec<[u32;3]>, material }` (f64 geom::Vec3,
-    per-vertex, CCW from outside, UV v up, object space; world/ID/flags
-    on the Scene entry), `Material { name, shading: Unlit|Lambert|Blinn,
-    color, texture: Option<PathBuf>, specular, roughness, emission }`
-    (default Unlit white), primitives cube / sphere / cylinder / plane
-    (XY facing +Z, like Card), helpers bounds / transform / merge /
-    compute_normals. Step 2 = OBJ + MTL import. Later: Shuffle node and
-    multi-plane EXR writing, once worker3d's ops.rs work is committed.
-  - **3DWorker** (wD:p4, `worker3d`) owns scene.rs, render3d.rs, ops.rs,
-    graph.rs, gui/*: (a) triangles in render3d (depth-sorted hits,
-    binning or BVH), cards as two-triangle meshes with identical output,
-    primitive nodes + Read Geo, viewport drawing/selection; (b) passes
-    (depth, P, N, uv, id, matte.<node>, holdout).
-  - **Not assigned yet:** (d) materials, lights and lighting passes;
-    (e) motion vectors, zmerge, glTF.
-  - **0.9.12 (MathWiz): mesh.rs step 1 committed** (Material also has
-    `opacity`, `specular: [f32;3]`; helpers smooth_normals / flat /
-    face_normal). Next: MathWiz OBJ + MTL (+ `examples/geo/` sample);
-    **0.9.13 (3DWorker): render3d triangle core committed** (`Surface`,
-    `card_surface`, `surfaces(scene)`, row binning, per-sample depth
-    sort, one hit per surface at shared edges). Next: 3DWorker (a2) Scene
-    meshes, primitive + Read Geo nodes, viewport drawing.
-    **0.9.14 (MathWiz): OBJ + MTL import** (`mesh::read_obj` /
-    `parse_obj` -> `Vec<Part {name, mesh, material}>`, `parse_mtl`),
-    sample `examples/geo/crate.obj`.
-    **0.9.15 (MathWiz): EXR planes + Shuffle engine** (image.rs:
-    `layer.channel` names, `layers`, `channel`, `shuffle`, `copy_to_plane`,
-    `layer_to_rgba`, `rgba_to_layer`, `remove_layers`). Shuffle *node* in
-    ops.rs still to do (when ops.rs is free).
-    **0.9.16 (MathWiz): `src/shade.rs`** (LightKind Ambient / Directional /
-    Point / Spot {cone, penumbra} / Area {size}; `Light {kind, color,
-    intensity, decay, world, node}` aiming down -Z; `shade(hit, material,
-    albedo, lights) -> Shaded {diffuse, specular, emission, ambient}`,
-    per-light `light()`; no lights or Unlit = color as is). Light *nodes*
-    and render3d use still to do (3DWorker).
+  ("Milestone 10 in detail" in `docs/phase-4-plan.md`), at **0.9.16**
+  (`41fa79a`). **The user asked for a release (Linux tarball +
+  universal DMG + wheels) when all of M10 lands**, steps (a)–(e).
+  - **Committed (engine side mostly by MathWiz):**
+    - 0.9.12 `src/mesh.rs`: `Mesh { name, positions: Vec<Vec3>, normals,
+      uvs: Vec<[f64;2]>, triangles: Vec<[u32;3]> }` (f64, per-vertex,
+      CCW from outside, UV v up, object space; world / ID / flags live on
+      the Scene entry), `Material { name, shading: Unlit|Lambert|Blinn,
+      color, opacity, texture: Option<PathBuf>, specular: [f32;3],
+      roughness, emission }` (default Unlit white), primitives cube /
+      sphere / cylinder / plane (XY facing +Z, like Card), helpers.
+    - 0.9.13 (3DWorker) render3d triangle core: `Surface`, `card_surface`,
+      `surfaces(scene)`, row binning, per-sample depth sort; cards
+      bit-identical to before; 80k tris 1080p 3×3 ≈ 46 ms.
+    - 0.9.14 OBJ + MTL: `mesh::read_obj` / `parse_obj` → `Vec<Part {name,
+      mesh, material}>`, `parse_mtl`; sample `examples/geo/crate.obj`.
+    - 0.9.15 image.rs: EXR planes as `layer.channel` (`depth.Z`, `P.x`,
+      `matte.<node>.A`; bare `Z` still reads as depth); Shuffle engine
+      (`layers`, `channel`, `shuffle`, `copy_to_plane`, `layer_to_rgba`,
+      `rgba_to_layer`, `remove_layers`).
+    - 0.9.16 `src/shade.rs`: lights Ambient / Directional / Point / Spot
+      {cone, penumbra} / Area {size} (`Light {kind, color, intensity,
+      decay, world, node}`, aims down −Z); `shade(hit, material, albedo,
+      lights) → Shaded {diffuse, specular, emission, ambient}` (sums to
+      the beauty), per-light `light()`; no lights or Unlit = color as is.
+  - **Working now (uncommitted in the tree at this update):**
+    - **3DWorker** (wD:p4, `worker3d`), owns scene.rs, render3d.rs,
+      ops.rs, graph.rs, gui/*: step (a2): Scene meshes, Cube / Sphere /
+      Cylinder / Plane and Read Geo nodes, viewport3d drawing / selecting
+      / moving meshes (files touched so far: scene.rs, render3d.rs,
+      ops.rs, gui/viewport3d.rs, gui/worker.rs).
+    - **MathWiz** (wD:p3), owns mesh.rs, image.rs, shade.rs, new
+      `src/gltf.rs`: glTF 2.0 import (.gltf/.glb → `Vec<Part>`, may add
+      the `gltf` crate), then a zmerge engine function in image.rs.
+  - **Still to assign / do:** 3DWorker after (a2): (b) passes in
+    render3d (depth, P, N, uv, id, matte.<node>, holdout, nearest vs
+    coverage filtering); light nodes, materials on primitives, calling
+    `shade` in render3d and the lighting passes (diffuse / specular /
+    emission / ambient, `light.<node>`); motion vectors. When ops.rs is
+    free: the Shuffle node and Merge's zmerge option (MathWiz has the
+    engine for both), Read Geo choosing glTF by extension. Then README
+    node table, `docs/help.md`, MCP / Python, and the release.
+  - Next version: **0.9.17**.
 - **Ask the user first** how the Mac builds (v0.9.11 universal DMG) went
   on their M4 Pro, and whether anyone tried an Intel Mac. Mac-only bugs
   come first.
