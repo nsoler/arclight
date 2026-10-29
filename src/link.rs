@@ -10,6 +10,9 @@
 //!   Tracker N's solved motion as a Transform's `translate`, `rotate` or
 //!   `scale` (M) about `pivot`, match-move or (B) stabilize.
 //!
+//! - `{"link": {"expr": F}}`: formula F (see [`crate::expr`]), reading any
+//!   number of nodes' params, e.g. `"sin(frame / 8) * 5 + t.track1.x"`.
+//!
 //! Any link may also carry `"multiply"` and `"add"` (a number for every
 //! component, or one per component): the value is then
 //! `linked × multiply + add`, e.g. half a rotation (`"multiply": 0.5`) or a
@@ -30,9 +33,34 @@ pub fn is_link(v: &Value) -> bool {
     v.get("link").is_some_and(Value::is_object)
 }
 
-/// The node a link reads from.
+/// The node a link reads from (not a formula's: see [`sources`]).
 pub fn source(v: &Value) -> Option<&str> {
     v.get("link")?.get("node")?.as_str()
+}
+
+/// A formula link's text.
+pub fn formula(v: &Value) -> Option<&str> {
+    v.get("link")?.get("expr")?.as_str()
+}
+
+/// Every node a link reads from: its node, or those its formula names.
+pub fn sources(v: &Value) -> Vec<String> {
+    if let Some(n) = source(v) {
+        return vec![n.to_string()];
+    }
+    let Some(e) = formula(v).and_then(|f| crate::expr::parse(f).ok()) else { return Vec::new() };
+    let mut out: Vec<String> = Vec::new();
+    for (node, _) in e.refs() {
+        if !out.iter().any(|n| n == node) {
+            out.push(node.to_string());
+        }
+    }
+    out
+}
+
+/// A link to the value of formula `f`.
+pub fn expr(f: &str) -> Value {
+    json!({ "link": { "expr": f } })
 }
 
 /// A link to `node`'s param `param`.
@@ -53,20 +81,40 @@ pub fn motion(node: &str, what: &str, stabilize: bool, pivot: track::Pt) -> Valu
 
 /// A link's value at time `t`, reading nodes through `lookup`; any other
 /// value is returned with its keyframes evaluated. Null when the link's
-/// node is gone (see [`missing`]) or the chain loops.
+/// node is gone (see [`missing`]), the chain loops or a formula fails
+/// (see [`error`]).
 pub fn resolve<'a>(lookup: &dyn Fn(&str) -> Option<&'a NodeSpec>, v: &Value, t: f64) -> Value {
-    resolve_depth(lookup, v, t, 0)
+    evaluate(lookup, v, t, 0).unwrap_or(Value::Null)
 }
 
-fn resolve_depth<'a>(lookup: &dyn Fn(&str) -> Option<&'a NodeSpec>, v: &Value, t: f64, depth: usize) -> Value {
+/// Why `v` can't be worked out at time `t`, if it can't.
+pub fn error<'a>(lookup: &dyn Fn(&str) -> Option<&'a NodeSpec>, v: &Value, t: f64) -> Option<String> {
+    evaluate(lookup, v, t, 0).err()
+}
+
+fn evaluate<'a>(lookup: &dyn Fn(&str) -> Option<&'a NodeSpec>, v: &Value, t: f64, depth: usize) -> Result<Value, String> {
     if !is_link(v) {
-        return crate::anim::evaluate(v, t);
+        return Ok(crate::anim::evaluate(v, t));
+    }
+    if depth >= MAX_DEPTH {
+        return Err("it loops: its links lead back to it".into());
     }
     let l = &v["link"];
-    let Some(n) = l["node"].as_str().and_then(lookup) else { return Value::Null };
-    if depth >= MAX_DEPTH {
-        return Value::Null;
+    // Node `n`'s param `name` at `t`, its own links followed.
+    let read = |n: &NodeSpec, name: &str, t: f64| -> Result<Value, String> {
+        let p = ops::params_with_defaults(&n.op, &n.params);
+        let raw = p.get(name).ok_or_else(|| format!("'{}' has no param '{name}'", n.id))?;
+        evaluate(lookup, raw, t, depth + 1)
+    };
+    if let Some(src) = l.get("expr") {
+        let src = src.as_str().ok_or("a formula must be text")?;
+        let e = crate::expr::parse(src)?;
+        let refs = |node: &str, name: &str, t: f64| read(lookup(node).ok_or_else(|| format!("no node '{node}'"))?, name, t);
+        let value = e.eval(&refs, t)?.to_json();
+        return Ok(adjust(value, &l["multiply"], &l["add"]));
     }
+    let node = l["node"].as_str().ok_or("a link needs a \"node\"")?;
+    let n = lookup(node).ok_or_else(|| format!("no node '{node}'"))?;
     let value = if let Some(what) = l["motion"].as_str() {
         let pivot = [l["pivot"][0].as_f64().unwrap_or(0.0) as f32, l["pivot"][1].as_f64().unwrap_or(0.0) as f32];
         let (translate, rotate, scale) = track::motion_at(&n.params, t, l["stabilize"].as_bool().unwrap_or(false), pivot);
@@ -74,18 +122,17 @@ fn resolve_depth<'a>(lookup: &dyn Fn(&str) -> Option<&'a NodeSpec>, v: &Value, t
             "translate" => json!(translate),
             "rotate" => json!(rotate),
             "scale" => json!([scale, scale]),
-            _ => Value::Null,
+            other => return Err(format!("unknown motion '{other}'")),
         }
     } else {
-        let Some(name) = l["param"].as_str() else { return Value::Null };
-        let p = ops::params_with_defaults(&n.op, &n.params);
+        let name = l["param"].as_str().ok_or("a link needs a \"param\"")?;
         let t = match l["at"].as_str() {
-            Some("reference") => p["reference_frame"].as_f64().unwrap_or(1.0),
+            Some("reference") => ops::params_with_defaults(&n.op, &n.params)["reference_frame"].as_f64().unwrap_or(1.0),
             _ => t,
         };
-        resolve_depth(lookup, &p[name], t, depth + 1)
+        read(n, name, t)?
     };
-    adjust(value, &l["multiply"], &l["add"])
+    Ok(adjust(value, &l["multiply"], &l["add"]))
 }
 
 /// `v × multiply + add`, per component: `multiply` and `add` are a number
@@ -127,8 +174,8 @@ pub fn with_adjust(link: &Value, multiply: Value, add: Value) -> Value {
 /// param's name and the missing node's.
 pub fn missing<'a>(lookup: &dyn Fn(&str) -> Option<&'a NodeSpec>, params: &Value) -> Option<(String, String)> {
     params.as_object()?.iter().find_map(|(k, v)| {
-        let node = source(v)?;
-        lookup(node).is_none().then(|| (k.clone(), node.to_string()))
+        let gone = sources(v).into_iter().find(|n| lookup(n).is_none())?;
+        Some((k.clone(), gone))
     })
 }
 
@@ -138,6 +185,8 @@ pub fn rename(params: &mut Value, old: &str, new: &str) {
     for v in map.values_mut() {
         if source(v) == Some(old) {
             v["link"]["node"] = json!(new);
+        } else if let Some(f) = formula(v) {
+            v["link"]["expr"] = json!(crate::expr::rename(f, old, new));
         }
     }
 }
@@ -147,7 +196,9 @@ pub fn rename(params: &mut Value, old: &str, new: &str) {
 pub fn describe(v: &Value) -> String {
     let l = &v["link"];
     let node = l["node"].as_str().unwrap_or("?");
-    let what = if l.get("motion").is_some() {
+    let what = if let Some(f) = l["expr"].as_str() {
+        format!("= {f}")
+    } else if l.get("motion").is_some() {
         let how = if l["stabilize"].as_bool() == Some(true) { "stabilize" } else { "match-move" };
         format!("{node} · {how}")
     } else {
@@ -234,6 +285,71 @@ mod tests {
         let l = with_adjust(&param("a", "center"), json!(0.5), json!([10, 0]));
         assert_eq!(describe(&l), "a · center × 0.5 + [10, 0]");
         assert_eq!(with_adjust(&l, Value::Null, Value::Null), param("a", "center"));
+    }
+
+    #[test]
+    fn formula_links_read_several_nodes_and_rename() {
+        let g = graph(json!([
+            { "id": "a", "op": "rectangle", "params": { "center": { "keys": [[1, [0, 0]], [11, [100, 50]]], "interp": "linear" } } },
+            { "id": "plate-2", "op": "rectangle", "params": { "center": [7, 3] } },
+            { "id": "b", "op": "rectangle", "params": {
+                "center": expr("a.center + [\"plate-2\".center.x, 0] + [wiggle(0.1, 0), 0]"),
+                "softness": with_adjust(&expr("at(a.center.y, 1) + frame"), json!(2), Value::Null) } },
+        ]));
+        let lookup = |id: &str| g.node(id);
+        let at = |param: &str, t: f64| resolve(&lookup, &g.node("b").unwrap().params[param], t);
+        assert_eq!(at("center", 6.0), json!([57.0, 25.0]));
+        assert_eq!(at("softness", 6.0), json!(12.0), "(0 + 6) × 2");
+        assert_eq!(sources(&g.node("b").unwrap().params["center"]), ["a", "plate-2"]);
+        assert_eq!(missing(&lookup, &json!({ "x": expr("a.center + gone.center") })), Some(("x".into(), "gone".into())));
+        assert_eq!(error(&lookup, &expr("a.nope"), 1.0), Some("'a' has no param 'nope'".into()));
+        assert_eq!(error(&lookup, &expr("a.center +"), 1.0), Some("unexpected end".into()));
+        let mut p = g.node("b").unwrap().params.clone();
+        rename(&mut p, "plate-2", "p2");
+        rename(&mut p, "a", "src");
+        assert_eq!(formula(&p["center"]), Some("src.center + [p2.center.x, 0] + [wiggle(0.1, 0), 0]"));
+        assert_eq!(describe(&p["softness"]), "= at(src.center.y, 1) + frame × 2");
+    }
+
+    /// A formula's value is in the cache key, so editing it or its source
+    /// re-renders; one that reads itself fails, naming the param.
+    #[test]
+    fn formula_links_rerender_on_change_and_report_loops() {
+        let mut g = graph(json!([
+            { "id": "a", "op": "constant", "params": { "color": [0.2, 0.2, 0.2, 1] } },
+            { "id": "b", "op": "constant", "params": { "color": expr("a.color * [2, 1, 1, 1]") } },
+        ]));
+        let ctx = EvalContext { frame: 1, write_outputs: false };
+        let key = |g: &Graph| Evaluator::key(g, "b", &ctx).unwrap();
+        let k0 = key(&g);
+        assert_eq!(key(&g), k0, "stable");
+        let px = |g: &Graph| Evaluator::new().evaluate(g, "b", &ctx).unwrap().pixels[0];
+        assert!((px(&g)[0] - 0.4).abs() < 1e-6);
+        // Change the source…
+        g.nodes[0].params["color"] = json!([0.3, 0.2, 0.2, 1]);
+        let k1 = key(&g);
+        assert_ne!(k1, k0);
+        assert!((px(&g)[0] - 0.6).abs() < 1e-6);
+        // …or the formula.
+        g.nodes[1].params["color"] = expr("a.color * [3, 1, 1, 1]");
+        assert_ne!(key(&g), k1);
+        assert!((px(&g)[0] - 0.9).abs() < 1e-6);
+        // Wobble is the same every time it's worked out.
+        g.nodes[1].params["color"] = expr("a.color + noise(frame * 0.3, 4) * 0.1");
+        assert_eq!(key(&g), key(&g));
+        // Itself, directly or through another node.
+        for (id, f) in [("b", "b.color + 1"), ("a", "b.color")] {
+            let n = g.nodes.iter_mut().find(|n| n.id == id).unwrap();
+            n.params["color"] = expr(f);
+            if id == "b" {
+                // Just b loops; next, b → a → b.
+                let e = Evaluator::new().evaluate(&g, "b", &ctx).err().unwrap().to_string();
+                assert!(e.contains("'color'") && e.contains("loops"), "{e}");
+                g.nodes[1].params["color"] = expr("a.color");
+            }
+        }
+        let e = Evaluator::new().evaluate(&g, "b", &ctx).err().unwrap().to_string();
+        assert!(e.contains("'color'") && e.contains("loops"), "{e}");
     }
 
     /// A Corner Pin linked to four tracks renders like one keyed with a

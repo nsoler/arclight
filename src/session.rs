@@ -425,8 +425,11 @@ pub fn validate_param(info: &OpInfo, name: &str, value: &Value) -> Result<Value>
     let spec = param_spec(info, name)?;
     // A live link to another node's value (see `crate::link`).
     if crate::link::is_link(value) {
-        if crate::link::source(value).is_none() {
-            bail!("'{name}': a link needs a \"node\"");
+        if let Some(f) = value["link"].get("expr") {
+            let f = f.as_str().ok_or_else(|| anyhow!("'{name}': a formula must be text"))?;
+            crate::expr::parse(f).map_err(|e| anyhow!("'{name}': formula: {e}"))?;
+        } else if crate::link::source(value).is_none() {
+            bail!("'{name}': a link needs a \"node\" (or an \"expr\")");
         }
         return Ok(value.clone());
     }
@@ -590,6 +593,26 @@ mod tests {
         let b2 = s.create_node("blur", None, &Map::new(), std::slice::from_ref(&b)).unwrap();
         assert!(s.connect(&b2, &b, 0).unwrap_err().to_string().contains("cycle"));
         assert_eq!(s.undo.len(), undo_depth + 2);
+    }
+
+    #[test]
+    fn formulas_are_checked_when_set_and_follow_renames() {
+        let mut s = Session::default();
+        let a = s.create_node("constant", None, &map(json!({"width": 4, "height": 4, "color": [0.25, 0.0, 0.0, 1.0]})), &[]).unwrap();
+        let b = s.create_node("constant", None, &map(json!({"width": 4, "height": 4})), &[]).unwrap();
+        let bad = s.set_params(&b, &map(json!({"color": crate::link::expr("sin(")}))).unwrap_err().to_string();
+        assert!(bad.contains("'color': formula:"), "{bad}");
+        assert!(s.set_params(&b, &map(json!({"color": {"link": {"expr": 3}}}))).is_err());
+        let f = format!("{a}.color * [2, 1, 1, 1] + [0.1 * frame, 0, 0, 0]");
+        s.set_params(&b, &map(json!({"color": crate::link::expr(&f)}))).unwrap();
+        assert!((s.render(&b, 2).unwrap().get(0, 0)[0] - 0.7).abs() < 1e-6);
+        s.rename(&a, "plate-2").unwrap();
+        assert_eq!(crate::link::formula(&s.node(&b).unwrap().params["color"]), Some("\"plate-2\".color * [2, 1, 1, 1] + [0.1 * frame, 0, 0, 0]"));
+        assert!((s.render(&b, 1).unwrap().get(0, 0)[0] - 0.6).abs() < 1e-6);
+        // Deleting the source: the render names the param and the node.
+        s.delete_node("plate-2").unwrap();
+        let e = s.render(&b, 1).err().unwrap().to_string();
+        assert!(e.contains("'color'") && e.contains("plate-2"), "{e}");
     }
 
     #[test]

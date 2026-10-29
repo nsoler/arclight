@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.0.21** (alpha); see `CHANGELOG.md`.
+Version **0.0.22** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -246,6 +246,40 @@ Pin** make linked nodes (untick **Linked** for a keyed copy). Linked
 params show their value and source in the panel, with **Unlink** to keep
 the value as a plain one; viewer handles don't move them. Renaming the
 source updates its links; deleting it makes the linked node report it.
+
+**Formulas.** A link can hold a formula instead, reading any number of
+nodes' params at the frame being rendered:
+
+```json
+{"link": {"expr": "tracker1.track1 + [wiggle(0.1, 5, 1), wiggle(0.1, 5, 2)]"}}
+{"link": {"expr": "45 * sin(frame / 8)"}}
+{"link": {"expr": "mix(a.color, b.color, smoothstep(1, 24, frame))"}}
+```
+
+- `node.param` is that param now (keyframes evaluated, links followed);
+  `.x .y .z .w` or `.r .g .b .a` (or `[i]`) pick a component. Quote a
+  node name that isn't a plain identifier: `"plate-2".center`.
+- `frame`, `pi`, `tau`, `e`; lists `[a, b]`; `+ - * / % ^`; comparisons
+  and `&& || !` (1 or 0). Lists work per component, and a number goes
+  with every component (`a.center * 0.5`). Give a list param a list: a
+  formula for a position or color must make one.
+- `sin cos tan asin acos atan atan2` (radians: `sin(rad(30))`; rotation
+  params are degrees), `sqrt abs floor ceil round fract sign pow exp log
+  rad deg min max clamp mix smoothstep length dist`, `if(c, a, b)`.
+- `noise(x[, seed])`: smooth noise in -1..1; `random(seed)`: a number in
+  0..1 that stays the same; `wiggle(freq, amp[, seed])` = `amp ×
+  noise(frame × freq, seed)`, `freq` wobbles per frame. All repeatable:
+  the same frame always gives the same value.
+- `at(x, f)`: `x` at frame `f`, e.g. `at(t.track1, frame - 3)` lags a
+  track by three frames.
+
+`multiply` / `add` apply after the formula. In the panel, right-click a
+param's name for **Use a formula** (it starts as the current value); the
+formula field applies on Enter, and a formula that doesn't parse, reads a
+missing node or param, mixes lists of different sizes or reads itself
+(directly or through other nodes) shows the reason in red; rendering it
+is an error naming the param. Renaming a node rewrites the formulas that
+name it. MCP `set_params` and Python take the same JSON.
 
 ## Scripting and automation
 

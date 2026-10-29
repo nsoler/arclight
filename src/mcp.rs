@@ -66,7 +66,7 @@ static TOOLS: &[Tool] = &[
         {"type": "object", "properties": {"node": {"type": "string"}}, "required": ["node"]}),
     tool!("rename_node", "Rename a node, updating connections.",
         {"type": "object", "properties": {"node": {"type": "string"}, "new_name": {"type": "string"}}, "required": ["node", "new_name"]}),
-    tool!("set_params", "Set one or more params of a node (validated; one undo step).",
+    tool!("set_params", "Set one or more params of a node (validated; one undo step). A value can be keyframes {\"keys\": ...}, a link {\"link\": {\"node\", \"param\"}} or a formula {\"link\": {\"expr\": \"sin(frame / 8) * 10 + tracker1.track1.x\"}} (see README, Live links).",
         {"type": "object", "properties": {"node": {"type": "string"}, "params": {"type": "object"}}, "required": ["node", "params"]}),
     tool!("set_key", "Set a keyframe on a numeric param at a frame, animating it.",
         {"type": "object", "properties": {"node": {"type": "string"}, "param": {"type": "string"}, "frame": {"type": "integer"}, "value": {}}, "required": ["node", "param", "frame", "value"]}),

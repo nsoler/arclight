@@ -37,7 +37,7 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.21**.
+  in the same commit as the change. Current: **0.0.22**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -878,9 +878,16 @@ decisions D1–D6 open, waiting for the user).
 - **Arbitrary channels** in `Image` (named planes such as rgba, mask,
   depth, motion) instead of fixed `[f32; 4]`. A big refactor; do it before
   3D.
-- **Expressions**: live links with multiply/add exist (v0.0.19–0.0.20,
-  `src/link.rs`); a formula language (several inputs, functions such as
-  sin or noise) would be the next step if needed.
+- **Expressions**: done. Live links with multiply/add (v0.0.19–0.0.20)
+  and formula links (v0.0.22, worker wD:p3): `src/expr.rs` is the lexer,
+  Pratt-style parser and evaluator (`Val` = number or list; `Lookup`
+  returns `Result`). `link::evaluate` is Result-based (`resolve` =
+  `unwrap_or` Null, `link::error` for the panel and graph); every ref goes
+  through it with `MAX_DEPTH` 8, so loops are errors, not overflows.
+  `link::sources` / `formula` / `expr` added; `graph::linked_params` fails
+  the node on any link that fails, naming the param. The frame cache keys
+  on resolved values, so formula or source edits re-render (tested).
+  `noise` is splitmix-hashed 1-D gradient noise, pure in frame and seed.
 - **ROI / tiled evaluation** once images get large or graphs get deep.
 
 ## Known issues and gaps

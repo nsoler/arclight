@@ -75,6 +75,9 @@ pub struct Properties {
     pub layer: Option<(String, arclight::image::IRect, arclight::image::Size)>,
     /// The Tracker panel's exports copy the keys instead of linking.
     copy_exports: bool,
+    /// Formulas being typed, by node and param (applied on Enter or when
+    /// the field loses focus, if they parse).
+    formula_edit: HashMap<(String, String), String>,
 }
 
 impl Properties {
@@ -90,6 +93,7 @@ impl Properties {
     /// Forget cached per-node UI state; call after undo/redo replaces the graph.
     pub fn invalidate(&mut self) {
         self.name_edit.clear();
+        self.formula_edit.clear();
         self.media_info.clear();
         self.name_error = None;
     }
@@ -177,10 +181,9 @@ impl Properties {
                             ui.add_space(KEY_SIZE + ui.spacing().item_spacing.x);
                         }
                         let animated = anim::is_animated(&doc.param(id, spec.name));
-                        if animated {
-                            ui.colored_label(KEY_COLOR, spec.label);
-                        } else {
-                            ui.label(spec.label);
+                        let label = if animated { ui.colored_label(KEY_COLOR, spec.label) } else { ui.label(spec.label) };
+                        if !linked {
+                            label.context_menu(|ui| self.formula_menu(ui, doc, id, spec.name));
                         }
                     });
                     if linked {
@@ -230,12 +233,30 @@ impl Properties {
         });
     }
 
+    /// "Use a formula": turns a numeric param into a formula link
+    /// (`arclight::expr`) that starts as its value at this frame.
+    fn formula_menu(&mut self, ui: &mut egui::Ui, doc: &mut Doc, id: &str, name: &str) {
+        let now = doc.param_at(id, name, self.frame);
+        let start = match &now {
+            Value::Number(n) => n.as_f64().map(|x| format!("{x}")),
+            Value::Array(a) => a.iter().map(|v| v.as_f64().map(|x| format!("{x}"))).collect::<Option<Vec<_>>>().map(|v| format!("[{}]", v.join(", "))),
+            _ => None,
+        };
+        let tip = "Work this value out from a formula every frame: other nodes' params (node.param), frame, sin, noise, wiggle…";
+        if ui.add_enabled(start.is_some(), egui::Button::new("Use a formula")).on_hover_text(tip).clicked() {
+            doc.set_param(id, name, arclight::link::expr(start.as_deref().unwrap_or("0")));
+            ui.close();
+        }
+    }
+
     /// A param linked to another node: its value now (read-only), where it
     /// comes from, and Unlink, which keeps the value as a plain one; below,
     /// × and + per component (`linked × multiply + add`), e.g. half a
-    /// rotation or a track followed 10 px to the side.
+    /// rotation or a track followed 10 px to the side. A formula link has
+    /// its formula to edit above that.
     fn linked_widget(&mut self, ui: &mut egui::Ui, doc: &mut Doc, id: &str, spec: &ParamSpec) {
         let raw = doc.param(id, spec.name);
+        let problem = doc.param_error(id, spec.name, self.frame);
         let now = doc.param_at(id, spec.name, self.frame);
         let shown = match &now {
             Value::Array(a) => a.iter().map(|v| format!("{:.3}", v.as_f64().unwrap_or(0.0))).collect::<Vec<_>>().join("  "),
@@ -254,11 +275,35 @@ impl Properties {
         };
         let (mut mul, mut add) = (spread(&raw["link"]["multiply"], 1.0), spread(&raw["link"]["add"], 0.0));
         let mut changed = false;
+        let formula = arclight::link::formula(&raw).map(str::to_string);
         ui.vertical(|ui| {
+            if let Some(f) = &formula {
+                let key = (id.to_string(), spec.name.to_string());
+                let buf = self.formula_edit.entry(key.clone()).or_insert_with(|| f.clone());
+                let resp = ui.add(egui::TextEdit::singleline(buf).code_editor().desired_width(f32::INFINITY).hint_text("e.g. t.track1 + [wiggle(0.1, 5), 0]"));
+                let parsed = arclight::expr::parse(buf);
+                if let Err(e) = &parsed {
+                    ui.colored_label(Color32::from_rgb(235, 100, 90), e);
+                }
+                if resp.lost_focus() {
+                    if parsed.is_ok() && buf != f {
+                        let mut l = raw.clone();
+                        l["link"]["expr"] = json!(buf.clone());
+                        doc.set_param(id, spec.name, l);
+                    }
+                    self.formula_edit.remove(&key);
+                }
+            }
+            if let Some(e) = &problem {
+                ui.colored_label(Color32::from_rgb(235, 100, 90), e);
+            }
             ui.horizontal(|ui| {
                 ui.label(RichText::new(shown).monospace());
-                ui.label(RichText::new(format!("← {}", arclight::link::describe(&raw))).color(Color32::from_rgb(120, 200, 240)))
-                    .on_hover_text("Linked: follows that node live, so it updates when it changes (re-tracking, say)");
+                let (text, tip) = match formula {
+                    Some(_) => ("= formula".to_string(), "Worked out from the formula above at every frame (sin, cos, noise, wiggle, at, node.param…; see README)"),
+                    None => (format!("← {}", arclight::link::describe(&raw)), "Linked: follows that node live, so it updates when it changes (re-tracking, say)"),
+                };
+                ui.label(RichText::new(text).color(Color32::from_rgb(120, 200, 240))).on_hover_text(tip);
                 if ui.small_button("Unlink").on_hover_text("Keep this frame's value as a plain one and stop following").clicked() {
                     doc.set_param(id, spec.name, now.clone());
                 }

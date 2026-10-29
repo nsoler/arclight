@@ -7,6 +7,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.22 — 2026-10-29
+
+- Formula links: `{"link": {"expr": "..."}}` works a param out every
+  frame from other nodes' params (`node.param`, `.x`/`.y` or `[i]`),
+  `frame`, arithmetic and comparisons per component,
+  sin/cos/…/clamp/mix/smoothstep, `if()`, seeded noise/random/wiggle and
+  `at(x, frame)`. Right-click a param name for Use a formula; errors show
+  in red and fail the render naming the param; renames rewrite formulas.
+
 ## 0.0.21 — 2026-10-29
 
 - Help → About Arclight Compositor… opens a dialog with the logo, the

@@ -290,6 +290,12 @@ fn linked_params(index: &HashMap<&str, &NodeSpec>, node: &NodeSpec, frame: i64) 
     if let Some((param, gone)) = crate::link::missing(&lookup, &node.params) {
         return Err(node_err(&node.id, format!("'{param}' is linked to '{gone}', which doesn't exist")));
     }
+    let links = node.params.as_object().into_iter().flatten().filter(|(_, v)| crate::link::is_link(v));
+    for (param, v) in links {
+        if let Some(e) = crate::link::error(&lookup, v, frame as f64) {
+            return Err(node_err(&node.id, format!("'{param}': {e}")));
+        }
+    }
     let follow = |v: &Value, t: f64| crate::link::resolve(&lookup, v, t);
     Ok(ops::resolve_params_linked(&node.op, &node.params, frame, Some(&follow)))
 }

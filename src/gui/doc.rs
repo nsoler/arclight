@@ -400,6 +400,13 @@ impl Doc {
         arclight::link::resolve(&lookup, &self.param(id, name), frame as f64)
     }
 
+    /// Why a linked param can't be worked out at `frame` (a formula that
+    /// doesn't parse, reads a missing node, loops…), if it can't.
+    pub fn param_error(&self, id: &str, name: &str, frame: i64) -> Option<String> {
+        let lookup = |n: &str| self.node(n);
+        arclight::link::error(&lookup, &self.param(id, name), frame as f64)
+    }
+
     /// Edit a param from the UI: animated params get a key at `frame`
     /// (auto-key); static ones are simply replaced.
     pub fn edit_param(&mut self, id: &str, name: &str, frame: i64, value: Value) {
@@ -565,6 +572,14 @@ mod tests {
         let now = d.param_at(&b, "center", 11);
         d.set_param(&b, "center", now);
         assert_eq!(d.param(&b, "center"), json!([100.0, 50.0]));
+        // A formula: live, renamed with its source, and its errors told.
+        d.set_param(&b, "center", arclight::link::expr("src.center + [wiggle(0.2, 0), 1]"));
+        assert_eq!(d.param_at(&b, "center", 6), json!([50.0, 26.0]));
+        d.rename("src", "a2").unwrap();
+        assert_eq!(arclight::link::formula(&d.param(&b, "center")), Some("a2.center + [wiggle(0.2, 0), 1]"));
+        assert_eq!(d.param_error(&b, "center", 6), None);
+        d.set_param(&b, "center", arclight::link::expr("a2.center + [1, 2, 3]"));
+        assert_eq!(d.param_error(&b, "center", 6), Some("lists of 2 and 3 components".into()));
     }
 
     #[test]
