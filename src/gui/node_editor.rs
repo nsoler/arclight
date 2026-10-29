@@ -20,6 +20,8 @@ use eframe::egui::{
 };
 
 const PORT_R: f32 = 5.5;
+/// The closest a fit (on opening, F, the minimap's double-click) zooms.
+const FIT_MAX_ZOOM: f32 = 0.7;
 const IN_PORT_COLOR: Color32 = Color32::from_rgb(235, 205, 60);
 const IN_PORT_HOT: Color32 = Color32::from_rgb(255, 240, 150);
 const OUT_PORT_COLOR: Color32 = Color32::from_rgb(140, 225, 140);
@@ -433,7 +435,7 @@ impl NodeEditor {
                 if *n_in > 1 && self.zoom > 0.6 {
                     let label = port.map_or("", |p| p.label);
                     // Outside the node, just above the incoming wire, clear of the title.
-                    painter.text(p + Vec2::new(-PORT_R * 1.4, -PORT_R * 0.6), Align2::RIGHT_BOTTOM, label, FontId::proportional(10.0 * self.zoom), Color32::from_gray(210));
+                    painter.text(p + Vec2::new(-PORT_R * 1.4, -PORT_R * 0.6), Align2::RIGHT_BOTTOM, label, FontId::proportional((10.0 * self.zoom).max(8.0)), Color32::from_gray(210));
                 }
             }
             if has_output(op) {
@@ -626,7 +628,9 @@ impl NodeEditor {
             b = b.union(Rect::from_min_size(Pos2::new(p[0], p[1]), Vec2::new(NODE_W, NODE_H)));
         }
         let b = b.expand(30.0);
-        self.zoom = (self.rect.width() / b.width()).min(self.rect.height() / b.height()).clamp(0.3, 1.25);
+        // Small graphs stop at 70%: fitted any closer, a few nodes fill the
+        // editor (scroll or pinch to zoom in further).
+        self.zoom = (self.rect.width() / b.width()).min(self.rect.height() / b.height()).clamp(0.3, FIT_MAX_ZOOM);
         self.pan = self.rect.size() / 2.0 - b.center().to_vec2() * self.zoom;
     }
 
@@ -670,7 +674,8 @@ impl NodeEditor {
             Pos2::new(r.center().x, r.top() + 15.0 * z),
             Align2::CENTER_CENTER,
             id,
-            FontId::proportional(13.0 * z),
+            // Scaled with the zoom, but kept readable.
+            FontId::proportional((13.0 * z).max(10.0)),
             Color32::WHITE,
         );
         if doc.overridden() == Some(id) {
@@ -713,7 +718,7 @@ impl NodeEditor {
                 Pos2::new(r.center().x, r.top() + 33.0 * z),
                 Align2::CENTER_CENTER,
                 sub,
-                FontId::proportional(10.5 * z),
+                FontId::proportional((10.5 * z).max(8.5)),
                 Color32::from_white_alpha(170),
             );
         }

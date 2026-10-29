@@ -86,7 +86,18 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   edge) selects its two ends and drags them, but only once the pointer
   moves > 3 screen px (`Drag::moved`); a click inserts a vertex on
   release (`Overlays::release`, which the tests' `gesture` now calls).
-  Rectangle/Ellipse move from anywhere inside (`box_outline`). No Developer ID signing / notarization (needs a paid Apple
+  Rectangle/Ellipse move from anywhere inside (`box_outline`).
+- **Session 7, part 25** (user request): Tracker panel "Per-track boxes"
+  (collapsed by default; `Properties::track_boxes`): a grid per track of
+  pattern/search DragValues (shared size shown with "·" until the track
+  has its own; ranges keep search ≥ pattern + 2, as the viewer does),
+  offset x/y, and ↺ (removes the track's `_pattern`/`_search`/`_offset`).
+  Off tracks are greyed.
+- **Session 7, part 26** (user request: nodes look huge on opening): the
+  node editor's fit zooms to at most `FIT_MAX_ZOOM` = 0.7 (was 1.25), so
+  the starter graph's nodes are ~105×32 px instead of ~190×58; node
+  titles, subtitles and port labels have minimum font sizes (10 / 8.5 /
+  8 px) so they stay readable when zoomed out. No Developer ID signing / notarization (needs a paid Apple
   account); ffmpeg not bundled (GPL builds; Homebrew instead).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
@@ -149,8 +160,7 @@ steps": take them in this order, one milestone at a time (commit, push and
 fast-forward `main` after each, per the standing instruction above), and
 report back after a few milestones.
 
-1. **Small UX debts:** per-track tracker box sizes and offsets are only
-   editable in the viewer; no filtering when Transform / Tracker output /
+1. **Small UX debts:** no filtering when Transform / Tracker output /
    Corner Pin shrink the image (aliasing). Formats: RLE / float / 1-bit
    DPX, DPX with alpha, EXR data windows (EXR reads ignore the file's data
    window), video color tags (encodes carry no color metadata).
@@ -771,8 +781,6 @@ windows exist.
   frames have only been seen with hand-keyed scores; Ctrl-drag offsets,
   per-track box sizing and drags over a match-moved output haven't been
   tried with a mouse.
-- Hidden tracker params (sizes, offsets) can't be seen or typed in the
-  panel; only the viewer shows them.
 - Corner Pin and every other warp sample bilinearly with no filtering, so
   strong shrinking aliases.
 - First frame after launch takes ~1.5 s (ffprobe + ffmpeg start); later
