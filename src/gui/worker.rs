@@ -93,7 +93,7 @@ impl FrameCache {
 }
 
 fn size_of_image(img: &Image) -> usize {
-    img.pixels.len() * std::mem::size_of::<arclight::color::Rgba>()
+    img.bytes()
 }
 
 fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Context) {

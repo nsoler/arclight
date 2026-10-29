@@ -86,6 +86,9 @@ pub struct Image {
     /// Extra channels over the same data window (a 3D render's `depth`):
     /// empty for most images. Ops that don't know about them drop them.
     pub planes: Vec<Plane>,
+    /// A 3D scene, on the output of the Camera, Card and Scene nodes (whose
+    /// pixels are empty); None on every other image.
+    pub scene: Option<std::sync::Arc<crate::scene::Scene>>,
 }
 
 /// A named extra channel: one float per pixel of its image's data window,
@@ -103,13 +106,24 @@ impl Image {
     }
 
     pub fn filled(width: usize, height: usize, value: Rgba) -> Self {
-        Image { format: Size { width, height }, x0: 0, y0: 0, width, height, pixels: vec![value; width * height], planes: Vec::new() }
+        Image { format: Size { width, height }, x0: 0, y0: 0, width, height, pixels: vec![value; width * height], planes: Vec::new(), scene: None }
     }
 
     /// A transparent image of frame `format` with pixels stored for `window`.
     pub fn blank(format: Size, window: IRect) -> Self {
         let (width, height) = (window.width(), window.height());
-        Image { format, x0: window.x0, y0: window.y0, width, height, pixels: vec![color::TRANSPARENT; width * height], planes: Vec::new() }
+        Image { format, x0: window.x0, y0: window.y0, width, height, pixels: vec![color::TRANSPARENT; width * height], planes: Vec::new(), scene: None }
+    }
+
+    /// Roughly how much memory this image holds: pixels, planes and a
+    /// scene's card textures and points, plus a little for the struct
+    /// itself, so an image carrying only a scene never counts as nothing.
+    pub fn bytes(&self) -> usize {
+        let planes: usize = self.planes.iter().map(|p| p.data.len() * 4).sum();
+        let scene = self.scene.as_ref().map_or(0, |s| {
+            s.cards.iter().map(|c| c.image.bytes() + 256).sum::<usize>() + s.cameras.len() * 256 + s.points.len() * 24
+        });
+        std::mem::size_of::<Image>() + self.pixels.len() * std::mem::size_of::<Rgba>() + planes + scene
     }
 
     /// The extra plane called `name`.
@@ -245,6 +259,7 @@ impl Image {
             *px = self.at((i % w) as i32, (i / w) as i32);
         }
         out.keep_planes(self);
+        out.scene = self.scene.clone();
         Cow::Owned(out)
     }
 

@@ -279,7 +279,14 @@ impl Evaluator {
                         None => inputs.push(None),
                     }
                 } else {
-                    inputs.push(Some(self.cache[dep].1.as_ref()));
+                    let img = self.cache[dep].1.as_ref();
+                    // A scene only into a scene port, an image only into an
+                    // image port (a hand-edited or old file may mix them).
+                    if let Some(port) = ports.get(i).filter(|p| p.kind != ops::Kind::of(img)) {
+                        let (want, got) = (port.kind.name(), ops::Kind::of(img).name());
+                        return Err(node_err(id, format!("input '{}' takes {} {want}, but '{dep}' outputs {} {got}", port.label, a(want), a(got))));
+                    }
+                    inputs.push(Some(img));
                 }
             }
             let out = ops::eval(&node.op, &params, &inputs, ctx)
@@ -307,6 +314,11 @@ fn linked_params(index: &HashMap<&str, &NodeSpec>, node: &NodeSpec, frame: i64, 
     }
     let follow = |v: &Value, t: f64| crate::link::resolve(&lookup, v, t, clock);
     Ok(ops::resolve_params_linked(&node.op, &node.params, frame, Some(&follow)))
+}
+
+/// "an" before "image", "a" before "scene".
+fn a(word: &str) -> &'static str {
+    if word.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" }
 }
 
 /// `params` are the node's params already resolved at `ctx.frame`.

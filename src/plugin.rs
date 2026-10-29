@@ -286,7 +286,7 @@ impl OpDesc {
         let inputs: Vec<Port> = self
             .inputs
             .into_iter()
-            .map(|p| Port { label: leak(p.label), optional: p.optional })
+            .map(|p| Port { label: leak(p.label), optional: p.optional, kind: ops::Kind::Image })
             .collect();
         Ok(OpInfo {
             label: leak(self.label.unwrap_or_else(|| self.name.clone())),

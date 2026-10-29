@@ -48,7 +48,7 @@ macro_rules! tool {
 
 static TOOLS: &[Tool] = &[
     tool!("list_ops", "List every node type (op) with its label and category, including plugin ops.",
-        {"type": "object", "properties": {"category": {"type": "string", "description": "Only this category (source, color, channel, merge, shape, transform, filter, output)."}}}),
+        {"type": "object", "properties": {"category": {"type": "string", "description": "Only this category (source, color, channel, keyer, merge, shape, transform, filter, output, scene)."}}}),
     tool!("describe_op", "Inputs, params (kind, range, default) and help for one op.",
         {"type": "object", "properties": {"op": {"type": "string"}}, "required": ["op"]}),
     tool!("get_graph", "The whole graph as JSON, plus file path, unsaved state and undo availability.",

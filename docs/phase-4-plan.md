@@ -2,7 +2,7 @@
 
 Status: **agreed** (2026-10-29). The user chose the proposed option for
 D1–D4; D5 (viewport) and D6 (order) stand as proposed until milestone 9.
-Milestones 1–2 done. The work goes one milestone at a time, as in
+Milestones 1–3 done. The work goes one milestone at a time, as in
 `phase-0.6-plan.md`.
 
 ## Goal
@@ -206,7 +206,16 @@ then poses of in-between frames by PnP and a final pass).
    ↔ focal ↔ field of view), Brown radial distortion and its inverse.
    Lens Distort op (2D, useful on its own). Tests: project / unproject
    round trips; distort ∘ undistort ≈ identity; a known grid.
-3. **Scene data and the 3D nodes (D2).** `Output` enum, port kinds,
+3. **Done (2026-10-29).** **Scene data and the 3D nodes (D2).** (As
+   built: no `Output` enum. A scene rides on the graph's existing value
+   as `Image::scene` (an image with no pixels), so the cache, worker,
+   viewer, stats and plugin calls needed no change; the wires are typed
+   all the same: `Port::kind` (image / scene), `ops::output_kind`,
+   `ops::wire_error`, checked by the graph at evaluation, by
+   `Session::connect` and by the node editor, which draws scene wires and
+   ports blue. A Camera outputs a scene holding the camera, so there are
+   two kinds, not three. Camera k1/k2 wait for the tracker. `Image::bytes`
+   counts card textures for the frame cache.) `Output` enum, port kinds,
    node editor wire kinds; Camera, Card, Scene nodes; scenes in the
    cache. Tests: a scene's contents; refused wires; save / load.
 4. **Scanline Render.** Rasterizer, textures, depth plane, background,

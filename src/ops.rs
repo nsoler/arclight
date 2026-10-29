@@ -10,6 +10,7 @@
 use crate::anim;
 use crate::color::{self, Rgba};
 use crate::geom;
+use crate::scene::{self, Scene};
 use crate::image::{IRect, Image, Size};
 use crate::media;
 use crate::shape::{self, FillRule, Pt};
@@ -45,6 +46,53 @@ pub enum Category {
     Transform,
     Filter,
     Output,
+    /// 3D: cameras, cards and scenes.
+    Scene,
+}
+
+/// What travels along a wire: an image, or a 3D scene (an image whose
+/// [`scene`](Image::scene) is set, with no pixels).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Image,
+    Scene,
+}
+
+impl Kind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Image => "image",
+            Kind::Scene => "scene",
+        }
+    }
+
+    /// The kind of a rendered output.
+    pub fn of(img: &Image) -> Kind {
+        if img.scene.is_some() { Kind::Scene } else { Kind::Image }
+    }
+}
+
+/// The kind of output `op` makes.
+pub fn output_kind(op: &str) -> Kind {
+    match op {
+        "camera" | "card" | "scene" => Kind::Scene,
+        _ => Kind::Image,
+    }
+}
+
+/// Why the output of an `from_op` node can't go into port `port` of a
+/// `to_op` node, if it can't: a scene into an image port or the other way.
+pub fn wire_error(from_op: &str, to_op: &str, port: usize) -> Option<String> {
+    let p = info(to_op)?.inputs.get(port)?;
+    let k = output_kind(from_op);
+    (k != p.kind).then(|| format!("input '{}' takes {}, not {}", p.label, article(p.kind), article(k)))
+}
+
+fn article(k: Kind) -> &'static str {
+    match k {
+        Kind::Image => "an image",
+        Kind::Scene => "a scene",
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -120,14 +168,21 @@ pub struct Port {
     pub label: &'static str,
     /// An optional port may be left unconnected; the op then sees `None`.
     pub optional: bool,
+    /// What it takes.
+    pub kind: Kind,
 }
 
 const fn req(label: &'static str) -> Port {
-    Port { label, optional: false }
+    Port { label, optional: false, kind: Kind::Image }
 }
 
 const fn opt(label: &'static str) -> Port {
-    Port { label, optional: true }
+    Port { label, optional: true, kind: Kind::Image }
+}
+
+/// An optional port taking a scene.
+const fn scene_in(label: &'static str) -> Port {
+    Port { label, optional: true, kind: Kind::Scene }
 }
 
 const IN: Port = req("input");
@@ -563,6 +618,54 @@ pub static OPS: &[OpInfo] = &[
         mask_base: None,
         help: "Resamples to a new frame size. Fit keeps the aspect ratio inside \
                the frame (with transparent bars); fill covers it and crops.",
+    },
+    OpInfo {
+        name: "camera",
+        label: "Camera",
+        category: Category::Scene,
+        inputs: &[],
+        params: &[
+            p!("focal", "Focal length (mm)", ParamKind::Float { min: 1.0, max: 1000.0 }, 35.0),
+            p!("film_back", "Film back (mm)", ParamKind::Vec2, [36.0, 24.0]),
+            p!("translate", "Translate", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+            p!("rotate", "Rotate", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+            p!("scale", "Scale", ParamKind::Vec3, [1.0, 1.0, 1.0]),
+            p!("near", "Near", ParamKind::Float { min: 0.001, max: 1000.0 }, 0.1),
+            p!("far", "Far", ParamKind::Float { min: 1.0, max: 1000000.0 }, 10000.0),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "A pinhole camera for a Scanline Render: it looks down its −Z axis (Y up), placed by Translate, \
+               then Rotate (degrees about X, then Y, then Z). The film back's width spans the frame's width. \
+               Outputs a scene holding the camera.",
+    },
+    OpInfo {
+        name: "card",
+        label: "Card",
+        category: Category::Scene,
+        inputs: &[req("image")],
+        params: &[
+            p!("translate", "Translate", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+            p!("rotate", "Rotate", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+            p!("scale", "Scale", ParamKind::Vec3, [1.0, 1.0, 1.0]),
+            // Null: 1 wide, as high as the image's aspect makes it.
+            p!("size", "Size", ParamKind::Vec2, Value::Null),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Puts its image on a flat card in 3D, centered on its origin and facing +Z, Size wide and high \
+               (by default 1 wide, keeping the image's aspect), then scaled, rotated and moved. \
+               Outputs a scene holding the card.",
+    },
+    OpInfo {
+        name: "scene",
+        label: "Scene",
+        category: Category::Scene,
+        inputs: &[scene_in("1"), scene_in("2"), scene_in("3"), scene_in("4")],
+        params: &[],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Gathers cameras, cards and other scenes into one scene.",
     },
     OpInfo {
         name: "lens_distort",
@@ -1115,6 +1218,12 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "crop" => crop(params, inputs),
         "resize" => resize(params, inputs),
         "lens_distort" => lens_distort(params, inputs),
+        "camera" => Ok(scene_output(DEFAULT_FORMAT, Scene { cameras: vec![scene::camera(params)], ..Scene::default() })),
+        "card" => {
+            let img = input(inputs, 0, "card")?;
+            Ok(scene_output(img.format, Scene { cards: vec![scene::card(params, img)], ..Scene::default() }))
+        }
+        "scene" => gather(inputs),
         "tracker" => tracker(params, inputs),
         "corner_pin" => corner_pin(params, inputs),
         "rectangle" | "ellipse" | "polygon" | "roto" => shape_op(op, params, inputs),
@@ -2043,6 +2152,31 @@ fn resize(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     });
     out.carry_planes(src, |x, y| Some([(x as f32 + 0.5 - ox) * fx - 0.5, (y as f32 + 0.5 - oy) * fy - 0.5]));
     Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// 3D
+// ---------------------------------------------------------------------------
+
+/// The output of a node making `scene`: no pixels, frame `format`.
+fn scene_output(format: Size, scene: Scene) -> Image {
+    let mut out = Image::blank(format, IRect::default());
+    out.scene = Some(std::sync::Arc::new(scene));
+    out
+}
+
+/// Everything in the connected scenes, in port order; the first one's
+/// frame.
+fn gather(inputs: &[Option<&Image>]) -> Result<Image> {
+    let mut all = Scene::default();
+    let mut format = None;
+    for img in inputs.iter().flatten() {
+        if let Some(s) = &img.scene {
+            all.extend(s);
+            format.get_or_insert(img.format);
+        }
+    }
+    Ok(scene_output(format.unwrap_or(DEFAULT_FORMAT), all))
 }
 
 // ---------------------------------------------------------------------------

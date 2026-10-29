@@ -37,7 +37,7 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.26**.
+  in the same commit as the change. Current: **0.0.27**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -884,8 +884,28 @@ width), `Distortion {k1, k2, center, scale = w/2}` `distort`/`undistort`
 (samples the edges, since a lens map's extremes aren't at the corners).
 Tests: geom rotations/projection/distortion round trips,
 `ops::lens_distort_moves_points_radially_and_undoes_itself`.
-Next: M3 (scene data: `Output` enum Image|Scene, port kinds,
-Camera/Card/Scene nodes).
+**M3 done (v0.0.27): scene data, Camera / Card / Scene, typed wires.**
+Deviation from the plan text (same result for users): no `Output` enum.
+A scene rides on `Image` as `Image.scene: Option<Arc<Scene>>` with no
+pixels, so it uses the existing cache and worker; `Image::bytes()`
+(pixels + planes + card textures/points + struct size) sizes the frame
+cache, so a scene-only image never counts as 0. `flat()` keeps the scene;
+MCP/Python stats flatten a scene image to a transparent frame and add
+`"scene": "1 camera, 1 card"`. Wires are typed by `Port.kind`
+(`Kind::Image`/`Scene`), `ops::output_kind`, `ops::wire_error`; checked in
+graph.rs `run()` ("input X takes an image, but Y outputs a scene"),
+`Session::connect` and the node editor (refuses the drop; scene wires
+and ports drawn blue). Plugin ports are image ports, so the ABI is
+unchanged. `src/scene.rs`: `Scene {cameras, cards, points}`,
+`Card {image: Arc<Image>, world, size}` + `corners()`, `extend`,
+`describe`, params → placement/camera/card. ops.rs: `Category::Scene`
+(shown "3D"), `scene_in`, ops camera/card/scene (`scene_output`,
+`gather`); Camera's (empty) frame is `DEFAULT_FORMAT`. Not checked by
+hand: dragging wires between 3D nodes, blue wire drawing. Tests:
+`scene::cards_and_cameras_from_params`,
+`scene::scenes_travel_along_typed_wires`.
+Next: M4, Scanline Render (and the viewer saying "scene: …" instead of
+an empty frame).
 
 - 3D needs a scene system first: Camera (focal length, film back, transform,
   animatable), Card / geometry nodes, a Scene node, and a **scanline renderer**

@@ -112,10 +112,11 @@ pub fn category_color(c: Category) -> Color32 {
         Category::Transform => Color32::from_rgb(140, 104, 48),
         Category::Filter => Color32::from_rgb(132, 74, 58),
         Category::Output => Color32::from_rgb(84, 86, 92),
+        Category::Scene => Color32::from_rgb(48, 110, 150),
     }
 }
 
-const CATEGORIES: [(Category, &str); 9] = [
+const CATEGORIES: [(Category, &str); 10] = [
     (Category::Source, "Source"),
     (Category::Color, "Color"),
     (Category::Channel, "Channel"),
@@ -125,6 +126,7 @@ const CATEGORIES: [(Category, &str); 9] = [
     (Category::Transform, "Transform"),
     (Category::Filter, "Filter"),
     (Category::Output, "Output"),
+    (Category::Scene, "3D"),
 ];
 
 fn category_name(c: Category) -> &'static str {
@@ -133,6 +135,28 @@ fn category_name(c: Category) -> &'static str {
 
 fn has_output(op: &str) -> bool {
     op != "viewer"
+}
+
+/// Wires carrying a 3D scene (and the ports taking one) are drawn in this.
+const SCENE_COLOR: Color32 = Color32::from_rgb(90, 175, 225);
+
+/// Whether `src`'s output may go into input `port` of `dst`: a scene only
+/// into a scene port, an image only into an image port.
+fn fits(doc: &Doc, src: &str, dst: &str, port: usize) -> bool {
+    match (doc.node(src), doc.node(dst)) {
+        (Some(s), Some(d)) => ops::wire_error(&s.op, &d.op, port).is_none(),
+        _ => false,
+    }
+}
+
+/// Whether `node` may go into the wire from `src` to input `port` of `dst`.
+fn fits_between(doc: &Doc, node: &str, src: &str, dst: &str, port: usize) -> bool {
+    fits(doc, src, node, 0) && fits(doc, node, dst, port)
+}
+
+/// Whether `node`'s output is a scene.
+fn is_scene(doc: &Doc, node: &str) -> bool {
+    doc.node(node).is_some_and(|n| ops::output_kind(&n.op) == ops::Kind::Scene)
 }
 
 /// Ops matching `query`, in category order. Every word of the query must
@@ -187,13 +211,13 @@ impl NodeEditor {
         let upstream = doc.selected.clone();
         let id = doc.add_node(op.name, [at.x, at.y]);
         if let Some(w) = self.target_wire.take() {
-            if doc.insert_on_wire(&id, &w.src, &w.dst, w.port) {
+            if fits_between(doc, &id, &w.src, &w.dst, w.port) && doc.insert_on_wire(&id, &w.src, &w.dst, w.port) {
                 doc.selected = Some(id);
                 return;
             }
         }
         if let Some(up) = upstream {
-            if !op.inputs.is_empty() && doc.node(&up).is_some_and(|n| has_output(&n.op)) {
+            if !op.inputs.is_empty() && doc.node(&up).is_some_and(|n| has_output(&n.op)) && fits(doc, &up, &id, 0) {
                 doc.connect(&up, &id, 0);
             }
         }
@@ -363,7 +387,8 @@ impl NodeEditor {
                     let a = Self::out_port(from);
                     let b = Self::in_port(to, i, n.inputs.len());
                     let on = lit.is_some_and(|w| w.src == *src && w.dst == n.id && w.port == i);
-                    painter.add(bezier(a, b, if on { Stroke::new(3.0, Color32::from_rgb(250, 190, 70)) } else { wire_stroke }));
+                    let plain = if is_scene(doc, src) { Stroke::new(wire_stroke.width, SCENE_COLOR) } else { wire_stroke };
+                    painter.add(bezier(a, b, if on { Stroke::new(3.0, Color32::from_rgb(250, 190, 70)) } else { plain }));
                 }
             }
         }
@@ -402,7 +427,7 @@ impl NodeEditor {
                 }
             }
             if resp.drag_stopped() {
-                if let Some(w) = self.drop_wire.take() {
+                if let Some(w) = self.drop_wire.take().filter(|w| fits_between(doc, id, &w.src, &w.dst, w.port)) {
                     doc.insert_on_wire(id, &w.src, &w.dst, w.port);
                 }
             }
@@ -431,7 +456,7 @@ impl NodeEditor {
                 }
                 let hot = resp.hovered() || resp.dragged();
                 let port = ops::info(op).and_then(|o| o.inputs.get(i));
-                port_dot(&painter, p, self.zoom, PortKind::Input, hot, port.is_some_and(|p| p.optional));
+                port_dot(&painter, p, self.zoom, PortKind::Input, hot, port.is_some_and(|p| p.optional), port.is_some_and(|p| p.kind == ops::Kind::Scene));
                 if *n_in > 1 && self.zoom > 0.6 {
                     let label = port.map_or("", |p| p.label);
                     // Outside the node, just above the incoming wire, clear of the title.
@@ -444,7 +469,7 @@ impl NodeEditor {
                 if resp.drag_started() {
                     self.wire = Some(Wire::FromOutput(id.clone()));
                 }
-                port_dot(&painter, p, self.zoom, PortKind::Output, resp.hovered() || resp.dragged(), false);
+                port_dot(&painter, p, self.zoom, PortKind::Output, resp.hovered() || resp.dragged(), false, ops::output_kind(op) == ops::Kind::Scene);
             }
         }
 
@@ -477,8 +502,10 @@ impl NodeEditor {
                 match wire {
                     Wire::FromOutput(src) => {
                         if let Some((dst, i)) = self.input_at(&geo, ptr) {
-                            doc.connect(&src, &dst, i);
-                        } else if let Some(w) = self.wire_at(doc, ptr, Some(&src)) {
+                            if fits(doc, &src, &dst, i) {
+                                doc.connect(&src, &dst, i);
+                            }
+                        } else if let Some(w) = self.wire_at(doc, ptr, Some(&src)).filter(|w| !is_scene(doc, &src) && !is_scene(doc, &w.src)) {
                             // Onto a wire: a Merge joins the two there.
                             if let Some(m) = doc.merge_into_wire(&src, &w.src, &w.dst, w.port) {
                                 doc.selected = Some(m);
@@ -492,7 +519,7 @@ impl NodeEditor {
                             .map(|(id, _, r, _)| (id, Self::out_port(*r).distance(ptr)))
                             .filter(|&(_, d)| d < PORT_R * 2.5)
                             .min_by(|a, b| a.1.total_cmp(&b.1));
-                        if let Some((src, _)) = hit {
+                        if let Some((src, _)) = hit.filter(|(src, _)| fits(doc, src, &dst, i)) {
                             doc.connect(src, &dst, i);
                         }
                     }
@@ -787,9 +814,12 @@ enum PortKind {
     Output,
 }
 
-fn port_dot(painter: &egui::Painter, p: Pos2, zoom: f32, kind: PortKind, hot: bool, optional: bool) {
+/// `scene`: the port takes or makes a 3D scene (drawn blue).
+#[allow(clippy::too_many_arguments)]
+fn port_dot(painter: &egui::Painter, p: Pos2, zoom: f32, kind: PortKind, hot: bool, optional: bool, scene: bool) {
     let r = PORT_R * zoom.max(0.6);
     let color = match (kind, hot) {
+        _ if scene && !hot => SCENE_COLOR,
         (PortKind::Input, false) => IN_PORT_COLOR,
         (PortKind::Input, true) => IN_PORT_HOT,
         (PortKind::Output, false) => OUT_PORT_COLOR,

@@ -7,6 +7,18 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.27 — 2026-10-29
+
+- 3D scene nodes (new 3D category): Camera (focal length, film back,
+  translate/rotate/scale, near/far), Card (puts its image on a flat card
+  in 3D, 1 wide by default keeping the image's aspect) and Scene (gathers
+  up to four cameras/cards/scenes). Scene wires are typed: the node editor
+  draws them blue and refuses a scene into an image input or an image
+  into a scene input; the session/MCP and the graph refuse them too, and
+  node descriptions list each input's kind. MCP `list_ops` also filters
+  by `keyer` and `scene`. Nothing draws a scene yet (Scanline Render is
+  next). Phase 4 milestone 3.
+
 ## 0.0.26 — 2026-10-29
 
 - The formula field suggests functions, variables, node names, params and

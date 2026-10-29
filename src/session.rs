@@ -142,7 +142,7 @@ impl Session {
             .enumerate()
             .map(|(i, p)| {
                 let src = n.inputs.get(i).filter(|s| !s.is_empty());
-                json!({"port": i, "label": p.label, "optional": p.optional, "source": src})
+                json!({"port": i, "label": p.label, "optional": p.optional, "kind": p.kind.name(), "source": src})
             })
             .collect();
         let outputs: Vec<Value> = self
@@ -302,6 +302,10 @@ impl Session {
         }
         if self.is_upstream(to, from) {
             bail!("connecting '{from}' to '{to}' would create a cycle");
+        }
+        let from_op = &self.graph.nodes[self.node_index(from)?].op;
+        if let Some(e) = ops::wire_error(from_op, &self.graph.nodes[i].op, port) {
+            bail!("can't connect '{from}' to '{to}': {e}");
         }
         self.checkpoint();
         self.graph.nodes[i].inputs[port] = from.to_string();
@@ -510,7 +514,7 @@ pub fn op_schema(info: &OpInfo) -> Value {
             v
         })
         .collect();
-    let inputs: Vec<Value> = info.inputs.iter().map(|p| json!({"label": p.label, "optional": p.optional})).collect();
+    let inputs: Vec<Value> = info.inputs.iter().map(|p| json!({"label": p.label, "optional": p.optional, "kind": p.kind.name()})).collect();
     let mut v = json!({
         "name": info.name,
         "label": info.label,
@@ -551,6 +555,7 @@ pub fn image_stats(img: &Image) -> Value {
         "min_rgba": if img.pixels.is_empty() { [0.0; 4] } else { lo.map(|x| round(x as f64)) },
         "max_rgba": if img.pixels.is_empty() { [0.0; 4] } else { hi.map(|x| round(x as f64)) },
         "planes": img.plane_stats(),
+        "scene": orig.scene.as_ref().map(|s| s.describe()),
     })
 }
 

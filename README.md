@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.0.26** (alpha); see `CHANGELOG.md`.
+Version **0.0.27** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -210,6 +210,14 @@ result is blended back toward the main input (B for merge/keymix) by
 | `write` | 1 | `path` | `.exr` = float; others = 8-bit sRGB |
 | `media_out` | 1 | `path`, `first_frame`, `last_frame`, `fps`, `dpx` (DPX encoding), `codec` (`auto`/`H.264 8-bit`/`HEVC 10-bit`/`ProRes 422 HQ 10-bit`/`ProRes 4444 + alpha`) | renders a range to a sequence or a video; `auto` = ProRes 422 HQ for `.mov`, H.264 otherwise; ProRes needs `.mov`/`.mkv`; the 10-bit codecs are fed 16-bit frames, ProRes 4444 keeps alpha |
 | `viewer` | 1 | — | pass-through; marks what the GUI viewer shows |
+| `camera` | 0 | `focal` (mm), `film_back` [2] (mm), `translate`/`rotate`/`scale` [3], `near`, `far` | 3D: outputs a scene holding a camera (right-handed, Y up, looking down −Z; rotate in degrees, X then Y then Z) |
+| `card` | 1 | `translate`/`rotate`/`scale` [3], `size` [2] or null | 3D: puts its input image on a flat card (1 wide by default, keeping the image's aspect); outputs a scene |
+| `scene` | 4 scenes | — | 3D: gathers up to four cameras, cards or scenes into one scene |
+
+3D nodes (Camera, Card, Scene) build a 3D scene: their blue wires carry
+scenes, not images, and only connect to scene inputs (the node editor,
+the session/MCP and the graph all refuse a mismatch). Viewing one shows an
+empty frame until Scanline Render arrives.
 
 Shape params, shared by `rectangle`, `ellipse`, `polygon` and `roto`: `width`,
 `height` (the frame when there's no background, 0 = the project format;
