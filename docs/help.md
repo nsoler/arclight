@@ -75,6 +75,10 @@ the file). **Apply** or **OK** changes the project (one undo step);
 **Cancel** leaves it as it was. The transport bar's In, Out, FPS and Format
 fields change the same settings directly.
 
+**Read** and **Media In** both read images and video (`.mp4`, `.mov`, …,
+in upper or lower case): Read plays a video from frame 1, Media In over the
+frame range it sets.
+
 New **Read** and **Media In** nodes fit what they read to the project's
 size (**Fit to project**), and follow it when it changes:
 

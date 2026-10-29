@@ -8,7 +8,8 @@
 //! ([`Pending::poll`]) once a frame, then applied as if it came at once.
 //! One at a time: [`busy`] says one is open. Dialogs are built by [`new`],
 //! which makes them belong to the app's window (see [`set_parent`]), so the
-//! system shows them over it.
+//! system shows them over it. Add file-type filters with [`filter`], which
+//! matches extensions in either case.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -32,6 +33,25 @@ pub fn set_parent(parent: &eframe::Frame) {
 /// A new file dialog over the app's window, to configure and [`start`].
 pub fn new() -> rfd::FileDialog {
     TEMPLATE.with(|t| t.borrow().clone())
+}
+
+/// Dialog `d` with a filter `name` for files ending in `exts` (lower case),
+/// in lower or upper case: the portal's filters are case-sensitive globs, so
+/// `*.mp4` alone hides a camera's `CLIP.MP4`.
+pub fn filter(d: rfd::FileDialog, name: &str, exts: &[&str]) -> rfd::FileDialog {
+    d.add_filter(name, &both_cases(exts))
+}
+
+/// `exts` and their upper-case versions.
+fn both_cases(exts: &[&str]) -> Vec<String> {
+    let mut all: Vec<String> = exts.iter().map(|e| e.to_ascii_lowercase()).collect();
+    for e in exts {
+        let up = e.to_ascii_uppercase();
+        if !all.contains(&up) {
+            all.push(up);
+        }
+    }
+    all
 }
 
 /// Whether a dialog is open (another can't be started until it closes).
@@ -119,6 +139,12 @@ pub(crate) mod tests {
             assert!(t0.elapsed() < Duration::from_secs(5), "no answer");
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+
+    #[test]
+    fn filters_match_either_case() {
+        assert_eq!(both_cases(&["mp4", "exr"]), ["mp4", "exr", "MP4", "EXR"]);
+        assert_eq!(both_cases(&["JPG"]), ["jpg", "JPG"]);
     }
 
     #[test]

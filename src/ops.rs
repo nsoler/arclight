@@ -415,13 +415,14 @@ pub static OPS: &[OpInfo] = &[
     },
     OpInfo {
         name: "read",
-        label: "Read (still)",
+        label: "Read",
         category: Category::Source,
         inputs: &[],
         params: &[p!("path", "File", ParamKind::Path { save: false }, ""), PROJECT_FIT],
         overlay: Overlay::None,
         mask_base: None,
-        help: "Reads a single image file. Prefer Media In for sequences and video. Fit to project scales it to the \
+        help: "Reads an image file, or a video file (its first frame at frame 1, holding the first and last frames \
+               outside it). Prefer Media In for sequences and to set a video's range. Fit to project scales it to the \
                project's format (as Media In's).",
     },
     OpInfo {
@@ -1364,7 +1365,8 @@ pub fn is_time_varying(op: &str, params: &Value) -> bool {
     let path = params.get("path").and_then(Value::as_str).unwrap_or("");
     match op {
         "media_in" => true,
-        "read" | "write" => media::is_sequence_pattern(path),
+        "read" => media::is_sequence_pattern(path) || media::is_video(Path::new(path)),
+        "write" => media::is_sequence_pattern(path),
         _ => crate::plugin::is_time_varying(op),
     }
 }
@@ -1603,8 +1605,9 @@ fn media_in(params: &Value, ctx: &EvalContext) -> Result<Image> {
     fit_to_project(read_media(&p, ctx)?, &p.fit, p.project_format)
 }
 
-/// What a Media In reads at `ctx`'s frame, at its own size.
-fn read_media(p: &MediaIn, ctx: &EvalContext) -> Result<Image> {
+/// What a Media In reads at `ctx`'s frame, at its own size (shared with
+/// the decoder for a video).
+fn read_media(p: &MediaIn, ctx: &EvalContext) -> Result<Arc<Image>> {
     if p.path.is_empty() {
         bail!("no file selected");
     }
@@ -1612,10 +1615,9 @@ fn read_media(p: &MediaIn, ctx: &EvalContext) -> Result<Image> {
     let frame = ctx.frame.clamp(p.first_frame, last);
     let path = Path::new(&p.path);
     if media::is_video(path) {
-        let img = media::read_video_frame(path, (frame - p.first_frame) as usize)?;
-        Ok(Arc::unwrap_or_clone(img))
+        media::read_video_frame(path, (frame - p.first_frame) as usize)
     } else {
-        Image::read(&media::existing_frame_path(&p.path, frame, p.first_frame, last))
+        Ok(Arc::new(Image::read(&media::existing_frame_path(&p.path, frame, p.first_frame, last))?))
     }
 }
 
@@ -1675,15 +1677,23 @@ fn read(params: &Value, ctx: &EvalContext) -> Result<Image> {
     if p.path.is_empty() {
         bail!("no file selected");
     }
-    fit_to_project(Image::read(&media::frame_path(&p.path, ctx.frame))?, &p.fit, p.project_format)
+    let path = Path::new(&p.path);
+    let img = if media::is_video(path) {
+        // The clip's own range from frame 1, as a new Media In reads it.
+        media::read_video_frame(path, (ctx.frame - 1).max(0) as usize)?
+    } else {
+        Arc::new(Image::read(&media::frame_path(&p.path, ctx.frame))?)
+    };
+    fit_to_project(img, &p.fit, p.project_format)
 }
 
 /// `img` scaled to the project's `format` (None outside a graph: the
 /// default format) as `fit` says (see [`PROJECT_FITS`]), centered; as it
-/// is for none, or when it already has that size.
-fn fit_to_project(img: Image, fit: &str, format: Option<[usize; 2]>) -> Result<Image> {
+/// is for none, or when it already has that size. Fitting reads `img` in
+/// place (a 4K video frame isn't copied first).
+fn fit_to_project(img: Arc<Image>, fit: &str, format: Option<[usize; 2]>) -> Result<Image> {
     if fit == "none" {
-        return Ok(img);
+        return Ok(Arc::unwrap_or_clone(img));
     }
     let [w, h] = format.unwrap_or([DEFAULT_FORMAT.width, DEFAULT_FORMAT.height]).map(|v| v.max(1));
     let (sx, sy) = (w as f32 / img.format.width.max(1) as f32, h as f32 / img.format.height.max(1) as f32);
@@ -1696,7 +1706,7 @@ fn fit_to_project(img: Image, fit: &str, format: Option<[usize; 2]>) -> Result<I
         other => bail!("unknown fit '{other}' (one of: {})", PROJECT_FITS.join(", ")),
     };
     if img.format == (Size { width: w, height: h }) && sx == 1.0 && sy == 1.0 {
-        return Ok(img);
+        return Ok(Arc::unwrap_or_clone(img));
     }
     // Cut to the frame: what fill crops is gone, and so is the filter's
     // spill past the edges.
@@ -3018,6 +3028,43 @@ mod tests {
         assert_eq!((s.graph.node(&id).unwrap().params["fit"].as_str(), s.graph.node("r").unwrap().params.get("fit")), (Some("fit"), None));
         assert_eq!(s.render(&id, 1).unwrap().format, Size { width: 1920, height: 1080 });
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A video with an upper-case extension (as cameras name them) reads
+    /// through Read and Media In alike, frame by frame, holding outside.
+    #[test]
+    fn read_and_media_in_read_videos_in_either_case() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/media/testsrc.mp4");
+        let dir = std::env::temp_dir().join(format!("arclight_mp4_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let clip = dir.join("CLIP.MP4");
+        std::fs::copy(&src, &clip).unwrap();
+        let path = clip.to_string_lossy().to_string();
+        assert!(is_time_varying("read", &json!({ "path": path })));
+        let at = |op: &str, params: Value, frame: i64| eval_op(op, &params, &[], &EvalContext { frame, write_outputs: false }).unwrap();
+        let read = |frame| at("read", json!({ "path": path }), frame);
+        let media = |frame| at("media_in", json!({ "path": path, "first_frame": 1, "last_frame": 120 }), frame);
+        let (r1, m1) = (read(1), media(1));
+        assert_eq!((r1.format, r1.pixels == m1.pixels), (media::probe_video(&clip).map(|v| Size { width: v.width, height: v.height }).unwrap(), true));
+        let (r30, m30) = (read(30), media(30));
+        assert!(r30.pixels == m30.pixels && r30.pixels != r1.pixels, "it moves, in step with Media In");
+        assert!(read(0).pixels == r1.pixels && read(500).pixels == media(500).pixels, "holds outside the clip");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The user's 4K camera clip, when it's there (it isn't in the repo).
+    #[test]
+    fn reads_a_4k_camera_clip_if_present() {
+        let clip = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/media/musicmen.MP4");
+        if !clip.exists() {
+            return;
+        }
+        let path = clip.to_string_lossy().to_string();
+        for op in ["read", "media_in"] {
+            let img = eval_op(op, &json!({ "path": path, "first_frame": 1, "last_frame": 132 }), &[], &CTX).unwrap();
+            assert_eq!(img.format, Size { width: 3840, height: 2160 }, "{op}");
+            assert!(img.pixels.iter().any(|p| p[0] > 0.01), "{op}: a picture, not black");
+        }
     }
 
     const CTX: EvalContext = EvalContext { frame: 1, write_outputs: false };

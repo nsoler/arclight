@@ -4,3 +4,5 @@
 __pycache__/
 /python/arclt/_arclt*.so
 /dist/
+# The user's own test footage, too big for the repo.
+/examples/media/musicmen.MP4

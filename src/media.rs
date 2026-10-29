@@ -11,7 +11,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, LazyLock, Mutex};
 
 const VIDEO_EXTS: &[&str] = &["mp4", "mov", "m4v", "mkv", "avi", "webm", "mxf", "mpg", "mpeg"];
@@ -244,17 +246,36 @@ pub fn probe_video(path: &Path) -> Result<VideoInfo> {
 }
 
 /// A running ffmpeg decode, kept alive so sequential frames stream without
-/// re-seeking. Any non-sequential request restarts it at the new position.
+/// re-seeking. A jump a little way ahead (playback skipping frames to keep
+/// time) reads on to it; any other restarts ffmpeg at the new position.
+/// A thread reads and converts the next frame while the last is used (a 4K
+/// frame takes tens of milliseconds each to decode and to convert), holding
+/// it until asked: one frame ahead, no more.
 struct Decoder {
     info: VideoInfo,
-    child: Option<(Child, ChildStdout)>,
+    child: Option<Stream>,
     next: usize,
     last: Option<(usize, Arc<Image>)>,
 }
 
+/// The ffmpeg decoding, and its frames from the reader thread: each with
+/// its index. The reader doesn't convert frames before `want`.
+struct Stream {
+    child: Child,
+    frames: Receiver<(usize, std::io::Result<Image>)>,
+    want: Arc<AtomicUsize>,
+}
+
+/// How far ahead a frame can be to be read on to rather than sought: a seek
+/// restarts at a key frame, costing as much as decoding a second or so.
+const READ_AHEAD: usize = 24;
+
 impl Decoder {
     fn stop(&mut self) {
-        if let Some((mut child, _)) = self.child.take() {
+        if let Some(Stream { mut child, frames, .. }) = self.child.take() {
+            // The reader stops at the end of the pipe, or when it can't hand
+            // a frame over.
+            drop(frames);
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -267,14 +288,39 @@ impl Decoder {
         let mut child = Command::new(tool("ffmpeg"))
             .args(["-v", "error", "-nostdin", "-ss", &format!("{t:.6}"), "-i"])
             .arg(path)
+            // The first video stream only (cameras add audio and data streams).
+            .args(["-map", "0:v:0", "-an", "-sn", "-dn"])
             .args(["-f", "rawvideo", "-pix_fmt", if self.info.bits > 8 { "rgba64le" } else { "rgba" }, "-"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
             .context("starting ffmpeg (is it installed?)")?;
-        let stdout = child.stdout.take().expect("piped stdout");
-        self.child = Some((child, stdout));
+        let mut stdout = child.stdout.take().expect("piped stdout");
+        let (w, h, deep) = (self.info.width, self.info.height, self.info.bits > 8);
+        let (tx, frames) = mpsc::sync_channel(0);
+        let want = Arc::new(AtomicUsize::new(index));
+        let wanted = want.clone();
+        let reader = std::thread::Builder::new().name("video decode".into()).spawn(move || {
+            let mut buf = vec![0u8; w * h * if deep { 8 } else { 4 }];
+            for i in index.. {
+                let read = stdout.read_exact(&mut buf);
+                if read.is_ok() && i < wanted.load(Ordering::Acquire) {
+                    continue;
+                }
+                let read = read.map(|_| if deep { rgba16_to_image(&buf, w, h) } else { rgba8_to_image(&buf, w, h) });
+                let end = read.is_err();
+                if tx.send((i, read)).is_err() || end {
+                    break;
+                }
+            }
+        });
+        if let Err(e) = reader {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e).context("starting a video reader");
+        }
+        self.child = Some(Stream { child, frames, want });
         self.next = index;
         Ok(())
     }
@@ -285,24 +331,32 @@ impl Decoder {
                 return Ok(img.clone());
             }
         }
-        if self.child.is_none() || self.next != index {
+        if self.child.is_none() || index < self.next || index > self.next + READ_AHEAD {
             self.start(path, index)?;
         }
-        let (w, h) = (self.info.width, self.info.height);
-        let deep = self.info.bits > 8;
-        let mut buf = vec![0u8; w * h * if deep { 8 } else { 4 }];
-        let (_, stdout) = self.child.as_mut().unwrap();
-        if let Err(e) = stdout.read_exact(&mut buf) {
-            self.stop();
-            // Frame counts from container metadata can overshoot by a frame or
-            // two; hold the last decoded frame rather than failing.
-            if let Some((_, img)) = &self.last {
-                return Ok(img.clone());
+        let stream = self.child.as_ref().unwrap();
+        stream.want.store(index, Ordering::Release);
+        // Frames before it (one read ahead already) are passed over.
+        let read = loop {
+            match stream.frames.recv() {
+                Ok((i, Ok(_))) if i < index => continue,
+                Ok((_, read)) => break read,
+                Err(_) => break Err(std::io::ErrorKind::UnexpectedEof.into()),
             }
-            return Err(e).with_context(|| format!("decoding frame {index} of {}", path.display()));
-        }
+        };
+        let img = match read {
+            Ok(img) => Arc::new(img),
+            Err(e) => {
+                self.stop();
+                // Frame counts from container metadata can overshoot by a
+                // frame or two; hold the last decoded frame rather than failing.
+                if let Some((_, img)) = &self.last {
+                    return Ok(img.clone());
+                }
+                return Err(e).with_context(|| format!("decoding frame {index} of {}", path.display()));
+            }
+        };
         self.next = index + 1;
-        let img = Arc::new(if deep { rgba16_to_image(&buf, w, h) } else { rgba8_to_image(&buf, w, h) });
         self.last = Some((index, img.clone()));
         Ok(img)
     }
@@ -573,6 +627,30 @@ mod tests {
         let mut levels: Vec<u32> = (0..1024).map(|x| img.at(x, 0)[0].to_bits()).collect();
         levels.dedup();
         assert!(levels.len() > 1000, "only {} distinct levels", levels.len());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Playback skipping a few frames reads on to the wanted one (the same
+    /// ffmpeg, no seek), and gets the frame a seek would.
+    #[test]
+    fn short_jumps_ahead_read_on_without_seeking() {
+        let dir = std::env::temp_dir().join(format!("arclight_jump_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let clip = dir.join("jump.mp4");
+        std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/media/testsrc.mp4"), &clip).unwrap();
+        let pid = || DECODERS.lock().unwrap()[&clip].child.as_ref().map(|s| s.child.id());
+        read_video_frame(&clip, 0).unwrap();
+        let first = pid();
+        read_video_frame(&clip, 1).unwrap();
+        let read_on = read_video_frame(&clip, 7).unwrap();
+        assert_eq!(pid(), first, "read on, not restarted");
+        read_video_frame(&clip, 7 + READ_AHEAD + 10).unwrap();
+        assert_ne!(pid(), first, "a long jump seeks");
+        let restarted = pid();
+        let sought = read_video_frame(&clip, 7).unwrap();
+        assert_ne!(pid(), restarted, "back: seeks");
+        assert!(read_on.pixels == sought.pixels, "the same frame either way");
+        assert!(read_on.pixels != read_video_frame(&clip, 6).unwrap().pixels);
         std::fs::remove_dir_all(&dir).ok();
     }
 

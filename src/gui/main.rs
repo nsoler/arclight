@@ -369,8 +369,8 @@ impl App {
             return;
         }
         self.file = match what {
-            FileFor::Open => dialogs::pick(what, dialogs::new().add_filter("Arclight graph", &["json"])),
-            FileFor::SaveAs => dialogs::save(what, dialogs::new().add_filter("Arclight graph", &["json"]).set_file_name("comp.json")),
+            FileFor::Open => dialogs::pick(what, dialogs::filter(dialogs::new(), "Arclight graph", &["json"])),
+            FileFor::SaveAs => dialogs::save(what, dialogs::filter(dialogs::new(), "Arclight graph", &["json"]).set_file_name("comp.json")),
             FileFor::Import => dialogs::pick(what, dialogs::new()),
         };
     }

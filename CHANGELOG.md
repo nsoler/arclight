@@ -11,6 +11,18 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.32 — 2026-10-29
+
+- **Read plays video files** as well as stills (it's now labelled
+  "Read"), and both Read and Media In read upper-case extensions such
+  as a camera's `CLIP.MP4`; the file browsers list them (the portal's
+  filters are case-sensitive, so each filter now adds the upper-case
+  form). Match media works on a video Read.
+- Video decoding reads only the first video stream (camera files with
+  audio and data streams work), decodes a frame ahead, and reads on
+  through frames that playback skips instead of seeking, so a 4K clip
+  plays at about 15 fps fitted to HD (22–24 once cached).
+
 ## 0.9.31 — 2026-10-29
 
 - Fixed: the app stopped responding while a file dialog was open

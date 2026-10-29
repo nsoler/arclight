@@ -9,17 +9,17 @@ M10 and M11 done, M12–M13 specified), `docs/help.md` (the in-app help) and
 
 ## Start here (next session)
 
-- **State:** version **0.9.31** on branch **`wip-ns-3dwork`**, commit
-  `504d443`, merged to `main`. The local build (`target/release`) is
-  0.9.31, so the Omarchy launcher entry runs 0.9.31. (The Python `.so`
+- **State:** version **0.9.32** on branch **`wip-ns-3dwork`**, merged to `main`. The local build (`target/release`) is
+  0.9.32, so the Omarchy launcher entry runs 0.9.32. (The Python `.so`
   in `python/` is older; rebuild with `python/build.sh` if needed.)
-- **Latest release: v0.9.31** (marked **Latest**;
+- **Latest release: v0.9.32** (marked **Latest**;
   github.com/nsoler/arclight/releases/latest): Linux x86_64 tarball,
-  macOS universal DMG `Arclight-0.9.31-universal.dmg`, `arclt` wheels +
-  sdist. Earlier this session: v0.9.30 (Latest before it), v0.9.27,
+  macOS universal DMG `Arclight-0.9.32-universal.dmg`, `arclt` wheels +
+  sdist. Earlier this session: v0.9.31, v0.9.30 (Latest before it), v0.9.27,
   v0.9.11. A stray **draft** release on tag v0.9.7 ("Arclight Compositor
   - ALPHA") was left alone (not ours); ask the user before deleting.
-- **Ask the user first:** (1) whether the file-dialog fix (0.9.31) holds
+- **Ask the user first:** (0) whether `musicmen.MP4` now reads and plays
+  through Read / Media In from the GUI (0.9.32); (1) whether the file-dialog fix (0.9.31) holds
   when navigating folders in the portal picker (the worker could only
   check that the picker stays up without a Not Responding dialog);
   (2) how 0.9.30 / 0.9.31 behave: Fit to project, Project Settings, the
@@ -108,7 +108,15 @@ M10 and M11 done, M12–M13 specified), `docs/help.md` (the in-app help) and
   one at a time, parented to the window); unsaved-changes prompts are an
   `egui::Modal`. No rfd calls outside dialogs.rs. Navigating folders in
   the portal picker by hand still to be confirmed by the user.
-  - Next version: **0.9.32**. Both workers (mathwiz, worker3d) were
+- **0.9.32 (3DWorker): video in Read, upper-case extensions.** Read
+  decodes video via media (frame 1 = clip's first); `dialogs::filter`
+  adds upper-case extensions; ffmpeg `-map 0:v:0 -an -sn -dn`, a reader
+  thread one frame ahead, read-on for jumps ≤ 24 frames. Test clip
+  `examples/media/musicmen.MP4` (user's, 71 MB, 4K) is **gitignored**,
+  not committed; a test reads it only when present. Limits: backward
+  scrubbing seeks every frame (~2 fps on long-GOP 4K); full-4K playback
+  ~6–7 fps.
+  - Next version: **0.9.33**. Both workers (mathwiz, worker3d) were
     idle at the end of session 10; nothing uncommitted. (CHANGELOG has one entry per version.)
 - Mac: also ask whether anyone tried an Intel Mac. Mac-only bugs come
   first.
@@ -320,7 +328,7 @@ M10 and M11 done, M12–M13 specified), `docs/help.md` (the in-app help) and
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.31**.
+  in the same commit as the change. Current: **0.9.32**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

@@ -678,11 +678,11 @@ impl Properties {
                     if browse.clicked() {
                         let what = Browse { node: id.to_string(), param: spec.name, op: op.to_string(), animatable: spec.animatable, frame: self.frame };
                         self.browse = if save {
-                            dialogs::save(what, dialogs::new().set_file_name("render.####.png").add_filter("Image sequence / video", WRITE_EXTS))
+                            dialogs::save(what, dialogs::filter(dialogs::new().set_file_name("render.####.png"), "Image sequence / video", WRITE_EXTS))
                         } else if op == "read_geo" {
-                            dialogs::pick(what, dialogs::new().add_filter("3D geometry (OBJ, glTF)", GEO_EXTS))
+                            dialogs::pick(what, dialogs::filter(dialogs::new(), "3D geometry (OBJ, glTF)", GEO_EXTS))
                         } else {
-                            dialogs::pick(what, dialogs::new().add_filter("Images & video", READ_EXTS))
+                            dialogs::pick(what, dialogs::filter(dialogs::new(), "Images & video", READ_EXTS))
                         };
                     }
                     let resp = ui.add(egui::TextEdit::singleline(&mut s).desired_width(f32::INFINITY));

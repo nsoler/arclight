@@ -80,6 +80,11 @@ pub fn probe(op: &str, params: &Value) -> Result<Source> {
             let file = if media::is_sequence_pattern(path) { media::existing_frame_path(path, first, first, last) } else { path.into() };
             Ok(Source { size: image_size(&file)?, fps: None, range })
         }
+        // A Read of a video plays the whole clip from frame 1.
+        "read" if media::is_video(Path::new(path)) => {
+            let v = media::probe_video(Path::new(path))?;
+            Ok(Source { size: Size { width: v.width, height: v.height }, fps: Some(v.fps), range: Some((1, v.frames as i64)) })
+        }
         "read" => Ok(Source { size: image_size(Path::new(path))?, fps: None, range: None }),
         _ => bail!("Match media takes a Media In or Read node"),
     }
@@ -295,6 +300,11 @@ mod tests {
         let read = probe("read", &json!({ "path": still.to_string_lossy() })).unwrap();
         assert_eq!((read.size, read.range), (Size { width: 32, height: 20 }, None));
         assert!(probe("read", &json!({ "path": "" })).unwrap_err().to_string().contains("no file"));
+        // A video through a Read: its size, rate and frames, like Media In's.
+        let clip = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/media/testsrc.mp4");
+        let v = media::probe_video(&clip).unwrap();
+        let read = probe("read", &json!({ "path": clip.to_string_lossy() })).unwrap();
+        assert_eq!(read, Source { size: Size { width: v.width, height: v.height }, fps: Some(v.fps), range: Some((1, v.frames as i64)) });
         assert!(probe("grade", &json!({ "path": "x" })).is_err());
 
         // Through the window: Match media changes the copy only; Cancel

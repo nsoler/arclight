@@ -27,7 +27,7 @@ Python wheels). All releases: [Releases](https://github.com/nsoler/arclight/rele
 
 ## Build
 
-Version **0.9.31** (alpha); see `CHANGELOG.md`.
+Version **0.9.32** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -254,7 +254,7 @@ result is blended back toward the main input (B for merge/keymix) by
 | op | inputs | key params | notes |
 |----|--------|-----------|-------|
 | `media_in` | 0 | `path`, `first_frame`, `last_frame`, `fit` (`none` / `fit` / `fill` / `stretch` / `width` / `height`) | still, sequence (`shot.####.exr` / `shot.%04d.exr`) or video (via ffmpeg); holds outside the range. `fit` scales it to the project format (follows it when it changes): fit = all of it with transparent bars, fill = covering it and cropped, stretch = exactly, ignoring the aspect, width / height = matching that and keeping the aspect; new nodes default to `fit`, projects saved without it read as `none` |
-| `read` | 0 | `path`, `fit` (as `media_in`) | `.exr` = linear float; others decoded from sRGB 8-bit; scaled to the project format as `fit` says |
+| `read` | 0 | `path`, `fit` (as `media_in`) | an image (`.exr` = linear float; others decoded from sRGB 8-bit) or a video (its frames from frame 1, holding the first and last outside); scaled to the project format as `fit` says |
 | `constant` | 0 | `width`, `height`, `color` [r,g,b,a] | solid fill (color is straight/unassociated) |
 | `checkerboard` | 0 | `width`, `height`, `size`, `color_a`, `color_b` | test pattern |
 | `grade` | 1 + mask | `multiply` [3], `offset` [3], `gamma` [3] | lift/gain/gamma on unassociated color |
@@ -503,7 +503,11 @@ what loaded, and `arclight ops [OP]` to see the op catalog.
   a one-frame sequence. A frame missing from the middle holds the nearest
   earlier frame. Media Out and Write take `####` / `%04d` patterns.
 - **Video** (via ffmpeg): `.mp4 .mov .m4v .mkv .avi .webm .mxf .mpg .mpeg`
-  in; out as H.264 (8-bit), HEVC (10-bit), ProRes 422 HQ (10-bit) or
+  in, in either case (a camera's `CLIP.MP4`; the file browser lists both),
+  through Media In or Read; the first video stream is read, other streams
+  (audio, a camera's data tracks) are ignored. Playback that falls behind
+  and skips a few frames reads on to the next one wanted rather than seeking
+  (a seek in a long-GOP 4K clip costs about half a second). Out as H.264 (8-bit), HEVC (10-bit), ProRes 422 HQ (10-bit) or
   ProRes 4444 with alpha (Media Out's Codec), converted with the BT.709
   matrix and tagged BT.709 primaries/matrix, sRGB transfer, video range. Sources deeper than 8 bits
   (10-bit HEVC, 10/12-bit ProRes, DNxHR HQX, …) are decoded at 16 bits, so
