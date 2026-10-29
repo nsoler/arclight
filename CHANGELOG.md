@@ -11,6 +11,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.36 — 2026-10-29
+
+- Particles engine (`src/particles.rs`): emitters (point, line, rect,
+  disk, sphere, box, mesh surface / vertices, image alpha) with rate /
+  burst, velocity cone, lifetime, size / color over life and seeds;
+  gravity, wind / drag, curl-noise turbulence, attractors, vortices,
+  bounce, kill and speed limit; substeps, pre-roll and a per-frame cache
+  that re-simulates only from a change; animated params sampled per
+  frame. No nodes yet (M13 steps a–b, engine side).
+
 ## 0.9.35 — 2026-10-29
 
 - New **Area Light** node: a rectangle or disk, Size across, optionally

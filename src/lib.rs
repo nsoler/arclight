@@ -24,6 +24,7 @@ pub mod mesh;
 pub mod mcp;
 pub mod nodal;
 pub mod ops;
+pub mod particles;
 pub mod plugin;
 pub mod render;
 pub mod render3d;
