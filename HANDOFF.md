@@ -16,6 +16,11 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
+- **Versioning (standing instruction, 2026-10-28):** Arclight is alpha,
+  `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
+  → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
+  `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
+  in the same commit as the change. Current: **0.0.15**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -97,7 +102,16 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   node editor's fit zooms to at most `FIT_MAX_ZOOM` = 0.7 (was 1.25), so
   the starter graph's nodes are ~105×32 px instead of ~190×58; node
   titles, subtitles and port labels have minimum font sizes (10 / 8.5 /
-  8 px) so they stay readable when zoomed out. No Developer ID signing / notarization (needs a paid Apple
+  8 px) so they stay readable when zoomed out.
+- **Session 7, part 27** (user request), **v0.0.15**: smoother
+  downscaling. `ops::sample_warped(src, x, y, inverse)` (Transform,
+  `warp` for the Tracker output, Corner Pin): the inverse map's finite
+  differences give each output pixel's source footprint; where it's over
+  one pixel a side (minus 1e-3 slack, so a 90° turn stays bilinear), the
+  mean of a grid of bilinear taps over it, up to `MAX_TAPS` = 16 a side;
+  else plain bilinear (unchanged output). A 1-px checkerboard shrunk 4×
+  went from values 0.03–0.97 to 0.5 ± 0.08. Also set the version to
+  0.0.15 (was 0.1.0), shown in the Help menu; `CHANGELOG.md` added. No Developer ID signing / notarization (needs a paid Apple
   account); ffmpeg not bundled (GPL builds; Homebrew instead).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
@@ -160,8 +174,7 @@ steps": take them in this order, one milestone at a time (commit, push and
 fast-forward `main` after each, per the standing instruction above), and
 report back after a few milestones.
 
-1. **Small UX debts:** no filtering when Transform / Tracker output /
-   Corner Pin shrink the image (aliasing). Formats: RLE / float / 1-bit
+1. **Small UX debts:** formats: RLE / float / 1-bit
    DPX, DPX with alpha, EXR data windows (EXR reads ignore the file's data
    window), video color tags (encodes carry no color metadata).
 2. **Session-4 follow-ups** (small to medium):
@@ -781,8 +794,6 @@ windows exist.
   frames have only been seen with hand-keyed scores; Ctrl-drag offsets,
   per-track box sizing and drags over a match-moved output haven't been
   tried with a mouse.
-- Corner Pin and every other warp sample bilinearly with no filtering, so
-  strong shrinking aliases.
 - First frame after launch takes ~1.5 s (ffprobe + ffmpeg start); later
   frames are ~5 ms for the starter graph.
 - Viewer display conversion is on the CPU (rayon); fine to ~4K.

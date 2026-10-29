@@ -22,6 +22,8 @@ compositing product.
 
 ## Build
 
+Version **0.0.15** (alpha); see `CHANGELOG.md`.
+
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
 cargo test                 # unit + graph tests
@@ -175,7 +177,7 @@ result is blended back toward the main input (B for merge/keymix) by
 | `keyer` | input, clean plate (opt) + mask | `screen` (color, or null = estimated from the image), `balance`, `clip_black`, `clip_white`, `despill`, `shrink_grow` (px, negative shrinks), `softness` (px the matte's edge blurs over), `output` (`keyed`/`matte`/`despill only`) | green/blue screen color-difference key with despill; a clean plate gives a per-pixel screen color |
 | `dissolve` | A, B | `amount` | cross-fade A → B |
 | `switch` | 5 (optional) | `which` | passes input `which` through; keyframe it to cut |
-| `transform` | 1 + mask | `translate` [2], `scale` [2], `rotate` (deg), `center` [2] or null | affine, bilinear resample, about `center`; null (the default) pivots on the middle of the input's data window, so a Transform after a shape turns it in place; `motion_blur`, `shutter`, `shutter_offset` as for shapes (the animated warp, averaged over the shutter) |
+| `transform` | 1 + mask | `translate` [2], `scale` [2], `rotate` (deg), `center` [2] or null | affine, bilinear resample (averaged over each pixel's footprint where it shrinks, as Corner Pin and the Tracker output also do), about `center`; null (the default) pivots on the middle of the input's data window, so a Transform after a shape turns it in place; `motion_blur`, `shutter`, `shutter_offset` as for shapes (the animated warp, averaged over the shutter) |
 | `corner_pin` | 1 + mask | `to1`–`to4` [2], `from1`–`from4` [2] | perspective warp taking the From quad onto the To quad; `motion_blur`, `shutter`, `shutter_offset` as for shapes (the animated warp, averaged over the shutter); the panel's **From = image corners** / **To = image corners** put a quad on the input's frame corners |
 | `crop` | 1 | `left`, `top`, `right`, `bottom`, `mode` | `clear outside` or `shrink canvas` |
 | `resize` | 1 | `width`, `height`, `fit` (`stretch`/`fit`/`fill`) | box-filtered down, bilinear up |

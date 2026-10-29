@@ -1,0 +1,32 @@
+# Changelog
+
+Arclight is alpha software: versions are `0.0.x`, and every feature or
+change that ships bumps the last number (0.0.15, 0.0.16, …). The version is
+set in `Cargo.toml` (also `python/Cargo.toml` and
+`plugins/example/Cargo.toml`, kept in step) and shows in the GUI's Help
+menu, `arclight --version`, the MCP server info and Python's
+`arclt.__version__`.
+
+## 0.0.15 — 2026-10-28
+
+First numbered version (before this the crates said 0.1.0). Includes all
+work up to and through session 7, most recently:
+
+- Smoother downscaling: Transform, Tracker match-move/stabilize and Corner
+  Pin average over each output pixel's source footprint when they shrink
+  the image (up to 16×16 taps), instead of aliasing; enlarging is unchanged.
+- Tracker panel: per-track pattern/search box sizes and offsets.
+- Node graph opens at a comfortable size (fit zoom capped at 70%).
+- New shapes land in the viewed picture; drag inside a Polygon/Roto to move
+  it all, drag an edge to move its two points.
+- Viewer toolbar color picker (R, G, B, A and a swatch).
+- macOS (Apple Silicon) build and DMG packaging, and a GitHub Actions
+  workflow for it.
+- DPX read/write (log, 10/16-bit video); 10-bit video decode and encode
+  (HEVC 10-bit, ProRes 422 HQ, ProRes 4444 with alpha); EXR/TIFF/Targa/WebP
+  sequences, held missing frames, 16-bit TIFF output with tagged alpha.
+- Keyer node (screen pick, shrink/grow, softness), motion blur on shapes,
+  Transform, Corner Pin and the Tracker, Transform auto pivot, view
+  override, app launcher entry and icon.
+
+See `HANDOFF.md` ("Progress log") for the full history.

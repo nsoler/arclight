@@ -655,6 +655,8 @@ impl App {
                 }
             });
             ui.menu_button("Help", |ui| {
+                ui.strong(concat!("Arclight ", env!("CARGO_PKG_VERSION"), " (alpha)"));
+                ui.separator();
                 ui.label(
                     "Node graph: right-click to add · drag ports to connect · \
                      double-click or V to view · ⌫ delete · F frame all\n\
