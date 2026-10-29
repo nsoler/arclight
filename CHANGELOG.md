@@ -7,6 +7,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.26 — 2026-10-29
+
+- The formula field suggests functions, variables, node names, params and
+  components as you type (Up/Down, Tab or click), and its ? lists
+  everything a formula can use.
+
 ## 0.0.25 — 2026-10-29
 
 - Formulas can use `time` (seconds from the project's first frame,

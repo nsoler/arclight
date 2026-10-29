@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.0.25** (alpha); see `CHANGELOG.md`.
+Version **0.0.26** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -279,7 +279,8 @@ nodes' params at the frame being rendered:
 
 `multiply` / `add` apply after the formula. In the panel, right-click a
 param's name for **Use a formula** (it starts as the current value); the
-formula field applies on Enter, and a formula that doesn't parse, reads a
+formula field applies on Enter (it suggests names as you type: ↑/↓ and
+Tab, or click; the ? beside it lists every function), and a formula that doesn't parse, reads a
 missing node or param, mixes lists of different sizes or reads itself
 (directly or through other nodes) shows the reason in red; rendering it
 is an error naming the param. Renaming a node rewrites the formulas that

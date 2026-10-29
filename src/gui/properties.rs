@@ -78,6 +78,11 @@ pub struct Properties {
     /// Formulas being typed, by node and param (applied on Enter or when
     /// the field loses focus, if they parse).
     formula_edit: HashMap<(String, String), String>,
+    /// The highlighted completion under the formula being typed.
+    formula_pick: usize,
+    /// Where the completion list was drawn last frame: a click there
+    /// mustn't count as leaving the field.
+    formula_popup: Option<egui::Rect>,
 }
 
 impl Properties {
@@ -279,19 +284,24 @@ impl Properties {
         ui.vertical(|ui| {
             if let Some(f) = &formula {
                 let key = (id.to_string(), spec.name.to_string());
-                let buf = self.formula_edit.entry(key.clone()).or_insert_with(|| f.clone());
-                let resp = ui.add(egui::TextEdit::singleline(buf).code_editor().desired_width(f32::INFINITY).hint_text("e.g. t.track1 + [wiggle(0.1, 5), 0]"));
-                let parsed = arclight::expr::parse(buf);
+                let mut buf = self.formula_edit.remove(&key).unwrap_or_else(|| f.clone());
+                let field = ui.make_persistent_id(("formula", id, spec.name));
+                let left = ui.horizontal(|ui| {
+                    ui.weak("?").on_hover_ui(formula_help);
+                    self.formula_field(ui, doc, field, &mut buf)
+                });
+                let parsed = arclight::expr::parse(&buf);
                 if let Err(e) = &parsed {
                     ui.colored_label(Color32::from_rgb(235, 100, 90), e);
                 }
-                if resp.lost_focus() {
-                    if parsed.is_ok() && buf != f {
+                if left.inner {
+                    if parsed.is_ok() && &buf != f {
                         let mut l = raw.clone();
-                        l["link"]["expr"] = json!(buf.clone());
+                        l["link"]["expr"] = json!(buf);
                         doc.set_param(id, spec.name, l);
                     }
-                    self.formula_edit.remove(&key);
+                } else {
+                    self.formula_edit.insert(key, buf);
                 }
             }
             if let Some(e) = &problem {
@@ -332,6 +342,89 @@ impl Properties {
             };
             doc.set_param(id, spec.name, arclight::link::with_adjust(&raw, pack(&mul, 1.0), pack(&add, 0.0)));
         }
+    }
+
+    /// The formula text field, with completions for the word at the
+    /// cursor (functions, `frame`/`time`/…, node names, then a node's
+    /// params and components) in a list under it: ↑/↓ pick, Tab or a click
+    /// takes one. True when the user is done with the field (Enter or
+    /// focus elsewhere).
+    fn formula_field(&mut self, ui: &mut egui::Ui, doc: &Doc, field: egui::Id, buf: &mut String) -> bool {
+        let ctx = ui.ctx().clone();
+        let focused = ctx.memory(|m| m.has_focus(field));
+        let cursor = egui::text_edit::TextEditState::load(&ctx, field).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index.0);
+        let mut take = None;
+        if let (true, Some(c)) = (focused, cursor) {
+            let n = completions(buf, c, doc).1.len();
+            if n > 0 {
+                ui.input_mut(|i| {
+                    if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                        self.formula_pick = (self.formula_pick + 1) % n;
+                    }
+                    if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                        self.formula_pick = (self.formula_pick + n - 1) % n;
+                    }
+                    if i.consume_key(egui::Modifiers::NONE, egui::Key::Tab) {
+                        take = Some(self.formula_pick.min(n - 1));
+                    }
+                });
+            }
+        }
+        let out = egui::TextEdit::singleline(buf)
+            .id(field)
+            .code_editor()
+            .desired_width(f32::INFINITY)
+            .hint_text("e.g. t.track1 + [wiggle(0.1, 5), 0]")
+            .show(ui);
+        if out.response.changed() {
+            self.formula_pick = 0;
+        }
+        // A press on the list takes focus from the field: give it back.
+        let on_list = self.formula_popup.zip(ctx.input(|i| i.pointer.interact_pos())).is_some_and(|(r, p)| r.contains(p));
+        let mut done = out.response.lost_focus();
+        if done && on_list {
+            done = false;
+            ctx.memory_mut(|m| m.request_focus(field));
+        }
+        let cursor = out.cursor_range.map(|r| r.primary.index.0).or(cursor);
+        let (start, list) = match cursor {
+            Some(c) if out.response.has_focus() || on_list => completions(buf, c, doc),
+            _ => (0, Vec::new()),
+        };
+        self.formula_popup = None;
+        if !list.is_empty() && !done {
+            let pick = self.formula_pick.min(list.len() - 1);
+            let area = egui::Area::new(field.with("completions"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(out.response.rect.left_bottom())
+                .show(&ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        for (i, c) in list.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                if ui.selectable_label(i == pick, RichText::new(&c.label).monospace()).clicked() {
+                                    take = Some(i);
+                                }
+                                ui.weak(&c.detail);
+                            });
+                        }
+                    });
+                });
+            self.formula_popup = Some(area.response.rect);
+        }
+        if let (Some(i), Some(c)) = (take, cursor) {
+            if let Some(s) = list.get(i) {
+                let at = |k: usize| buf.char_indices().nth(k).map_or(buf.len(), |(b, _)| b);
+                let (from, to) = (at(start), at(c));
+                buf.replace_range(from..to, &s.insert);
+                let end = start + s.insert.chars().count();
+                let mut state = out.state;
+                state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(end))));
+                state.store(&ctx, field);
+                ctx.memory_mut(|m| m.request_focus(field));
+                self.formula_pick = 0;
+            }
+        }
+        done
     }
 
     /// What an unset param with an automatic default stands for, when
@@ -1005,10 +1098,189 @@ fn corner_pin_corners(f: arclight::image::Size) -> [[f32; 2]; 4] {
     [[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]]
 }
 
+/// Formula functions for completion and the help: name, call, what it does.
+const FORMULA_FUNCS: &[(&str, &str, &str)] = &[
+    ("sin", "sin(x)", "sine (radians)"),
+    ("cos", "cos(x)", "cosine (radians)"),
+    ("tan", "tan(x)", "tangent (radians)"),
+    ("asin", "asin(x)", "arc sine"),
+    ("acos", "acos(x)", "arc cosine"),
+    ("atan", "atan(x)", "arc tangent"),
+    ("atan2", "atan2(y, x)", "angle of (x, y)"),
+    ("sqrt", "sqrt(x)", "square root"),
+    ("abs", "abs(x)", "absolute value"),
+    ("floor", "floor(x)", "round down"),
+    ("ceil", "ceil(x)", "round up"),
+    ("round", "round(x)", "nearest whole number"),
+    ("fract", "fract(x)", "x - floor(x)"),
+    ("sign", "sign(x)", "-1, 0 or 1"),
+    ("min", "min(a, b, …)", "smallest (one list: its smallest)"),
+    ("max", "max(a, b, …)", "largest (one list: its largest)"),
+    ("clamp", "clamp(x, lo, hi)", "x kept between lo and hi"),
+    ("mix", "mix(a, b, k)", "a to b by k (0..1)"),
+    ("smoothstep", "smoothstep(a, b, x)", "0 to 1 as x goes a to b, eased"),
+    ("pow", "pow(x, y)", "x to the power y (also x ^ y)"),
+    ("exp", "exp(x)", "e to the power x"),
+    ("log", "log(x)", "natural logarithm"),
+    ("rad", "rad(deg)", "degrees to radians"),
+    ("deg", "deg(rad)", "radians to degrees"),
+    ("length", "length(v)", "length of a list as a vector"),
+    ("dist", "dist(a, b)", "distance between two points"),
+    ("if", "if(c, a, b)", "a where c isn't 0, else b"),
+    ("noise", "noise(x, seed)", "smooth noise, -1..1"),
+    ("random", "random(seed)", "a fixed number in 0..1"),
+    ("wiggle", "wiggle(freq, amp, seed)", "amp × noise(frame × freq)"),
+    ("at", "at(x, f)", "x worked out at frame f"),
+];
+
+/// Formula variables: name, what it is.
+const FORMULA_VARS: &[(&str, &str)] = &[
+    ("frame", "the frame"),
+    ("time", "seconds from the first frame"),
+    ("fps", "the project's frame rate"),
+    ("pi", "3.14159…"),
+    ("tau", "2π"),
+    ("e", "2.71828…"),
+];
+
+/// A completion: what it matches, what it puts in, how it's listed.
+#[derive(Debug, PartialEq)]
+struct Completion {
+    key: String,
+    insert: String,
+    label: String,
+    detail: String,
+}
+
+/// Completions for the word before char `cursor` in `text`, and the char
+/// where that word starts: after `node.`, its params; after
+/// `node.param.`, components; else variables, functions and node names.
+/// Nothing inside a number or before anything is typed.
+fn completions(text: &str, cursor: usize, doc: &Doc) -> (usize, Vec<Completion>) {
+    let chars: Vec<char> = text.chars().collect();
+    let cursor = cursor.min(chars.len());
+    let word = |c: &char| c.is_ascii_alphanumeric() || *c == '_';
+    let start = cursor - chars[..cursor].iter().rev().take_while(|c| word(c)).count();
+    let typed: String = chars[start..cursor].iter().collect();
+    let item = |key: &str, insert: String, label: String, detail: &str| Completion { key: key.into(), insert, label, detail: detail.into() };
+    let mut out = Vec::new();
+    if typed.starts_with(|c: char| c.is_ascii_digit()) {
+        return (start, out);
+    }
+    if start > 0 && chars[start - 1] == '.' {
+        // The name before the dot: plain, or "quoted".
+        let dot = start - 1;
+        let (name, before) = if dot > 0 && chars[dot - 1] == '"' {
+            match chars[..dot - 1].iter().rposition(|c| *c == '"') {
+                Some(q) => (chars[q + 1..dot - 1].iter().collect::<String>(), q),
+                None => return (start, out),
+            }
+        } else {
+            let k = dot - chars[..dot].iter().rev().take_while(|c| word(c)).count();
+            (chars[k..dot].iter().collect(), k)
+        };
+        if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
+            return (start, out);
+        }
+        if before > 0 && chars[before - 1] == '.' {
+            for (c, what) in [("x", "1st"), ("y", "2nd"), ("z", "3rd"), ("w", "4th"), ("r", "red"), ("g", "green"), ("b", "blue"), ("a", "alpha")] {
+                out.push(item(c, c.into(), c.into(), what));
+            }
+        } else if let Some(info) = doc.node(&name).and_then(|n| ops::info(&n.op)) {
+            for p in info.params {
+                out.push(item(p.name, p.name.into(), p.name.into(), p.label));
+            }
+        }
+    } else {
+        if typed.is_empty() {
+            return (start, out);
+        }
+        for (name, what) in FORMULA_VARS {
+            out.push(item(name, name.to_string(), name.to_string(), what));
+        }
+        for (name, call, what) in FORMULA_FUNCS {
+            out.push(item(name, format!("{name}("), call.to_string(), what));
+        }
+        for n in &doc.graph.nodes {
+            let plain = n.id.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') && n.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            let insert = if plain { format!("{}.", n.id) } else { format!("\"{}\".", n.id) };
+            let detail = ops::info(&n.op).map_or(n.op.as_str(), |i| i.label);
+            out.push(item(&n.id, insert.clone(), insert, detail));
+        }
+    }
+    let typed_lower = typed.to_lowercase();
+    out.retain(|c| c.key.to_lowercase().starts_with(&typed_lower) && c.insert != typed);
+    out.truncate(12);
+    (start, out)
+}
+
+/// The `?` beside a formula: what can go in one.
+fn formula_help(ui: &mut egui::Ui) {
+    ui.label(RichText::new("Formula").strong());
+    ui.label("node.param reads another node's param (.x .y .z .w / .r .g .b .a or [i] for one component). Lists work per component: [a, b] * 2. Operators: + - * / % ^ < <= > >= == != && || !");
+    ui.add_space(4.0);
+    egui::Grid::new("formula-help").num_columns(2).spacing([12.0, 2.0]).show(ui, |ui| {
+        for (name, what) in FORMULA_VARS {
+            ui.monospace(*name);
+            ui.weak(*what);
+            ui.end_row();
+        }
+        for (_, call, what) in FORMULA_FUNCS {
+            ui.monospace(*call);
+            ui.weak(*what);
+            ui.end_row();
+        }
+    });
+    ui.add_space(4.0);
+    ui.weak("Type to get suggestions: ↑/↓ to pick, Tab to take one. Enter applies the formula.");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arclight::graph::{Graph, NodeSpec};
+
+    #[test]
+    fn formula_completions_follow_what_is_typed() {
+        let mut d = Doc::new(Graph::default(), None);
+        let t = d.add_node("tracker", [0.0, 0.0]);
+        let r = d.add_node("rectangle", [200.0, 0.0]);
+        d.rename(&r, "plate-2").unwrap();
+        let keys = |text: &str| {
+            let (start, list) = completions(text, text.chars().count(), &d);
+            (start, list.into_iter().map(|c| c.insert).collect::<Vec<_>>())
+        };
+        // Variables, functions and nodes by prefix (any case).
+        assert_eq!(keys("1 + si"), (4, vec!["sin(".to_string(), "sign(".to_string()]));
+        assert_eq!(keys("Ti").1, ["time"]);
+        assert!(keys("tr").1.contains(&format!("{t}.")));
+        assert_eq!(keys("pla").1, ["\"plate-2\"."]);
+        // A node's params, then components.
+        assert!(keys(&format!("{t}.track1")).1.contains(&"track1_on".to_string()));
+        assert_eq!(keys(&format!("{t}.ref")).1, ["reference_frame"]);
+        assert_eq!(keys(&format!("{t}.")).1.len(), 12, "the first dozen before typing");
+        assert_eq!(keys("\"plate-2\".cen").1, ["center"]);
+        assert_eq!(keys(&format!("{t}.track1.")).1, ["x", "y", "z", "w", "r", "g", "b", "a"]);
+        // Nothing yet, in a number, a finished word or an unknown node.
+        assert!(keys("").1.is_empty() && keys("1 + ").1.is_empty() && keys("2.5e").1.is_empty());
+        assert!(keys("frame").1.is_empty() && keys("nope.").1.is_empty());
+        // In the middle of the text, up to the cursor.
+        let (start, list) = completions("cos(fr) + 1", 6, &d);
+        assert_eq!((start, list[0].insert.as_str()), (4, "frame"));
+    }
+
+    /// Every function the help and completions offer is one formulas know.
+    #[test]
+    fn formula_help_lists_real_functions() {
+        for (name, call, _) in FORMULA_FUNCS {
+            let e = arclight::expr::parse(&format!("{name}(1)")).err().unwrap_or_default();
+            assert!(!e.contains("unknown function"), "{name}: {e}");
+            assert!(call.starts_with(&format!("{name}(")));
+        }
+        for (name, _) in FORMULA_VARS {
+            assert!(arclight::expr::parse(name).is_ok(), "{name}");
+        }
+    }
 
     #[test]
     fn a_corner_pin_from_and_to_the_image_corners_leaves_the_image_alone() {

@@ -37,7 +37,7 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.25**.
+  in the same commit as the change. Current: **0.0.26**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -919,6 +919,10 @@ Camera/Card/Scene nodes).
   moves time too). `Expr::eval`, `link::resolve` and `link::error` take a
   Clock; `Project::clock()` in graph.rs; `Evaluator::run` takes
   `&Project` instead of the format.
+  Formula completions (v0.0.26): `properties::completions()` is pure
+  (text, char cursor, Doc) -> (word start, list); `FORMULA_FUNCS` /
+  `FORMULA_VARS` feed the list and the ? help, and a test parses every
+  listed name so the list can't drift from `src/expr.rs`.
 - **ROI / tiled evaluation** once images get large or graphs get deep.
 
 ## Known issues and gaps
