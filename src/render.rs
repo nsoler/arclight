@@ -3,7 +3,7 @@
 use crate::graph::{Evaluator, Graph};
 use crate::media::{self, VideoWriter};
 use crate::ops::{self, EvalContext};
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -29,6 +29,7 @@ struct MediaOut {
     first_frame: i64,
     last_frame: i64,
     fps: f64,
+    codec: String,
 }
 
 /// Render the frame range of `media_out` node `out_id` to its file(s).
@@ -47,6 +48,9 @@ pub fn render_media_out(graph: &Graph, out_id: &str, progress: &Progress) -> Res
     let (first, last) = (p.first_frame, p.last_frame.max(p.first_frame));
     let path = Path::new(&p.path);
     let video = media::is_video(path);
+    // Checked before rendering anything: a codec the container can't hold
+    // fails here, not after the last frame.
+    let codec = if video { Some(media::VideoCodec::choose(&p.codec, path).with_context(|| out_id.to_string())?) } else { None };
     if !video && last > first && !media::is_sequence_pattern(&p.path) {
         bail!("{out_id}: to write several frames, put #### or %04d in the file name");
     }
@@ -64,7 +68,7 @@ pub fn render_media_out(graph: &Graph, out_id: &str, progress: &Progress) -> Res
         if video {
             let w = match writer.as_mut() {
                 Some(w) => w,
-                None => writer.insert(VideoWriter::new(path, img.format.width, img.format.height, p.fps)?),
+                None => writer.insert(VideoWriter::new(path, img.format.width, img.format.height, p.fps, codec.unwrap())?),
             };
             w.push(&img)?;
         } else {
@@ -76,4 +80,66 @@ pub fn render_media_out(graph: &Graph, out_id: &str, progress: &Progress) -> Res
         w.finish()?;
     }
     Ok(last - first + 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::image::Image;
+    use std::process::Command;
+
+    /// Each codec through Media Out and back: the 10-bit ones keep far
+    /// more than 8 bits of a smooth ramp, ProRes 4444 keeps alpha, and
+    /// ProRes refuses an .mp4. Needs ffmpeg (with libx265); skipped without.
+    #[test]
+    fn video_codecs_keep_their_depth() {
+        if Command::new("ffmpeg").arg("-version").output().is_err() {
+            eprintln!("skipping: no ffmpeg");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("arclight_codecs_{}", std::process::id()));
+        // A 1024-step ramp, half transparent, as a 16-bit TIFF.
+        let mut ramp = Image::new(1024, 16);
+        for (i, p) in ramp.pixels.iter_mut().enumerate() {
+            let v = crate::color::srgb_to_linear((i % 1024) as f32 / 1023.0);
+            *p = [v * 0.5, v * 0.5, v * 0.5, 0.5];
+        }
+        ramp.write(&dir.join("ramp.tif")).unwrap();
+        let render = |file: &str, codec: &str| {
+            let graph: Graph = serde_json::from_value(serde_json::json!({ "nodes": [
+                { "id": "in", "op": "media_in", "params": { "path": dir.join("ramp.tif").to_string_lossy() } },
+                { "id": "out", "op": "media_out", "inputs": ["in"], "params": {
+                    "path": dir.join(file).to_string_lossy(), "first_frame": 1, "last_frame": 2, "codec": codec } },
+            ]}))
+            .unwrap();
+            render_media_out(&graph, "out", &Progress::default())
+        };
+        for (file, codec, bits, min_levels) in [
+            ("h264.mp4", "auto", 8, 0),
+            ("hevc.mp4", "HEVC 10-bit", 10, 600),
+            ("hq.mov", "auto", 10, 600),
+            ("alpha.mov", "ProRes 4444 + alpha", 12, 600),
+        ] {
+            render(file, codec).unwrap();
+            let path = dir.join(file);
+            assert_eq!(media::probe_video(&path).unwrap().bits, bits, "{file}");
+            let img = media::read_video_frame(&path, 0).unwrap();
+            let mut levels: Vec<u32> = (0..1024).map(|x| img.at(x, 8)[0].to_bits()).collect();
+            levels.dedup();
+            if codec == "auto" && bits == 8 {
+                assert!(levels.len() <= 256, "{file}: {}", levels.len());
+            } else {
+                assert!(levels.len() >= min_levels, "{file}: only {} levels", levels.len());
+            }
+            let a = img.at(512, 8)[3];
+            if codec == "ProRes 4444 + alpha" {
+                assert!((a - 0.5).abs() < 0.01, "{file}: alpha {a}");
+            } else {
+                assert_eq!(a, 1.0, "{file}");
+            }
+        }
+        let err = render("bad.mp4", "ProRes 422 HQ 10-bit").unwrap_err();
+        assert!(format!("{err:#}").contains("ProRes needs a .mov"), "{err:#}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

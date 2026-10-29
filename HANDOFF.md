@@ -29,8 +29,7 @@ Last updated 2026-10-28 (session 7). Read this, then `README.md`
   node-graph insert-into-wire, shake-to-disconnect, minimap, wiring a
   Merge's inputs; viewer box select / Ctrl+A / transform box on Roto and
   Polygon; the data-window outline, overscan and Format field.
-  Clippy is clean apart from two old style lints (`Graph::from_str` name,
-  `chunks_exact_mut(4)` in media.rs).
+  Clippy is clean apart from one old style lint (`Graph::from_str` name).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
   (Rectangle, Ellipse, Polygon, Roto), Transform layer dragging in the viewer,
@@ -487,8 +486,16 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   8-bit path as before. Checked: an FFV1 gbrp10 ramp keeps 1024 levels
   (8-bit gave 256); HEVC Main10, ProRes 422 HQ 10-bit and 4444 12-bit
   probe and decode; 4K ProRes 10-bit ~72 ms/frame vs 60 ms for 8-bit
-  H.264. `probe_media` reports `bits`. Video *encode* is still 8-bit
-  H.264 / 10-bit ProRes from 8-bit frames (`Encoder` pipes rgba).
+  H.264. `probe_media` reports `bits`.
+- **Session 7, part 20** (user request): 10-bit video encode. Media Out
+  `codec` (`media::VIDEO_CODECS`; `VideoCodec::choose` resolves "auto"
+  by container and refuses ProRes outside .mov/.mkv before rendering).
+  HEVC 10-bit (libx265 yuv420p10le, hvc1 tag), ProRes 422 HQ, ProRes
+  4444 (yuva444p10le, alpha_bits 16, straight color + alpha) are fed
+  `rgba64le`; H.264 stays `rgba`. `render::tests::
+  video_codecs_keep_their_depth` round-trips a 1024-step ramp through
+  each. Also fixed the old `chunks_exact_mut(4)` clippy lint (now
+  `as_chunks_mut`); only `Graph::from_str` remains.
 - **CorridorKey** (AI keyer, github.com/nikopueringer/CorridorKey; the
   OFX port gitcapoom/corridorkey_ofx is Windows/Resolve-only): the user
   deferred it. If revisited: run upstream's PyTorch engine (Linux OK; the

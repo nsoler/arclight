@@ -164,7 +164,7 @@ result is blended back toward the main input (B for merge/keymix) by
 | `roto` | background (optional) | `points` [x, y, in dx, in dy, out dx, out dy, …], `fill_rule`, + shape params | one closed bezier; handles are offsets from their vertex, so moving a vertex carries them; the whole list animates as one value |
 | `tracker` | 1 | `track1`–`track4` [2] + `track<i>_on`, `pattern`, `search` (box sizes, px), `min_score`, `update` (`first frame`/`every frame`), `motion` (`translate`/`translate, rotate`/`translate, rotate, scale`: what the matcher follows besides position), `output` (`input`/`match-move`/`stabilize`), `solve` (`translate`/`translate, rotate`/`translate, rotate, scale`), `reference_frame` | the panel's Track buttons key each track's position per frame (and, when Track motion follows rotation, its turn and growth in `track<i>_warp` = [degrees, scale], so one track can solve rotation and scale) (NCC on luminance, sub-pixel); the output applies or removes the motion relative to the reference frame; **To Transform: Match-move / Stabilize** adds a Transform keyed with that motion on every tracked frame, to move another layer with the shot (or steady it); with all four tracks on, **To Corner Pin** adds a Corner Pin that follows them in perspective; `motion_blur`, `shutter`, `shutter_offset` blur the match-move/stabilize output over the shutter, as for Transform |
 | `write` | 1 | `path` | `.exr` = float; others = 8-bit sRGB |
-| `media_out` | 1 | `path`, `first_frame`, `last_frame`, `fps` | renders a range to a sequence, `.mp4` (H.264) or `.mov` (ProRes 422 HQ) |
+| `media_out` | 1 | `path`, `first_frame`, `last_frame`, `fps`, `codec` (`auto`/`H.264 8-bit`/`HEVC 10-bit`/`ProRes 422 HQ 10-bit`/`ProRes 4444 + alpha`) | renders a range to a sequence or a video; `auto` = ProRes 422 HQ for `.mov`, H.264 otherwise; ProRes needs `.mov`/`.mkv`; the 10-bit codecs are fed 16-bit frames, ProRes 4444 keeps alpha |
 | `viewer` | 1 | — | pass-through; marks what the GUI viewer shows |
 
 Shape params, shared by `rectangle`, `ellipse`, `polygon` and `roto`: `width`,
@@ -288,7 +288,8 @@ what loaded, and `arclight ops [OP]` to see the op catalog.
   a one-frame sequence. A frame missing from the middle holds the nearest
   earlier frame. Media Out and Write take `####` / `%04d` patterns.
 - **Video** (via ffmpeg): `.mp4 .mov .m4v .mkv .avi .webm .mxf .mpg .mpeg`
-  in; H.264 `.mp4` or ProRes 422 HQ `.mov` out. Sources deeper than 8 bits
+  in; out as H.264 (8-bit), HEVC (10-bit), ProRes 422 HQ (10-bit) or
+  ProRes 4444 with alpha (Media Out's Codec). Sources deeper than 8 bits
   (10-bit HEVC, 10/12-bit ProRes, DNxHR HQX, …) are decoded at 16 bits, so
   their full precision reaches the comp; 8-bit sources stay on the lighter
   8-bit path. The Media In panel shows the clip's bit depth.

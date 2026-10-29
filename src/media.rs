@@ -352,38 +352,80 @@ fn rgba8_to_image(buf: &[u8], w: usize, h: usize) -> Image {
 // Video encoding
 // ---------------------------------------------------------------------------
 
-/// Streams frames into an ffmpeg encode. `.mov` gets ProRes 422 HQ; every
-/// other container gets H.264.
+/// Media Out's codec choices.
+pub const VIDEO_CODECS: &[&str] = &["auto", "H.264 8-bit", "HEVC 10-bit", "ProRes 422 HQ 10-bit", "ProRes 4444 + alpha"];
+
+/// What a video file is encoded as.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VideoCodec {
+    H264,
+    Hevc10,
+    ProRes422Hq,
+    ProRes4444,
+}
+
+impl VideoCodec {
+    /// The codec for a `VIDEO_CODECS` choice; "auto" picks by container:
+    /// ProRes 422 HQ in `.mov`, H.264 elsewhere.
+    pub fn choose(choice: &str, path: &Path) -> Result<VideoCodec> {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        let codec = match choice {
+            "auto" | "" if ext == "mov" => VideoCodec::ProRes422Hq,
+            "auto" | "" | "H.264 8-bit" => VideoCodec::H264,
+            "HEVC 10-bit" => VideoCodec::Hevc10,
+            "ProRes 422 HQ 10-bit" => VideoCodec::ProRes422Hq,
+            "ProRes 4444 + alpha" => VideoCodec::ProRes4444,
+            other => bail!("unknown codec '{other}'"),
+        };
+        let prores = matches!(codec, VideoCodec::ProRes422Hq | VideoCodec::ProRes4444);
+        if prores && !matches!(ext.as_str(), "mov" | "mkv") {
+            bail!("ProRes needs a .mov (or .mkv) file, not .{ext}");
+        }
+        Ok(codec)
+    }
+
+    /// Fed 16-bit frames, so the encode keeps more than 8 bits.
+    fn deep(self) -> bool {
+        self != VideoCodec::H264
+    }
+
+    fn args(self) -> &'static [&'static str] {
+        match self {
+            VideoCodec::H264 => &["-c:v", "libx264", "-crf", "16", "-preset", "medium", "-pix_fmt", "yuv420p"],
+            VideoCodec::Hevc10 => &[
+                "-c:v", "libx265", "-crf", "16", "-preset", "medium", "-pix_fmt", "yuv420p10le",
+                "-x265-params", "log-level=error", "-tag:v", "hvc1",
+            ],
+            VideoCodec::ProRes422Hq => &["-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", "yuv422p10le"],
+            VideoCodec::ProRes4444 => &["-c:v", "prores_ks", "-profile:v", "4", "-pix_fmt", "yuva444p10le", "-alpha_bits", "16"],
+        }
+    }
+}
+
+/// Streams frames into an ffmpeg encode (see [`VideoCodec`]).
 pub struct VideoWriter {
     child: Child,
     stdin: Option<ChildStdin>,
     width: usize,
     height: usize,
+    codec: VideoCodec,
     buf: Vec<u8>,
 }
 
 impl VideoWriter {
-    pub fn new(path: &Path, width: usize, height: usize, fps: f64) -> Result<Self> {
+    pub fn new(path: &Path, width: usize, height: usize, fps: f64, codec: VideoCodec) -> Result<Self> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent).ok();
             }
         }
-        let is_mov = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("mov"));
-        let codec: &[&str] = if is_mov {
-            &["-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", "yuv422p10le"]
-        } else {
-            &["-c:v", "libx264", "-crf", "16", "-preset", "medium", "-pix_fmt", "yuv420p"]
-        };
+        let input = if codec.deep() { "rgba64le" } else { "rgba" };
         let mut child = Command::new("ffmpeg")
-            .args(["-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgba"])
+            .args(["-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", input])
             .args(["-s", &format!("{width}x{height}"), "-r", &format!("{fps}"), "-i", "-"])
             // 4:2:0 / 4:2:2 chroma needs even dimensions.
             .args(["-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"])
-            .args(codec)
+            .args(codec.args())
             .arg(path)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -396,7 +438,8 @@ impl VideoWriter {
             stdin,
             width,
             height,
-            buf: vec![0; width * height * 4],
+            codec,
+            buf: vec![0; width * height * if codec.deep() { 8 } else { 4 }],
         })
     }
 
@@ -408,12 +451,25 @@ impl VideoWriter {
                 self.width, self.height, img.width, img.height
             );
         }
-        // Video has no alpha: premultiplied color is already "over black".
-        for (px, out) in img.pixels.iter().zip(self.buf.chunks_exact_mut(4)) {
-            for c in 0..3 {
-                out[c] = (color::linear_to_srgb(px[c]) * 255.0).round() as u8;
+        // Without alpha in the file, premultiplied color is already "over
+        // black"; ProRes 4444 keeps alpha, so it gets straight color.
+        let alpha = self.codec == VideoCodec::ProRes4444;
+        let encode = |px: &[f32; 4]| -> [f32; 4] {
+            let px = if alpha { color::unpremultiply(*px) } else { *px };
+            [color::linear_to_srgb(px[0]), color::linear_to_srgb(px[1]), color::linear_to_srgb(px[2]), if alpha { px[3] } else { 1.0 }]
+        };
+        if self.codec.deep() {
+            for (px, out) in img.pixels.iter().zip(self.buf.as_chunks_mut::<8>().0) {
+                for (c, v) in encode(px).into_iter().enumerate() {
+                    out[c * 2..c * 2 + 2].copy_from_slice(&((v.clamp(0.0, 1.0) * 65535.0).round() as u16).to_le_bytes());
+                }
             }
-            out[3] = 255;
+        } else {
+            for (px, out) in img.pixels.iter().zip(self.buf.as_chunks_mut::<4>().0) {
+                for (c, v) in encode(px).into_iter().enumerate() {
+                    out[c] = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                }
+            }
         }
         self.stdin
             .as_mut()

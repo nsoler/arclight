@@ -746,11 +746,14 @@ pub static OPS: &[OpInfo] = &[
             fixed!("first_frame", "First frame", FRAME, 1),
             fixed!("last_frame", "Last frame", FRAME, 100),
             fixed!("fps", "FPS (video)", ParamKind::Float { min: 1.0, max: 240.0 }, 24.0),
+            fixed!("codec", "Codec (video)", ParamKind::Choice(crate::media::VIDEO_CODECS), "auto"),
         ],
         overlay: Overlay::None,
         mask_base: None,
         help: "Renders a frame range to an image sequence (shot.####.exr) or a \
-               video (.mp4 = H.264, .mov = ProRes 422 HQ).",
+               video. Codec: auto (.mov = ProRes 422 HQ, others H.264), H.264 8-bit, \
+               HEVC 10-bit, ProRes 422 HQ 10-bit, or ProRes 4444 with alpha (ProRes \
+               needs .mov or .mkv). The 10-bit codecs get the full 10 bits.",
     },
     OpInfo {
         name: "viewer",
