@@ -16,10 +16,14 @@
 //! exactly (`-` negates); snapping rounds to 1 unit, 15° or 0.1. Axes are
 //! the world's (global) or the object's (local). Pure maths, so it's
 //! tested without a window; the viewport supplies a [`View`].
+//! [`Transforming`] runs one on a node through `Doc`, and puts the param
+//! back exactly as it was on cancel.
 
+use crate::doc::Doc;
 use arclight::geom::{self, Mat4, Vec3};
-use eframe::egui::Pos2;
+use eframe::egui::{self, Color32, Key, Pos2, Stroke, Vec2};
 use nalgebra::{Rotation3, Unit};
+use serde_json::{json, Value};
 
 /// How the viewport maps the scene to the screen and back.
 pub trait View {
@@ -114,6 +118,23 @@ pub enum GestureKey {
     Backspace,
 }
 
+/// The viewport's projection (the free view, orthographic, or through a
+/// scene camera).
+impl View for crate::viewport3d::Projector {
+    fn project(&self, p: Vec3) -> Option<(Pos2, f64)> {
+        crate::viewport3d::Projector::project(self, p)
+    }
+    fn ray(&self, s: Pos2) -> (Vec3, Vec3) {
+        crate::viewport3d::Projector::ray(self, s)
+    }
+    fn pixels_per_unit(&self, depth: f64) -> f64 {
+        crate::viewport3d::Projector::pixels_per_unit(self, depth)
+    }
+    fn view_dir(&self) -> Vec3 {
+        crate::viewport3d::Projector::view_dir(self)
+    }
+}
+
 /// Snapping steps: 1 unit, 15°, 0.1 scale.
 pub const SNAP_MOVE: f64 = 1.0;
 pub const SNAP_ANGLE: f64 = 15.0;
@@ -150,6 +171,7 @@ impl Gesture {
     }
 
     /// A gizmo drag: like [`Gesture::new`], constrained from the start.
+    #[cfg(test)] // Gizmo drags (step 4) will use it outside tests.
     pub fn with_constraint(mut self, c: Constraint) -> Gesture {
         self.constraint = c;
         self
@@ -218,11 +240,6 @@ impl Gesture {
             Mode::Rotate => self.rotated(view, mouse, snap),
             Mode::Scale => self.scaled(view, mouse, snap),
         }
-    }
-
-    /// Esc / right-click: the params as they were.
-    pub fn cancel(&self) -> Trs {
-        self.start
     }
 
     /// What the gesture does, for the viewport's header: "Move X (local)
@@ -379,6 +396,458 @@ impl Gesture {
         }
         t
     }
+}
+
+/// The param a mode edits.
+pub fn param_of(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Move => "translate",
+        Mode::Rotate => "rotate",
+        Mode::Scale => "scale",
+    }
+}
+
+/// A node's transform at `frame` (defaults for what it lacks).
+pub fn trs_at(doc: &Doc, node: &str, frame: i64) -> Trs {
+    let get = |name: &str, default: [f64; 3]| -> [f64; 3] {
+        let v = doc.param_at(node, name, frame);
+        std::array::from_fn(|i| v.get(i).and_then(Value::as_f64).unwrap_or(default[i]))
+    };
+    let d = Trs::default();
+    Trs { translate: get("translate", d.translate), rotate: get("rotate", d.rotate), scale: get("scale", d.scale) }
+}
+
+/// Why `mode` can't change `node`'s transform, if it can't: it has no such
+/// param (a Locator only moves), or the param is linked.
+pub fn refusal(doc: &Doc, node: &str, mode: Mode) -> Option<String> {
+    let name = param_of(mode);
+    let n = doc.node(node)?;
+    let has = arclight::ops::info(&n.op).is_some_and(|i| i.params.iter().any(|p| p.name == name && matches!(p.kind, arclight::ops::ParamKind::Vec3)));
+    if !has {
+        return Some(format!("{node} has no {name} to {}", mode.name().to_lowercase()));
+    }
+    let raw = doc.param(node, name);
+    arclight::link::is_link(&raw).then(|| format!("{node}'s {name} is linked ({}): Unlink it in Properties to change it here", arclight::link::describe(&raw)))
+}
+
+/// Alt + G / R / S: put `node`'s translate, rotate or scale back to its
+/// default (a key at `frame` when animated). Err: why not.
+pub fn reset(doc: &mut Doc, node: &str, mode: Mode, frame: i64) -> Result<(), String> {
+    if let Some(why) = refusal(doc, node, mode) {
+        return Err(why);
+    }
+    let d = Trs::default().reset(mode);
+    let v = match mode {
+        Mode::Move => d.translate,
+        Mode::Rotate => d.rotate,
+        Mode::Scale => d.scale,
+    };
+    doc.edit_param(node, param_of(mode), frame, json!(v));
+    Ok(())
+}
+
+/// This frame's input to a G / R / S in progress.
+#[derive(Clone, Debug, Default)]
+pub struct Input {
+    pub mouse: Option<Pos2>,
+    /// Gesture keys pressed this frame, in order.
+    pub keys: Vec<GestureKey>,
+    /// Enter or a left click.
+    pub confirm: bool,
+    /// Esc or a right click.
+    pub cancel: bool,
+    /// Ctrl held.
+    pub snap: bool,
+}
+
+impl Input {
+    /// Read (and take, so nothing else acts on them) the keys a gesture
+    /// uses from egui's input.
+    /// `by_drag`: a gizmo drag, which releasing the button confirms (else a
+    /// click does).
+    pub fn take(i: &mut eframe::egui::InputState, by_drag: bool) -> Input {
+        use eframe::egui::Modifiers;
+        let mut keys = Vec::new();
+        for (k, axis) in [(Key::X, 0), (Key::Y, 1), (Key::Z, 2)] {
+            if i.consume_key(Modifiers::SHIFT, k) {
+                keys.push(GestureKey::Axis(axis, true));
+            } else if i.consume_key(Modifiers::NONE, k) {
+                keys.push(GestureKey::Axis(axis, false));
+            }
+        }
+        const DIGITS: [(Key, char); 11] = [
+            (Key::Num0, '0'), (Key::Num1, '1'), (Key::Num2, '2'), (Key::Num3, '3'), (Key::Num4, '4'),
+            (Key::Num5, '5'), (Key::Num6, '6'), (Key::Num7, '7'), (Key::Num8, '8'), (Key::Num9, '9'), (Key::Period, '.'),
+        ];
+        for (k, c) in DIGITS {
+            if i.consume_key(Modifiers::NONE, k) {
+                keys.push(GestureKey::Digit(c));
+            }
+        }
+        if i.consume_key(Modifiers::NONE, Key::Minus) {
+            keys.push(GestureKey::Minus);
+        }
+        if i.consume_key(Modifiers::NONE, Key::Backspace) {
+            keys.push(GestureKey::Backspace);
+        }
+        let click = if by_drag { i.pointer.primary_released() } else { i.pointer.primary_pressed() };
+        let confirm = i.consume_key(Modifiers::NONE, Key::Enter) || click;
+        let cancel = i.consume_key(Modifiers::NONE, Key::Escape) || i.pointer.secondary_pressed();
+        Input { mouse: i.pointer.latest_pos(), keys, confirm, cancel, snap: i.modifiers.ctrl || i.modifiers.command }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Going,
+    Done,
+    Cancelled,
+}
+
+/// G / R / S on a node: the gesture, writing the node's param as it goes
+/// (a key at the frame when it's animated), and putting it back exactly as
+/// it was (keys and all, or unset) on cancel.
+pub struct Transforming {
+    pub node: String,
+    pub gesture: Gesture,
+    /// The param as stored in the node when it started (None: unset).
+    stored: Option<Value>,
+    frame: i64,
+    /// The params last written, for the header.
+    pub now: Trs,
+    /// Started by dragging a gizmo handle: releasing the button confirms.
+    pub by_drag: bool,
+}
+
+impl Transforming {
+    /// Start `mode` on `node`, whose place in the scene is `world`, with the
+    /// pointer at `mouse`. Err: why it can't (see [`refusal`]).
+    pub fn start(doc: &Doc, node: &str, mode: Mode, world: &Mat4, mouse: Pos2, frame: i64) -> Result<Transforming, String> {
+        if let Some(why) = refusal(doc, node, mode) {
+            return Err(why);
+        }
+        let start = trs_at(doc, node, frame);
+        let stored = doc.node(node).and_then(|n| n.params.get(param_of(mode)).cloned());
+        Ok(Transforming { node: node.into(), gesture: Gesture::new(mode, start, world, mouse), stored, frame, now: start, by_drag: false })
+    }
+
+    /// A drag on gizmo handle `h` (axes in `space`): releasing confirms.
+    pub fn drag(doc: &Doc, node: &str, h: Handle, space: Space, world: &Mat4, mouse: Pos2, frame: i64) -> Result<Transforming, String> {
+        let (mode, c) = h.gesture(space);
+        let mut t = Transforming::start(doc, node, mode, world, mouse, frame)?;
+        t.gesture.constraint = c;
+        t.by_drag = true;
+        Ok(t)
+    }
+
+    /// One frame: handle `input`, write the param. Done or Cancelled ends it.
+    pub fn step(&mut self, input: &Input, view: &dyn View, doc: &mut Doc) -> Outcome {
+        for k in &input.keys {
+            self.gesture.key(*k);
+        }
+        if input.cancel {
+            self.restore(doc);
+            return Outcome::Cancelled;
+        }
+        // (Without a pointer, e.g. it left the window, a typed amount still
+        // applies.)
+        let m = input.mouse.unwrap_or(self.gesture.from);
+        let t = self.gesture.apply(view, m, input.snap);
+        if t != self.now {
+            self.write(doc, &t);
+            self.now = t;
+        }
+        if input.confirm { Outcome::Done } else { Outcome::Going }
+    }
+
+    fn write(&self, doc: &mut Doc, t: &Trs) {
+        let v = match self.gesture.mode {
+            Mode::Move => t.translate,
+            Mode::Rotate => t.rotate,
+            Mode::Scale => t.scale,
+        };
+        doc.edit_param(&self.node, param_of(self.gesture.mode), self.frame, json!(v));
+    }
+
+    /// Put the param back as stored when it started.
+    fn restore(&self, doc: &mut Doc) {
+        let name = param_of(self.gesture.mode);
+        if let Some(n) = doc.node_mut(&self.node) {
+            match (&self.stored, n.params.as_object_mut()) {
+                (Some(v), Some(m)) => {
+                    m.insert(name.into(), v.clone());
+                }
+                (None, Some(m)) => {
+                    m.remove(name);
+                }
+                _ => {}
+            }
+            doc.changed();
+        }
+    }
+}
+
+// ---- Gizmos ----
+
+/// Which gizmo the viewport shows on the selected object (the viewer
+/// toolbar's tools, as Blender's).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Tool {
+    /// None: clicks only select.
+    Select,
+    #[default]
+    Move,
+    Rotate,
+    Scale,
+    /// Move, rotate and scale together.
+    All,
+}
+
+impl Tool {
+    pub const ALL: [(Tool, &'static str, &'static str); 5] = [
+        (Tool::Select, "Select", "No gizmo: clicks select (G / R / S still work)"),
+        (Tool::Move, "Move", "Arrows move along an axis, squares in a plane, the center circle in the view plane"),
+        (Tool::Rotate, "Rotate", "Rings turn about an axis, the outer ring about the view, inside like a trackball"),
+        (Tool::Scale, "Scale", "Cubes scale along an axis, the center circle all of them"),
+        (Tool::All, "All", "Move, rotate and scale gizmos together"),
+    ];
+    fn moves(self) -> bool {
+        matches!(self, Tool::Move | Tool::All)
+    }
+    fn rotates(self) -> bool {
+        matches!(self, Tool::Rotate | Tool::All)
+    }
+    fn scales(self) -> bool {
+        matches!(self, Tool::Scale | Tool::All)
+    }
+}
+
+/// A part of a gizmo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Handle {
+    Arrow(usize),
+    /// The square for the plane without this axis.
+    Square(usize),
+    MoveCenter,
+    Ring(usize),
+    ViewRing,
+    Trackball,
+    Cube(usize),
+    ScaleCenter,
+}
+
+impl Handle {
+    /// The gesture a drag on it makes (scale is always along the object's
+    /// own axes).
+    pub fn gesture(self, space: Space) -> (Mode, Constraint) {
+        match self {
+            Handle::Arrow(k) => (Mode::Move, Constraint::Axis(k, space)),
+            Handle::Square(k) => (Mode::Move, Constraint::Plane(k, space)),
+            Handle::MoveCenter => (Mode::Move, Constraint::Free),
+            Handle::Ring(k) => (Mode::Rotate, Constraint::Axis(k, space)),
+            Handle::ViewRing => (Mode::Rotate, Constraint::Free),
+            Handle::Trackball => (Mode::Rotate, Constraint::Trackball),
+            Handle::Cube(k) => (Mode::Scale, Constraint::Axis(k, Space::Local)),
+            Handle::ScaleCenter => (Mode::Scale, Constraint::Free),
+        }
+    }
+}
+
+/// How big a gizmo is on screen: its arrows' length, in points.
+pub const GIZMO_SIZE: f32 = 90.0;
+/// How near (points) the pointer must be to take a handle.
+const GRAB: f32 = 7.0;
+const AXIS_COLORS: [Color32; 3] = [Color32::from_rgb(235, 75, 85), Color32::from_rgb(120, 200, 60), Color32::from_rgb(70, 135, 245)];
+
+/// A gizmo's parts on screen.
+#[derive(Clone, Debug)]
+pub struct Layout {
+    pub tool: Tool,
+    pub center: Pos2,
+    /// Arrow k: from near the center to its tip; None when it points at
+    /// (or away from) the viewer and is too short to grab.
+    pub arrows: [Option<(Pos2, Pos2)>; 3],
+    /// The plane squares' corners (by the axis they leave out).
+    pub squares: [Option<[Pos2; 4]>; 3],
+    /// Ring k as a polyline, and which samples are behind the center.
+    pub rings: [Vec<(Pos2, bool)>; 3],
+    /// The view ring's and trackball's radius.
+    pub ring_radius: f32,
+    pub cubes: [Option<Pos2>; 3],
+}
+
+impl Layout {
+    /// The gizmo for `tool` on an object at scene point `origin` with axes
+    /// `axes` (unit, scene space). None when it's behind the camera or the
+    /// tool shows none.
+    pub fn new(view: &dyn View, tool: Tool, origin: Vec3, axes: [Vec3; 3]) -> Option<Layout> {
+        if tool == Tool::Select {
+            return None;
+        }
+        let (center, depth) = view.project(origin)?;
+        let len = GIZMO_SIZE as f64 / view.pixels_per_unit(depth).max(1e-9);
+        let at = |v: Vec3| view.project(v).map(|p| p.0);
+        let arrows = std::array::from_fn(|k| {
+            let tip = at(origin + axes[k] * len)?;
+            let base = at(origin + axes[k] * len * 0.2)?;
+            ((tip - center).length() > 12.0 && tool.moves()).then_some((base, tip))
+        });
+        let squares = std::array::from_fn(|k| {
+            let (u, v) = (axes[(k + 1) % 3], axes[(k + 2) % 3]);
+            let (a, b) = (0.28 * len, 0.46 * len);
+            let quad = [at(origin + u * a + v * a)?, at(origin + u * b + v * a)?, at(origin + u * b + v * b)?, at(origin + u * a + v * b)?];
+            // Seen edge-on it can't be grabbed.
+            (tool.moves() && quad_area(&quad) > 30.0).then_some(quad)
+        });
+        let ring_r = if tool == Tool::All { 1.15 * len } else { len };
+        let toward = -view.view_dir();
+        let rings = std::array::from_fn(|k| {
+            if !tool.rotates() {
+                return Vec::new();
+            }
+            let (u, v) = (axes[(k + 1) % 3], axes[(k + 2) % 3]);
+            (0..=64)
+                .filter_map(|i| {
+                    let t = i as f64 / 64.0 * std::f64::consts::TAU;
+                    let off = (u * t.cos() + v * t.sin()) * ring_r;
+                    at(origin + off).map(|p| (p, off.dot(&toward) < -1e-6 * ring_r))
+                })
+                .collect()
+        });
+        let cube_at = if tool == Tool::All { 0.62 } else { 1.0 };
+        let cubes = std::array::from_fn(|k| {
+            let p = at(origin + axes[k] * len * cube_at)?;
+            (tool.scales() && (p - center).length() > 10.0).then_some(p)
+        });
+        let ring_radius = (GIZMO_SIZE * if tool == Tool::All { 1.15 } else { 1.0 }) * 1.12;
+        Some(Layout { tool, center, arrows, squares, rings, ring_radius, cubes })
+    }
+
+    /// The handle under screen point `p`, the small ones first.
+    pub fn hit(&self, p: Pos2) -> Option<Handle> {
+        for k in 0..3 {
+            if self.cubes[k].is_some_and(|c| (c - p).length() < GRAB + 2.0) {
+                return Some(Handle::Cube(k));
+            }
+        }
+        if self.tool.moves() && (p - self.center).length() < GRAB + 3.0 {
+            return Some(Handle::MoveCenter);
+        }
+        if self.tool == Tool::Scale && (p - self.center).length() < GRAB + 5.0 {
+            return Some(Handle::ScaleCenter);
+        }
+        for k in 0..3 {
+            if self.squares[k].is_some_and(|q| in_quad(&q, p)) {
+                return Some(Handle::Square(k));
+            }
+        }
+        for k in 0..3 {
+            if self.arrows[k].is_some_and(|(a, b)| segment_distance(a, b, p) < GRAB) {
+                return Some(Handle::Arrow(k));
+            }
+        }
+        if self.tool.rotates() {
+            // Rings cross on screen: the nearest one.
+            let dist = |k: usize| self.rings[k].windows(2).map(|w| segment_distance(w[0].0, w[1].0, p)).fold(f32::INFINITY, f32::min);
+            if let Some((k, d)) = (0..3).map(|k| (k, dist(k))).min_by(|a, b| a.1.total_cmp(&b.1)) {
+                if d < GRAB {
+                    return Some(Handle::Ring(k));
+                }
+            }
+            let r = (p - self.center).length();
+            if (r - self.ring_radius).abs() < GRAB {
+                return Some(Handle::ViewRing);
+            }
+            if self.tool == Tool::Rotate && r < self.ring_radius - GRAB {
+                return Some(Handle::Trackball);
+            }
+        }
+        None
+    }
+
+    /// Draw it; `hot` lit (hovered or dragged), all of it gray when
+    /// `enabled` is false (the param is linked).
+    pub fn draw(&self, painter: &egui::Painter, hot: Option<Handle>, enabled: bool) {
+        let color = |k: usize, h: Handle| -> Color32 {
+            if !enabled {
+                Color32::from_gray(110)
+            } else if hot == Some(h) {
+                Color32::from_rgb(255, 225, 120)
+            } else if k < 3 {
+                AXIS_COLORS[k]
+            } else {
+                Color32::from_gray(225)
+            }
+        };
+        if self.tool.rotates() {
+            let r = self.ring_radius;
+            painter.circle_stroke(self.center, r, Stroke::new(if hot == Some(Handle::ViewRing) { 2.5 } else { 1.5 }, color(3, Handle::ViewRing)));
+            if self.tool == Tool::Rotate && hot == Some(Handle::Trackball) {
+                painter.circle_filled(self.center, r - GRAB, Color32::from_white_alpha(14));
+            }
+            for k in 0..3 {
+                let c = color(k, Handle::Ring(k));
+                let w = if hot == Some(Handle::Ring(k)) { 3.0 } else { 2.0 };
+                for seg in self.rings[k].windows(2) {
+                    // The far half fainter, as Blender draws it.
+                    let c = if seg[0].1 && seg[1].1 { c.gamma_multiply(0.3) } else { c };
+                    painter.line_segment([seg[0].0, seg[1].0], Stroke::new(w, c));
+                }
+            }
+        }
+        for k in 0..3 {
+            if let Some(q) = self.squares[k] {
+                let c = color(k, Handle::Square(k));
+                painter.add(egui::Shape::convex_polygon(q.to_vec(), c.gamma_multiply(0.45), Stroke::new(1.0, c)));
+            }
+            if let Some((a, b)) = self.arrows[k] {
+                let c = color(k, Handle::Arrow(k));
+                painter.line_segment([a, b], Stroke::new(if hot == Some(Handle::Arrow(k)) { 3.5 } else { 2.5 }, c));
+                // The head: a small triangle along the arrow.
+                let d = (b - a).normalized();
+                let n = Vec2::new(-d.y, d.x);
+                painter.add(egui::Shape::convex_polygon(vec![b + d * 10.0, b + n * 5.0, b - n * 5.0], c, Stroke::NONE));
+            }
+            if let Some(p) = self.cubes[k] {
+                let c = color(k, Handle::Cube(k));
+                painter.rect_filled(egui::Rect::from_center_size(p, Vec2::splat(9.0)), 1.0, c);
+                if self.tool == Tool::Scale {
+                    painter.line_segment([self.center, p], Stroke::new(2.0, c));
+                }
+            }
+        }
+        if self.tool.moves() || self.tool == Tool::Scale {
+            let h = if self.tool.moves() { Handle::MoveCenter } else { Handle::ScaleCenter };
+            painter.circle_stroke(self.center, GRAB + 1.0, Stroke::new(if hot == Some(h) { 2.5 } else { 1.5 }, color(3, h)));
+        }
+    }
+}
+
+/// An object's axes in `space`, from its place in the scene.
+pub fn axes_of(world: &Mat4, space: Space) -> [Vec3; 3] {
+    std::array::from_fn(|k| match space {
+        Space::Global => Vec3::ith(k, 1.0),
+        Space::Local => world.fixed_view::<3, 3>(0, 0).column(k).into_owned().try_normalize(1e-12).unwrap_or_else(|| Vec3::ith(k, 1.0)),
+    })
+}
+
+/// The distance from `p` to the segment `a`–`b`.
+fn segment_distance(a: Pos2, b: Pos2, p: Pos2) -> f32 {
+    let ab = b - a;
+    let t = ((p - a).dot(ab) / ab.length_sq().max(1e-6)).clamp(0.0, 1.0);
+    (a + ab * t - p).length()
+}
+
+fn quad_area(q: &[Pos2; 4]) -> f32 {
+    let cross = |a: Pos2, b: Pos2| a.x * b.y - a.y * b.x;
+    (0..4).map(|i| cross(q[i], q[(i + 1) % 4])).sum::<f32>().abs() / 2.0
+}
+
+/// Whether `p` is inside convex quad `q` (either winding).
+fn in_quad(q: &[Pos2; 4], p: Pos2) -> bool {
+    let side = |a: Pos2, b: Pos2| (b - a).x * (p - a).y - (b - a).y * (p - a).x;
+    let s: Vec<f32> = (0..4).map(|i| side(q[i], q[(i + 1) % 4])).collect();
+    s.iter().all(|&x| x >= 0.0) || s.iter().all(|&x| x <= 0.0)
 }
 
 fn nonzero(x: f64) -> f64 {
@@ -639,10 +1108,173 @@ pub mod tests {
         g.key(GestureKey::Backspace);
         g.key(GestureKey::Backspace);
         assert_eq!(g.typed(), None);
-        assert_eq!(g.cancel(), s, "cancel gives back the start");
+        assert_eq!(g.start, s, "the start stays as it was, for cancelling");
         // Alt + G / R / S.
         let t = Trs { translate: [1.0; 3], rotate: [2.0; 3], scale: [3.0; 3] };
         assert_eq!(t.reset(Mode::Rotate), Trs { rotate: [0.0; 3], ..t });
         assert_eq!(t.reset(Mode::Scale).scale, [1.0; 3]);
+    }
+
+    impl Transforming {
+        /// Type `digits` along X and step once.
+        fn key_typed(&mut self, doc: &mut Doc, view: &Pinhole, digits: &str) {
+            let mut keys = vec![GestureKey::Axis(0, false)];
+            keys.extend(digits.chars().map(GestureKey::Digit));
+            self.step(&Input { keys, ..input(Pos2::ZERO) }, view, doc);
+        }
+    }
+
+    fn input(mouse: Pos2) -> Input {
+        Input { mouse: Some(mouse), ..Input::default() }
+    }
+
+    #[test]
+    fn grab_writes_the_node_keys_when_animated_and_cancel_puts_it_back() {
+        use arclight::graph::Graph;
+        let view = front();
+        let mut doc = Doc::new(Graph::default(), None);
+        let card = doc.add_node("card", [0.0, 0.0]);
+        // Unset, as in a file that leaves it out.
+        doc.node_mut(&card).unwrap().params.as_object_mut().unwrap().remove("rotate");
+        doc.commit(false);
+        let placed = doc.node(&card).unwrap().params["translate"].clone();
+        let c = at(&view, [0.0; 3]);
+        // G, then the pointer to x = 2: the card follows; Enter confirms.
+        let mut g = Transforming::start(&doc, &card, Mode::Move, &Mat4::identity(), c, 1).unwrap();
+        assert_eq!(g.step(&input(at(&view, [1.0, 0.0, 0.0])), &view, &mut doc), Outcome::Going);
+        let keys = Input { keys: vec![GestureKey::Axis(0, false)], ..input(at(&view, [2.0, 0.0, 0.0])) };
+        assert_eq!(g.step(&keys, &view, &mut doc), Outcome::Going);
+        assert!(near(trs_at(&doc, &card, 1).translate, [2.0, 0.0, 0.0], 1e-4));
+        assert_eq!(g.step(&Input { confirm: true, ..input(at(&view, [2.0, 0.0, 0.0])) }, &view, &mut doc), Outcome::Done);
+        doc.commit(false);
+        // One undo step for the whole gesture.
+        doc.undo();
+        assert_eq!(doc.node(&card).unwrap().params["translate"], placed);
+        doc.redo();
+
+        // Cancel: exactly as before, even an unset param, and no undo step.
+        let mut g = Transforming::start(&doc, &card, Mode::Rotate, &Mat4::identity(), c + eframe::egui::vec2(100.0, 0.0), 1).unwrap();
+        g.step(&input(c + eframe::egui::vec2(0.0, -100.0)), &view, &mut doc);
+        assert!(doc.node(&card).unwrap().params.get("rotate").is_some());
+        assert_eq!(g.step(&Input { cancel: true, ..Input::default() }, &view, &mut doc), Outcome::Cancelled);
+        assert_eq!(doc.node(&card).unwrap().params.get("rotate"), None);
+        let before = doc.graph.clone();
+        doc.commit(false);
+        doc.undo();
+        assert_ne!(doc.graph, before, "the undo went to the move, not a cancelled rotate");
+
+        // Animated: a key at the frame; cancel takes the key out again.
+        doc.redo();
+        doc.set_param(&card, "translate", json!({ "keys": [[1, [0, 0, 0]], [10, [5, 0, 0]]], "interp": "linear" }));
+        let stored = doc.node(&card).unwrap().params["translate"].clone();
+        let mut g = Transforming::start(&doc, &card, Mode::Move, &Mat4::identity(), at(&view, [2.5, 0.0, 0.0]), 5).unwrap();
+        g.key_typed(&mut doc, &view, "1");
+        assert!(arclight::anim::has_key_at(&doc.node(&card).unwrap().params["translate"], 5));
+        g.step(&Input { cancel: true, ..Input::default() }, &view, &mut doc);
+        assert_eq!(doc.node(&card).unwrap().params["translate"], stored);
+    }
+
+    #[test]
+    fn linked_or_missing_params_refuse_and_alt_resets() {
+        use arclight::graph::Graph;
+        let mut doc = Doc::new(Graph::default(), None);
+        let card = doc.add_node("card", [0.0, 0.0]);
+        let loc = doc.add_node("locator", [0.0, 100.0]);
+        doc.set_param(&card, "translate", arclight::link::param(&loc, "translate"));
+        let why = Transforming::start(&doc, &card, Mode::Move, &Mat4::identity(), Pos2::ZERO, 1).err().unwrap();
+        assert!(why.contains("linked") && why.contains(&loc) && why.contains("Unlink"), "{why}");
+        assert!(refusal(&doc, &loc, Mode::Rotate).unwrap().contains("no rotate"));
+        assert!(refusal(&doc, &loc, Mode::Move).is_none());
+        // Alt + R / S: back to the defaults.
+        doc.set_param(&card, "rotate", json!([10, 20, 30]));
+        doc.set_param(&card, "scale", json!([2, 2, 2]));
+        reset(&mut doc, &card, Mode::Rotate, 1).unwrap();
+        reset(&mut doc, &card, Mode::Scale, 1).unwrap();
+        assert_eq!(trs_at(&doc, &card, 1).rotate, [0.0; 3]);
+        assert_eq!(trs_at(&doc, &card, 1).scale, [1.0; 3]);
+        assert!(reset(&mut doc, &card, Mode::Move, 1).is_err(), "linked");
+    }
+
+    /// From above and to the side, so no axis points at the camera.
+    fn oblique() -> Pinhole {
+        let world = geom::trs([6.0, 5.0, 8.0], [-27.0, 37.0, 0.0], [1.0; 3]);
+        Pinhole(Camera { world, ..Camera::default() })
+    }
+
+    #[test]
+    fn gizmo_handles_are_where_they_are_drawn() {
+        let view = oblique();
+        let axes = axes_of(&Mat4::identity(), Space::Global);
+        let lay = Layout::new(&view, Tool::Move, Vec3::zeros(), axes).unwrap();
+        let (base, tip) = lay.arrows[0].unwrap();
+        assert!(((tip - lay.center).length() - GIZMO_SIZE).abs() < 25.0, "about GIZMO_SIZE long: {}", (tip - lay.center).length());
+        assert_eq!(lay.hit(base.lerp(tip, 0.6)), Some(Handle::Arrow(0)));
+        assert_eq!(lay.hit(lay.center + Vec2::new(2.0, 1.0)), Some(Handle::MoveCenter));
+        let q = lay.squares[1].unwrap();
+        let mid = Pos2::new(q.iter().map(|p| p.x).sum::<f32>() / 4.0, q.iter().map(|p| p.y).sum::<f32>() / 4.0);
+        assert_eq!(lay.hit(mid), Some(Handle::Square(1)));
+        assert_eq!(lay.hit(lay.center + Vec2::new(300.0, 0.0)), None);
+        assert!(lay.rings.iter().all(Vec::is_empty) && lay.cubes.iter().all(Option::is_none), "move only");
+
+        // Rotate: on a ring, the outer ring, inside.
+        let lay = Layout::new(&view, Tool::Rotate, Vec3::zeros(), axes).unwrap();
+        let on_z = lay.rings[2][10].0;
+        assert_eq!(lay.hit(on_z), Some(Handle::Ring(2)));
+        assert_eq!(lay.hit(lay.center + Vec2::new(lay.ring_radius, 0.0)), Some(Handle::ViewRing));
+        assert_eq!(lay.hit(lay.center + Vec2::new(3.0, 3.0)), Some(Handle::Trackball));
+        // Scale: cubes at the tips, the center for all axes.
+        let lay = Layout::new(&view, Tool::Scale, Vec3::zeros(), axes).unwrap();
+        assert_eq!(lay.hit(lay.cubes[2].unwrap()), Some(Handle::Cube(2)));
+        assert_eq!(lay.hit(lay.center), Some(Handle::ScaleCenter));
+        assert!(Layout::new(&view, Tool::Select, Vec3::zeros(), axes).is_none());
+    }
+
+    #[test]
+    fn an_arrow_pointing_at_the_viewer_isnt_offered() {
+        // From the front, Z points straight at the camera.
+        let lay = Layout::new(&front(), Tool::Move, Vec3::zeros(), axes_of(&Mat4::identity(), Space::Global)).unwrap();
+        assert!(lay.arrows[2].is_none() && lay.arrows[0].is_some());
+        assert!(lay.squares[2].is_some() && lay.squares[0].is_none(), "the XY square faces the camera; YZ is edge-on");
+        // Local axes of an object turned 90° about Z: its X arrow points up.
+        let world = geom::trs([0.0; 3], [0.0, 0.0, 90.0], [1.0; 3]);
+        let lay = Layout::new(&front(), Tool::Move, Vec3::zeros(), axes_of(&world, Space::Local)).unwrap();
+        let (_, tip) = lay.arrows[0].unwrap();
+        assert!(tip.y < lay.center.y - 50.0 && (tip.x - lay.center.x).abs() < 1.0);
+    }
+
+    #[test]
+    fn dragging_a_handle_edits_only_what_it_should() {
+        use arclight::graph::Graph;
+        let view = oblique();
+        let mut doc = Doc::new(Graph::default(), None);
+        let card = doc.add_node("card", [0.0, 0.0]);
+        let axes = axes_of(&Mat4::identity(), Space::Global);
+        let lay = Layout::new(&view, Tool::All, Vec3::zeros(), axes).unwrap();
+        // The X arrow, grabbed at its tip (x = len) and dragged to where
+        // x = 3 + len is: 3 along X. Released.
+        let (_, tip) = lay.arrows[0].unwrap();
+        let len = GIZMO_SIZE as f64 / view.pixels_per_unit(view.project(Vec3::zeros()).unwrap().1);
+        let mut t = Transforming::drag(&doc, &card, Handle::Arrow(0), Space::Global, &Mat4::identity(), tip, 1).unwrap();
+        let to = at(&view, [3.0 + len, 0.0, 0.0]);
+        assert_eq!(t.step(&input(to), &view, &mut doc), Outcome::Going);
+        assert_eq!(t.step(&Input { confirm: true, ..input(to) }, &view, &mut doc), Outcome::Done);
+        let moved = trs_at(&doc, &card, 1);
+        assert!((moved.translate[0] - 3.0).abs() < 1e-6 && moved.translate[1] == 0.0 && moved.translate[2] == 0.0, "{moved:?}");
+        // The Y cube, dragged to twice its distance from the center: scale.y × 2.
+        let c = view.project(Vec3::new(3.0, 0.0, 0.0)).unwrap().0;
+        let lay = Layout::new(&view, Tool::Scale, Vec3::new(3.0, 0.0, 0.0), axes).unwrap();
+        let cube = lay.cubes[1].unwrap();
+        let mut t = Transforming::drag(&doc, &card, Handle::Cube(1), Space::Global, &moved.matrix(), cube, 1).unwrap();
+        t.step(&input(c + (cube - c) * 2.0), &view, &mut doc);
+        assert!(near(trs_at(&doc, &card, 1).scale, [1.0, 2.0, 1.0], 1e-4), "{:?}", trs_at(&doc, &card, 1).scale);
+        // The Z ring: a rotation about Z only.
+        let lay = Layout::new(&view, Tool::Rotate, Vec3::new(3.0, 0.0, 0.0), axes).unwrap();
+        let mut t = Transforming::drag(&doc, &card, Handle::Ring(2), Space::Global, &moved.matrix(), lay.rings[2][0].0, 1).unwrap();
+        t.step(&input(lay.rings[2][8].0), &view, &mut doc);
+        let r = trs_at(&doc, &card, 1).rotate;
+        assert!(r[0] == 0.0 && r[1] == 0.0 && r[2].abs() > 1.0, "{r:?}");
+        // A gizmo can't take a linked param (refused like G).
+        doc.set_param(&card, "translate", arclight::link::expr("[1, 2, 3]"));
+        assert!(Transforming::drag(&doc, &card, Handle::Arrow(0), Space::Global, &Mat4::identity(), tip, 1).is_err());
     }
 }

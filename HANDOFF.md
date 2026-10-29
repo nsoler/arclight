@@ -77,6 +77,20 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
     `context_menu` (Place Card / locator via camera_tracker.rs, now
     `pub(crate)`; Frame selected / all). Selection is skipped while a
     gizmo or G/R/S is running.
+  - **0.9.5 (mathwiz step 3 + wiring):** the 3D view is live.
+    `Viewer.viewport3d`; `Viewer::ui_3d` runs G/R/S input first (so a
+    gesture takes its keys before the viewport's), then
+    `viewport3d.ui(.., blocked = is_transforming())`, then the gesture
+    header and notices. `gizmo3d::Transforming` runs a `Gesture` on the
+    selected node through `Doc::edit_param` (a key at the frame when
+    animated); Esc / right-click restore the param exactly as stored (no
+    key, no undo step); main.rs counts a running G/R/S as a gesture and
+    skips its own shortcuts meanwhile. `impl View for Projector`; the
+    world matrix comes from `viewport3d.object_world(node)`. Refusals
+    (no selection, missing param, linked param) show 4 s at the
+    viewport's bottom-left. `Graph.view` saves the viewport camera.
+    `Gesture::with_constraint` is `#[cfg(test)]` until step 4's gizmo
+    drags use it.
 - **Next work, in order:** (1) anything from the Mac test; (2) the
   hand checks listed below for session 8's GUI work; (3) **M9, the 3D
   viewport** (fully specified in `docs/phase-4-plan.md`, "Milestone 9 in
@@ -134,7 +148,7 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.4**.
+  in the same commit as the change. Current: **0.9.5**.
 - ~23,200 lines of Rust + Python. Tests: 134 library + 10 CLI + 46 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

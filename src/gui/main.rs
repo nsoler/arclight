@@ -7,8 +7,6 @@
 mod camera_tracker;
 mod curve_editor;
 mod doc;
-// Used by the viewer from M9 step 3 (G / R / S); only its tests until then.
-#[allow(dead_code)]
 mod gizmo3d;
 mod node_editor;
 mod overlay;
@@ -420,6 +418,10 @@ impl App {
         }
         if ctx.text_edit_focused() {
             // Let the focused text field use ⌘Z for its own text undo.
+            return;
+        }
+        // G / R / S in the 3D view takes the keys (Esc, Backspace, digits…).
+        if self.viewer.is_transforming() {
             return;
         }
         // Redo first: shortcut matching ignores an extra Shift.
@@ -920,7 +922,7 @@ impl eframe::App for App {
             });
         });
         // One undo step per finished gesture (drag, typing, click).
-        let gesture = ctx.input(|i| i.pointer.any_down()) || ctx.text_edit_focused() || self.props.is_tracking();
+        let gesture = ctx.input(|i| i.pointer.any_down()) || ctx.text_edit_focused() || self.props.is_tracking() || self.viewer.is_transforming();
         self.doc.commit(gesture);
     }
 }

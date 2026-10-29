@@ -5,6 +5,7 @@
 //! the frame is outlined.
 
 use crate::doc::Doc;
+use crate::gizmo3d::{self, Handle, Layout, Mode, Space, Tool, Transforming};
 use crate::overlay::{Overlays, Xf};
 use arclight::color;
 use arclight::ops;
@@ -67,6 +68,17 @@ pub struct Viewer {
     /// Showing the viewed node's 3D scene instead of its image (the 2D / 3D
     /// toggle, or Tab over the viewer).
     pub mode3d: bool,
+    /// The 3D view (`mode3d`).
+    pub viewport3d: crate::viewport3d::Viewport3d,
+    /// G / R / S, or a gizmo drag, in progress in the 3D view.
+    transforming: Option<Transforming>,
+    /// The 3D view's gizmo (toolbar tools) and axes (Global / Local).
+    pub tool: Tool,
+    pub space: Space,
+    /// The gizmo handle being dragged.
+    dragged: Option<Handle>,
+    /// A message for the 3D view (why G / R / S can't), and when it was shown.
+    notice: Option<(String, f64)>,
     pub rect: Rect,
 }
 
@@ -95,6 +107,12 @@ impl Default for Viewer {
             fit_pending: true,
             overlays: Overlays::default(),
             mode3d: false,
+            viewport3d: Default::default(),
+            transforming: None,
+            tool: Tool::default(),
+            space: Space::default(),
+            dragged: None,
+            notice: None,
             rect: Rect::NOTHING,
         }
     }
@@ -131,6 +149,137 @@ impl Viewer {
     /// Switch between the image (2D) and the scene (3D).
     pub fn toggle_3d(&mut self) {
         self.mode3d = !self.mode3d;
+    }
+
+    /// G / R / S is running: it takes the keys and the pointer, and its
+    /// edits are one undo step.
+    pub fn is_transforming(&self) -> bool {
+        self.transforming.is_some()
+    }
+
+    /// G / R / S over the 3D view (Blender's keys; see `gizmo3d`), and Alt +
+    /// G / R / S to reset. Runs before the viewport, so a gesture takes its
+    /// keys first; [`Viewer::transform_overlay`] draws the header after.
+    fn transform_keys(&mut self, ui: &mut egui::Ui, resp: &egui::Response, doc: &mut Doc, frame: i64) {
+        let view = self.viewport3d.projector();
+        if let Some(t) = &mut self.transforming {
+            let by_drag = t.by_drag;
+            let input = ui.input_mut(|i| gizmo3d::Input::take(i, by_drag));
+            let outcome = match &view {
+                Some(v) => t.step(&input, v, doc),
+                None => gizmo3d::Outcome::Cancelled,
+            };
+            if outcome != gizmo3d::Outcome::Going {
+                self.transforming = None;
+                self.dragged = None;
+            }
+            ui.ctx().request_repaint();
+            return;
+        }
+        if resp.hovered() && !ui.ctx().text_edit_focused() {
+            use egui::{Key, Modifiers};
+            let pressed = ui.input_mut(|i| {
+                [(Key::G, Mode::Move), (Key::R, Mode::Rotate), (Key::S, Mode::Scale)].into_iter().find_map(|(k, m)| {
+                    if i.consume_key(Modifiers::ALT, k) {
+                        Some((m, true))
+                    } else {
+                        i.consume_key(Modifiers::NONE, k).then_some((m, false))
+                    }
+                })
+            });
+            if let Some((mode, reset)) = pressed {
+                let now = ui.input(|i| i.time);
+                let result = match doc.selected.clone() {
+                    None => Err(format!("Select an object to {} it", mode.name().to_lowercase())),
+                    Some(node) if reset => gizmo3d::reset(doc, &node, mode, frame),
+                    Some(node) => match (&view, resp.hover_pos()) {
+                        (Some(_), Some(at)) => {
+                            // Its place in the viewed scene, or its own params
+                            // if it isn't in it.
+                            let world = self.viewport3d.object_world(&node).unwrap_or_else(|| gizmo3d::trs_at(doc, &node, frame).matrix());
+                            Transforming::start(doc, &node, mode, &world, at, frame).map(|t| self.transforming = Some(t))
+                        }
+                        _ => Err("The 3D view isn't ready yet".into()),
+                    },
+                };
+                if let Err(why) = result {
+                    self.notice = Some((why, now));
+                }
+            }
+        }
+    }
+
+    /// The selected object's gizmo for the current tool, from the view as
+    /// last drawn, and whether its handles can move it (per mode: why not).
+    fn gizmo(&self, doc: &Doc) -> Option<(Layout, String, [Option<String>; 3])> {
+        let node = doc.selected.clone()?;
+        let view = self.viewport3d.projector()?;
+        let world = self.viewport3d.object_world(&node)?;
+        let origin = arclight::geom::transform_point(&world, &arclight::geom::Vec3::zeros());
+        let layout = Layout::new(&view, self.tool, origin, gizmo3d::axes_of(&world, self.space))?;
+        let refused = [Mode::Move, Mode::Rotate, Mode::Scale].map(|m| gizmo3d::refusal(doc, &node, m));
+        Some((layout, node, refused))
+    }
+
+    /// Hovering a gizmo handle, and pressing it to start a drag (releasing
+    /// confirms; Esc or right-click cancels). The handle under the pointer,
+    /// so the viewport leaves that click alone.
+    fn gizmo_input(&mut self, ui: &egui::Ui, resp: &egui::Response, doc: &Doc, frame: i64) -> Option<Handle> {
+        if self.transforming.is_some() {
+            return self.dragged;
+        }
+        let (layout, node, refused) = self.gizmo(doc)?;
+        let at = resp.hover_pos()?;
+        let h = layout.hit(at)?;
+        let mode = h.gesture(self.space).0;
+        if ui.input(|i| i.pointer.primary_pressed()) {
+            let world = self.viewport3d.object_world(&node).unwrap_or_else(|| gizmo3d::trs_at(doc, &node, frame).matrix());
+            match Transforming::drag(doc, &node, h, self.space, &world, at, frame) {
+                Ok(t) => {
+                    self.transforming = Some(t);
+                    self.dragged = Some(h);
+                }
+                Err(why) => self.notice = Some((why, ui.input(|i| i.time))),
+            }
+        } else if let Some(why) = &refused[mode as usize] {
+            self.notice = Some((why.clone(), ui.input(|i| i.time)));
+        }
+        Some(h)
+    }
+
+    /// Draw the gizmo over the view (gray when its params are linked).
+    fn gizmo_draw(&self, ui: &egui::Ui, rect: Rect, doc: &Doc, hot: Option<Handle>) {
+        if let Some((layout, _, refused)) = self.gizmo(doc) {
+            let enabled = refused.iter().any(Option::is_none);
+            layout.draw(&ui.painter_at(rect), hot, enabled);
+        }
+    }
+
+    /// The running gesture's header (top left) and any notice (bottom
+    /// left), over the 3D view.
+    fn transform_overlay(&mut self, ui: &egui::Ui, rect: Rect) {
+        let painter = ui.painter_at(rect);
+        if let Some(t) = &self.transforming {
+            let text = format!("{}   ·   X / Y / Z axis, ⇧ to exclude, type a value, Ctrl snaps · Enter or click: done · Esc or right-click: cancel", t.gesture.describe(&t.now));
+            let pos = rect.left_top() + Vec2::new(8.0, 8.0);
+            let galley = painter.layout_no_wrap(text, FontId::proportional(13.0), Color32::from_gray(235));
+            painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand(4.0), 3.0, Color32::from_black_alpha(170));
+            painter.galley(pos, galley, Color32::from_gray(235));
+        }
+        // A notice fades after 4 s.
+        if let Some((text, at)) = &self.notice {
+            let age = ui.input(|i| i.time) - at;
+            if age > 4.0 {
+                self.notice = None;
+            } else {
+                let pos = rect.left_bottom() + Vec2::new(8.0, -8.0);
+                let galley = painter.layout_no_wrap(text.clone(), FontId::proportional(13.0), Color32::from_rgb(255, 190, 110));
+                let r = Align2::LEFT_BOTTOM.anchor_size(pos, galley.size());
+                painter.rect_filled(r.expand(4.0), 3.0, Color32::from_black_alpha(170));
+                painter.galley(r.min, galley, Color32::from_rgb(255, 190, 110));
+                ui.ctx().request_repaint();
+            }
+        }
     }
 
     /// `doc` and `frame` drive the selected node's overlay handles; edits
@@ -257,7 +406,6 @@ impl Viewer {
 
     /// The 3D view of the viewed node's scene (see [`scene_of`]).
     fn ui_3d(&mut self, ui: &mut egui::Ui, rect: Rect, resp: &egui::Response, d: &Display<'_>, doc: &mut Doc, frame: i64) {
-        let _ = (resp, frame);
         let painter = ui.painter_at(rect);
         let Some(node) = d.target else {
             painter.text(rect.center(), Align2::CENTER_CENTER, "Nothing to view — connect a node to a Viewer, or select one.", FontId::proportional(14.0), Color32::GRAY);
@@ -266,14 +414,17 @@ impl Viewer {
         match scene_of(doc, node) {
             None => {
                 let text = format!(
-                    "'{node}' has no 3D scene.\nView a Camera, Card, Scene, Locator, Point Cloud or a Scanline Render to see one here,\nor press Tab (or 2D) for its image."
+                    "'{node}' has no 3D scene.\nView a Camera, Card, Scene, Locator, Point Cloud, Camera Tracker or a Scanline Render to see one here,\nor press Tab (or 2D) for its image."
                 );
                 painter.text(rect.center(), Align2::CENTER_CENTER, text, FontId::proportional(14.0), Color32::GRAY);
             }
-            // Placeholder until the viewport (src/gui/viewport3d.rs) lands.
-            Some(scene) => {
-                let text = format!("3D view of '{scene}'");
-                painter.text(rect.center(), Align2::CENTER_CENTER, text, FontId::proportional(14.0), Color32::from_rgb(120, 190, 235));
+            Some(_) => {
+                self.transform_keys(ui, resp, doc, frame);
+                let hot = self.gizmo_input(ui, resp, doc, frame);
+                let blocked = self.is_transforming() || hot.is_some();
+                self.viewport3d.ui(ui, rect, resp, doc, frame, blocked);
+                self.gizmo_draw(ui, rect, doc, hot);
+                self.transform_overlay(ui, rect);
             }
         }
     }
@@ -293,6 +444,14 @@ impl Viewer {
     fn toolbar_3d(&mut self, ui: &mut egui::Ui, d: &Display<'_>) {
         ui.horizontal(|ui| {
             self.mode_switch(ui);
+            for (tool, label, tip) in Tool::ALL {
+                ui.selectable_value(&mut self.tool, tool, label).on_hover_text(tip);
+            }
+            ui.separator();
+            let tip = "The gizmo's axes: the world's, or the object's own (G / R / S: press X / Y / Z twice for the object's)";
+            ui.selectable_value(&mut self.space, Space::Global, "Global").on_hover_text(tip);
+            ui.selectable_value(&mut self.space, Space::Local, "Local").on_hover_text(tip);
+            ui.separator();
             if let Some(t) = d.target {
                 ui.weak(format!("Viewing {t}"));
             }
@@ -496,16 +655,17 @@ fn plane_image(img: &Image, plane: &Plane, region: IRect, step: usize) -> ColorI
 }
 
 /// The node whose 3D scene viewing `node` shows: `node` itself when it
-/// outputs a scene (Camera, Card, Scene, …), else what feeds its first
-/// scene input (a Scanline Render's or Camera Tracker's). A Viewer node
-/// stands for what it shows. None: no scene.
+/// outputs a scene (Camera, Card, Scene, …) or solves one (a Camera
+/// Tracker: its camera and points), else what feeds its first scene input
+/// (a Scanline Render's). A Viewer node stands for what it shows. None: no
+/// scene.
 pub fn scene_of(doc: &Doc, node: &str) -> Option<String> {
     let mut n = doc.node(node)?;
     if n.op == "viewer" {
         n = doc.node(n.inputs.first().filter(|s| !s.is_empty())?)?;
     }
     let node = n.id.as_str();
-    if ops::output_kind(&n.op) == ops::Kind::Scene {
+    if ops::output_kind(&n.op) == ops::Kind::Scene || n.op == "camera_tracker" {
         return Some(node.to_string());
     }
     let ports = ops::info(&n.op)?.inputs;
@@ -531,6 +691,8 @@ mod tests {
         d.connect(&card, &render, port);
         assert_eq!(scene_of(&d, &render).as_deref(), Some(card.as_str()));
         assert_eq!(scene_of(&d, &blur), None);
+        let tracker = d.add_node("camera_tracker", [0.0, 300.0]);
+        assert_eq!(scene_of(&d, &tracker).as_deref(), Some(tracker.as_str()), "its solved camera and points");
         // A Viewer shows what feeds it.
         let viewer = d.add_node("viewer", [600.0, 0.0]);
         assert_eq!(scene_of(&d, &viewer), None);

@@ -11,6 +11,19 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.5 — 2026-10-29
+
+- The 3D view is live: the viewer's 3D mode (2D / 3D toggle, or Tab over
+  the viewer) shows the viewed node's scene in the 3D viewport, and says
+  so when it has none.
+- In the 3D view, G / R / S move, rotate and scale the selected object
+  Blender-style: X / Y / Z to constrain (twice: local), Shift to exclude
+  an axis, type a value (- negates), Ctrl snaps, Enter or click to
+  confirm, Esc or right-click to cancel; Alt + G / R / S reset. Animated
+  params get a key; one undo step per gesture; linked params say why they
+  can't move.
+- The viewport camera is saved with the project.
+
 ## 0.9.4 — 2026-10-29
 
 - 3D viewport selection, Blender-style: left-click picks a card, camera,
