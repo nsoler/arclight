@@ -304,7 +304,7 @@ then poses of in-between frames by PnP and a final pass).
 9. **3D viewport (D5)**, specified below, and the remaining follow-ups
    (distortion solve, mask input, motion blur in Scanline Render; the
    nodal solve is now part of M11).
-10. **3D objects and render passes (AOVs)**, specified below (added
+10. **3D objects and render passes (AOVs)** — done in 0.9.12–0.9.27; specified below (added
     2026-10-29, user request): geometry beyond cards (primitives and
     imported meshes), simple lights and shading, and Scanline Render
     writing render passes as image planes.

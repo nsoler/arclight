@@ -11,6 +11,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.27 — 2026-10-29
+
+- Motion vectors: Scanline Render's **motion** pass (`motion.u` /
+  `motion.v`, pixels to the next frame) from the camera's move and the
+  objects' animation (deforming meshes too), evaluating the scene a
+  frame later; shown as color in the viewer. Completes **M10, 3D
+  objects and render passes** (0.9.12–0.9.27).
+- Help: the 3D view section describes transforming several objects.
+
 ## 0.9.26 — 2026-10-29
 
 - 3D view: with several objects selected, G / R / S and the gizmos

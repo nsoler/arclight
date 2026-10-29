@@ -951,7 +951,8 @@ pub static OPS: &[OpInfo] = &[
                else the scene's first. Over the background, in its frame, else Width × Height (0: the project's). \
                Anti-aliasing takes that many samples across each pixel and down (3: nine). \
                Passes adds planes next to the picture: depth (each pixel's distance in front of the camera, 0 where \
-               nothing is), P (scene position), N (normal), uv (texture coordinates), id (an object number per \
+               nothing is), P (scene position), N (normal), uv (texture coordinates), motion (pixels each pixel moves by \
+               the next frame), id (an object number per \
                pixel), mattes (matte.<node>: each object's coverage), the light in parts adding up to the picture \
                (diffuse, specular, emission, ambient) and lights (light.<node>: each light's share). The scene's \
                lights light Lambert and Blinn objects; with none, everything renders unlit. Holdout objects draw \
@@ -2537,18 +2538,34 @@ struct ScanlineRender {
 }
 
 fn scanline_render(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
+    scanline_render_next(params, inputs, [None, None])
+}
+
+/// Whether a node of `op` with (resolved) `params` needs its inputs a frame
+/// later too (see [`scanline_render_next`]): a Scanline Render writing the
+/// motion pass.
+pub fn needs_next_frame(op: &str, params: &Value) -> bool {
+    op == "scanline_render" && params["passes"].as_array().is_some_and(|a| a.iter().any(|v| v == "motion"))
+}
+
+/// A Scanline Render, given also its scene and camera inputs a frame later
+/// (`next`), for the motion pass (unconnected or missing: as now).
+pub fn scanline_render_next(params: &Value, inputs: &[Option<&Image>], next: [Option<&Image>; 2]) -> Result<Image> {
     let p: ScanlineRender = parse(params, "scanline_render")?;
     let port = |i: usize| inputs.get(i).copied().flatten();
+    let camera_of = |scene_in: Option<&Image>, camera_in: Option<&Image>| {
+        camera_in.and_then(|img| img.scene.as_ref()?.cameras.first().cloned()).or_else(|| scene_in?.scene.as_ref()?.cameras.first().cloned())
+    };
     let scene = port(0).and_then(|img| img.scene.clone());
-    let camera = port(1)
-        .and_then(|img| img.scene.as_ref()?.cameras.first().cloned())
-        .or_else(|| scene.as_ref()?.cameras.first().cloned())
-        .context("no camera: connect a Camera to the camera input, or put one in the scene")?;
+    let camera = camera_of(port(0), port(1)).context("no camera: connect a Camera to the camera input, or put one in the scene")?;
     let bg = port(2);
     let format = bg.map_or(source_size(p.width, p.height), |b| b.format);
     let empty = Scene::default();
     let passes = p.passes.as_ref().map_or(render3d::Passes::DEPTH, |n| render3d::Passes::from_names(n.iter().map(String::as_str)));
-    Ok(render3d::render_passes(scene.as_deref().unwrap_or(&empty), &camera, format, p.samples, bg, passes))
+    let next_scene = next[0].and_then(|img| img.scene.clone());
+    let next_camera = camera_of(next[0], next[1]).unwrap_or_else(|| camera.clone());
+    let later = passes.motion.then(|| (next_scene.as_deref().unwrap_or(&empty), &next_camera));
+    Ok(render3d::render_motion(scene.as_deref().unwrap_or(&empty), &camera, format, p.samples, bg, passes, later))
 }
 
 /// A Read Geo's meshes: the file's parts (OBJ, or glTF for .gltf / .glb;

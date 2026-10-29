@@ -136,6 +136,14 @@ drags and G / R / S key animated parameters at the current frame and are
 one undo step each. A parameter linked to another node can't be moved
 until it's unlinked.
 
+With several objects selected, the gizmo sits at their median point (the
+middle of their origins), and moving, rotating or scaling works on all of
+them at once: rotate and scale turn and size each one about its own center
+and carry it round the median point, as Blender's Median Point pivot does.
+Objects whose position or rotation is linked to another node are left out
+(a linked position still turns in place). **Alt + G / R / S** resets each
+selected object.
+
 ### 3D objects
 
 - **Cube**, **Sphere**, **Cylinder** and **Plane** (3D category) make
@@ -166,19 +174,22 @@ until it's unlinked.
 ## Render passes
 
 Scanline Render can add render passes to its image: depth, position
-(**P**), normal (**N**), texture coordinates (**uv**), object **id** and a
-matte per object (**matte.<node>**), and the light in parts: **diffuse**,
-**specular**, **emission** (with unlit surfaces' color) and **ambient**,
-which add up to the picture, and **lights** (a **light.<node>** for each
-light's share); motion is still to come.
-The viewer's plane buttons show any pass (one button a layer; **P**, **N**
-and **uv** as color).
+(**P**), normal (**N**), texture coordinates (**uv**), **motion**, object
+**id** and a matte per object (**matte.<node>**), and the light in parts:
+**diffuse**, **specular**, **emission** (with unlit surfaces' color) and
+**ambient**, which add up to the picture, and **lights** (a
+**light.<node>** for each light's share). The viewer's plane buttons show
+any pass (one button a layer; **P**, **N**, **uv** and **motion** as
+color).
 
 - Choose them with **Passes** in Scanline Render's properties: **depth**,
-  **P**, **N**, **uv**, **id**, **mattes** (a **matte.<node>** for each
-  object, adding up to the picture's alpha) and the lighting passes. Depth, P, N, uv and id come
-  from the nearest surface in each pixel, so they aren't blurred across
-  edges.
+  **P**, **N**, **uv**, **motion**, **id**, **mattes** (a **matte.<node>**
+  for each object, adding up to the picture's alpha) and the lighting
+  passes. Depth, P, N, uv, motion and id come from the nearest surface in
+  each pixel, so they aren't blurred across edges.
+- **motion** (`motion.u`, `motion.v`) is how far, in pixels (right and
+  down), what each pixel shows moves by the next frame, with the camera's
+  move and the objects' own animation: for motion blur in 2D.
 - **Holdout** on a Cube, Sphere, Cylinder, Plane or Read Geo makes it draw
   nothing but cut out what is behind it (alpha 0 there); its matte still
   shows where it is.

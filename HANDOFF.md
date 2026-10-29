@@ -21,7 +21,7 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
   wheels (Linux manylinux2014, macOS universal2) + sdist. Both
   workflows passed. Earlier: v0.9.7, v0.9.5, v0.8.4, v0.8.3 and the
   0.0.x pre-releases.
-- **In progress (session 10): M10, 3D objects and render passes**
+- **Done (session 10): M10, 3D objects and render passes**
   ("Milestone 10 in detail" in `docs/phase-4-plan.md`), at **0.9.22**
   (`d422ffb`); steps (a) objects, (b) passes and (c) OBJ are done; (d)
   lights / materials and (e) motion remain (glTF and zmerge of (e) are
@@ -86,30 +86,13 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
       `Gesture::about(pivot)`, `Transforming::start_many / drag_many`;
       viewer G/R/S and gizmo act on `doc.selection()`. Only the true
       ortho texture path (render3d) remains of M9's leftovers.
-  - **Working now (assigned at this update; nothing uncommitted yet):**
-    - **3DWorker** (wD:p4, `worker3d`), owns ops.rs, scene.rs,
-      render3d.rs, session.rs, gui/properties.rs, README.md,
-      docs/help.md: step (d). First, on its own: `Scene.lights:
-      Vec<shade::Light>` (extend / tag / describe) and light nodes
-      `light_ambient` / `light_directional` / `light_point` / `light_spot`
-      (translate / rotate, color, intensity, decay, cone, penumbra). Then
-      material params on the mesh nodes (Read Geo keeps the file's unless
-      overridden), `shade::shade` per hit in render3d (no lights or Unlit
-      must stay bit-identical), and lighting passes diffuse / specular /
-      emission / ambient (+ optional `light.<node>`) in `Passes::NAMES`.
-    - **MathWiz** (wD:p3), owns `src/gui/viewport3d.rs` for this: lights
-      in the 3D view (point = star, spot = cone with angle and penumbra,
-      directional = parallel arrows, area = outline + normal), pickable,
-      framed, moved by G / R / S and gizmos via the node's translate /
-      rotate. Codes against `Scene.lights` until 3DWorker's first piece
-      is committed (tell MathWiz when it is).
-  - **Still to do after that:** (e) motion vectors (`motion` pass from
-    camera and object animation; likely MathWiz or 3DWorker, whoever is
-    free, in render3d / graph); MCP / Python check that lights, passes
-    and Shuffle work through `create_node` / params (they should);
-    README rows for the light nodes; `docs/help.md` lights; then the
-    **release** (tarball + universal DMG + wheels) per the user's request.
-  - Next version: **0.9.27**. (CHANGELOG has one entry per version.)
+    - 0.9.27 (3DWorker) (e): `motion` pass (`render_motion`, next-frame
+      scene + camera via `Evaluator.next`, keys mixed in;
+      `ops::needs_next_frame`, `scanline_render_next`). **M10 done.**
+  - **Left over from M10:** the viewport's solid view is headlit (not
+    lit by scene lights); Area light has engine support (`shade.rs`) but
+    no node (M12); shadows (M12); true ortho texture path (M9).
+  - Next version: **0.9.28**. (CHANGELOG has one entry per version.)
 - **Ask the user first** how the Mac builds (v0.9.11 universal DMG) went
   on their M4 Pro, and whether anyone tried an Intel Mac. Mac-only bugs
   come first.
@@ -320,7 +303,7 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.26**.
+  in the same commit as the change. Current: **0.9.27**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

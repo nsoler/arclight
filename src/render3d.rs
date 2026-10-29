@@ -109,12 +109,21 @@ struct Vert {
     world: Vec3,
     uv: [f64; 2],
     n: Vec3,
+    /// Where this point of the surface is in the scene a frame later (for
+    /// motion vectors).
+    next: Vec3,
 }
 
 impl Vert {
     fn lerp(&self, o: &Vert, t: f64) -> Vert {
         let l = |a: f64, b: f64| a + (b - a) * t;
-        Vert { p: self.p + (o.p - self.p) * t, world: self.world + (o.world - self.world) * t, uv: [l(self.uv[0], o.uv[0]), l(self.uv[1], o.uv[1])], n: self.n + (o.n - self.n) * t }
+        Vert {
+            p: self.p + (o.p - self.p) * t,
+            world: self.world + (o.world - self.world) * t,
+            uv: [l(self.uv[0], o.uv[0]), l(self.uv[1], o.uv[1])],
+            n: self.n + (o.n - self.n) * t,
+            next: self.next + (o.next - self.next) * t,
+        }
     }
 }
 
@@ -154,7 +163,8 @@ fn edge(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
 }
 
 /// Every surface's triangles, projected into a frame of `format`.
-fn triangles(surfs: &[Surface], cam: &Camera, format: Size) -> Vec<Tri> {
+/// `next[i]`, when given: surface `i`'s vertices in the scene a frame later.
+fn triangles(surfs: &[Surface], cam: &Camera, format: Size, next: Option<&[Vec<Vec3>]>) -> Vec<Tri> {
     let view = cam.view();
     let f = cam.focal_pixels(format);
     let (cx, cy) = (format.width as f64 / 2.0, format.height as f64 / 2.0);
@@ -168,6 +178,7 @@ fn triangles(surfs: &[Surface], cam: &Camera, format: Size) -> Vec<Tri> {
         let cam_p: Vec<Vec3> = s.positions.iter().map(|p| geom::transform_point(&to_cam, p)).collect();
         let world_p: Vec<Vec3> = s.positions.iter().map(|p| geom::transform_point(&s.world, p)).collect();
         let world_n: Vec<Vec3> = s.normals.iter().map(|n| (normal_m * n).try_normalize(1e-300).unwrap_or(*n)).collect();
+        let next_p = next.and_then(|n| n.get(si)).filter(|n| n.len() == world_p.len()).unwrap_or(&world_p);
         for t in s.triangles.iter() {
             let [a, b, c] = t.map(|i| i as usize);
             if a.max(b).max(c) >= cam_p.len() {
@@ -179,6 +190,7 @@ fn triangles(surfs: &[Surface], cam: &Camera, format: Size) -> Vec<Tri> {
                 world: world_p[i],
                 uv: s.uvs.get(i).map_or([0.0, 0.0], |uv| if s.v_up { [uv[0], 1.0 - uv[1]] } else { *uv }),
                 n: world_n.get(i).copied().unwrap_or(face),
+                next: next_p[i],
             };
             let tri = [corner(a), corner(b), corner(c)];
             let poly = if tri.iter().all(|v| -v.p.z >= near) { tri.to_vec() } else { clip_near(&tri, near) };
@@ -320,14 +332,17 @@ pub struct Passes {
     pub ambient: bool,
     /// `light.<node>` (`.R` `.G` `.B`): what each light node adds.
     pub lights: bool,
+    /// `motion.u` `motion.v`: how far (pixels, right and down) the surface
+    /// seen moves by the next frame, with the camera's move.
+    pub motion: bool,
 }
 
 impl Passes {
     /// What a plain render writes.
     pub const DEPTH: Passes = Passes { depth: true, ..Passes::NONE };
-    const NONE: Passes = Passes { depth: false, position: false, normal: false, uv: false, id: false, mattes: false, diffuse: false, specular: false, emission: false, ambient: false, lights: false };
+    const NONE: Passes = Passes { depth: false, position: false, normal: false, uv: false, id: false, mattes: false, diffuse: false, specular: false, emission: false, ambient: false, lights: false, motion: false };
     /// The pass names, as a Scanline Render's Passes list holds them.
-    pub const NAMES: [&'static str; 11] = ["depth", "P", "N", "uv", "id", "mattes", "diffuse", "specular", "emission", "ambient", "lights"];
+    pub const NAMES: [&'static str; 12] = ["depth", "P", "N", "uv", "motion", "id", "mattes", "diffuse", "specular", "emission", "ambient", "lights"];
 
     /// The passes named in `names` (others are ignored).
     pub fn from_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Passes {
@@ -345,6 +360,7 @@ impl Passes {
                 "emission" => p.emission = true,
                 "ambient" => p.ambient = true,
                 "lights" => p.lights = true,
+                "motion" => p.motion = true,
                 _ => {}
             }
         }
@@ -359,7 +375,14 @@ impl Passes {
 /// where the render shows nothing each pass is the background's plane of
 /// that name, if it has one; its other planes are kept.
 pub fn render_passes(scene: &Scene, cam: &Camera, format: Size, samples: usize, background: Option<&Image>, passes: Passes) -> Image {
-    let out = draw_passes(&surfaces(scene), &scene.lights, &scene.points, cam, format, samples, passes);
+    render_motion(scene, cam, format, samples, background, passes, None)
+}
+
+/// [`render_passes`], with `next`: the scene and camera a frame later, for
+/// the motion pass (without it, motion is the camera's and objects' move
+/// as if nothing moved: all 0).
+pub fn render_motion(scene: &Scene, cam: &Camera, format: Size, samples: usize, background: Option<&Image>, passes: Passes, next: Option<(&Scene, &Camera)>) -> Image {
+    let out = draw_passes(&surfaces(scene), &scene.lights, &scene.points, cam, format, samples, passes, next);
     match background {
         Some(bg) => over_background(out, bg),
         None => out,
@@ -431,7 +454,7 @@ fn slot(k: &mut usize, on: bool, n: usize) -> usize {
 /// Surfaces `surfs` and dots at `points` through `cam` into a frame of
 /// `format`, with depth (see [`render`]).
 fn draw(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, samples: usize) -> Image {
-    draw_passes(surfs, &[], points, cam, format, samples, Passes::DEPTH)
+    draw_passes(surfs, &[], points, cam, format, samples, Passes::DEPTH, None)
 }
 
 /// The object nodes of `surfs` in order (each once, unnamed ones left out):
@@ -447,9 +470,30 @@ fn object_nodes<'a>(surfs: &[Surface<'a>]) -> Vec<&'a str> {
 }
 
 /// [`draw`] writing `passes` (see [`render_passes`]).
-fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes) -> Image {
+#[allow(clippy::too_many_arguments)]
+fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes, next: Option<(&Scene, &Camera)>) -> Image {
     let n = samples.clamp(1, 16);
-    let tris = triangles(surfs, cam, format);
+    // With the motion pass: each surface's vertices a frame later (the
+    // surface at the same place in the next frame's list, if it's from the
+    // same node; its own vertices if it has as many, so deforming meshes
+    // move too), else where they are now.
+    let next_cam = next.map_or(cam, |n| n.1);
+    let next_world: Option<Vec<Vec<Vec3>>> = passes.motion.then(|| {
+        let later = next.map(|n| surfaces(n.0)).unwrap_or_default();
+        surfs
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let (world, positions) = match later.get(i).filter(|l| l.node == s.node) {
+                    Some(l) if l.positions.len() == s.positions.len() => (l.world, &l.positions),
+                    Some(l) => (l.world, &s.positions),
+                    None => (s.world, &s.positions),
+                };
+                positions.iter().map(|p| geom::transform_point(&world, p)).collect()
+            })
+            .collect()
+    });
+    let tris = triangles(surfs, cam, format, next_world.as_deref());
     let rows = bin_rows(&tris, format.height);
     let eye = geom::transform_point(&cam.world, &Vec3::zeros());
     let frame = IRect::frame(format);
@@ -464,6 +508,7 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
     let p_at = slot(&mut k, passes.position, 3);
     let n_at = slot(&mut k, passes.normal, 3);
     let uv_at = slot(&mut k, passes.uv, 2);
+    let motion_at = slot(&mut k, passes.motion, 2);
     let id_at = slot(&mut k, passes.id, 1);
     let matte_at = slot(&mut k, passes.mattes, nodes.len());
     let part_on = [passes.diffuse, passes.specular, passes.emission, passes.ambient];
@@ -632,6 +677,15 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                     px[uv_at] = uv[0] as f32;
                     px[uv_at + 1] = (1.0 - uv[1]) as f32;
                 }
+                if passes.motion {
+                    // Where the point lands next frame, less where it is
+                    // now (0 if it goes behind the camera).
+                    let (now, later) = (cam.project(&at(|v| v.world), format), next_cam.project(&at(|v| v.next), format));
+                    if let (Some((a, _)), Some((b, _))) = (now, later) {
+                        px[motion_at] = (b[0] - a[0]) as f32;
+                        px[motion_at + 1] = (b[1] - a[1]) as f32;
+                    }
+                }
                 if passes.id {
                     px[id_at] = object[t.surf].map_or(0.0, |o| (o + 1) as f32);
                 }
@@ -670,6 +724,10 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
     if passes.uv {
         plane("uv.u".into(), uv_at);
         plane("uv.v".into(), uv_at + 1);
+    }
+    if passes.motion {
+        plane("motion.u".into(), motion_at);
+        plane("motion.v".into(), motion_at + 1);
     }
     if passes.id {
         plane("id".into(), id_at);
@@ -1269,9 +1327,83 @@ mod tests {
         assert!((flat[0] - 0.6).abs() < 1e-6 && (flat[1] - 0.4).abs() < 1e-6, "overridden to unlit: its color ({flat:?})");
     }
 
+    /// Motion vectors through the graph: the scene and camera are taken a
+    /// frame later too.
+    #[test]
+    fn motion_vectors_follow_the_camera_and_objects() {
+        use crate::graph::{Evaluator, Graph};
+        use crate::ops::EvalContext;
+        use serde_json::json;
+        let keys = |a: [f64; 3], b: [f64; 3]| json!({ "keys": [[1, a], [10, b]], "interp": "linear" });
+        let graph = |cam: serde_json::Value, card: serde_json::Value| -> Graph {
+            serde_json::from_value(json!({
+                "project": { "first_frame": 1, "last_frame": 10, "fps": 24, "format": { "width": 64, "height": 32 } },
+                "nodes": [
+                    { "id": "plate", "op": "checkerboard", "params": { "width": 64, "height": 32, "size": 4 } },
+                    { "id": "cam", "op": "camera", "params": cam },
+                    { "id": "card1", "op": "card", "inputs": ["plate"], "params": card },
+                    { "id": "floor", "op": "plane", "params": { "size": [40, 40], "translate": [0, -2, -10], "rotate": [-90, 0, 0] } },
+                    { "id": "all", "op": "scene", "inputs": ["card1", "floor", "", ""] },
+                    { "id": "r", "op": "scanline_render", "inputs": ["all", "cam", ""], "params": { "samples": 1, "passes": ["depth", "P", "motion"] } },
+                ] })).unwrap()
+        };
+        let ctx = |frame: i64| EvalContext { frame, write_outputs: false };
+        let card = json!({ "translate": [0, 0, -5], "size": [6, 3] });
+        // A camera moving right and up, and turning: each pixel's motion is
+        // where its point lands through the next frame's camera, less where
+        // it is.
+        let moving = json!({ "focal": 18, "translate": keys([0.0, 0.0, 0.0], [1.8, 0.9, -0.9]), "rotate": keys([0.0, 0.0, 0.0], [-9.0, 18.0, 0.0]) });
+        let g = graph(moving, card.clone());
+        let mut ev = Evaluator::new();
+        let out = ev.evaluate(&g, "r", &ctx(3)).unwrap();
+        let next_cam = ev.evaluate(&g, "cam", &ctx(4)).unwrap().scene.as_ref().unwrap().cameras[0].clone();
+        let mut covered = 0;
+        for y in 0..32 {
+            for x in 0..64 {
+                if out.plane_at("depth", x, y) == 0.0 {
+                    assert_eq!((out.plane_at("motion.u", x, y), out.plane_at("motion.v", x, y)), (0.0, 0.0), "nothing there");
+                    continue;
+                }
+                covered += 1;
+                let p = Vec3::new(out.plane_at("P.x", x, y) as f64, out.plane_at("P.y", x, y) as f64, out.plane_at("P.z", x, y) as f64);
+                let (to, _) = next_cam.project(&p, FMT).unwrap();
+                let want = [to[0] - (x as f64 + 0.5), to[1] - (y as f64 + 0.5)];
+                let got = [out.plane_at("motion.u", x, y) as f64, out.plane_at("motion.v", x, y) as f64];
+                assert!((got[0] - want[0]).abs() < 2e-3 && (got[1] - want[1]).abs() < 2e-3, "({x}, {y}): {got:?} vs {want:?}");
+            }
+        }
+        let most = out.plane("motion.u").unwrap().data.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(covered > 1000 && most > 1.0, "it moves: {covered} px, up to {most}");
+        // The card sliding right 10 px a frame (1.5625 units at 5 away, 6.4
+        // px a unit) past a still camera: (10, 0) on it; the floor still.
+        let still = json!({ "focal": 18 });
+        let sliding = json!({ "translate": keys([-7.0, 0.0, -5.0], [7.0625, 0.0, -5.0]), "size": [6, 3] });
+        let g = graph(still.clone(), sliding);
+        let out = Evaluator::new().evaluate(&g, "r", &ctx(5)).unwrap();
+        let card_at = (32.0 + (-7.0 + 4.0 * 1.5625) * 6.4) as i32;
+        assert!((out.plane_at("motion.u", card_at, 16) - 10.0).abs() < 1e-3 && out.plane_at("motion.v", card_at, 16).abs() < 1e-3, "{}", out.plane_at("motion.u", card_at, 16));
+        assert!(out.plane_at("motion.u", 60, 31).abs() < 1e-6 && out.plane_at("depth", 60, 31) > 0.0, "the floor doesn't move");
+        // All still: 0 everywhere.
+        let g = graph(still, card);
+        let out = Evaluator::new().evaluate(&g, "r", &ctx(5)).unwrap();
+        assert!(out.plane("motion.u").unwrap().data.iter().chain(&out.plane("motion.v").unwrap().data).all(|v| *v == 0.0));
+        // A change only at the next frame changes the render's key (and so
+        // its cached result).
+        let with = |to: f64| {
+            let mut g = g.clone();
+            g.nodes.iter_mut().find(|n| n.id == "card1").unwrap().params["translate"] = json!({ "keys": [[5, [0, 0, -5]], [6, [to, 0, -5]]], "interp": "linear" });
+            g
+        };
+        let (held, later) = (with(0.0), with(1.0));
+        assert_eq!(Evaluator::key(&held, "card1", &ctx(5)).unwrap(), Evaluator::key(&later, "card1", &ctx(5)).unwrap(), "the card is the same at frame 5");
+        assert_ne!(Evaluator::key(&held, "r", &ctx(5)).unwrap(), Evaluator::key(&later, "r", &ctx(5)).unwrap(), "but not at 6");
+        let out = Evaluator::new().evaluate(&later, "r", &ctx(5)).unwrap();
+        assert!(out.plane_at("motion.u", 32, 16) > 1.0, "so it moves");
+    }
+
     #[test]
     fn pass_names_parse() {
-        let every = Passes { diffuse: true, specular: true, emission: true, ambient: true, lights: true, ..ALL };
+        let every = Passes { diffuse: true, specular: true, emission: true, ambient: true, lights: true, motion: true, ..ALL };
         assert_eq!(Passes::from_names(Passes::NAMES), every);
         assert_eq!(Passes::from_names(["depth", "nonsense"]), Passes::DEPTH);
         assert_eq!(Passes::from_names([]), Passes::default());

@@ -282,6 +282,9 @@ impl Graph {
 #[derive(Default)]
 pub struct Evaluator {
     cache: HashMap<String, (u64, Arc<Image>)>,
+    /// Results a frame later, for nodes that need them (a Scanline
+    /// Render's motion pass: see [`ops::needs_next_frame`]).
+    next: Option<Box<Evaluator>>,
 }
 
 impl Evaluator {
@@ -332,7 +335,12 @@ impl Evaluator {
             let node = index[id.as_str()];
             let mut params = linked_params(&index, node, ctx.frame, &graph.project)?;
             ops::apply_format(&node.op, &mut params, graph.project.format);
-            let k = node_key(node, &params, &keys, ctx);
+            let mut k = node_key(node, &params, &keys, ctx);
+            if ops::needs_next_frame(&node.op, &params) {
+                let later = EvalContext { frame: ctx.frame + 1, write_outputs: false };
+                let next: Vec<u64> = next_inputs(node).iter().flatten().map(|d| Evaluator::key(graph, d, &later)).collect::<Result<_, _>>()?;
+                k = mix(k, &next);
+            }
             keys.insert(id.as_str(), k);
         }
         Ok(keys[target])
@@ -356,7 +364,21 @@ impl Evaluator {
             // cache, and a changed link source re-renders.
             let mut params = linked_params(index, node, ctx.frame, project)?;
             ops::apply_format(&node.op, &mut params, graph_format);
-            let key = node_key(node, &params, &keys, ctx);
+            let mut key = node_key(node, &params, &keys, ctx);
+            // A node that needs its inputs a frame later: render those (and
+            // what they need) at the next frame too, and key on them.
+            let next = if ops::needs_next_frame(&node.op, &params) {
+                let deps = next_inputs(node);
+                let roots: Vec<String> = deps.iter().flatten().cloned().collect();
+                let later = self.next.get_or_insert_with(Default::default);
+                let ctx_next = EvalContext { frame: ctx.frame + 1, write_outputs: false };
+                later.run(index, &Graph::order(index, roots)?, &ctx_next, project)?;
+                let found = deps.map(|d| d.map(|d| later.cache[&d].clone()));
+                key = mix(key, &found.iter().flatten().map(|f| f.0).collect::<Vec<_>>());
+                Some(found.map(|f| f.map(|f| f.1)))
+            } else {
+                None
+            };
             keys.insert(id.as_str(), key);
             if self.cache.get(id).is_some_and(|(k, _)| *k == key) {
                 continue;
@@ -391,8 +413,11 @@ impl Evaluator {
                     inputs.push(Some(img));
                 }
             }
-            let mut out = ops::eval(&node.op, &params, &inputs, ctx)
-                .map_err(|e| node_err(id, format!("{e:#}")))?;
+            let out = match &next {
+                Some(later) => ops::scanline_render_next(&params, &inputs, [later[0].as_deref(), later[1].as_deref()]),
+                None => ops::eval(&node.op, &params, &inputs, ctx),
+            };
+            let mut out = out.map_err(|e| node_err(id, format!("{e:#}")))?;
             // What a node made in 3D carries its name (for the viewport).
             if let Some(scene) = out.scene.as_mut() {
                 Arc::make_mut(scene).tag(id);
@@ -428,6 +453,20 @@ fn a(word: &str) -> &'static str {
 }
 
 /// `params` are the node's params already resolved at `ctx.frame`.
+/// The inputs a node needing the next frame wants then (a Scanline
+/// Render's scene and camera; None where unconnected).
+fn next_inputs(node: &NodeSpec) -> [Option<String>; 2] {
+    std::array::from_fn(|i| node.inputs.get(i).filter(|d| !d.is_empty()).cloned())
+}
+
+/// `key` combined with `more` keys.
+fn mix(key: u64, more: &[u64]) -> u64 {
+    let mut h = DefaultHasher::new();
+    key.hash(&mut h);
+    more.hash(&mut h);
+    h.finish()
+}
+
 fn node_key(node: &NodeSpec, params: &Value, keys: &HashMap<&str, u64>, ctx: &EvalContext) -> u64 {
     let mut h = DefaultHasher::new();
     node.op.hash(&mut h);
