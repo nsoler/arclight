@@ -79,9 +79,13 @@ static TOOLS: &[Tool] = &[
             "name": {"type": "string"},
             "input": {"type": "string"}
         }, "required": ["node"]}),
-    tool!("track_camera", "Camera Tracker: find and follow features over the project's frame range in its input, solve the camera's path and 3D points, and keep the solve on the node. Returns frames solved, points, the reprojection error (px) and the focal length. Takes a while (seconds to minutes).",
-        {"type": "object", "properties": {"node": {"type": "string", "description": "The Camera Tracker node."}}, "required": ["node"]}),
-    tool!("camera_points", "A Camera Tracker's solved points: index, position in 3D, and where each lands in the frame at 'frame' (default: the first solved frame), to pick points for place_on_points or orient_camera.",
+    tool!("track_camera", "Camera Tracker: find and follow features over the project's frame range in its input, solve the camera's path and 3D points, and keep the solve on the node. Returns frames solved, points, the reprojection error (px), the focal length, the mode solved in ('free move' or 'tripod') and the frames placed by PnP. Takes a while (seconds to minutes).",
+        {"type": "object", "properties": {
+            "node": {"type": "string", "description": "The Camera Tracker node."},
+            "mode": {"type": "string", "enum": ["auto", "free move", "free", "tripod"], "description": "'free move' (or 'free') for a camera that travels; 'tripod' for one that only turns about its center; 'auto' picks tripod when the camera only turns. Default: the node's Solve setting (auto). Kept on the node."},
+            "distance": {"type": "number", "description": "How far from the camera a tripod solve puts its points (they have no depth). Default: the node's Tripod distance (10). Kept on the node."}
+        }, "required": ["node"]}),
+    tool!("camera_points", "A Camera Tracker's solved points: index, position in 3D, and where each lands in the frame at 'frame' (default: the first solved frame), to pick points for place_on_points or orient_camera; also the solve's mode ('free move' or 'tripod') and the frames placed by PnP.",
         {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}}, "required": ["node"]}),
     tool!("orient_camera", "Move a Camera Tracker's solve (arbitrary until then): 'ground' (3+ point indices) becomes level at height 0 with the camera above, 'origin' (a point index) goes to 0,0,0, and 'scale' ({points: [a, b], distance}) sets the distance between two points. Applied in that order; any may be left out.",
         {"type": "object", "properties": {
@@ -292,7 +296,7 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
             }
             out
         }
-        "track_camera" => s.track_camera(str_arg(args, "node")?, progress)?,
+        "track_camera" => s.track_camera(str_arg(args, "node")?, opt_str(args, "mode"), args.get("distance").and_then(Value::as_f64), progress)?,
         "camera_points" => {
             let sol = s.camera_solution(str_arg(args, "node")?)?;
             let frame = args.get("frame").and_then(Value::as_i64).or_else(|| sol.frames.first().copied()).unwrap_or(1);
@@ -307,7 +311,7 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
                     json!({"index": i, "position": p, "frame_position": px})
                 })
                 .collect();
-            json!({"frame": frame, "points": pts})
+            json!({"frame": frame, "points": pts, "mode": if sol.tripod { "tripod" } else { "free move" }, "pnp_frames": sol.pnp_frames})
         }
         "orient_camera" => {
             let ids = |k: &str| -> Option<Vec<usize>> { args.get(k)?.as_array().map(|a| a.iter().filter_map(Value::as_u64).map(|v| v as usize).collect()) };
@@ -697,7 +701,7 @@ mod tests {
         let sol = crate::camtrack::Solution {
             format: [96, 54], focal: 35.0, film_back: [36.0, 24.0], frames: vec![1, 2],
             cameras: vec![[0.0, 0.0, 0.0, -20.0, 0.0, 0.0], [0.5, 0.0, 0.0, -20.0, 0.0, 0.0]],
-            points, rms: 0.2, frame_rms: vec![0.2, 0.2], point_rms: Vec::new(), pnp_frames: Vec::new(),
+            points, rms: 0.2, frame_rms: vec![0.2, 0.2], point_rms: Vec::new(), pnp_frames: Vec::new(), tripod: false,
         };
         s.session.graph.nodes[1].params["solution"] = sol.to_value();
         let r = call(&mut s, "camera_points", json!({"node": "ct", "frame": 2}))["structuredContent"].clone();
@@ -723,6 +727,30 @@ mod tests {
         // Tracking needs a moving camera: a still plate can't be solved.
         let r = call(&mut s, "track_camera", json!({"node": "ct"}));
         assert_eq!(r["isError"], true, "{r}");
+        // A mode or distance that isn't one is refused before tracking; a
+        // failed solve leaves the node's settings as they were.
+        let r = call(&mut s, "track_camera", json!({"node": "ct", "mode": "sideways"}));
+        assert!(r["content"][0]["text"].as_str().unwrap().contains("isn't one of"), "{r}");
+        let r = call(&mut s, "track_camera", json!({"node": "ct", "mode": "tripod", "distance": 0}));
+        assert!(r["content"][0]["text"].as_str().unwrap().contains("above 0"), "{r}");
+        let r = call(&mut s, "track_camera", json!({"node": "ct", "mode": "free", "distance": 5}));
+        assert_eq!(r["isError"], true, "{r}");
+        assert_eq!((&s.session.graph.nodes[1].params["solve_mode"], &s.session.graph.nodes[1].params["distance"]), (&json!("auto"), &json!(10.0)));
+        // A tripod solve: scaling keeps the camera where it is, and the
+        // exported Camera only turns.
+        let mut sol = s.session.camera_solution("ct").unwrap();
+        sol.tripod = true;
+        sol.cameras = vec![[1.0, 2.0, 3.0, -20.0, 0.0, 0.0], [1.0, 2.0, 3.0, -20.0, 5.0, 0.0]];
+        s.session.graph.nodes[1].params["solution"] = sol.to_value();
+        assert_eq!(call(&mut s, "camera_points", json!({"node": "ct"}))["structuredContent"]["mode"], "tripod");
+        call(&mut s, "orient_camera", json!({"node": "ct", "scale": {"points": [0, 3], "distance": 12}}));
+        let sol = s.session.camera_solution("ct").unwrap();
+        let near = |v: &[f64]| (v[0] - 1.0).abs() + (v[1] - 2.0).abs() + (v[2] - 3.0).abs() < 1e-9;
+        assert!(sol.cameras.iter().all(|c| near(&c[..3])), "{:?}", sol.cameras);
+        let names = call(&mut s, "export_camera", json!({"node": "ct"}))["structuredContent"].clone();
+        let cam = call(&mut s, "describe_node", json!({"node": names["camera"]}))["structuredContent"].clone();
+        let t: Vec<f64> = cam["params"]["translate"].as_array().unwrap().iter().filter_map(Value::as_f64).collect();
+        assert!(near(&t) && cam["params"]["rotate"]["keys"].as_array().unwrap().len() == 2, "{cam}");
     }
 
     #[test]

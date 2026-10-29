@@ -4,6 +4,10 @@
 //! own terms: per frame, a Camera node's translate and rotate; points in
 //! scene units, Y up (see [`crate::geom`]).
 //!
+//! The solve is [`sfm`]'s for a camera that moves, or [`nodal`]'s for one
+//! that only turns (a tripod shot: a camera fixed at one place, its points
+//! on a sphere around it, as they have no depth); [`Mode`] picks which.
+//!
 //! The solve's scale and placement are arbitrary (its first camera at the
 //! origin); [`Solution::set_origin`], [`Solution::set_ground`] and
 //! [`Solution::set_scale`] move it to something meaningful, and
@@ -13,6 +17,7 @@ use crate::features::{FeatureTracker, Settings as TrackSettings};
 use crate::geom::{self, Camera, Vec3};
 use crate::image::{Image, Size};
 use crate::render::Progress;
+use crate::nodal;
 use crate::sfm;
 use crate::solve::{Intrinsics, Pose};
 use anyhow::{bail, Context, Result};
@@ -20,6 +25,38 @@ use nalgebra::{Matrix3, Matrix4, Rotation3};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::sync::atomic::Ordering;
+
+/// Which solve to use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// Free move, or Tripod when no two frames have parallax to start
+    /// from and the camera is found to only turn.
+    Auto,
+    Free,
+    Tripod,
+}
+
+impl Mode {
+    /// From a `solve_mode` param or a tool argument: "auto", "free move"
+    /// (or "free") or "tripod".
+    pub fn parse(s: &str) -> Option<Mode> {
+        match s {
+            "auto" => Some(Mode::Auto),
+            "free move" | "free" => Some(Mode::Free),
+            "tripod" => Some(Mode::Tripod),
+            _ => None,
+        }
+    }
+
+    /// Its `solve_mode` param value.
+    pub fn name(self) -> &'static str {
+        match self {
+            Mode::Auto => "auto",
+            Mode::Free => "free move",
+            Mode::Tripod => "tripod",
+        }
+    }
+}
 
 /// How to track and solve, from a Camera Tracker's params.
 #[derive(Clone, Debug)]
@@ -34,6 +71,9 @@ pub struct Settings {
     pub solve_focal: bool,
     /// Pixels a track may miss by and still count.
     pub max_error: f64,
+    pub mode: Mode,
+    /// How far from a tripod solve's camera its points go.
+    pub distance: f64,
 }
 
 impl Settings {
@@ -49,6 +89,8 @@ impl Settings {
             film_back: [p["film_back"][0].as_f64().unwrap_or(36.0), p["film_back"][1].as_f64().unwrap_or(24.0)],
             solve_focal: p["solve_focal"].as_bool().unwrap_or(false),
             max_error: num("max_error", 1.0),
+            mode: p["solve_mode"].as_str().and_then(Mode::parse).unwrap_or(Mode::Auto),
+            distance: num("distance", 10.0).max(1e-3),
         }
     }
 }
@@ -78,6 +120,10 @@ pub struct Solution {
     /// a cut) rather than from a neighbouring frame's camera.
     #[serde(default)]
     pub pnp_frames: Vec<i64>,
+    /// A tripod solve: the camera only turns, staying where it is, and the
+    /// points lie on a sphere around it.
+    #[serde(default)]
+    pub tripod: bool,
 }
 
 /// Computer-vision frame (y down, z forward) ↔ the scene's (y up, z back).
@@ -86,7 +132,7 @@ fn flip() -> Matrix3<f64> {
 }
 
 impl Solution {
-    fn from_sfm(sol: &sfm::Solution, film_back: [f64; 2], format: Size) -> Solution {
+    fn from_sfm(sol: &sfm::Solution, film_back: [f64; 2], format: Size, tripod: bool) -> Solution {
         let f = flip();
         let mut f4 = Matrix4::identity();
         f4.fixed_view_mut::<3, 3>(0, 0).copy_from(&f);
@@ -112,6 +158,7 @@ impl Solution {
             frame_rms,
             point_rms: sol.points.iter().zip(&sol.point_rms).filter(|(p, _)| p.is_some()).map(|(_, e)| e.unwrap_or(0.0)).collect(),
             pnp_frames: sol.pnp.iter().copied().collect(),
+            tripod,
         }
     }
 
@@ -178,15 +225,21 @@ impl Solution {
         Ok(())
     }
 
-    /// Scale the solve (about the origin) so points `a` and `b` are
-    /// `distance` apart.
+    /// Scale the solve so points `a` and `b` are `distance` apart: about
+    /// the origin, or for a tripod solve about its camera (which stays put:
+    /// only the sphere of points grows or shrinks).
     pub fn set_scale(&mut self, a: usize, b: usize, distance: f64) -> Result<()> {
         let (pa, pb) = (self.centroid(&[a]).context("no such point")?, self.centroid(&[b]).context("no such point")?);
         let d = (pa - pb).norm();
         if d < 1e-12 || distance <= 0.0 {
             bail!("pick two different points and a distance above 0");
         }
-        self.transform(distance / d, &Rotation3::identity(), &Vec3::zeros());
+        let s = distance / d;
+        let about = match (self.tripod, self.cameras.first()) {
+            (true, Some(c)) => Vec3::new(c[0], c[1], c[2]),
+            _ => Vec3::zeros(),
+        };
+        self.transform(s, &Rotation3::identity(), &(about * (1.0 - s)));
         Ok(())
     }
 }
@@ -271,12 +324,30 @@ pub fn run(frames: &mut dyn FnMut(i64) -> Result<Image>, s: &Settings, progress:
     let format = format.unwrap();
     let intr = Intrinsics::new(s.focal, s.film_back[0], format);
     let settings = sfm::Settings { max_error: s.max_error, solve_focal: s.solve_focal, ..sfm::Settings::default() };
-    let sol = sfm::solve(&tracker.tracks, s.first, s.last, intr, &settings, &mut |frac| {
+    let mut solving = |frac: f32| {
         progress.done.store(n + (frac * n as f32) as i64, Ordering::Relaxed);
         !progress.cancel.load(Ordering::Relaxed)
-    })?;
+    };
+    let (sol, tripod) = solve(&tracker.tracks, s, intr, &settings, &mut solving)?;
     progress.done.store(2 * n, Ordering::Relaxed);
-    Ok(Solution::from_sfm(&sol, s.film_back, format))
+    Ok(Solution::from_sfm(&sol, s.film_back, format, tripod))
+}
+
+/// Solve `tracks` as `s.mode` says, and whether that was a tripod solve.
+fn solve(tracks: &[crate::features::FeatureTrack], s: &Settings, intr: Intrinsics, settings: &sfm::Settings, progress: &mut dyn FnMut(f32) -> bool) -> Result<(sfm::Solution, bool)> {
+    if s.mode == Mode::Tripod {
+        return Ok((nodal::solve(tracks, s.first, s.last, intr, settings, s.distance, progress)?, true));
+    }
+    match sfm::solve(tracks, s.first, s.last, intr, settings, progress) {
+        Err(e) if e.downcast_ref::<sfm::NoParallax>().is_some() && nodal::detect(tracks, s.first, s.last, &intr, settings).nodal => {
+            if s.mode == Mode::Auto {
+                Ok((nodal::solve(tracks, s.first, s.last, intr, settings, s.distance, progress)?, true))
+            } else {
+                bail!("the camera only turns about its center, so a free-move solve has no parallax to start from: set Solve to Tripod")
+            }
+        }
+        r => Ok((r?, false)),
+    }
 }
 
 /// A Camera node's params, keyed on every solved frame (linear), from
@@ -289,7 +360,9 @@ pub fn camera_params(sol: &Solution) -> Map<String, Value> {
     let mut out = Map::new();
     out.insert("focal".into(), json!(sol.focal));
     out.insert("film_back".into(), json!(sol.film_back));
-    out.insert("translate".into(), keys(0));
+    // A tripod solve's camera doesn't move.
+    let still = sol.tripod.then(|| sol.cameras.first()).flatten();
+    out.insert("translate".into(), still.map_or_else(|| keys(0), |c| json!([c[0], c[1], c[2]])));
     out.insert("rotate".into(), keys(3));
     out
 }
@@ -319,6 +392,7 @@ mod tests {
             frame_rms: vec![0.3, 0.3],
             point_rms: Vec::new(),
             pnp_frames: Vec::new(),
+            tripod: false,
         }
     }
 
@@ -405,7 +479,7 @@ mod tests {
                 { "id": "ct", "op": "camera_tracker", "inputs": ["plate"], "params": { "focal": 24 } },
             ] })).unwrap();
         let mut s = Session::new(graph);
-        let summary = s.track_camera("ct", &Progress::default()).unwrap();
+        let summary = s.track_camera("ct", None, None, &Progress::default()).unwrap();
         assert_eq!(summary["frames_solved"], 24, "{summary}");
         assert!(summary["rms_error_px"].as_f64().unwrap() < 0.3, "{summary}");
         let sol = s.camera_solution("ct").unwrap();
@@ -466,6 +540,93 @@ mod tests {
             let got = [sum[0] / n, sum[1] / n];
             assert!((got[0] - want[0]).hypot(got[1] - want[1]) < 2.0, "frame {f}: marker at {got:?}, floor spot at {want:?}");
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A camera turning on the spot: Auto solves it as a tripod shot, Free
+    /// move refuses it and says to use Tripod.
+    #[test]
+    fn auto_picks_tripod_for_a_camera_that_only_turns() {
+        use crate::solve::tests::{cloud, synthetic_tracks, FMT};
+        let k = Intrinsics::new(30.0, 36.0, FMT);
+        let pan: Vec<Pose> = (0..20).map(|f| Pose::from_center(Rotation3::from_euler_angles(0.002 * f as f64, 0.01 * f as f64, 0.0), Vec3::zeros())).collect();
+        let tracks = synthetic_tracks(&k, &pan, &cloud(300, 4), 0.2);
+        let mut s = Settings::from_params(&json!({}), 0, 19);
+        s.distance = 7.0;
+        let solve_as = |s: &Settings| solve(&tracks, s, k, &sfm::Settings::default(), &mut |_| true);
+        let (sol, tripod) = solve_as(&s).unwrap();
+        assert!(tripod && sol.poses.len() == 20 && sol.poses.values().all(|p| p.t.norm() < 1e-12));
+        assert!(sol.points.iter().flatten().all(|x| (x.norm() - 7.0).abs() < 1e-9));
+        let e = solve_as(&Settings { mode: Mode::Free, ..s.clone() }).unwrap_err();
+        assert!(e.to_string().contains("set Solve to Tripod"), "{e}");
+        assert!(solve_as(&Settings { mode: Mode::Tripod, ..s }).unwrap().1);
+        assert_eq!(Mode::parse("free"), Some(Mode::Free));
+        assert!([Mode::Auto, Mode::Free, Mode::Tripod].iter().all(|m| Mode::parse(m.name()) == Some(*m) && crate::ops::SOLVE_MODES.contains(&m.name())));
+    }
+
+    /// The whole tripod pipeline: a rendered pan (the camera turning on the
+    /// spot), tracked and solved under Auto; a card placed on floor points
+    /// stays on its spot of the plate in every frame, and the exported
+    /// Camera only turns.
+    #[test]
+    fn a_rendered_pan_solves_as_a_tripod_shot() {
+        use crate::session::Session;
+        let dir = std::env::temp_dir().join(format!("arclight_camtrack_pan_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tex: Vec<String> = (0..3)
+            .map(|i| {
+                let path = dir.join(format!("tex{i}.exr"));
+                crate::features::tests::blob_texture(2500, 768, 768, 41 + i).write(&path).unwrap();
+                path.to_string_lossy().into_owned()
+            })
+            .collect();
+        let graph: crate::graph::Graph = serde_json::from_value(json!({
+            "project": { "first_frame": 1, "last_frame": 24, "fps": 24, "format": { "width": 480, "height": 270 } },
+            "nodes": [
+                { "id": "t0", "op": "read", "params": { "path": tex[0] } },
+                { "id": "t1", "op": "read", "params": { "path": tex[1] } },
+                { "id": "t2", "op": "read", "params": { "path": tex[2] } },
+                { "id": "wall", "op": "card", "inputs": ["t0"], "params": { "translate": [0, 3, -16], "size": [48, 24] } },
+                { "id": "floor", "op": "card", "inputs": ["t1"], "params": { "translate": [0, -1.5, -10], "rotate": [-90, 0, 0], "size": [40, 24] } },
+                { "id": "panel", "op": "card", "inputs": ["t2"], "params": { "translate": [-2.5, 1.0, -6], "rotate": [0, 25, 0], "size": [3, 3] } },
+                { "id": "truecam", "op": "camera", "params": { "focal": 24, "rotate": { "keys": [[1, [0.0, 0.0, 0.0]], [24, [-4.0, 12.0, 0.0]]], "interp": "linear" } } },
+                { "id": "set", "op": "scene", "inputs": ["wall", "floor", "panel"] },
+                { "id": "plate", "op": "scanline_render", "inputs": ["set", "truecam", ""], "params": { "samples": 2 } },
+                { "id": "ct", "op": "camera_tracker", "inputs": ["plate"], "params": { "focal": 24 } },
+            ] })).unwrap();
+        let mut s = Session::new(graph);
+        let summary = s.track_camera("ct", None, Some(20.0), &Progress::default()).unwrap();
+        assert_eq!((summary["frames_solved"].as_i64(), summary["mode"].as_str()), (Some(24), Some("tripod")), "{summary}");
+        assert!(summary["rms_error_px"].as_f64().unwrap() < 0.3, "{summary}");
+        assert_eq!(s.node("ct").unwrap().params["distance"], json!(20.0));
+        let sol = s.camera_solution("ct").unwrap();
+        assert!(sol.tripod && sol.points.iter().all(|p| (Vec3::from(*p).norm() - 20.0).abs() < 1e-6));
+        let fmt = Size { width: 480, height: 270 };
+        let cam1 = sol.camera(1).unwrap();
+        let floor: Vec<usize> = (0..sol.points.len())
+            .filter(|&i| cam1.project(&Vec3::from(sol.points[i]), fmt).is_some_and(|(q, _)| q[1] > 190.0 && q[0] > 100.0 && q[0] < 380.0))
+            .collect();
+        assert!(floor.len() >= 6, "{} floor points", floor.len());
+        let card = s.place_on_points("ct", &floor, "card", 1, None, Some("marker")).unwrap();
+        let center = Vec3::from(crate::scene::numbers::<3>(&s.node(&card).unwrap().params["translate"], 0.0));
+        // The true camera only turns, so the floor spot under the card at
+        // frame 1 is anywhere along that frame's ray through it.
+        let truth = |f: i64| {
+            let t = (f - 1) as f64 / 23.0;
+            Camera { focal: 24.0, world: geom::trs([0.0; 3], [-4.0 * t, 12.0 * t, 0.0], [1.0; 3]), ..Camera::default() }
+        };
+        let p1 = cam1.project(&center, fmt).unwrap().0;
+        let spot = truth(1).unproject(p1, 10.0, fmt);
+        let mut worst = 0.0f64;
+        for f in 1..=24 {
+            let a = sol.camera(f).unwrap().project(&center, fmt).unwrap().0;
+            let b = truth(f).project(&spot, fmt).unwrap().0;
+            worst = worst.max((a[0] - b[0]).hypot(a[1] - b[1]));
+        }
+        assert!(worst < 1.0, "the card drifts {worst} px off its spot");
+        let names = s.export_camera("ct").unwrap();
+        let cam = &s.node(names["camera"].as_str().unwrap()).unwrap().params;
+        assert!(cam["translate"].is_array() && cam["rotate"]["keys"].as_array().is_some_and(|k| k.len() == 24), "{cam:?}");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -217,19 +217,37 @@ impl Session {
 
     /// Track and solve Camera Tracker `id` over the project's frame range
     /// (frames of its input), keeping the solution on the node (one undo
-    /// step). Returns a summary.
-    pub fn track_camera(&mut self, id: &str, progress: &Progress) -> Result<Value> {
+    /// step). `mode` ("auto", "free move" or "free", "tripod") and
+    /// `distance`, when given, are set on the node too. Returns a summary.
+    pub fn track_camera(&mut self, id: &str, mode: Option<&str>, distance: Option<f64>, progress: &Progress) -> Result<Value> {
         let n = &self.graph.nodes[self.node_index(id)?];
         if n.op != "camera_tracker" {
             bail!("'{id}' isn't a Camera Tracker");
         }
-        let p = ops::params_with_defaults("camera_tracker", &n.params);
+        let mut set = Vec::new();
+        if let Some(m) = mode {
+            let m = camtrack::Mode::parse(m).ok_or_else(|| anyhow!("mode '{m}' isn't one of auto, free move (or free) and tripod"))?;
+            set.push(("solve_mode", json!(m.name())));
+        }
+        if let Some(d) = distance {
+            if d.is_nan() || d <= 0.0 {
+                bail!("the distance needs to be above 0");
+            }
+            set.push(("distance", json!(d)));
+        }
+        let mut p = ops::params_with_defaults("camera_tracker", &n.params);
+        for (k, v) in &set {
+            p[*k] = v.clone();
+        }
         let settings = camtrack::Settings::from_params(&p, self.graph.project.first_frame, self.graph.project.last_frame);
         let mut frames = track::input_frames(&self.graph, id)?;
         let sol = camtrack::run(&mut frames, &settings, progress)?;
         let summary = solution_summary(&sol, settings.first, settings.last);
         self.checkpoint();
         let i = self.node_index(id)?;
+        for (k, v) in set {
+            self.graph.nodes[i].params[k] = v;
+        }
         self.graph.nodes[i].params["solution"] = sol.to_value();
         Ok(summary)
     }
@@ -622,6 +640,8 @@ pub fn solution_summary(sol: &camtrack::Solution, first: i64, last: i64) -> Valu
         "rms_error_px": round(sol.rms),
         "worst_frame_rms_px": round(sol.frame_rms.iter().copied().fold(0.0, f64::max)),
         "focal_mm": round(sol.focal),
+        "mode": if sol.tripod { "tripod" } else { "free move" },
+        "pnp_frames": sol.pnp_frames,
     })
 }
 

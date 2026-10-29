@@ -304,6 +304,8 @@ const MOTION_SAMPLES: ParamKind = ParamKind::Int { min: 0, max: 64 };
 /// How long the shutter is open, in frames.
 const SHUTTER: ParamKind = ParamKind::Float { min: 0.0, max: 2.0 };
 const SHUTTER_OFFSETS: &[&str] = &["centered", "start", "end"];
+/// A Camera Tracker's solve: see [`crate::camtrack::Mode`].
+pub const SOLVE_MODES: &[&str] = &["auto", "free move", "tripod"];
 /// Ops with motion blur params: shapes average their coverage, the warps
 /// their output images (see [`eval`]).
 const MOTION_BLUR_OPS: [&str; 7] = ["rectangle", "ellipse", "polygon", "roto", "transform", "corner_pin", "tracker"];
@@ -683,6 +685,8 @@ pub static OPS: &[OpInfo] = &[
             fixed!("film_back", "Film back (mm)", ParamKind::Vec2, [36.0, 24.0]),
             fixed!("solve_focal", "Solve focal length", ParamKind::Bool, false),
             fixed!("max_error", "Max error (px)", ParamKind::Float { min: 0.2, max: 5.0 }, 1.0),
+            fixed!("solve_mode", "Solve", ParamKind::Choice(SOLVE_MODES), "auto"),
+            fixed!("distance", "Tripod distance", ParamKind::Float { min: 0.1, max: 10000.0 }, 10.0),
         ],
         overlay: Overlay::CameraTracker,
         mask_base: None,
@@ -690,7 +694,10 @@ pub static OPS: &[OpInfo] = &[
                over the project's frame range (Track & Solve in its panel). It passes its input through; the viewer \
                shows the solved points, to select and place a Card or a Locator on, or to set the origin, ground and \
                scale. Export makes a keyed Camera, the point cloud, a Scene and a Scanline Render over the plate. \
-               The focal length is used as given, or as a starting guess with Solve focal length (which needs the camera to move).",
+               The focal length is used as given, or as a starting guess with Solve focal length (which needs the camera to move, \
+               or to turn enough on a tripod). Solve: Free move for a camera that travels, Tripod for one that only turns about \
+               its center (its points go on a sphere Tripod distance away, as they have no depth), or Auto (picks Tripod when \
+               the camera only turns).",
     },
     OpInfo {
         name: "point_cloud",

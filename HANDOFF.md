@@ -47,8 +47,7 @@ done, M10 specified), `docs/help.md` (the in-app help) and
   (4) **M11, PnP and the tripod solve** ("Milestone 11 in detail" in
   `docs/phase-4-plan.md`; added 2026-10-29 at the user's request: M7
   left out PnP, and a camera that only turns is refused today) —
-  **in progress** (session 10: MathWiz (c)+(d) 0.9.8, 3DWorker (a)
-  0.9.9, (b) and (e) under way);
+  **done in 0.9.8–0.9.11** (session 10);
   (5) **M10, 3D objects and render passes (AOVs)** ("Milestone 10 in
   detail"); (6) **M12, lights** (Area lights, lights movable in the 3D
   view with G / R / S and gizmos, a Light 2D node) and (7) **M13,
@@ -144,6 +143,13 @@ done, M10 specified), `docs/help.md` (the in-app help) and
     `camtrack::Solution.point_rms` (`#[serde(default)]`),
     `Scene.point_errors` (negative = unknown). Also mathwiz's small
     `with_constraint` cleanup and the README "3D view" section.
+  - **0.9.11 (MathWiz): M11 (e), Camera Tracker modes.** `ops.rs`
+    camera_tracker `solve_mode` (SOLVE_MODES auto / free move / tripod)
+    and `distance`; `camtrack::Mode`, `Solution.tripod` (serde default);
+    Auto falls back to `nodal::solve` on `NoParallax` when detected nodal;
+    tripod export has constant translate, set_scale resizes the sphere.
+    `session::track_camera(id, mode, distance, ..)`; MCP/Python `mode`,
+    `distance`; reports `mode`, `pnp_frames`. Test: a rendered pan.
   - **0.9.10 (3DWorker): M11 (b), PnP in the solve.** `sfm::Solution.pnp`
     (BTreeSet of frames), `sfm::NoParallax` typed error; growth from any
     solved neighbour, PnP fallback when the refined guess fails, PnP
@@ -234,7 +240,7 @@ done, M10 specified), `docs/help.md` (the in-app help) and
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.10**.
+  in the same commit as the change. Current: **0.9.11**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.
@@ -514,7 +520,7 @@ the user asks, usually after a visible feature lands.
 3. **Phase 4 M10: 3D objects and render passes (AOVs)**, as specified
    there (order: meshes + primitives; P / N / uv / id / mattes + Shuffle;
    OBJ import; materials, lights, lighting passes; motion, zmerge, glTF).
-4. **M11: PnP and the tripod solve** (specified in the plan; covers the
+4. **M11: PnP and the tripod solve — done in 0.9.8–0.9.11** (covers the
    old follow-ups "solving frames between solved ones" and "nodal
    solve"). **Other M8 follow-ups:** a live link from a Camera to the
    solve (Export bakes keys today); point picking over a Scanline Render

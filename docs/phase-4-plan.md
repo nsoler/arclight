@@ -308,7 +308,7 @@ then poses of in-between frames by PnP and a final pass).
     2026-10-29, user request): geometry beyond cards (primitives and
     imported meshes), simple lights and shading, and Scanline Render
     writing render passes as image planes.
-11. **Camera solve: PnP and the tripod solve**, specified below (added
+11. **Camera solve: PnP and the tripod solve** — done in 0.9.8–0.9.11; specified below (added
     2026-10-29, user request): M7 left these out. PnP places a frame's
     camera from 3D points it sees, so solves survive jumps, gaps and
     restarts; the tripod (nodal) solve handles shots where the camera

@@ -142,6 +142,15 @@ until it's unlinked.
 - With it selected, select solved points in the viewer (click, **⇧**-click,
   drag a box) to place a Card or Locator on them, or to set the origin,
   ground plane and scale.
+- **Solve**: **Free move** for a camera that travels, **Tripod** for one that
+  only turns about its center (a pan or tilt), or **Auto** (the default),
+  which solves as Tripod when no frames show parallax and the camera only
+  turns, and says so. Free move refuses a shot that only turns and
+  suggests Tripod.
+- A tripod solve keeps the camera in one place (the exported Camera is
+  keyed on rotation only) and puts the points on a sphere **Tripod
+  distance** away, as they have no depth. Cards still go on them; setting
+  the scale only changes the sphere's size.
 
 ## Undo
 

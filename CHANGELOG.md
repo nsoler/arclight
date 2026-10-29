@@ -11,6 +11,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.11 — 2026-10-29
+
+- Camera Tracker: **Solve** setting Auto / Free move / Tripod, and
+  **Tripod distance**. Auto solves a camera that only turns (a pan or
+  tilt on a tripod) as a tripod shot: the camera keyed on rotation only,
+  its points on a sphere at the distance (setting the scale only resizes
+  the sphere). Free move refuses such a shot and suggests Tripod. MCP
+  `track_camera` / Python `Node.track_camera` take `mode` and
+  `distance`; the result and `camera_points` report the mode and PnP
+  frames. Completes M11 (PnP and the tripod solve).
+
 ## 0.9.10 — 2026-10-29
 
 - Camera Tracker: frames the neighbouring camera can't explain (after a

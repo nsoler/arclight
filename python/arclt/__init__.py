@@ -109,11 +109,17 @@ class Node:
         src = None if input is None else _name(input)
         return Node(_call("export_tracker", node=self._name, op=op, mode=mode, name=name, input=src, linked=linked)["node"])
 
-    def track_camera(self) -> dict:
+    def track_camera(self, mode: str | None = None, distance: float | None = None) -> dict:
         """For a Camera Tracker: follow features over the project's frame
         range, solve the camera and 3D points, and keep the solve on the
-        node. Returns frames solved, points, error (px) and focal length."""
-        return _call("track_camera", node=self._name)
+        node. ``mode`` is "free move" (or "free") for a camera that
+        travels, "tripod" for one that only turns about its center, or
+        "auto" (picks tripod when the camera only turns); ``distance`` is
+        how far from the camera a tripod solve puts its points. Both
+        default to the node's settings and are kept on it. Returns frames
+        solved, points, error (px), focal length, the ``mode`` solved in
+        and the ``pnp_frames``."""
+        return _call("track_camera", node=self._name, mode=mode, distance=distance)
 
     def camera_points(self, frame: int | None = None) -> list[dict]:
         """For a solved Camera Tracker: its points (``index``,

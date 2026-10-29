@@ -111,6 +111,10 @@ class ArcltTest(unittest.TestCase):
             ct.camera_points()
         with self.assertRaises(arclt.ArcltError):
             ct.track_camera()  # a still, featureless plate can't be solved
+        with self.assertRaisesRegex(arclt.ArcltError, "isn't one of"):
+            ct.track_camera(mode="sideways")
+        with self.assertRaises(arclt.ArcltError):
+            ct.track_camera(mode="tripod", distance=5)
         with self.assertRaises(arclt.ArcltError):
             ct.place_on_points([0, 1, 2])
 

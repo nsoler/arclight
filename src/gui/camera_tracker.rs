@@ -70,6 +70,9 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, id: &str, jobs: &mut std::collect
                 if !sol.pnp_frames.is_empty() {
                     msg += &format!(" {} placed by PnP (see Frames).", sol.pnp_frames.len());
                 }
+                if sol.tripod {
+                    msg += " Tripod solve: the camera only turns, so its points are on a sphere around it.";
+                }
                 doc.set_param(id, "solution", sol.to_value());
                 (true, msg)
             }
@@ -102,7 +105,8 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, id: &str, jobs: &mut std::collect
     let sol = doc.node(id).and_then(|n| Solution::from_params(&n.params));
     if let Some(sol) = &sol {
         let worst = sol.frame_rms.iter().copied().fold(0.0, f64::max);
-        ui.label(format!("{} frames, {} points · error {:.2} px (worst frame {:.2}) · {:.1} mm", sol.frames.len(), sol.points.len(), sol.rms, worst, sol.focal));
+        let mode = if sol.tripod { " · tripod" } else { "" };
+        ui.label(format!("{} frames, {} points · error {:.2} px (worst frame {:.2}) · {:.1} mm{mode}", sol.frames.len(), sol.points.len(), sol.rms, worst, sol.focal));
         frame_list(ui, id, sol);
         ui.weak("Select points in the viewer (click, ⇧-click, drag a box) to place a Card or Locator, or to set the origin, ground and scale.");
         ui.horizontal(|ui| {
@@ -385,7 +389,7 @@ mod tests {
     fn solved() -> Doc {
         let sol = Solution {
             format: [200, 100], focal: 35.0, film_back: [36.0, 24.0], frames: vec![1], cameras: vec![[0.0, 0.0, 0.0, -15.0, 0.0, 0.0]],
-            points: (0..9).map(|i| [(i % 3) as f64 - 1.0, -2.0, -8.0 - (i / 3) as f64]).collect(), rms: 0.1, frame_rms: vec![0.1], point_rms: Vec::new(), pnp_frames: Vec::new(),
+            points: (0..9).map(|i| [(i % 3) as f64 - 1.0, -2.0, -8.0 - (i / 3) as f64]).collect(), rms: 0.1, frame_rms: vec![0.1], point_rms: Vec::new(), pnp_frames: Vec::new(), tripod: false,
         };
         let node = NodeSpec { id: "ct".into(), op: "camera_tracker".into(), inputs: vec![String::new()], params: json!({ "solution": sol.to_value() }), pos: Some([0.0, 0.0]) };
         let mut d = Doc::new(Graph { nodes: vec![node], ..Default::default() }, None);
