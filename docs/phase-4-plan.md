@@ -1,8 +1,9 @@
 # Phase 4 plan: 3D and the camera tracker
 
-Status: **proposed** (2026-10-29). Decisions **D1–D6** below are waiting
-for the user's choice; nothing has been built yet. The work goes one
-milestone at a time, as in `phase-0.6-plan.md`.
+Status: **agreed** (2026-10-29). The user chose the proposed option for
+D1–D4; D5 (viewport) and D6 (order) stand as proposed until milestone 9.
+Nothing built yet. The work goes one milestone at a time, as in
+`phase-0.6-plan.md`.
 
 ## Goal
 
@@ -154,7 +155,7 @@ Performance target: 1080p, ~200 features, 200 frames in under a minute
 on this machine (KLT dominates; bundle adjustment on keyframes only,
 then poses of in-between frames by PnP and a final pass).
 
-## Decisions (waiting for the user)
+## Decisions (D1–D4 as proposed, chosen 2026-10-29)
 
 - **D1 Channels.** *Proposed:* keep RGBA as `[f32; 4]` and add named
   extra planes beside it (above). Small change, every op keeps its fast
