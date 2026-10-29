@@ -81,8 +81,8 @@ pub struct Display<'a> {
     pub target: Option<&'a str>,
     pub frame: i64,
     pub millis: f32,
-    /// A node and its input's data window, for that node's overlay.
-    pub input_window: Option<(String, IRect)>,
+    /// A node and its input's image, for that node's overlay.
+    pub input: Option<&'a (String, Arc<Image>)>,
 }
 
 impl Viewer {
@@ -124,7 +124,7 @@ impl Viewer {
             self.fit_pending = false;
         }
 
-        self.overlays.set_input_window(d.input_window.clone());
+        self.overlays.set_input(d.input.cloned());
         // Overlay handles take a drag before panning does.
         let xf = |v: &Viewer| Xf::new(Rect::from_center_size(rect.center() + v.pan, size * v.zoom), v.zoom);
         self.overlays.interact(ui, &resp, &xf(self), size, doc, frame);

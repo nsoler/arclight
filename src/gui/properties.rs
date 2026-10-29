@@ -269,7 +269,7 @@ impl Properties {
                 // show until set.
                 let mut set = false;
                 ui.horizontal(|ui| {
-                    ui.weak("auto").on_hover_text("Estimated from the image");
+                    ui.weak("auto").on_hover_text("Estimated from the image. Ctrl+click (or Ctrl+drag) in the viewer to pick it");
                     set = ui.small_button("Set").on_hover_text("Choose the color yourself").clicked();
                 });
                 set.then(|| json!([0.1, 0.5, 0.1, 1.0]))

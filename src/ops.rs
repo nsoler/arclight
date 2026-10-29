@@ -97,6 +97,9 @@ pub enum Overlay {
     /// Move/rotate/scale gizmo about `center` (null: the input layer's
     /// center), plus `translate`.
     Transform { translate: &'static str, rotate: &'static str, scale: &'static str, center: &'static str },
+    /// A Color param picked from the node's input in the viewer: Ctrl+click
+    /// a pixel, or Ctrl+drag to average a box.
+    Pick(&'static str),
     /// A box inset from the image edges by four Int params.
     Insets { left: &'static str, top: &'static str, right: &'static str, bottom: &'static str },
     /// A box (or the ellipse inside it) with center, size and rotation params.
@@ -448,12 +451,13 @@ pub static OPS: &[OpInfo] = &[
             fixed!("output", "Output", ParamKind::Choice(KEYER_OUTPUTS), "keyed"),
             MIX,
         ],
-        overlay: Overlay::None,
+        overlay: Overlay::Pick("screen"),
         mask_base: Some(0),
         help: "Pulls a key from a green or blue screen by color difference: how far \
                each pixel's screen channel rises above the other two, against the \
                screen color's. Screen color: picked from the image unless set; a \
-               clean plate (the empty screen) evens out uneven lighting. Balance \
+               clean plate (the empty screen) evens out uneven lighting; Ctrl+click \
+               or Ctrl+drag in the viewer picks it from the input. Balance \
                weighs the larger of the other two channels (1) against the smaller \
                (0). Clip black/white crush the matte's ends; despill pulls the \
                screen channel down to the others. Output: the keyed image \

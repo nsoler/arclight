@@ -5,7 +5,7 @@
 //! keyed by the graph's cache key, so scrubbing back over a frame is instant.
 
 use arclight::graph::{Evaluator, Graph, NodeError};
-use arclight::image::{IRect, Image};
+use arclight::image::Image;
 use std::collections::HashMap;
 use arclight::ops::EvalContext;
 use std::collections::VecDeque;
@@ -21,8 +21,8 @@ pub struct Request {
     pub graph: Arc<Graph>,
     pub target: String,
     pub frame: i64,
-    /// A node and its input whose data window to report alongside (the
-    /// selected Transform's layer, for its overlay).
+    /// A node and its input to report alongside (the selected Transform's
+    /// layer, a Keyer's plate to pick colors from), for its overlay.
     pub probe: Option<(String, String)>,
 }
 
@@ -33,8 +33,8 @@ pub struct Response {
     pub millis: f32,
     /// Frames of the project range already in the frame cache for this target.
     pub cached_frames: Vec<i64>,
-    /// The probed node and its input's data window, when asked and known.
-    pub probe: Option<(String, IRect)>,
+    /// The probed node and its input's image, when asked and known.
+    pub probe: Option<(String, Arc<Image>)>,
 }
 
 pub struct Worker {
@@ -99,9 +99,9 @@ fn size_of_image(img: &Image) -> usize {
 fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Context) {
     let mut eval = Evaluator::new();
     let mut frames = FrameCache { entries: VecDeque::new(), bytes: 0 };
-    // Probed inputs' data windows by cache key, so frames served from the
-    // frame cache needn't render the input again.
-    let mut windows: HashMap<u64, IRect> = HashMap::new();
+    // Probed inputs by cache key, so frames served from the frame cache
+    // needn't render the input again. Kept small: they're whole images.
+    let mut probed: HashMap<u64, Arc<Image>> = HashMap::new();
 
     while let Ok(mut req) = rx.recv() {
         while let Ok(newer) = rx.try_recv() {
@@ -125,14 +125,14 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
         let millis = start.elapsed().as_secs_f32() * 1000.0;
         let probe = req.probe.and_then(|(node, input)| {
             let key = Evaluator::key(&req.graph, &input, &ctx).ok()?;
-            if !windows.contains_key(&key) {
+            if !probed.contains_key(&key) {
                 let img = eval.evaluate(&req.graph, &input, &ctx).ok()?;
-                if windows.len() > 4096 {
-                    windows.clear();
+                if probed.len() >= 8 {
+                    probed.clear();
                 }
-                windows.insert(key, img.window());
+                probed.insert(key, img);
             }
-            Some((node, windows[&key]))
+            Some((node, probed[&key].clone()))
         });
 
         let p = &req.graph.project;

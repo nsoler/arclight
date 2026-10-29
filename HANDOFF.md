@@ -16,7 +16,7 @@ Last updated 2026-10-28 (session 7). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~14,400 lines of Rust + Python. Tests: 73 library + 10 CLI + 35 GUI
+- ~14,400 lines of Rust + Python. Tests: 73 library + 10 CLI + 36 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
 - **Release build (end of session 6):** `cargo build --release --workspace`
   and `python/build.sh` were run at the final commit, so
@@ -78,8 +78,7 @@ steps": take them in this order, one milestone at a time (commit, push and
 fast-forward `main` after each, per the standing instruction above), and
 report back after a few milestones.
 
-1. **Small UX debts:** Keyer: pick the screen color in the viewer, matte
-   shrink/grow and softness; Corner Pin's default
+1. **Small UX debts:** Keyer: matte shrink/grow and softness; Corner Pin's default
    From/To is a 512 square (add "From = image corners"); per-track tracker
    box sizes and offsets are only editable in the viewer; no filtering when
    Transform / Tracker output / Corner Pin shrink the image (aliasing);
@@ -384,8 +383,14 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   null → `estimate_screen` (per-channel median of pixels where green, or
   blue if more, leads by 25%). Optional clean plate gives the screen per
   pixel. Panel: null Color params show "auto" + Set, and an Auto button
-  once set. No viewer color picker yet (would help: sample the *input*,
-  since the viewer shows the keyer's output).
+  once set.
+- **Session 7, part 6**: viewer color picker. `Overlay::Pick(param)`
+  (Keyer: `screen`) → `Geo::Pick`, `Part::Pick`: Ctrl+click samples the
+  node's *input* at the pixel, Ctrl+drag averages the box (straight color,
+  alpha 1, rounded to 1e-4), via `edit_param` (auto-keys). The worker's
+  probe now returns the input `Arc<Image>` (small cache of 8) instead of
+  its window, for Transform and Pick overlays alike;
+  `Overlays::set_input`, `Display::input`.
 - **CorridorKey** (AI keyer, github.com/nikopueringer/CorridorKey; the
   OFX port gitcapoom/corridorkey_ofx is Windows/Resolve-only): the user
   deferred it. If revisited: run upstream's PyTorch engine (Linux OK; the

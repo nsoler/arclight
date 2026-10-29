@@ -9,7 +9,9 @@
 
 use crate::doc::Doc;
 use arclight::ops::{self, Overlay};
-use arclight::image::IRect;
+use arclight::color;
+use arclight::image::Image;
+use std::sync::Arc;
 use arclight::{anim, shape, track};
 use eframe::egui::{self, Color32, CursorIcon, Pos2, Rect, Response, Shape, Stroke, Vec2};
 use serde_json::{json, Value};
@@ -115,6 +117,8 @@ enum Part {
     SelBox(BoxHandle),
     /// Corner `i` of a corner pin's To quad, or of its From quad.
     Corner { i: usize, from: bool },
+    /// Picking a color from the node's input (Ctrl+click / Ctrl+drag).
+    Pick,
 }
 
 /// A handle of the selected vertices' transform box.
@@ -182,6 +186,8 @@ enum Geo {
     Tracker { names: [&'static str; 2], pos: Vec<Option<Vec2>>, sizes: Vec<[f32; 2]>, offsets: Vec<Vec2> },
     /// Corner pin quads, in image pixels.
     CornerPin { names: [[&'static str; 4]; 2], to: [Vec2; 4], from: [Vec2; 4] },
+    /// A color param to pick from the input.
+    Pick { param: &'static str },
 }
 
 impl Geo {
@@ -223,8 +229,9 @@ pub struct Overlays {
     points_node: Option<String>,
     /// The selection a box selection adds to (empty unless Shift was held).
     marquee_base: Vec<usize>,
-    /// A node and its input's data window (frame pixels), when known.
-    input_window: Option<(String, IRect)>,
+    /// A node and its input's image, when known: a Transform's layer is
+    /// its data window, a picker samples it.
+    input: Option<(String, Arc<Image>)>,
 }
 
 fn vec2(v: &Value) -> Vec2 {
@@ -248,6 +255,7 @@ fn geo(doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
     Some(match ops::info(op)?.overlay {
         Overlay::None => return None,
         Overlay::Point(param) => Geo::Point { param, value: vec2(&at(param)) },
+        Overlay::Pick(param) => Geo::Pick { param },
         Overlay::Transform { translate, rotate, scale, center } => Geo::Transform {
             names: [translate, rotate, scale],
             auto: at(center).is_null(),
@@ -425,6 +433,8 @@ fn inset_rect(xf: &Xf, v: [f32; 4], size: Vec2) -> Rect {
 fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
     match *g {
         Geo::Point { value, .. } => (xf.screen(value).distance(p) < GRAB * 1.5).then_some(Part::Point),
+        // No handles: Ctrl+click picks (see `Overlays::press`).
+        Geo::Pick { .. } => None,
         Geo::CornerPin { to, from, .. } => {
             // To corners first: they're what's usually adjusted.
             let near = |q: &[Vec2; 4]| (0..4).find(|&i| xf.screen(q[i]).distance(p) < GRAB * 1.5);
@@ -561,16 +571,48 @@ impl Overlays {
         self.drag.is_some()
     }
 
-    /// Tell the overlays a node's input data window (or that none is known).
-    pub fn set_input_window(&mut self, w: Option<(String, IRect)>) {
-        self.input_window = w;
+    /// Tell the overlays a node's input image (or that none is known).
+    pub fn set_input(&mut self, input: Option<(String, Arc<Image>)>) {
+        self.input = input;
+    }
+
+    /// The selected node's input, averaged (straight color) over the
+    /// pixels the image-space box from `a` to `b` touches. None when it
+    /// isn't known or is transparent there.
+    fn sample_input(&self, id: &str, a: Vec2, b: Vec2) -> Option<[f32; 4]> {
+        let img = self.input.as_ref().filter(|(n, _)| n == id).map(|(_, img)| img)?;
+        let (lo, hi) = (a.min(b), a.max(b));
+        let (x0, y0) = (lo.x.floor() as i32, lo.y.floor() as i32);
+        let (x1, y1) = ((hi.x.floor() as i32).max(x0), (hi.y.floor() as i32).max(y0));
+        let mut sum = [0.0f64; 4];
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                for (s, v) in sum.iter_mut().zip(img.at(x, y)) {
+                    *s += v as f64;
+                }
+            }
+        }
+        (sum[3] > 0.0).then(|| {
+            let [r, g, b, _] = color::unpremultiply(sum.map(|v| v as f32));
+            [r, g, b, 1.0]
+        })
+    }
+
+    /// Set the picked color from the box `drag` spans.
+    fn pick(&self, drag: &Drag, doc: &mut Doc, frame: i64) {
+        let Geo::Pick { param } = drag.geo else { return };
+        if let Some(c) = self.sample_input(&drag.node, drag.start, drag.now) {
+            let round = |v: f32| (v as f64 * 1e4).round() / 1e4;
+            doc.edit_param(&drag.node, param, frame, json!(c.map(round)));
+        }
     }
 
     /// The node's overlay at `frame`; a Transform's layer is its input's
     /// data window when known.
     fn node_geo(&self, doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
         let mut g = geo(doc, id, frame, size)?;
-        if let (Geo::Transform { layer, center, auto, .. }, Some((node, w))) = (&mut g, &self.input_window) {
+        if let (Geo::Transform { layer, center, auto, .. }, Some((node, img))) = (&mut g, &self.input) {
+            let w = img.window();
             if node == id && !w.is_empty() {
                 *layer = Rect::from_min_max(Pos2::new(w.x0 as f32, w.y0 as f32), Pos2::new(w.x1 as f32, w.y1 as f32));
                 if *auto {
@@ -626,6 +668,9 @@ impl Overlays {
         let mut part = hit(&g, xf, o, &self.points);
         if let (Some(Part::Track(i)), true) = (part, mods.command) {
             part = Some(Part::TrackOffset(i));
+        }
+        if let (Geo::Pick { .. }, true) = (&g, mods.command) {
+            part = Some(Part::Pick);
         }
         if let Geo::Points { param, stride, ref pts, .. } = g {
             let spline = stride == SPLINE;
@@ -696,12 +741,23 @@ impl Overlays {
             _ => g.pivot(),
         };
         let d = start - pivot;
-        self.drag = Some(Drag { node: id, part, start, geo: g, angle: d.y.atan2(d.x), turned: 0.0, xf: *xf, now: start, pivot });
+        let drag = Drag { node: id, part, start, geo: g, angle: d.y.atan2(d.x), turned: 0.0, xf: *xf, now: start, pivot };
+        if part == Part::Pick {
+            // A click picks the pixel under it.
+            self.pick(&drag, doc, frame);
+        }
+        self.drag = Some(drag);
     }
 
     fn drag_to(&mut self, doc: &mut Doc, frame: i64, p: Vec2, mods: Mods) {
         let Some(drag) = &mut self.drag else { return };
         drag.now = p;
+        if drag.part == Part::Pick {
+            let drag = self.drag.take().unwrap();
+            self.pick(&drag, doc, frame);
+            self.drag = Some(drag);
+            return;
+        }
         if drag.part != Part::Marquee {
             return apply(drag, &self.points, p, mods, doc, frame);
         }
@@ -769,6 +825,16 @@ impl Overlays {
         }
 
         match g {
+            Geo::Pick { .. } => {
+                // The box being averaged; a crosshair while Ctrl is held.
+                if let Some(d) = self.drag.as_ref().filter(|d| d.part == Part::Pick) {
+                    let r = Rect::from_two_pos(xf.screen(d.start.floor()), xf.screen(d.now.floor() + Vec2::splat(1.0)));
+                    painter.rect_stroke(r, 0.0, Stroke::new(1.0, HOT), egui::StrokeKind::Middle);
+                }
+                if hover.is_some() && ui.input(|i| i.modifiers.command) {
+                    ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+                }
+            }
             Geo::Point { value, .. } => {
                 let c = xf.screen(value);
                 painter.circle(c, 5.0, color(Part::Point, HANDLE), outline);
@@ -1013,6 +1079,7 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
     let id = drag.node.clone();
     let delta = p - drag.start;
     match drag.geo.clone() {
+        Geo::Pick { .. } => {}
         Geo::Point { param, value } => {
             let v = value + delta;
             doc.edit_param(&id, param, frame, json!([v.x, v.y]));
@@ -1219,7 +1286,7 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
 fn cursor(part: Part) -> CursorIcon {
     match part {
         Part::Point | Part::Move | Part::Vertex(_) | Part::Tangent { .. } | Part::Pull(_) | Part::Track(_) | Part::TrackOffset(_) | Part::Corner { .. } => CursorIcon::Move,
-        Part::Marquee => CursorIcon::Crosshair,
+        Part::Marquee | Part::Pick => CursorIcon::Crosshair,
         Part::SelBox(BoxHandle::Move) => CursorIcon::Move,
         Part::SelBox(BoxHandle::Rotate) => CursorIcon::Alias,
         Part::SelBox(BoxHandle::Scale { x, y }) => match (x, y) {
@@ -1264,6 +1331,7 @@ fn crosshair(painter: &egui::Painter, c: Pos2, r: f32, stroke: Stroke) {
 mod tests {
     use super::*;
     use arclight::graph::Graph;
+    use arclight::image::IRect;
 
     const SIZE: Vec2 = Vec2::new(200.0, 100.0);
     /// 1:1 zoom with the image at the screen origin, so screen = image.
@@ -1419,7 +1487,7 @@ mod tests {
         // then a scale handle about there…
         let mut d = doc("transform", json!({}));
         let mut ov = Overlays::default();
-        ov.set_input_window(Some(("n".into(), IRect::new(50, 25, 100, 50))));
+        ov.set_input(Some(("n".into(), layer(IRect::new(50, 25, 100, 50)))));
         let part = gesture(&mut ov, &mut d, Pos2::new(50.0, 25.0), Pos2::new(25.0, 12.5), 1, Mods::default());
         assert_eq!(part, Some(Part::Size { x: true, y: true }));
         assert_eq!(vec2(&d.param("n", "scale")), Vec2::new(2.0, 2.0));
@@ -1428,8 +1496,43 @@ mod tests {
         let mut d = doc("transform", json!({}));
         assert_eq!(drag(&mut d, Pos2::new(170.0, 85.0), Pos2::new(175.0, 85.0), 1), Part::Move);
         let mut ov = Overlays::default();
-        ov.set_input_window(Some(("n".into(), IRect::new(50, 25, 100, 50))));
+        ov.set_input(Some(("n".into(), layer(IRect::new(50, 25, 100, 50)))));
         assert_eq!(gesture(&mut ov, &mut d, Pos2::new(170.0, 85.0), Pos2::new(175.0, 85.0), 1, Mods::default()), None, "outside the small layer");
+    }
+
+    /// A 200×100 input whose data is only `window`, filled with mid grey.
+    fn layer(window: IRect) -> Arc<Image> {
+        let mut img = Image::blank(arclight::image::Size { width: 200, height: 100 }, window);
+        img.pixels.iter_mut().for_each(|p| *p = [0.5, 0.5, 0.5, 1.0]);
+        Arc::new(img)
+    }
+
+    #[test]
+    fn ctrl_click_or_drag_picks_a_keyer_s_screen_color_from_its_input() {
+        let mut d = doc("keyer", json!({}));
+        let mut ov = Overlays::default();
+        // Green on the left half, blue on the right, half-transparent blue
+        // in the bottom-right corner (picked as straight color).
+        let mut img = Image::filled(200, 100, [0.1, 0.6, 0.1, 1.0]);
+        for (i, p) in img.pixels.iter_mut().enumerate() {
+            if i % 200 >= 100 {
+                *p = if i / 200 >= 90 { [0.05, 0.1, 0.4, 0.5] } else { [0.1, 0.2, 0.8, 1.0] };
+            }
+        }
+        ov.set_input(Some(("n".into(), Arc::new(img))));
+        let ctrl = Mods { command: true, ..Mods::default() };
+        let screen = |d: &Doc| d.param("n", "screen");
+        // Without Ctrl nothing is grabbed.
+        assert_eq!(gesture(&mut ov, &mut d, Pos2::new(20.5, 20.5), Pos2::new(20.5, 20.5), 1, Mods::default()), None);
+        assert!(screen(&d).is_null());
+        assert_eq!(gesture(&mut ov, &mut d, Pos2::new(20.5, 20.5), Pos2::new(20.5, 20.5), 1, ctrl), Some(Part::Pick));
+        assert_eq!(screen(&d), json!([0.1, 0.6, 0.1, 1.0]));
+        assert_eq!(gesture(&mut ov, &mut d, Pos2::new(150.5, 95.5), Pos2::new(150.5, 95.5), 1, ctrl), Some(Part::Pick));
+        assert_eq!(screen(&d), json!([0.1, 0.2, 0.8, 1.0]));
+        // A box over the seam averages both sides.
+        gesture(&mut ov, &mut d, Pos2::new(98.5, 10.5), Pos2::new(101.5, 11.5), 1, ctrl);
+        let c: Vec<f64> = screen(&d).as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+        assert!((c[1] - 0.4).abs() < 1e-3 && (c[2] - 0.45).abs() < 1e-3, "{c:?}");
     }
 
     #[test]
