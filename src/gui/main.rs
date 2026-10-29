@@ -576,10 +576,10 @@ impl App {
             Some(t) => {
                 // A selected node with a Transform overlay wants its input's
                 // data window; one with a color picker, its input's pixels;
-                // a Corner Pin, its input's frame.
+                // a Corner Pin, its input's frame; a Shuffle, its layers.
                 let probe = self.doc.selected.as_ref().and_then(|id| self.doc.node(id)).filter(|n| {
                     use arclight::ops::Overlay;
-                    arclight::ops::info(&n.op).is_some_and(|i| matches!(i.overlay, Overlay::Transform { .. } | Overlay::Pick(_) | Overlay::CornerPin { .. }))
+                    n.op == "shuffle" || arclight::ops::info(&n.op).is_some_and(|i| matches!(i.overlay, Overlay::Transform { .. } | Overlay::Pick(_) | Overlay::CornerPin { .. }))
                 });
                 let probe = probe.and_then(|n| n.inputs.first().filter(|i| !i.is_empty()).map(|i| (n.id.clone(), i.clone())));
                 let key = (self.doc.revision, t.clone(), self.transport.frame, probe.clone());
@@ -854,6 +854,7 @@ impl eframe::App for App {
                 ui.heading("Properties");
                 ui.separator();
                 self.props.layer = self.probe.as_ref().map(|(n, img)| (n.clone(), img.window(), img.format));
+                self.props.input_layers = self.probe.as_ref().map(|(n, img)| (n.clone(), img.layers()));
                 if let Some(f) = self.props.ui(ui, &mut self.doc, self.transport.frame) {
                     self.transport.set_play(Play::Stopped);
                     self.transport.seek(f, &self.doc.graph.project);

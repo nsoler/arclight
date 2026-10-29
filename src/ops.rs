@@ -109,6 +109,8 @@ pub enum ParamKind {
     Path { save: bool },
     /// Free text (a Shuffle's plane names).
     Text,
+    /// Any of these names, as a JSON array of the chosen ones (checkboxes).
+    Flags(&'static [&'static str]),
     Bool,
     /// A flat array of point data, `stride` numbers per point (x, y first).
     /// Animates as a whole: one key holds every point.
@@ -233,6 +235,8 @@ const PLACE_T: ParamSpec = p!("translate", "Translate", ParamKind::Vec3, [0.0, 0
 const PLACE_R: ParamSpec = p!("rotate", "Rotate", ParamKind::Vec3, [0.0, 0.0, 0.0]);
 const PLACE_S: ParamSpec = p!("scale", "Scale", ParamKind::Vec3, [1.0, 1.0, 1.0]);
 const SURFACE_COLOR: ParamSpec = p!("color", "Color", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]);
+/// A 3D object that renders nothing but hides what's behind it.
+const HOLDOUT: ParamSpec = fixed!("holdout", "Holdout", ParamKind::Bool, false);
 
 const CHANNEL_SOURCES: &[&str] = &[
     "A red", "A green", "A blue", "A alpha", "B red", "B green", "B blue", "B alpha", "zero", "one",
@@ -706,6 +710,7 @@ pub static OPS: &[OpInfo] = &[
             p!("size", "Size", ParamKind::Vec3, [1.0, 1.0, 1.0]),
             fixed!("segments", "Segments", ParamKind::Vec3, [1.0, 1.0, 1.0]),
             SURFACE_COLOR,
+            HOLDOUT,
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -724,6 +729,7 @@ pub static OPS: &[OpInfo] = &[
             p!("radius", "Radius", ParamKind::Float { min: 0.001, max: 10000.0 }, 0.5),
             fixed!("segments", "Segments (around, up)", ParamKind::Vec2, [32.0, 16.0]),
             SURFACE_COLOR,
+            HOLDOUT,
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -744,6 +750,7 @@ pub static OPS: &[OpInfo] = &[
             fixed!("segments", "Segments (around, up)", ParamKind::Vec2, [32.0, 1.0]),
             fixed!("caps", "Caps", ParamKind::Bool, true),
             SURFACE_COLOR,
+            HOLDOUT,
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -762,6 +769,7 @@ pub static OPS: &[OpInfo] = &[
             p!("size", "Size", ParamKind::Vec2, [1.0, 1.0]),
             fixed!("segments", "Segments", ParamKind::Vec2, [1.0, 1.0]),
             SURFACE_COLOR,
+            HOLDOUT,
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -779,6 +787,7 @@ pub static OPS: &[OpInfo] = &[
             PLACE_T,
             PLACE_R,
             PLACE_S,
+            HOLDOUT,
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -851,13 +860,17 @@ pub static OPS: &[OpInfo] = &[
             p!("width", "Width", FRAME_SIZE, 0),
             p!("height", "Height", FRAME_SIZE, 0),
             fixed!("samples", "Anti-aliasing", ParamKind::Int { min: 1, max: 8 }, 3),
+            fixed!("passes", "Passes", ParamKind::Flags(&render3d::Passes::NAMES), ["depth"]),
         ],
         overlay: Overlay::None,
         mask_base: None,
-        help: "Draws a scene's cards (and points, as dots) through a camera: the one on the camera input, \
+        help: "Draws a scene's cards and meshes (and points, as dots) through a camera: the one on the camera input, \
                else the scene's first. Over the background, in its frame, else Width × Height (0: the project's). \
                Anti-aliasing takes that many samples across each pixel and down (3: nine). \
-               Adds a depth plane: each pixel's distance in front of the camera, 0 where nothing is.",
+               Passes adds planes next to the picture: depth (each pixel's distance in front of the camera, 0 where \
+               nothing is), P (scene position), N (normal), uv (texture coordinates), id (an object number per \
+               pixel) and mattes (matte.<node>: each object's coverage). Holdout objects draw nothing but cut out \
+               what is behind them.",
     },
     OpInfo {
         name: "lens_distort",
@@ -2429,6 +2442,9 @@ struct ScanlineRender {
     width: usize,
     height: usize,
     samples: usize,
+    /// None (a project from before passes): depth only.
+    #[serde(default)]
+    passes: Option<Vec<String>>,
 }
 
 fn scanline_render(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
@@ -2442,7 +2458,8 @@ fn scanline_render(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let bg = port(2);
     let format = bg.map_or(source_size(p.width, p.height), |b| b.format);
     let empty = Scene::default();
-    Ok(render3d::render(scene.as_deref().unwrap_or(&empty), &camera, format, p.samples, bg))
+    let passes = p.passes.as_ref().map_or(render3d::Passes::DEPTH, |n| render3d::Passes::from_names(n.iter().map(String::as_str)));
+    Ok(render3d::render_passes(scene.as_deref().unwrap_or(&empty), &camera, format, p.samples, bg, passes))
 }
 
 /// A Read Geo's meshes: the file's parts (OBJ, or glTF for .gltf / .glb;
@@ -2488,7 +2505,7 @@ fn read_geo(params: &Value) -> Result<Image> {
             world,
             material: part.material.clone(),
             texture: tex.clone(),
-            holdout: false,
+            holdout: params["holdout"].as_bool().unwrap_or(false),
             name: part.name.clone(),
             node: String::new(),
         })

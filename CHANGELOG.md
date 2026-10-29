@@ -11,6 +11,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.22 — 2026-10-29
+
+- Scanline Render's **Passes** checkboxes choose depth, P, N, uv, id and
+  mattes (older projects render depth only, as before); **Holdout** on
+  Cube, Sphere, Cylinder, Plane and Read Geo; Read Geo's file browser
+  shows OBJ and glTF files; Shuffle's ▾ lists offer the layers its input
+  actually has. Completes M10 steps (a) and (b).
+
 ## 0.9.21 — 2026-10-29
 
 - Render passes, engine side: Scanline Render can write `P`, `N`, `uv`,

@@ -579,6 +579,17 @@ pub fn validate_param(info: &OpInfo, name: &str, value: &Value) -> Result<Value>
         }
         ParamKind::Path { .. } => json!(value.as_str().ok_or_else(|| anyhow!("'{name}' needs a file path"))?),
         ParamKind::Text => json!(value.as_str().ok_or_else(|| anyhow!("'{name}' needs text"))?),
+        ParamKind::Flags(names) => {
+            let arr = value.as_array().ok_or_else(|| anyhow!("'{name}' needs a list of: {}", names.join(", ")))?;
+            let mut chosen = Vec::new();
+            for v in arr {
+                let s = v.as_str().filter(|s| names.contains(s)).ok_or_else(|| anyhow!("'{v}' is not one of '{name}' (any of: {})", names.join(", ")))?;
+                if !chosen.contains(&s) {
+                    chosen.push(s);
+                }
+            }
+            json!(chosen)
+        }
         ParamKind::Bool => json!(value.as_bool().ok_or_else(|| anyhow!("'{name}' needs true or false"))?),
         ParamKind::Points { stride } => {
             let arr = value.as_array().ok_or_else(|| anyhow!("'{name}' needs an array of numbers"))?;
@@ -606,6 +617,7 @@ pub fn op_schema(info: &OpInfo) -> Value {
                 ParamKind::Choice(c) => ("choice", json!({"choices": c})),
                 ParamKind::Path { save } => ("path", json!({"save": save})),
                 ParamKind::Text => ("text", json!({})),
+                ParamKind::Flags(names) => ("flags", json!({"choices": names, "note": "a list of any of the choices"})),
                 ParamKind::Bool => ("bool", json!({})),
                 ParamKind::Points { stride } => ("points", json!({"stride": stride})),
             };

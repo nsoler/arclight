@@ -149,11 +149,20 @@ until it's unlinked.
 ## Render passes
 
 Scanline Render can add render passes to its image: depth, position
-(**P**), normal (**N**), texture coordinates (**uv**), motion, object
-**id**, a matte per object (**matte.<node>**) and the lighting parts
-(**diffuse**, **specular**, **emission**, **ambient**), which add up to the
-picture. The viewer's plane buttons show any pass.
+(**P**), normal (**N**), texture coordinates (**uv**), object **id** and a
+matte per object (**matte.<node>**); motion and the lighting parts
+(**diffuse**, **specular**, **emission**, **ambient**) are still to come.
+The viewer's plane buttons show any pass (one button a layer; **P**, **N**
+and **uv** as color).
 
+- Choose them with **Passes** in Scanline Render's properties: **depth**,
+  **P**, **N**, **uv**, **id** and **mattes** (a **matte.<node>** for each
+  object, adding up to the picture's alpha). Depth, P, N, uv and id come
+  from the nearest surface in each pixel, so they aren't blurred across
+  edges.
+- **Holdout** on a Cube, Sphere, Cylinder, Plane or Read Geo makes it draw
+  nothing but cut out what is behind it (alpha 0 there); its matte still
+  shows where it is.
 - **Shuffle** works on passes with any node: set **In** to a pass to see it
   as color (then grade, blur or key it), take single channels with **Red /
   Green / Blue / Alpha from** (any channel, a plane such as `N.y`, or `0` /

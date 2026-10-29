@@ -53,21 +53,47 @@ const READ_EXTS: &[&str] = &[
     "exr", "dpx", "tif", "tiff", "tga", "png", "jpg", "jpeg", "webp", "hdr", "bmp",
     "mp4", "mov", "m4v", "mkv", "avi", "webm", "mxf", "mpg", "mpeg",
 ];
+/// What Read Geo's file browser offers.
+const GEO_EXTS: &[&str] = &["obj", "gltf", "glb"];
 /// …and to write.
 const WRITE_EXTS: &[&str] = &["exr", "dpx", "tif", "tiff", "tga", "png", "jpg", "webp", "mp4", "mov"];
 
+/// A layer's name and its planes' names.
+type Layer = (String, Vec<String>);
+
 /// Names offered for text param `name` of `op`: a Shuffle's layers (In,
-/// Out, Remove) or channels (Red … Alpha from), as render passes name them.
-fn text_suggestions(op: &str, name: &str) -> &'static [&'static str] {
+/// Out, Remove) or channels (Red … Alpha from). With its input's `layers`
+/// known (as [`Image::layers`](arclight::image::Image::layers) lists them),
+/// those (Out also offers the usual pass names, to write a new one); else
+/// the names render passes use.
+fn text_suggestions(op: &str, name: &str, layers: Option<&[Layer]>) -> Vec<String> {
     const LAYERS: &[&str] = &["rgba", "P", "N", "uv", "motion", "depth", "id", "diffuse", "specular", "emission", "ambient"];
     const REMOVE: &[&str] = &["*", "P", "N", "uv", "motion", "depth", "id", "diffuse", "specular", "emission", "ambient"];
     const CHANNELS: &[&str] = &["R", "G", "B", "A", "0", "1", "P.x", "P.y", "P.z", "N.x", "N.y", "N.z", "uv.u", "uv.v", "motion.u", "motion.v", "depth", "id"];
-    match (op, name) {
-        ("shuffle", "in" | "out") => LAYERS,
-        ("shuffle", "remove") => REMOVE,
-        ("shuffle", _) => CHANNELS,
-        _ => &[],
+    if op != "shuffle" {
+        return Vec::new();
     }
+    let strings = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let Some(layers) = layers else {
+        return strings(match name {
+            "in" | "out" => LAYERS,
+            "remove" => REMOVE,
+            _ => CHANNELS,
+        });
+    };
+    let mut out: Vec<String> = match name {
+        "in" | "out" => std::iter::once("rgba".to_string()).chain(layers.iter().map(|l| l.0.clone())).collect(),
+        "remove" => std::iter::once("*".to_string()).chain(layers.iter().map(|l| l.0.clone())).collect(),
+        _ => strings(&CHANNELS[..6]).into_iter().chain(layers.iter().flat_map(|l| l.1.iter().cloned())).collect(),
+    };
+    if name == "out" {
+        for l in &LAYERS[1..] {
+            if !out.iter().any(|o| o == l) {
+                out.push(l.to_string());
+            }
+        }
+    }
+    out
 }
 
 #[derive(Default)]
@@ -89,6 +115,9 @@ pub struct Properties {
     /// window and frame: they place a Transform's automatic center and a
     /// Corner Pin's image corners.
     pub layer: Option<(String, arclight::image::IRect, arclight::image::Size)>,
+    /// The selected node (a Shuffle) and its input's layers, for the names
+    /// its fields offer.
+    pub input_layers: Option<(String, Vec<Layer>)>,
     /// The Tracker panel's exports copy the keys instead of linking.
     copy_exports: bool,
     /// Formulas being typed, by node and param (applied on Enter or when
@@ -597,11 +626,29 @@ impl Properties {
                     });
                 (chosen != current).then(|| json!(chosen))
             }
+            ParamKind::Flags(names) => {
+                let on = |n: &str| value.as_array().is_some_and(|a| a.iter().any(|v| v.as_str() == Some(n)));
+                let mut chosen: Vec<&str> = names.iter().copied().filter(|n| on(n)).collect();
+                let mut changed = false;
+                ui.horizontal_wrapped(|ui| {
+                    for n in names.iter() {
+                        let mut b = chosen.contains(n);
+                        if ui.checkbox(&mut b, *n).changed() {
+                            changed = true;
+                            if b { chosen.push(n) } else { chosen.retain(|c| c != n) }
+                        }
+                    }
+                });
+                // In the list's own order.
+                changed.then(|| json!(names.iter().filter(|n| chosen.contains(n)).collect::<Vec<_>>()))
+            }
             ParamKind::Text => {
                 let key = (id.to_string(), spec.name.to_string());
                 let current = value.as_str().unwrap_or("").to_string();
                 let mut buf = self.text_edit.remove(&key).unwrap_or_else(|| current.clone());
                 let mut out = None;
+                let layers = self.input_layers.as_ref().filter(|(n, _)| n == id).map(|(_, l)| l.as_slice());
+                let offered = text_suggestions(op, spec.name, layers);
                 ui.horizontal(|ui| {
                     let resp = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(150.0));
                     if resp.has_focus() {
@@ -610,8 +657,8 @@ impl Properties {
                         out = Some(json!(buf.trim()));
                     }
                     egui::ComboBox::from_id_salt(("text", id, spec.name)).selected_text("").width(20.0).show_ui(ui, |ui| {
-                        for o in text_suggestions(op, spec.name) {
-                            if ui.selectable_label(*o == current, *o).clicked() {
+                        for o in &offered {
+                            if ui.selectable_label(*o == current, o).clicked() {
                                 out = Some(json!(o));
                             }
                         }
@@ -632,10 +679,11 @@ impl Properties {
                             {
                                 out = Some(json!(p.to_string_lossy()));
                             }
-                        } else if let Some(p) = rfd::FileDialog::new()
-                            .add_filter("Images & video", READ_EXTS)
-                            .pick_file()
-                        {
+                        } else if let Some(p) = if op == "read_geo" {
+                            rfd::FileDialog::new().add_filter("3D geometry (OBJ, glTF)", GEO_EXTS).pick_file()
+                        } else {
+                            rfd::FileDialog::new().add_filter("Images & video", READ_EXTS).pick_file()
+                        } {
                             if op == "media_in" {
                                 self.media_info.remove(id);
                                 apply_media(doc, id, &p);
@@ -1356,6 +1404,20 @@ fn formula_help(ui: &mut egui::Ui) {
 mod tests {
     use super::*;
     use arclight::graph::{Graph, NodeSpec};
+
+    #[test]
+    fn shuffle_offers_its_inputs_layers() {
+        let layers = vec![("depth".to_string(), vec!["depth".to_string()]), ("N".to_string(), vec!["N.x".to_string(), "N.y".to_string(), "N.z".to_string()])];
+        assert_eq!(text_suggestions("shuffle", "in", Some(&layers)), ["rgba", "depth", "N"]);
+        assert_eq!(text_suggestions("shuffle", "remove", Some(&layers)), ["*", "depth", "N"]);
+        assert_eq!(text_suggestions("shuffle", "red", Some(&layers)), ["R", "G", "B", "A", "0", "1", "depth", "N.x", "N.y", "N.z"]);
+        // Out also offers new passes to write.
+        let out = text_suggestions("shuffle", "out", Some(&layers));
+        assert!(out.starts_with(&["rgba".to_string(), "depth".to_string(), "N".to_string()]) && out.contains(&"diffuse".to_string()));
+        // Input not known yet: the usual names.
+        assert!(text_suggestions("shuffle", "in", None).contains(&"P".to_string()));
+        assert!(text_suggestions("grade", "in", Some(&layers)).is_empty());
+    }
 
     #[test]
     fn formula_completions_follow_what_is_typed() {

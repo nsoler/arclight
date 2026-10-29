@@ -976,6 +976,45 @@ mod tests {
         assert_eq!((v("other", 32, 16), v("other", 2, 2), v("depth", 2, 2)), (3.0, 3.0, 50.0), "the background's other planes kept");
     }
 
+    /// The Passes list and Holdout through the graph and the session.
+    #[test]
+    fn the_scanline_render_writes_the_passes_it_lists() {
+        use crate::graph::{Evaluator, Graph};
+        use crate::ops::EvalContext;
+        use serde_json::json;
+        let g: Graph = serde_json::from_value(json!({
+            "project": { "first_frame": 1, "last_frame": 1, "fps": 24, "format": { "width": 64, "height": 32 } },
+            "nodes": [
+                { "id": "cam", "op": "camera", "params": { "focal": 18 } },
+                { "id": "ball", "op": "sphere", "params": { "translate": [0, 0, -5], "radius": 2 } },
+                { "id": "hole", "op": "cube", "params": { "translate": [0.6, 0, -3], "size": [0.4, 0.4, 0.4], "holdout": true } },
+                { "id": "all", "op": "scene", "inputs": ["ball", "hole", "", ""] },
+                { "id": "plain", "op": "scanline_render", "inputs": ["all", "cam", ""], "params": { "samples": 1 } },
+                { "id": "passes", "op": "scanline_render", "inputs": ["all", "cam", ""], "params": { "samples": 1, "passes": ["P", "mattes"] } },
+            ] })).unwrap();
+        let mut ev = Evaluator::new();
+        let ctx = EvalContext { frame: 1, write_outputs: false };
+        let plain = ev.evaluate(&g, "plain", &ctx).unwrap();
+        let names = |img: &Image| img.planes.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&plain), ["depth"], "no Passes param (an older project): depth, as before");
+        let out = ev.evaluate(&g, "passes", &ctx).unwrap();
+        assert_eq!(names(&out), ["P.x", "P.y", "P.z", "matte.ball", "matte.hole"]);
+        // The holdout cube (in front of the ball's right side) cuts it out.
+        let hole = (32.0 + 0.6 / 3.0 * 32.0) as i32;
+        assert_eq!((out.at(hole, 16)[3], out.plane_at("matte.hole", hole, 16), out.plane_at("matte.ball", hole, 16)), (0.0, 1.0, 0.0));
+        assert!(out.at(26, 16)[3] == 1.0 && out.plane_at("matte.ball", 26, 16) == 1.0);
+        // The session takes a list of pass names, and refuses others.
+        let mut s = crate::session::Session::new(g);
+        let set = |s: &mut crate::session::Session, v: serde_json::Value| s.set_params("passes", json!({ "passes": v }).as_object().unwrap());
+        set(&mut s, json!(["N", "id", "N"])).unwrap();
+        assert_eq!(s.graph.node("passes").unwrap().params["passes"], json!(["N", "id"]));
+        assert!(set(&mut s, json!(["normals"])).unwrap_err().to_string().contains("not one of 'passes'"));
+        assert!(set(&mut s, json!("N")).is_err());
+        let schema = crate::session::op_schema(crate::ops::info("scanline_render").unwrap());
+        let p = schema["params"].as_array().unwrap().iter().find(|p| p["name"] == "passes").unwrap().clone();
+        assert_eq!((p["kind"].as_str(), p["default"].clone(), p["choices"].as_array().map(Vec::len)), (Some("flags"), json!(["depth"]), Some(6)));
+    }
+
     #[test]
     fn pass_names_parse() {
         assert_eq!(Passes::from_names(Passes::NAMES), ALL);
