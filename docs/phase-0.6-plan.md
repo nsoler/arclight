@@ -115,7 +115,9 @@ export don't change.
    pixel ops honor windows; Merge takes the union. Tests: a 4K shape's
    window is its bounds; merge of two small layers; alpha Invert grows
    to the frame.
-3. **Windows that move.** Transform, Tracker output, Corner Pin, Blur,
+3. **Done (session 6).** **Windows that move.** (Blur grows only on
+   sides inside the frame; where data meets the frame edge it keeps
+   clamping, so plates blur as before.) Transform, Tracker output, Corner Pin, Blur,
    Resize, Crop "shrink canvas"; overscan per **D1**. Tests: move a layer
    out and back; blur grows the window; resize scales it.
 4. **Viewer and overlays.** Data-window outline and overscan in the

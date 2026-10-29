@@ -758,6 +758,31 @@ fn pointwise_window(format: Size, windows: &[IRect], blank: Rgba) -> IRect {
     if blank == color::TRANSPARENT { w } else { w.union(&IRect::frame(format)) }
 }
 
+/// How far past the frame a moved image keeps its pixels: one frame size on
+/// each side, so a later move can bring them back without a huge scale
+/// allocating gigabytes.
+fn overscan(format: Size) -> IRect {
+    let (w, h) = (format.width as i32, format.height as i32);
+    IRect::new(-w, -h, 2 * w, 2 * h)
+}
+
+/// Where `window` lands under `f` (a point map in frame pixels, pixel
+/// centers on integers), limited to the overscan; the whole overscan when
+/// a corner can't be mapped. Bilinear sampling reads pixels `x0..x1` for
+/// positions in (x0 − 1, x1), so that span's image is what's covered.
+fn moved_window(window: IRect, format: Size, f: impl Fn([f32; 2]) -> Option<[f32; 2]>) -> IRect {
+    if window.is_empty() {
+        return window;
+    }
+    let (x0, y0, x1, y1) = (window.x0 as f32 - 1.0, window.y0 as f32 - 1.0, window.x1 as f32, window.y1 as f32);
+    let corners: Option<Vec<[f32; 2]>> = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].into_iter().map(&f).collect();
+    let Some(c) = corners.filter(|c| c.iter().flatten().all(|v| v.is_finite())) else { return overscan(format) };
+    // Rounded out by one on the low side: float error near a whole number.
+    let lo = |k: usize| c.iter().map(|p| p[k]).fold(f32::INFINITY, f32::min).floor().max(-1e8) as i32;
+    let hi = |k: usize| c.iter().map(|p| p[k]).fold(f32::NEG_INFINITY, f32::max).ceil().min(1e8) as i32;
+    IRect::new(lo(0), lo(1), hi(0), hi(1)).intersect(&overscan(format))
+}
+
 /// An image of frame `format` holding `window`, each pixel `f(x, y)` at its
 /// frame position.
 fn generate(format: Size, window: IRect, f: impl Fn(i32, i32) -> Rgba + Sync + Send) -> Image {
@@ -1052,32 +1077,27 @@ struct Transform {
 /// output pixel we find the source location and sample it.
 fn transform(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: Transform = parse(params, "transform")?;
-    // Not data-window aware yet (Phase 0.6 milestone 3): the whole frame.
-    let flat = input(inputs, 0, "transform")?.flat();
-    let src: &Image = &flat;
-    let (w, h) = (src.width, src.height);
-    let cx = w as f32 / 2.0;
-    let cy = h as f32 / 2.0;
+    let src = input(inputs, 0, "transform")?;
+    // About the frame's center (pixel centers on integers).
+    let cx = src.format.width as f32 / 2.0;
+    let cy = src.format.height as f32 / 2.0;
     let theta = -p.rotate.to_radians(); // inverse rotation
     let (s, c) = theta.sin_cos();
     let sx = if p.scale[0] == 0.0 { 1e-6 } else { p.scale[0] };
     let sy = if p.scale[1] == 0.0 { 1e-6 } else { p.scale[1] };
-
-    let mut out = Image::new(w, h);
-    out.pixels
-        .par_iter_mut()
-        .enumerate()
-        .for_each(|(i, px)| {
-            let ox = (i % w) as f32;
-            let oy = (i / w) as f32;
-            // Undo translate, then rotate+scale about center (inverse).
-            let dx = ox - p.translate[0] - cx;
-            let dy = oy - p.translate[1] - cy;
-            let rx = (dx * c - dy * s) / sx + cx;
-            let ry = (dx * s + dy * c) / sy + cy;
-            *px = src.sample_bilinear(rx, ry);
-        });
-    Ok(out)
+    // Forward: scale, rotate, then translate.
+    let window = moved_window(src.window(), src.format, |[x, y]| {
+        let (dx, dy) = ((x - cx) * sx, (y - cy) * sy);
+        Some([dx * c + dy * s + cx + p.translate[0], -dx * s + dy * c + cy + p.translate[1]])
+    });
+    Ok(generate(src.format, window, |ox, oy| {
+        // Undo translate, then rotate+scale about center (inverse).
+        let dx = ox as f32 - p.translate[0] - cx;
+        let dy = oy as f32 - p.translate[1] - cy;
+        let rx = (dx * c - dy * s) / sx + cx;
+        let ry = (dx * s + dy * c) / sy + cy;
+        src.sample_bilinear(rx, ry)
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1092,9 +1112,7 @@ fn tracker(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     if output == "input" {
         return Ok(input(inputs, 0, "tracker")?.clone());
     }
-    // Not data-window aware yet (Phase 0.6 milestone 3): the whole frame.
-    let flat = input(inputs, 0, "tracker")?.flat();
-    let src: &Image = &flat;
+    let src = input(inputs, 0, "tracker")?;
     let p = params_with_defaults("tracker", params);
     let now = track::positions(&p, 0);
     let refs: Vec<_> = (1..=now.len())
@@ -1141,34 +1159,32 @@ struct CornerPin {
 /// that map from behind the source's horizon stay transparent.
 fn corner_pin(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: CornerPin = parse(params, "corner_pin")?;
-    // Not data-window aware yet (Phase 0.6 milestone 3): the whole frame.
-    let flat = input(inputs, 0, "corner_pin")?.flat();
-    let src: &Image = &flat;
+    let src = input(inputs, 0, "corner_pin")?;
     let to = [p.to1, p.to2, p.to3, p.to4];
     let from = [p.from1, p.from2, p.from3, p.from4];
     // Each output pixel reads where it came from: to → from.
     let h = track::homography(&to, &from).context("corner_pin: three of the corners are in a line")?;
-    let mut out = Image::new(src.width, src.height);
-    let w = src.width;
-    out.pixels.par_iter_mut().enumerate().for_each(|(i, px)| {
-        if let Some(q) = track::project(&h, [(i % w) as f32 + 0.5, (i / w) as f32 + 0.5]) {
-            *px = src.sample_bilinear(q[0] - 0.5, q[1] - 0.5);
-        }
-    });
-    Ok(out)
+    let forward = track::homography(&from, &to).context("corner_pin: three of the corners are in a line")?;
+    // In track coordinates pixel centers sit at +0.5.
+    let window = moved_window(src.window(), src.format, |[x, y]| track::project(&forward, [x + 0.5, y + 0.5]).map(|[u, v]| [u - 0.5, v - 0.5]));
+    Ok(generate(src.format, window, |x, y| match track::project(&h, [x as f32 + 0.5, y as f32 + 0.5]) {
+        Some(q) => src.sample_bilinear(q[0] - 0.5, q[1] - 0.5),
+        None => color::TRANSPARENT,
+    }))
 }
 
 /// Resample `src`: each output pixel center `o` reads `src` at `m(o)`.
 fn warp(src: &Image, m: &track::Affine) -> Image {
-    let mut out = Image::new(src.width, src.height);
-    let w = src.width;
-    out.pixels.par_iter_mut().enumerate().for_each(|(i, px)| {
-        let o = [(i % w) as f32 + 0.5, (i / w) as f32 + 0.5];
-        let q = track::apply(m, o);
-        // `sample_bilinear` puts pixel centers on integers.
-        *px = src.sample_bilinear(q[0] - 0.5, q[1] - 0.5);
+    let forward = track::invert(m);
+    let window = moved_window(src.window(), src.format, |[x, y]| {
+        let [u, v] = track::apply(&forward, [x + 0.5, y + 0.5]);
+        Some([u - 0.5, v - 0.5])
     });
-    out
+    generate(src.format, window, |x, y| {
+        let q = track::apply(m, [x as f32 + 0.5, y as f32 + 0.5]);
+        // `sample_bilinear` puts pixel centers on integers.
+        src.sample_bilinear(q[0] - 0.5, q[1] - 0.5)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1183,14 +1199,23 @@ struct Blur {
 
 fn blur(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: Blur = parse(params, "blur")?;
-    // Not data-window aware yet (Phase 0.6 milestone 3): the whole frame.
-    let flat = input(inputs, 0, "blur")?.flat();
-    let src: &Image = &flat;
+    let src = input(inputs, 0, "blur")?;
     let r = p.radius.max(0.0).round() as usize;
-    if r == 0 {
+    if r == 0 || src.window().is_empty() {
         return Ok(src.clone());
     }
-    let mut img = src.clone();
+    // The blur spreads into transparency by its full reach, except where
+    // the data meets the frame's edge: there the edge pixels repeat, as
+    // for a full-frame plate.
+    let reach = (r * p.passes.max(1)) as i32;
+    let (w, f) = (src.window(), src.frame());
+    let region = IRect::new(
+        w.x0 - if w.x0 > f.x0 { reach } else { 0 },
+        w.y0 - if w.y0 > f.y0 { reach } else { 0 },
+        w.x1 + if w.x1 < f.x1 { reach } else { 0 },
+        w.y1 + if w.y1 < f.y1 { reach } else { 0 },
+    );
+    let mut img = generate(src.format, region, |x, y| src.at(x, y));
     for _ in 0..p.passes.max(1) {
         box_pass_h(&mut img, r);
         box_pass_v(&mut img, r);
@@ -1458,11 +1483,9 @@ struct Resize {
 /// pixels are skipped) and bilinear interpolation when enlarging.
 fn resize(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: Resize = parse(params, "resize")?;
-    // Not data-window aware yet (Phase 0.6 milestone 3): the whole frame.
-    let flat = input(inputs, 0, "resize")?.flat();
-    let src: &Image = &flat;
+    let src = input(inputs, 0, "resize")?;
     let (w, h) = (p.width.max(1), p.height.max(1));
-    let (sx, sy) = (w as f32 / src.width as f32, h as f32 / src.height as f32);
+    let (sx, sy) = (w as f32 / src.format.width.max(1) as f32, h as f32 / src.format.height.max(1) as f32);
     let (sx, sy) = match p.fit.as_str() {
         "stretch" => (sx, sy),
         "fit" => (sx.min(sy), sx.min(sy)),
@@ -1470,19 +1493,19 @@ fn resize(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
         other => bail!("unknown fit '{other}'"),
     };
     // Center the scaled image in the output frame.
-    let ox = (w as f32 - src.width as f32 * sx) / 2.0;
-    let oy = (h as f32 - src.height as f32 * sy) / 2.0;
+    let ox = (w as f32 - src.format.width as f32 * sx) / 2.0;
+    let oy = (h as f32 - src.format.height as f32 * sy) / 2.0;
     // Source pixels per output pixel, and how many taps cover that span.
     let (fx, fy) = (1.0 / sx, 1.0 / sy);
     let (nx, ny) = (fx.ceil().max(1.0) as usize, fy.ceil().max(1.0) as usize);
-    let mut out = Image::new(w, h);
-    out.pixels.par_iter_mut().enumerate().for_each(|(i, px)| {
+    let format = Size { width: w, height: h };
+    let window = moved_window(src.window(), format, |[x, y]| Some([(x + 0.5) * sx + ox - 0.5, (y + 0.5) * sy + oy - 0.5]));
+    Ok(generate(format, window, |x, y| {
         // Source position of this output pixel's center.
-        let cx = ((i % w) as f32 + 0.5 - ox) * fx - 0.5;
-        let cy = ((i / w) as f32 + 0.5 - oy) * fy - 0.5;
+        let cx = (x as f32 + 0.5 - ox) * fx - 0.5;
+        let cy = (y as f32 + 0.5 - oy) * fy - 0.5;
         if nx == 1 && ny == 1 {
-            *px = src.sample_bilinear(cx, cy);
-            return;
+            return src.sample_bilinear(cx, cy);
         }
         // Average an nx × ny grid of bilinear taps spread over the footprint.
         let mut acc = [0.0f32; 4];
@@ -1497,9 +1520,8 @@ fn resize(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
             }
         }
         let norm = 1.0 / (nx * ny) as f32;
-        *px = acc.map(|v| v * norm);
-    });
-    Ok(out)
+        acc.map(|v| v * norm)
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1731,6 +1753,47 @@ mod tests {
     }
 
     #[test]
+    fn moved_layers_keep_pixels_past_the_frame() {
+        let red = patch(100, 50, 10, 10, 4, 4, [1.0, 0.0, 0.0, 1.0]);
+        // Out of the frame to the right, and back: nothing lost.
+        let out = eval("transform", &json!({ "translate": [150, 0] }), &[Some(&red), None], &CTX).unwrap();
+        assert_eq!((out.at(161, 11), out.flat().pixels.iter().map(|p| p[3]).sum::<f32>()), ([1.0, 0.0, 0.0, 1.0], 0.0));
+        let back = eval("transform", &json!({ "translate": [-150, 0] }), &[Some(&out), None], &CTX).unwrap();
+        assert_eq!(back.at(11, 11), [1.0, 0.0, 0.0, 1.0]);
+        assert!(back.window().width() < 10, "{:?}", back.window());
+        // A huge scale stops at the overscan: one frame past each edge (and
+        // an off-center layer scaled clean past it keeps nothing).
+        let mid = patch(100, 50, 48, 23, 4, 4, [1.0; 4]);
+        let big = eval("transform", &json!({ "scale": [500, 500] }), &[Some(&mid), None], &CTX).unwrap();
+        assert_eq!(big.window(), IRect::new(-100, -50, 200, 100));
+        let gone = eval("transform", &json!({ "scale": [500, 500] }), &[Some(&red), None], &CTX).unwrap();
+        assert!(gone.window().is_empty());
+        // The tracker's match-move and a corner pin move windows the same way.
+        let pin = json!({ "from1": [0, 0], "from2": [100, 0], "from3": [100, 50], "from4": [0, 50],
+                          "to1": [20, 5], "to2": [120, 5], "to3": [120, 55], "to4": [20, 55] });
+        let pinned = eval("corner_pin", &pin, &[Some(&red), None], &CTX).unwrap();
+        assert_eq!(pinned.at(31, 16), [1.0, 0.0, 0.0, 1.0]);
+        assert!(pinned.window().width() < 10, "{:?}", pinned.window());
+    }
+
+    #[test]
+    fn blur_spreads_a_layer_but_keeps_a_plate_s_edges() {
+        let red = patch(100, 50, 40, 20, 4, 4, [1.0, 0.0, 0.0, 1.0]);
+        let soft = eval("blur", &json!({ "radius": 2, "passes": 3 }), &[Some(&red), None], &CTX).unwrap();
+        assert_eq!(soft.window(), IRect::new(34, 14, 50, 30));
+        let total = |img: &Image| img.flat().pixels.iter().map(|p| p[3]).sum::<f32>();
+        assert!((total(&soft) - 16.0).abs() < 1e-3, "blur keeps the total: {}", total(&soft));
+        // A full-frame plate: same window, edges not darkened.
+        let plate = solid(20, 10, [0.5, 0.5, 0.5, 1.0]);
+        let soft = eval("blur", &json!({ "radius": 2 }), &[Some(&plate), None], &CTX).unwrap();
+        assert_eq!((soft.window(), soft.at(0, 0)), (plate.window(), [0.5, 0.5, 0.5, 1.0]));
+        // Resize scales the window along with the frame.
+        let half = eval("resize", &json!({ "width": 50, "height": 25 }), &[Some(&red)], &CTX).unwrap();
+        assert_eq!(half.format, Size { width: 50, height: 25 });
+        assert!(half.window().width() <= 6 && half.at(21, 11)[3] > 0.9, "{:?}", half.window());
+    }
+
+    #[test]
     fn a_shape_merged_over_a_background_matches_one_drawn_on_it() {
         let bg = eval("checkerboard", &json!({ "width": 64, "height": 48, "size": 8 }), &[], &CTX).unwrap();
         let p = json!({ "width": 64, "height": 48, "center": [30, 20], "size": [20, 12], "rotate": 20, "feather": 3, "color": [1, 0.5, 0, 0.8] });
@@ -1778,15 +1841,15 @@ mod tests {
             "output": "match-move", "reference_frame": 1,
         });
         let at = |f: i64, params: &Value| eval("tracker", &resolve_params("tracker", params, f), &[Some(&src)], &CTX).unwrap();
-        assert_eq!(at(1, &params).get(5, 5)[3], 1.0, "identity at the reference frame");
+        assert_eq!(at(1, &params).at(5, 5)[3], 1.0, "identity at the reference frame");
         let moved = at(5, &params);
-        assert_eq!((moved.get(8, 7)[3], moved.get(5, 5)[3]), (1.0, 0.0));
+        assert_eq!((moved.at(8, 7)[3], moved.at(5, 5)[3]), (1.0, 0.0));
         let mut params = params;
         params["output"] = json!("stabilize");
         let steady = at(5, &params);
-        assert_eq!((steady.get(2, 3)[3]), 1.0, "moved back by the track's motion");
+        assert_eq!((steady.at(2, 3)[3]), 1.0, "moved back by the track's motion");
         params["output"] = json!("input");
-        assert_eq!(at(5, &params).get(5, 5)[3], 1.0);
+        assert_eq!(at(5, &params).at(5, 5)[3], 1.0);
     }
 
     #[test]
@@ -1832,11 +1895,11 @@ mod tests {
         });
         let out = eval("tracker", &resolve_params("tracker", &params, 5), &[Some(&src)], &CTX).unwrap();
         // (25.5, 15.5) turned 90° clockwise about the track lands at (15.5, 25.5).
-        assert!(out.get(15, 25)[3] > 0.99, "{:?}", out.get(15, 25));
+        assert!(out.at(15, 25)[3] > 0.99, "{:?}", out.at(15, 25));
         // The export agrees.
         let xf = Value::Object(track::transform_params(&params, [40, 30], false).unwrap());
         let got = eval("transform", &resolve_params("transform", &xf, 5), &[Some(&src)], &CTX).unwrap();
-        let diff = out.pixels.iter().zip(&got.pixels).map(|(a, b)| (a[3] - b[3]).abs()).fold(0.0, f32::max);
+        let diff = out.flat().pixels.iter().zip(&got.flat().pixels).map(|(a, b)| (a[3] - b[3]).abs()).fold(0.0, f32::max);
         assert!(diff < 1e-3, "off by {diff}");
     }
 
@@ -1861,11 +1924,11 @@ mod tests {
             let pin = Value::Object(track::corner_pin_params(&params, stabilize).unwrap());
             let want = eval("tracker", &resolve_params("tracker", &params, 5), &[Some(&src)], &CTX).unwrap();
             let got = eval("corner_pin", &resolve_params("corner_pin", &pin, 5), &[Some(&src)], &CTX).unwrap();
-            let diff = want.pixels.iter().zip(&got.pixels).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0, f32::max);
+            let diff = want.flat().pixels.iter().zip(&got.flat().pixels).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0, f32::max);
             assert!(diff < 2e-3, "{output}: off by {diff}");
             // At the reference frame it's the identity.
             let still = eval("corner_pin", &resolve_params("corner_pin", &pin, 1), &[Some(&src)], &CTX).unwrap();
-            assert!(still.pixels.iter().zip(&src.pixels).all(|(a, b)| (0..4).all(|c| (a[c] - b[c]).abs() < 1e-4)));
+            assert!(still.flat().pixels.iter().zip(&src.flat().pixels).all(|(a, b)| (0..4).all(|c| (a[c] - b[c]).abs() < 1e-4)));
         }
         params["track4_on"] = json!(false);
         assert!(track::corner_pin_params(&params, false).is_err());
@@ -1939,8 +2002,8 @@ mod tests {
             "color_a": [0, 0, 0, 1], "color_b": [1, 1, 1, 1] })).unwrap();
         let p = json!({ "width": 32, "height": 32, "fit": "stretch" });
         let out = eval("resize", &p, &[Some(&check)], &CTX).unwrap();
-        assert_eq!((out.width, out.height), (32, 32));
-        assert!(out.pixels.iter().all(|px| approx(px[0], 0.5)));
+        assert_eq!((out.format.width, out.format.height), (32, 32));
+        assert!(out.flat().pixels.iter().all(|px| approx(px[0], 0.5)));
     }
 
     #[test]

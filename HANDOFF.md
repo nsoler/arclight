@@ -16,7 +16,7 @@ Last updated 2026-10-28 (end of session 5). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~13,300 lines of Rust + Python. Tests: 68 library + 10 CLI + 30 GUI
+- ~13,300 lines of Rust + Python. Tests: 70 library + 10 CLI + 30 GUI
   (`cargo test --release`) and 8 Python (see "Working tips"), all passing.
   Clippy is clean apart from two old style lints (`Graph::from_str` name,
   `chunks_exact_mut(4)` in media.rs).
@@ -298,6 +298,15 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   output, Corner Pin, Blur and Resize `flat()` their input until milestone
   3. A 12-node test graph renders identically (MAE 0) to the previous
   commit.
+- **Session 6, part 6**: Phase 0.6 milestone 3, windows that move.
+  `moved_window(window, format, f)` maps the span bilinear sampling
+  reads, (x0 − 1, x1), through the forward map and limits it to
+  `overscan(format)` (one frame past each edge; the whole cap when a
+  corner can't be mapped, e.g. past a corner pin's horizon). Transform,
+  `warp` (Tracker output), Corner Pin and Resize use it; Blur grows by
+  radius × passes on sides inside the frame and clamps where data meets
+  the frame edge (old behavior for plates). No op flattens any more. The
+  12-node comparison graph still matches pre-0.6 output exactly.
 
 ## Architecture in one page
 
