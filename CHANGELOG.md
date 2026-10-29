@@ -7,6 +7,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.33 — 2026-10-29
+
+- Camera-tracker groundwork: from tracked features in two frames, the
+  camera's motion between them and the 3D points (eight-point essential
+  matrix in RANSAC, the right one of its four decompositions, linear
+  triangulation), and a search for the frame pair with enough parallax
+  to start a solve from. Library only, no node yet. Phase 4 milestone 6.
+
 ## 0.0.32 — 2026-10-29
 
 - Camera-tracker features no longer drift: each tracked feature is

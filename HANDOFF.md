@@ -37,7 +37,7 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.32**.
+  in the same commit as the change. Current: **0.0.33**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -955,7 +955,22 @@ live track uses it). Test shot: 0.015 px median / 0.12 px p95 (was
 (median < 0.05, p95 < 0.2).
 Speed: ~6.5 ms/frame at 1080p with ~200 live features (20 rendered
 frames, push-in + pan + roll), so 200 frames in ~1.3 s.
-Next: M6, two-view init + triangulation (new `src/solve.rs`).
+**M6 done (v0.0.33): two-view init + triangulation.** `src/solve.rs`
+works in the CV camera frame (x right, y down, z forward;
+x_cam = R X + t). `Pose {r, t}` with `center`/`apply`/`from_center`/
+`world()`/`from_world()` converting to geom's y-up, −Z-looking camera
+(tested: same pixels either way); `Intrinsics {f, c}` (`new(focal,
+film_width, format)`, `ray`, `project`); `Rng` (deterministic LCG);
+`essential` (8-point via the 9×9 normal-equation eigenvector, singular
+values forced to 1,1,0), `sampson`, `decompose` (4 poses),
+`triangulate` (DLT, any number of views), `parallax`, `two_view`
+(adaptive RANSAC, refit, cheirality + reprojection filter, median
+parallax), `shared`, `initial_pair` (scans forward until median
+parallax ≥ enough). Tests: pose conversion, exact noiseless
+triangulation/decomposition, 0.3 px noise + 20 % outliers (rotation
+< 0.1°, direction < 2°, points < 1 % after scaling), initial pair waits
+for parallax and refuses a pure pan.
+Next: M7, incremental solve + bundle adjustment.
 
 - 3D needs a scene system first: Camera (focal length, film back, transform,
   animatable), Card / geometry nodes, a Scene node, and a **scanline renderer**

@@ -2,7 +2,7 @@
 
 Status: **agreed** (2026-10-29). The user chose the proposed option for
 D1–D4; D5 (viewport) and D6 (order) stand as proposed until milestone 9.
-Milestones 1–5 done. The work goes one milestone at a time, as in
+Milestones 1–6 done. The work goes one milestone at a time, as in
 `phase-0.6-plan.md`.
 
 ## Goal
@@ -242,7 +242,13 @@ then poses of in-between frames by PnP and a final pass).
    down from 0.22 / 0.94.) Shi–Tomasi on a pyramid, pyramidal LK, forward–
    backward check. Tests on synthetic renders (Scanline Render of
    textured cards through a known moving camera: ground truth for free).
-6. **Two-view initialization and triangulation.** Fundamental /
+6. **Done (2026-10-29).** **Two-view initialization and triangulation.**
+   (As built: `src/solve.rs`, computer-vision camera frame inside
+   (`Pose`, `Intrinsics`, `Pose::world` / `from_world` to `geom`);
+   eight-point essential matrix on normalized rays in adaptive RANSAC
+   (Sampson distance), refit on inliers, decomposition chosen by points
+   in front, DLT triangulation, `initial_pair` scanning forward for
+   parallax.) Fundamental /
    essential matrix in RANSAC, pose recovery, DLT triangulation. Tests:
    known synthetic camera pair recovered up to scale.
 7. **Incremental solve and bundle adjustment.** PnP, LM with Schur,
