@@ -120,7 +120,8 @@ struct App {
     /// Help > About is open.
     about: bool,
     /// The window icon as a texture, for the About dialog (made on first use).
-    logo: Option<egui::TextureHandle>,
+    /// and the part of it with artwork (UV), its transparent border cut off.
+    logo: Option<(egui::TextureHandle, egui::Rect)>,
 }
 
 impl App {
@@ -586,38 +587,51 @@ impl App {
         if !self.about {
             return;
         }
-        let logo = self
+        let (logo, uv) = self
             .logo
             .get_or_insert_with(|| {
                 let icon = app_icon();
-                let size = [icon.width as usize, icon.height as usize];
-                let img = egui::ColorImage::from_rgba_unmultiplied(size, &icon.rgba);
-                ctx.load_texture("about-logo", img, egui::TextureOptions::LINEAR)
+                let (w, h) = (icon.width as usize, icon.height as usize);
+                // The opaque pixels' bounds, so the margins around the
+                // artwork are the dialog's own.
+                let opaque = |x: usize, y: usize| icon.rgba[(y * w + x) * 4 + 3] > 8;
+                let rows: Vec<usize> = (0..h).filter(|&y| (0..w).any(|x| opaque(x, y))).collect();
+                let cols: Vec<usize> = (0..w).filter(|&x| (0..h).any(|y| opaque(x, y))).collect();
+                let uv = match (rows.first(), rows.last(), cols.first(), cols.last()) {
+                    (Some(&y0), Some(&y1), Some(&x0), Some(&x1)) => egui::Rect::from_min_max(
+                        egui::pos2(x0 as f32 / w as f32, y0 as f32 / h as f32),
+                        egui::pos2((x1 + 1) as f32 / w as f32, (y1 + 1) as f32 / h as f32),
+                    ),
+                    _ => egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                };
+                let img = egui::ColorImage::from_rgba_unmultiplied([w, h], &icon.rgba);
+                (ctx.load_texture("about-logo", img, egui::TextureOptions::LINEAR), uv)
             })
             .clone();
-        let modal = egui::Modal::new(egui::Id::unique("about")).show(ctx, |ui| {
-            ui.set_width(320.0);
+        // The same margin on every side; each row is one centered label.
+        const MARGIN: i8 = 24;
+        let frame = egui::Frame::popup(&ctx.global_style()).inner_margin(MARGIN);
+        let modal = egui::Modal::new(egui::Id::unique("about")).frame(frame).show(ctx, |ui| {
+            ui.set_width(300.0);
             ui.vertical_centered(|ui| {
-                ui.add_space(4.0);
-                // Square artwork; keep its proportions.
+                // The artwork 160 px wide, in its own proportions.
                 let side = 160.0;
-                let [w, h] = logo.size_vec2().into();
-                ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(side, side * h / w)));
+                let [w, h] = (logo.size_vec2() * uv.size()).into();
+                ui.add(egui::Image::new(&logo).uv(uv).fit_to_exact_size(egui::vec2(side, side * h / w)));
                 ui.add_space(8.0);
                 ui.heading("Arclight Compositor");
                 ui.add_space(6.0);
-                egui::Grid::new("about-grid").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                    ui.label(egui::RichText::new("Created by:").weak());
-                    ui.label("Nelson Soler");
-                    ui.end_row();
-                    ui.label(egui::RichText::new("Version:").weak());
-                    ui.label(concat!(env!("CARGO_PKG_VERSION"), " (alpha)"));
-                    ui.end_row();
-                    ui.label(egui::RichText::new("Built:").weak());
-                    ui.label(env!("ARCLIGHT_BUILD_TIME"));
-                    ui.end_row();
-                });
-                ui.add_space(10.0);
+                let row = |ui: &mut egui::Ui, name: &str, value: &str| {
+                    let style = ui.style().clone();
+                    let mut job = egui::text::LayoutJob::default();
+                    egui::RichText::new(format!("{name}  ")).weak().append_to(&mut job, &style, egui::FontSelection::Default, egui::Align::Center);
+                    egui::RichText::new(value).append_to(&mut job, &style, egui::FontSelection::Default, egui::Align::Center);
+                    ui.label(job);
+                };
+                row(ui, "Created by:", "Nelson Soler");
+                row(ui, "Version:", concat!(env!("CARGO_PKG_VERSION"), " (alpha)"));
+                row(ui, "Built:", env!("ARCLIGHT_BUILD_TIME"));
+                ui.add_space(12.0);
                 if ui.add(egui::Button::new("OK").min_size(egui::vec2(80.0, 0.0))).clicked() {
                     ui.close();
                 }

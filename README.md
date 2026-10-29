@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.0.34** (alpha); see `CHANGELOG.md`.
+Version **0.0.35** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui

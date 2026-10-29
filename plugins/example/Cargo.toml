@@ -1,6 +1,6 @@
 [package]
 name = "arclight-plugin-example"
-version = "0.0.34"
+version = "0.0.35"
 edition = "2021"
 description = "Example Arclight native plugin: Vignette and Film Grain ops"
 license = "MIT OR Apache-2.0"

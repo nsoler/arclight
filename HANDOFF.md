@@ -37,7 +37,7 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.34**.
+  in the same commit as the change. Current: **0.0.35**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -102,6 +102,11 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   missing path would rerun every build), so the stamp is the time of the
   first build after a commit. `rustc-env` is package-wide, so the lib sees
   it too.
+  Layout (v0.0.35, mathwiz/wD:p3): each info row is one centered label
+  (weak "Created by:" + value in one `LayoutJob`); the modal frame has a
+  24 px inner margin on every side; the logo is drawn trimmed to its
+  opaque pixels (UV rect computed once; `App.logo` is `(TextureHandle,
+  Rect)`), since the PNG's transparent border made the top gap larger.
 - **Releases (session 7, user request):** GitHub releases, marked
   pre-release, tagged `v<version>`. First: `v0.0.19`. To make one at the
   current commit: tag it (`git tag -a v0.0.N -m "Arclight 0.0.N (alpha)"`)

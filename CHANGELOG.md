@@ -7,6 +7,11 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.35 — 2026-10-29
+
+- Help → About is laid out evenly: all text centered, equal margins left
+  and right, and equal space above the logo and below OK.
+
 ## 0.0.34 — 2026-10-29
 
 - Camera solving (library, no node yet): from feature tracks, a camera
