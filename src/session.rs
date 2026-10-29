@@ -550,6 +550,7 @@ pub fn image_stats(img: &Image) -> Value {
         "mean_rgba": sum.map(|s| round(s / n)),
         "min_rgba": if img.pixels.is_empty() { [0.0; 4] } else { lo.map(|x| round(x as f64)) },
         "max_rgba": if img.pixels.is_empty() { [0.0; 4] } else { hi.map(|x| round(x as f64)) },
+        "planes": img.plane_stats(),
     })
 }
 

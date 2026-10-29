@@ -2,7 +2,7 @@
 
 Status: **agreed** (2026-10-29). The user chose the proposed option for
 D1–D4; D5 (viewport) and D6 (order) stand as proposed until milestone 9.
-Nothing built yet. The work goes one milestone at a time, as in
+Milestone 1 done. The work goes one milestone at a time, as in
 `phase-0.6-plan.md`.
 
 ## Goal
@@ -189,7 +189,11 @@ then poses of in-between frames by PnP and a final pass).
 
 ## Milestones
 
-1. **Extra planes on `Image` (D1).** `planes`, accessors, `plane(name)`;
+1. **Done (2026-10-29).** **Extra planes on `Image` (D1).** (As built:
+   warps, Crop, Resize, Merge and motion blur carry planes; color ops,
+   Keyer, Blur, shapes over a background and Keymix keep their input's;
+   Dissolve takes the nearer input's; plugins and sources drop them.
+   `Image::plane_stats` for MCP / Python stats; zmerge waits for M4.) `planes`, accessors, `plane(name)`;
    Transform / Corner Pin / Crop / Resize / Merge carry them; EXR `Z`
    and named channels in and out; viewer shows a chosen plane; MCP /
    Python stats list planes. Tests: EXR round trip with depth; a

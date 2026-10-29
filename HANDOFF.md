@@ -37,7 +37,7 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.22**.
+  in the same commit as the change. Current: **0.0.23**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -858,8 +858,22 @@ windows exist.
 
 ### Phase 4: 3D (large; plan it separately)
 
-Plan: `docs/phase-4-plan.md` (proposed 2026-10-29 by worker wD:p4;
-decisions D1–D6 open, waiting for the user).
+Plan: `docs/phase-4-plan.md` (2026-10-29, worker wD:p4). D1–D4 agreed
+as proposed; D5–D6 still open. **M1 done (v0.0.23): extra image planes.**
+`Image.planes: Vec<Plane>` (name + f32 per window pixel), `plane`,
+`plane_mut`, `plane_at`/`plane_value` (frame coords, 0 outside),
+`carry_planes(src, source_fn)` (nearest), `keep_planes`, `plane_stats`;
+`flat()` keeps them. ops.rs: `planes_source(op)` lists ops that keep
+their input's planes (applied in `eval`), `merge_planes`; warps, crop and
+resize call `carry_planes`; `mask_mix` keeps the result's (else the
+base's); motion blur keeps the middle sample's. EXR: `read_exr_planes`
+(reads the flat layer only when the header has non-RGBA channels),
+`write_exr_planes` (AnyChannels when planes exist). Viewer:
+`Channel::Plane`, `Viewer::plane`, `plane_image`. `image_stats` (MCP)
+lists planes. Not checked by hand: the viewer's plane buttons (no 3D
+renderer yet; an EXR with Z shows them). Tests:
+`image::exr_keeps_extra_planes`, `ops::planes_follow_their_pixels`.
+Next: M2, `src/geom.rs` camera maths + Lens Distort op (adds nalgebra).
 
 - 3D needs a scene system first: Camera (focal length, film back, transform,
   animatable), Card / geometry nodes, a Scene node, and a **scanline renderer**
@@ -875,9 +889,8 @@ decisions D1–D6 open, waiting for the user).
 
 ### Engine changes that would make the above easier
 
-- **Arbitrary channels** in `Image` (named planes such as rgba, mask,
-  depth, motion) instead of fixed `[f32; 4]`. A big refactor; do it before
-  3D.
+- **Arbitrary channels**: done as extra named planes beside RGBA
+  (v0.0.23, Phase 4 M1; see above).
 - **Expressions**: done. Live links with multiply/add (v0.0.19–0.0.20)
   and formula links (v0.0.22, worker wD:p3): `src/expr.rs` is the lexer,
   Pratt-style parser and evaluator (`Val` = number or list; `Lookup`

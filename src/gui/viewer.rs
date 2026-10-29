@@ -1,12 +1,13 @@
 //! The image viewer: shows the rendered frame with pan/zoom, channel isolation,
-//! exposure, and a float pixel readout under the cursor. Pixels stored past
+//! exposure, extra planes (depth) as gray, and a float pixel readout under
+//! the cursor. Pixels stored past
 //! the frame (overscan) show dimmed, and a data window smaller or larger than
 //! the frame is outlined.
 
 use crate::doc::Doc;
 use crate::overlay::{Overlays, Xf};
 use arclight::color;
-use arclight::image::{IRect, Image};
+use arclight::image::{IRect, Image, Plane};
 use eframe::egui::{
     self, Align2, Color32, ColorImage, FontId, Pos2, Rect, Sense, Stroke, TextureHandle,
     TextureOptions, Vec2,
@@ -21,6 +22,9 @@ pub enum Channel {
     Green,
     Blue,
     Alpha,
+    /// The extra plane named by [`Viewer::plane`], as gray from its lowest
+    /// to its highest value (0, empty, stays black).
+    Plane,
 }
 
 impl Channel {
@@ -36,11 +40,13 @@ impl Channel {
 pub struct Viewer {
     texture: Option<TextureHandle>,
     /// The image currently uploaded, and the display settings it used.
-    shown: Option<(Arc<Image>, Channel, f32)>,
+    shown: Option<(Arc<Image>, Channel, f32, String)>,
     /// What the texture covers, in frame pixels: the frame and the data window.
     region: IRect,
     nearest: bool,
     pub channel: Channel,
+    /// The plane shown with [`Channel::Plane`].
+    pub plane: String,
     /// Exposure in stops.
     pub exposure: f32,
     /// Image pixels per screen point.
@@ -76,6 +82,7 @@ impl Default for Viewer {
             region: IRect::default(),
             nearest: false,
             channel: Channel::Rgb,
+            plane: String::new(),
             exposure: 0.0,
             zoom: 1.0,
             pan: Vec2::ZERO,
@@ -197,10 +204,13 @@ impl Viewer {
             if self.region.contains(x, y) {
                 let px = img.at(x, y);
                 self.picked = Some(Picked { x, y, px, shown: Color32::BLACK });
-                let text = format!(
+                let mut text = format!(
                     "x {:<5} y {:<5}   R {:.4}  G {:.4}  B {:.4}  A {:.4}",
                     x, y, px[0], px[1], px[2], px[3]
                 );
+                if let Some(plane) = self.shown_plane(img) {
+                    text += &format!("   {} {:.4}", plane.name, img.plane_value(plane, x, y));
+                }
                 let pos = rect.left_bottom() + Vec2::new(8.0, -8.0);
                 let galley = painter.layout_no_wrap(text, FontId::monospace(12.0), Color32::from_gray(220));
                 let r = Align2::LEFT_BOTTOM.anchor_size(pos, galley.size());
@@ -227,6 +237,14 @@ impl Viewer {
         ui.horizontal(|ui| {
             for (ch, label) in Channel::ALL {
                 ui.selectable_value(&mut self.channel, ch, label);
+            }
+            // The image's extra planes (a 3D render's depth), if any.
+            for plane in d.image.map_or(&[][..], |img| &img.planes[..]) {
+                let on = self.channel == Channel::Plane && self.plane == plane.name;
+                if ui.selectable_label(on, &plane.name).on_hover_text(format!("Show the {} plane as gray, lowest to highest value", plane.name)).clicked() {
+                    self.channel = Channel::Plane;
+                    self.plane = plane.name.clone();
+                }
             }
             ui.separator();
             ui.label("Exposure");
@@ -310,9 +328,14 @@ impl Viewer {
         }
     }
 
+    /// The plane shown, when [`Channel::Plane`] is on and `img` has it.
+    fn shown_plane<'a>(&self, img: &'a Image) -> Option<&'a Plane> {
+        (self.channel == Channel::Plane).then(|| img.plane(&self.plane)).flatten()
+    }
+
     fn upload(&mut self, ctx: &egui::Context, img: &Arc<Image>) {
-        let up_to_date = self.shown.as_ref().is_some_and(|(shown, ch, ex)| {
-            Arc::ptr_eq(shown, img) && *ch == self.channel && *ex == self.exposure
+        let up_to_date = self.shown.as_ref().is_some_and(|(shown, ch, ex, plane)| {
+            Arc::ptr_eq(shown, img) && *ch == self.channel && *ex == self.exposure && *plane == self.plane
         });
         if up_to_date {
             return;
@@ -326,13 +349,16 @@ impl Viewer {
         // resolution (the readout still reads full-resolution pixels).
         let max_side = ctx.input(|i| i.max_texture_side).max(1);
         let step = self.region.width().max(self.region.height()).div_ceil(max_side).max(1);
-        let ci = to_color_image(img, self.region, self.channel, self.exposure, step);
+        let ci = match self.shown_plane(img) {
+            Some(plane) => plane_image(img, plane, self.region, step),
+            None => to_color_image(img, self.region, self.channel, self.exposure, step),
+        };
         let filter = if self.nearest { TextureOptions::NEAREST } else { TextureOptions::LINEAR };
         match &mut self.texture {
             Some(t) => t.set(ci, filter),
             None => self.texture = Some(ctx.load_texture("viewer", ci, filter)),
         }
-        self.shown = Some((img.clone(), self.channel, self.exposure));
+        self.shown = Some((img.clone(), self.channel, self.exposure, self.plane.clone()));
     }
 }
 
@@ -373,9 +399,30 @@ fn to_color_image(img: &Image, region: IRect, channel: Channel, exposure: f32, s
                 Channel::Green => [enc(px[1]); 3],
                 Channel::Blue => [enc(px[2]); 3],
                 // Alpha is coverage, not light: show it without the sRGB curve.
-                Channel::Alpha => [(px[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8; 3],
+                Channel::Alpha | Channel::Plane => [(px[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8; 3],
             };
             out.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
         });
+    ColorImage::from_rgba_unmultiplied([tw, th], &bytes)
+}
+
+/// `plane` of `img` as gray over `region`: its lowest non-zero value dark,
+/// its highest white, 0 (nothing there) black; overscan dimmed. With
+/// `step` above 1, one sample per `step`×`step` block (values such as depth
+/// don't average).
+fn plane_image(img: &Image, plane: &Plane, region: IRect, step: usize) -> ColorImage {
+    let (lo, hi) = plane.data.iter().filter(|v| **v != 0.0 && v.is_finite()).fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+    let span = if hi > lo { hi - lo } else { 1.0 };
+    let (tw, th) = (region.width().div_ceil(step).max(1), region.height().div_ceil(step).max(1));
+    let frame = img.frame();
+    let mut bytes = vec![0u8; tw * th * 4];
+    bytes.par_chunks_exact_mut(4).enumerate().for_each(|(i, out)| {
+        let (x, y) = (region.x0 + ((i % tw) * step) as i32, region.y0 + ((i / tw) * step) as i32);
+        let v = img.plane_value(plane, x, y);
+        let g = if v == 0.0 || !v.is_finite() { 0.0 } else { 0.15 + 0.85 * ((v - lo) / span).clamp(0.0, 1.0) };
+        let g = if frame.contains(x, y) { g } else { g * 0.35 };
+        let g = (g * 255.0 + 0.5) as u8;
+        out.copy_from_slice(&[g, g, g, 255]);
+    });
     ColorImage::from_rgba_unmultiplied([tw, th], &bytes)
 }

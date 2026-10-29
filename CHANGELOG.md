@@ -7,6 +7,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.23 — 2026-10-29
+
+- Images can carry extra named planes beside RGBA (a 3D render's depth,
+  to come): EXR reads and writes them (`Z` as `depth`); Transform, Corner
+  Pin, Tracker output, Crop, Resize and motion blur move them with the
+  pixels (nearest, not blended); color ops, Keyer, Blur and shapes keep
+  them; Merge takes the front input's where it is over half opaque; the
+  Viewer lists an image's planes beside R G B A and shows one as gray
+  (the readout adds its value). First step of the Phase 4 plan
+  (`docs/phase-4-plan.md`).
+
 ## 0.0.22 — 2026-10-29
 
 - Formula links: `{"link": {"expr": "..."}}` works a param out every

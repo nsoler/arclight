@@ -1018,16 +1018,37 @@ pub fn eval(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalConte
         // A warp with motion blur: its output at each sample, averaged.
         Some(samples) if matches!(op, "transform" | "corner_pin" | "tracker") => {
             let outs = samples.iter().map(|p| eval_op(op, p, inputs, ctx)).collect::<Result<Vec<_>>>()?;
-            average(&outs)
+            // Planes (depth) can't be averaged: the middle sample's.
+            let mut out = average(&outs);
+            out.keep_planes(&outs[outs.len() / 2]);
+            out
         }
         _ => eval_op(op, params, inputs, ctx)?,
     };
+    let mut out = out;
+    if let Some(src) = planes_source(op).and_then(|n| inputs.get(n).copied().flatten()) {
+        if out.planes.is_empty() && out.format == src.format {
+            out.keep_planes(src);
+        }
+    }
     match info(op).and_then(|i| i.mask_base.map(|b| (b, i.inputs.len() - 1))) {
         Some((base, mask)) => {
             let mix = params.get("mix").and_then(Value::as_f64).unwrap_or(1.0) as f32;
             Ok(mask_mix(input(inputs, base, op)?, out, inputs.get(mask).copied().flatten(), mix))
         }
         None => Ok(out),
+    }
+}
+
+/// The input whose extra planes (depth, ...) an op keeps where they are: ops
+/// that change color but don't move pixels. Ops that move pixels carry
+/// planes themselves; others (plugins, sources) drop them.
+fn planes_source(op: &str) -> Option<usize> {
+    match op {
+        "grade" | "exposure" | "saturation" | "invert" | "clamp" | "premult" | "unpremult" | "channel_select" | "keyer" | "blur" => Some(0),
+        "rectangle" | "ellipse" | "polygon" | "roto" => Some(0),
+        "keymix" => Some(1),
+        _ => None,
     }
 }
 
@@ -1040,11 +1061,13 @@ fn mask_mix(base: &Image, result: Image, mask: Option<&Image>, mix: f32) -> Imag
     }
     // Where the mask holds back the result, the base shows: both windows.
     let window = result.window().union(&base.window());
-    generate(result.format, window, |x, y| {
+    let mut out = generate(result.format, window, |x, y| {
         let t = mix * mask.map_or(1.0, |m| m.at(x, y)[3].clamp(0.0, 1.0));
         let (b, r) = (base.at(x, y), result.at(x, y));
         std::array::from_fn(|c| b[c] + (r[c] - b[c]) * t)
-    })
+    });
+    out.keep_planes(if result.planes.is_empty() { base } else { &result });
+    out
 }
 
 fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContext) -> Result<Image> {
@@ -1227,7 +1250,31 @@ fn merge(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let op = p.operation.as_str();
     let blank = blend(op, color::TRANSPARENT, color::TRANSPARENT)?;
     let window = pointwise_window(bg.format, &[fg.window(), bg.window()], blank);
-    Ok(generate(bg.format, window, |x, y| blend(op, fg.at(x, y), bg.at(x, y)).unwrap_or(blank)))
+    let mut out = generate(bg.format, window, |x, y| blend(op, fg.at(x, y), bg.at(x, y)).unwrap_or(blank));
+    merge_planes(&mut out, fg, bg, op == "under");
+    Ok(out)
+}
+
+/// A merge's extra planes (depth, ...): the front input's where it is more
+/// than half opaque, the back's elsewhere (A is in front, B with `under`).
+/// A plane only one input has counts as 0 in the other.
+fn merge_planes(out: &mut Image, fg: &Image, bg: &Image, under: bool) {
+    let (front, back) = if under { (bg, fg) } else { (fg, bg) };
+    let mut names: Vec<&str> = back.planes.iter().map(|p| p.name.as_str()).collect();
+    names.extend(front.planes.iter().map(|p| p.name.as_str()).filter(|n| back.plane(n).is_none()));
+    let (w, x0, y0) = (out.width.max(1), out.x0, out.y0);
+    out.planes = names
+        .into_iter()
+        .map(|name| {
+            let mut data = vec![0.0; out.width * out.height];
+            data.par_iter_mut().enumerate().for_each(|(i, v)| {
+                let (x, y) = (x0 + (i % w) as i32, y0 + (i / w) as i32);
+                let src = if front.at(x, y)[3] > 0.5 { front } else { back };
+                *v = src.plane_at(name, x, y);
+            });
+            crate::image::Plane { name: name.to_string(), data }
+        })
+        .collect();
 }
 
 #[inline]
@@ -1331,7 +1378,9 @@ fn transform(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
         let dy = oy - p.translate[1] - cy;
         Some([(dx * c - dy * s) / sx + cx, (dx * s + dy * c) / sy + cy])
     };
-    Ok(generate(src.format, window, |ox, oy| sample_warped(src, ox, oy, inverse)))
+    let mut out = generate(src.format, window, |ox, oy| sample_warped(src, ox, oy, inverse));
+    out.carry_planes(src, |x, y| inverse([x as f32, y as f32]));
+    Ok(out)
 }
 
 /// The most taps a side [`sample_warped`] averages: shrinking by more than
@@ -1442,7 +1491,9 @@ fn corner_pin(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     // In track coordinates pixel centers sit at +0.5.
     let window = moved_window(src.window(), src.format, |[x, y]| track::project(&forward, [x + 0.5, y + 0.5]).map(|[u, v]| [u - 0.5, v - 0.5]));
     let inverse = |[x, y]: [f32; 2]| track::project(&h, [x + 0.5, y + 0.5]).map(|[u, v]| [u - 0.5, v - 0.5]);
-    Ok(generate(src.format, window, |x, y| sample_warped(src, x, y, inverse)))
+    let mut out = generate(src.format, window, |x, y| sample_warped(src, x, y, inverse));
+    out.carry_planes(src, |x, y| inverse([x as f32, y as f32]));
+    Ok(out)
 }
 
 /// Resample `src`: each output pixel center `o` reads `src` at `m(o)`.
@@ -1457,7 +1508,9 @@ fn warp(src: &Image, m: &track::Affine) -> Image {
         let [u, v] = track::apply(m, [x + 0.5, y + 0.5]);
         Some([u - 0.5, v - 0.5])
     };
-    generate(src.format, window, |x, y| sample_warped(src, x, y, inverse))
+    let mut out = generate(src.format, window, |x, y| sample_warped(src, x, y, inverse));
+    out.carry_planes(src, |x, y| inverse([x as f32, y as f32]));
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1695,10 +1748,13 @@ fn dissolve(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let b = input(inputs, 1, "dissolve")?;
     let t = p.amount.clamp(0.0, 1.0);
     let window = a.window().union(&b.window());
-    Ok(generate(b.format, window, |x, y| {
+    let mut out = generate(b.format, window, |x, y| {
         let (pa, pb) = (a.at(x, y), b.at(x, y));
         std::array::from_fn(|c| pa[c] + (pb[c] - pa[c]) * t)
-    }))
+    });
+    // Planes can't be blended: the nearer input's.
+    out.keep_planes(if t < 0.5 { a } else { b });
+    Ok(out)
 }
 
 /// A in B's frame; [`eval`]'s mask/mix step then blends it over B by the
@@ -1895,13 +1951,19 @@ fn crop(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let keep = IRect::new(x0 as i32, y0 as i32, x1 as i32, y1 as i32);
     let window = src.window().intersect(&keep);
     match p.mode.as_str() {
-        "clear outside" => Ok(generate(f, window, |x, y| src.at(x, y))),
+        "clear outside" => {
+            let mut out = generate(f, window, |x, y| src.at(x, y));
+            out.keep_planes(src);
+            Ok(out)
+        }
         "shrink canvas" => {
             // The box becomes the frame, its corner the new origin.
             let format = Size { width: keep.width().max(1), height: keep.height().max(1) };
             let (dx, dy) = (keep.x0, keep.y0);
             let moved = IRect::new(window.x0 - dx, window.y0 - dy, window.x1 - dx, window.y1 - dy);
-            Ok(generate(format, moved, |x, y| src.at(x + dx, y + dy)))
+            let mut out = generate(format, moved, |x, y| src.at(x + dx, y + dy));
+            out.carry_planes(src, |x, y| Some([(x + dx) as f32, (y + dy) as f32]));
+            Ok(out)
         }
         other => bail!("unknown crop mode '{other}'"),
     }
@@ -1935,7 +1997,7 @@ fn resize(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let (nx, ny) = (fx.ceil().max(1.0) as usize, fy.ceil().max(1.0) as usize);
     let format = Size { width: w, height: h };
     let window = moved_window(src.window(), format, |[x, y]| Some([(x + 0.5) * sx + ox - 0.5, (y + 0.5) * sy + oy - 0.5]));
-    Ok(generate(format, window, |x, y| {
+    let mut out = generate(format, window, |x, y| {
         // Source position of this output pixel's center.
         let cx = (x as f32 + 0.5 - ox) * fx - 0.5;
         let cy = (y as f32 + 0.5 - oy) * fy - 0.5;
@@ -1956,7 +2018,9 @@ fn resize(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
         }
         let norm = 1.0 / (nx * ny) as f32;
         acc.map(|v| v * norm)
-    }))
+    });
+    out.carry_planes(src, |x, y| Some([(x as f32 + 0.5 - ox) * fx - 0.5, (y as f32 + 0.5 - oy) * fy - 0.5]));
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -2348,6 +2412,51 @@ mod tests {
         // Shrinking the canvas moves the window with the new origin.
         let c = eval("crop", &json!({ "left": 8, "top": 5, "mode": "shrink canvas" }), &[Some(&red)], &CTX).unwrap();
         assert_eq!((c.format, c.window()), (Size { width: 92, height: 45 }, IRect::new(2, 5, 6, 9)));
+    }
+
+    /// Extra planes (a 3D render's depth) move with the pixels they
+    /// belong to, stay put through color ops, and take the front input's
+    /// value in a merge.
+    #[test]
+    fn planes_follow_their_pixels() {
+        // A 4×4 square at (10, 10) with depth 5, in a 100×50 frame.
+        let with_depth = |img: Image, d: f32| {
+            let mut img = img;
+            let n = img.pixels.len();
+            *img.plane_mut("depth") = img.pixels.iter().map(|p| if p[3] > 0.0 { d } else { 0.0 }).take(n).collect();
+            img
+        };
+        let sq = with_depth(patch(100, 50, 10, 10, 4, 4, [1.0; 4]), 5.0);
+        let run = |op: &str, p: Value, inputs: &[Option<&Image>]| eval(op, &p, inputs, &CTX).unwrap();
+        // Moved 20 px right: the depth goes along, nearest, not blended.
+        let moved = run("transform", json!({ "translate": [20.5, 0] }), &[Some(&sq), None]);
+        assert_eq!((moved.plane_at("depth", 31, 11), moved.plane_at("depth", 11, 11)), (5.0, 0.0));
+        assert!(moved.plane("depth").unwrap().data.iter().all(|&d| d == 0.0 || d == 5.0));
+        let pin = json!({ "from1": [0, 0], "from2": [100, 0], "from3": [100, 50], "from4": [0, 50],
+                          "to1": [20, 5], "to2": [120, 5], "to3": [120, 55], "to4": [20, 55] });
+        assert_eq!(run("corner_pin", pin, &[Some(&sq), None]).plane_at("depth", 31, 16), 5.0);
+        // Color ops (masked too) keep it; a merge over a far plate keeps
+        // the square's depth where it covers and the plate's elsewhere.
+        assert_eq!(run("grade", json!({ "multiply": [0.5, 0.5, 0.5] }), &[Some(&sq), None]).plane_at("depth", 11, 11), 5.0);
+        let mut mask = Image::new(100, 50);
+        mask.set(11, 11, [1.0; 4]);
+        assert_eq!(run("exposure", json!({ "stops": 1, "mix": 0.5 }), &[Some(&sq), Some(&mask)]).plane_at("depth", 12, 12), 5.0);
+        let plate = with_depth(solid(100, 50, [0.2, 0.2, 0.2, 1.0]), 100.0);
+        let over = run("merge", json!({}), &[Some(&sq), Some(&plate), None]);
+        assert_eq!((over.plane_at("depth", 11, 11), over.plane_at("depth", 50, 30)), (5.0, 100.0));
+        let under = run("merge", json!({ "operation": "under" }), &[Some(&sq), Some(&plate), None]);
+        assert_eq!(under.plane_at("depth", 11, 11), 100.0, "under: B in front");
+        // Crop to a new canvas and resize move it like the pixels.
+        let cropped = run("crop", json!({ "left": 10, "top": 10, "mode": "shrink canvas" }), &[Some(&sq), None]);
+        assert_eq!((cropped.plane_at("depth", 1, 1), cropped.plane_at("depth", 5, 5)), (5.0, 0.0));
+        let half = run("resize", json!({ "width": 50, "height": 25, "fit": "stretch" }), &[Some(&sq), None]);
+        assert_eq!((half.plane_at("depth", 6, 6), half.plane_at("depth", 2, 2)), (5.0, 0.0));
+        // Motion blur: the depth of the middle of the shutter.
+        let p = json!({ "translate": { "keys": [[0, [0, 0]], [10, [200, 0]]], "interp": "linear" }, "motion_blur": 8, "shutter": 1.0 });
+        let blurred = eval("transform", &resolve_params("transform", &p, 1), &[Some(&sq), None], &CTX).unwrap();
+        assert_eq!((blurred.plane_at("depth", 31, 11), blurred.plane_at("depth", 11, 11)), (5.0, 0.0));
+        // A source drops nothing it never had; an op that can't know keeps none.
+        assert!(run("constant", json!({}), &[]).planes.is_empty());
     }
 
     #[test]

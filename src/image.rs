@@ -83,6 +83,17 @@ pub struct Image {
     pub height: usize,
     /// `width * height` pixels, row by row from the window's top-left.
     pub pixels: Vec<Rgba>,
+    /// Extra channels over the same data window (a 3D render's `depth`):
+    /// empty for most images. Ops that don't know about them drop them.
+    pub planes: Vec<Plane>,
+}
+
+/// A named extra channel: one float per pixel of its image's data window,
+/// in the same order as `pixels`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Plane {
+    pub name: String,
+    pub data: Vec<f32>,
 }
 
 impl Image {
@@ -92,13 +103,100 @@ impl Image {
     }
 
     pub fn filled(width: usize, height: usize, value: Rgba) -> Self {
-        Image { format: Size { width, height }, x0: 0, y0: 0, width, height, pixels: vec![value; width * height] }
+        Image { format: Size { width, height }, x0: 0, y0: 0, width, height, pixels: vec![value; width * height], planes: Vec::new() }
     }
 
     /// A transparent image of frame `format` with pixels stored for `window`.
     pub fn blank(format: Size, window: IRect) -> Self {
         let (width, height) = (window.width(), window.height());
-        Image { format, x0: window.x0, y0: window.y0, width, height, pixels: vec![color::TRANSPARENT; width * height] }
+        Image { format, x0: window.x0, y0: window.y0, width, height, pixels: vec![color::TRANSPARENT; width * height], planes: Vec::new() }
+    }
+
+    /// The extra plane called `name`.
+    pub fn plane(&self, name: &str) -> Option<&Plane> {
+        self.planes.iter().find(|p| p.name == name)
+    }
+
+    /// Plane `name`'s data, added (all zero) when missing.
+    pub fn plane_mut(&mut self, name: &str) -> &mut Vec<f32> {
+        let i = match self.planes.iter().position(|p| p.name == name) {
+            Some(i) => i,
+            None => {
+                self.planes.push(Plane { name: name.to_string(), data: vec![0.0; self.width * self.height] });
+                self.planes.len() - 1
+            }
+        };
+        &mut self.planes[i].data
+    }
+
+    /// Plane `name` at frame position (x, y): 0 outside the window or when
+    /// there is no such plane.
+    #[inline]
+    pub fn plane_at(&self, name: &str, x: i32, y: i32) -> f32 {
+        self.plane(name).map_or(0.0, |p| self.plane_value(p, x, y))
+    }
+
+    /// `plane` (one of this image's) at frame position (x, y): 0 outside
+    /// the window.
+    #[inline]
+    pub fn plane_value(&self, plane: &Plane, x: i32, y: i32) -> f32 {
+        let (lx, ly) = (x - self.x0, y - self.y0);
+        if lx < 0 || ly < 0 || lx >= self.width as i32 || ly >= self.height as i32 {
+            0.0
+        } else {
+            plane.data[ly as usize * self.width + lx as usize]
+        }
+    }
+
+    /// Give this image `src`'s planes, each pixel taking the value nearest
+    /// to where `source` says it came from (frame coordinates, pixel
+    /// centers on integers; None: nothing there). Nearest, not blended: a
+    /// depth halfway between a near and a far surface is neither.
+    pub fn carry_planes(&mut self, src: &Image, source: impl Fn(i32, i32) -> Option<[f32; 2]> + Sync) {
+        use rayon::prelude::*;
+        let (w, x0, y0) = (self.width.max(1), self.x0, self.y0);
+        self.planes = src
+            .planes
+            .iter()
+            .map(|p| {
+                let mut data = vec![0.0; self.width * self.height];
+                data.par_iter_mut().enumerate().for_each(|(i, v)| {
+                    if let Some([sx, sy]) = source(x0 + (i % w) as i32, y0 + (i / w) as i32) {
+                        if sx.is_finite() && sy.is_finite() {
+                            *v = src.plane_value(p, sx.round() as i32, sy.round() as i32);
+                        }
+                    }
+                });
+                Plane { name: p.name.clone(), data }
+            })
+            .collect();
+    }
+
+    /// Each plane's name and lowest, highest and mean value over the data
+    /// window, for reporting a render (MCP / Python stats).
+    pub fn plane_stats(&self) -> serde_json::Value {
+        let round = |x: f64| (x * 1e5).round() / 1e5;
+        self.planes
+            .iter()
+            .map(|p| {
+                let (lo, hi, sum) = p.data.iter().fold((f32::INFINITY, f32::NEG_INFINITY, 0f64), |(lo, hi, s), &v| (lo.min(v), hi.max(v), s + v as f64));
+                let n = p.data.len();
+                let (lo, hi) = if n == 0 { (0.0, 0.0) } else { (lo as f64, hi as f64) };
+                serde_json::json!({ "name": p.name, "min": round(lo), "max": round(hi), "mean": round(sum / n.max(1) as f64) })
+            })
+            .collect()
+    }
+
+    /// [`carry_planes`](Self::carry_planes) from the same place in `src`:
+    /// a copy when the windows match.
+    pub fn keep_planes(&mut self, src: &Image) {
+        if src.planes.is_empty() {
+            self.planes.clear();
+        } else if self.window() == src.window() {
+            self.planes = src.planes.clone();
+        } else {
+            self.carry_planes(src, |x, y| Some([x as f32, y as f32]));
+        }
     }
 
     /// Where the stored pixels lie in the frame.
@@ -146,6 +244,7 @@ impl Image {
         for (i, px) in out.pixels.iter_mut().enumerate() {
             *px = self.at((i % w) as i32, (i / w) as i32);
         }
+        out.keep_planes(self);
         Cow::Owned(out)
     }
 
@@ -247,7 +346,32 @@ impl Image {
         img.format = Size { width: display.size.width(), height: display.size.height() };
         img.x0 = origin.x() - display.position.x();
         img.y0 = origin.y() - display.position.y();
+        Self::read_exr_planes(path, &mut img)?;
         Ok(img)
+    }
+
+    /// Channels other than R, G, B and A become planes (`Z` as `depth`),
+    /// read only when the header lists some.
+    fn read_exr_planes(path: &Path, img: &mut Image) -> Result<()> {
+        let meta = exr::meta::MetaData::read_from_file(path, false).with_context(|| format!("reading EXR {}", path.display()))?;
+        let extra = |name: &str| !matches!(name, "R" | "G" | "B" | "A");
+        let has_extra = meta.headers.first().is_some_and(|h| h.channels.list.iter().any(|c| extra(&c.name.to_string())));
+        if !has_extra {
+            return Ok(());
+        }
+        let flat = exr::prelude::read_first_flat_layer_from_file(path).with_context(|| format!("reading EXR {}", path.display()))?;
+        let n = img.width * img.height;
+        for c in flat.layer_data.channel_data.list.iter() {
+            let name = c.name.to_string();
+            if !extra(&name) {
+                continue;
+            }
+            let data: Vec<f32> = c.sample_data.values_as_f32().take(n).collect();
+            if data.len() == n {
+                img.planes.push(Plane { name: exr_plane_name(&name, true), data });
+            }
+        }
+        Ok(())
     }
 
     /// Write to disk. `.exr` keeps full float; `.tif`/`.tiff` are 16-bit
@@ -347,10 +471,47 @@ impl Image {
             let px = if w.is_empty() { color::TRANSPARENT } else { self.get(p.x(), p.y()) };
             (px[0], px[1], px[2], px[3])
         });
+        let display = IntegerBounds::new((0, 0), (self.format.width, self.format.height));
+        if !self.planes.is_empty() {
+            return self.write_exr_planes(path, size, attributes, display);
+        }
         let mut image = ExrImage::from_layer(Layer::new(size, attributes, Encoding::FAST_LOSSLESS, channels));
-        image.attributes.display_window = IntegerBounds::new((0, 0), (self.format.width, self.format.height));
+        image.attributes.display_window = display;
         image.write().to_file(path).with_context(|| format!("writing EXR {}", path.display()))?;
         Ok(())
+    }
+
+    /// [`write_exr`](Self::write_exr) with the planes as extra channels.
+    fn write_exr_planes(&self, path: &Path, size: (usize, usize), attributes: exr::prelude::LayerAttributes, display: exr::meta::attribute::IntegerBounds) -> Result<()> {
+        use exr::prelude::{AnyChannel, AnyChannels, Encoding, FlatSamples, Image as ExrImage, Layer, WritableImage};
+        let n = size.0 * size.1;
+        let empty = self.window().is_empty();
+        let mut list: Vec<AnyChannel<FlatSamples>> = ["R", "G", "B", "A"]
+            .into_iter()
+            .enumerate()
+            .map(|(c, name)| {
+                let data = if empty { vec![0.0; n] } else { self.pixels.iter().map(|p| p[c]).collect() };
+                AnyChannel::new(name, FlatSamples::F32(data))
+            })
+            .collect();
+        for p in &self.planes {
+            let data = if empty { vec![0.0; n] } else { p.data.clone() };
+            list.push(AnyChannel::new(exr_plane_name(&p.name, false).as_str(), FlatSamples::F32(data)));
+        }
+        let mut image = ExrImage::from_layer(Layer::new(size, attributes, Encoding::FAST_LOSSLESS, AnyChannels::sort(list.into())));
+        image.attributes.display_window = display;
+        image.write().to_file(path).with_context(|| format!("writing EXR {}", path.display()))?;
+        Ok(())
+    }
+}
+
+/// A plane's name in an EXR file and back (`reading`): depth is the
+/// standard `Z` channel; other names are kept.
+fn exr_plane_name(name: &str, reading: bool) -> String {
+    match (name, reading) {
+        ("Z", true) => "depth".into(),
+        ("depth", false) => "Z".into(),
+        _ => name.into(),
     }
 }
 
@@ -419,6 +580,31 @@ mod tests {
         let back = Image::read(&path).unwrap();
         assert_eq!(back.format, empty.format);
         assert!(back.flat().pixels.iter().all(|p| *p == color::TRANSPARENT));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn exr_keeps_extra_planes() {
+        let dir = std::env::temp_dir().join(format!("arclight_exrplanes_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut img = Image::blank(Size { width: 5, height: 4 }, IRect::new(1, 1, 4, 3));
+        img.pixels.iter_mut().enumerate().for_each(|(i, p)| *p = [i as f32, 0.0, 0.0, 1.0]);
+        *img.plane_mut("depth") = (0..6).map(|i| 10.0 + i as f32).collect();
+        *img.plane_mut("id") = vec![7.0; 6];
+        let path = dir.join("planes.exr");
+        img.write(&path).unwrap();
+        let back = Image::read(&path).unwrap();
+        assert_eq!((back.format, back.window(), &back.pixels), (img.format, img.window(), &img.pixels));
+        assert_eq!(back.plane("depth"), img.plane("depth"), "Z in the file, depth here");
+        assert_eq!(back.plane("id"), img.plane("id"));
+        assert_eq!(back.plane_at("depth", 2, 1), 11.0);
+        assert_eq!(back.plane_at("depth", 0, 0), 0.0, "outside the window");
+        assert_eq!(back.plane_stats()[0], serde_json::json!({ "name": "depth", "min": 10.0, "max": 15.0, "mean": 12.5 }));
+        let names: Vec<String> = exr::meta::MetaData::read_from_file(&path, false).unwrap().headers[0].channels.list.iter().map(|c| c.name.to_string()).collect();
+        assert!(names.contains(&"Z".to_string()), "{names:?}");
+        // The frame copy keeps them, moved into place.
+        let flat = back.flat();
+        assert_eq!(flat.plane_at("depth", 3, 2), 15.0);
         std::fs::remove_dir_all(&dir).ok();
     }
 
