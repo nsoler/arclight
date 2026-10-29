@@ -28,7 +28,8 @@ struct RenderJob {
 }
 
 /// Positions found so far by a tracking run, per frame.
-type Found = Arc<Mutex<Vec<(i64, Vec<Option<track::Pt>>)>>>;
+/// Positions found per frame, and warps when the run follows rotation.
+type Found = Arc<Mutex<Vec<(i64, Vec<Option<track::Pt>>, Option<Vec<track::Warp>>)>>>;
 
 struct TrackJob {
     progress: Arc<Progress>,
@@ -471,10 +472,10 @@ impl Properties {
             // Checked before draining, so a finished run's last frame isn't missed.
             let finished = job.handle.as_ref().is_some_and(|h| h.is_finished());
             let found = std::mem::take(&mut *job.found.lock().unwrap());
-            for (frame, pos) in &found {
-                key_tracks(doc, id, *frame, pos);
+            for (frame, pos, warps) in &found {
+                key_tracks(doc, id, *frame, pos, warps.as_deref());
             }
-            if let Some(&(frame, _)) = found.last() {
+            if let Some(&(frame, ..)) = found.last() {
                 self.seek = Some(frame);
             }
             if finished {
@@ -566,8 +567,12 @@ impl Properties {
         let Some(node) = doc.node(id) else { return };
         let start = track::positions(&node.params, from);
         let settings = track::Settings::from_params(&ops::params_with_defaults("tracker", &node.params));
+        // Runs measure turn and growth from the start frame: carry on from
+        // what's keyed there.
+        let follow = settings.motion != track::Solve::Translate;
+        let base: Vec<_> = track::warps(&node.params, from).into_iter().map(Option::unwrap_or_default).collect();
         // Anchor each track's curve at the start frame.
-        key_tracks(doc, id, from, &start);
+        key_tracks(doc, id, from, &start, follow.then_some(&base[..]));
         let frames = match track::input_frames(&doc.graph, id) {
             Ok(f) => f,
             Err(e) => {
@@ -580,7 +585,10 @@ impl Properties {
         let found = Found::default();
         let (pg, out) = (progress.clone(), found.clone());
         let handle = std::thread::spawn(move || {
-            track::track(frames, &start, from, to, &settings, &pg, |f, p| out.lock().unwrap().push((f, p.to_vec())))
+            track::track(frames, &start, from, to, &settings, &pg, |f, p, w| {
+                let warps = follow.then(|| base.iter().zip(w).map(|(b, w)| b.then(*w)).collect());
+                out.lock().unwrap().push((f, p.to_vec(), warps))
+            })
         });
         self.tracks.insert(id.to_string(), TrackJob { progress, handle: Some(handle), found, result: None });
     }
@@ -603,13 +611,19 @@ fn export_transform(doc: &mut Doc, id: &str, stabilize: bool) -> anyhow::Result<
     Ok(xf)
 }
 
-/// Key each found track position of tracker `id` at `frame`.
-fn key_tracks(doc: &mut Doc, id: &str, frame: i64, pos: &[Option<track::Pt>]) {
+/// Key each found track position of tracker `id` at `frame`, and its warp
+/// (`track<i>_warp`) when given.
+fn key_tracks(doc: &mut Doc, id: &str, frame: i64, pos: &[Option<track::Pt>], warps: Option<&[track::Warp]>) {
     for (i, p) in pos.iter().enumerate() {
         if let Some(p) = p {
             let name = format!("track{}", i + 1);
             let raw = doc.param(id, &name);
             doc.set_param(id, &name, anim::set_key(&raw, frame, &json!(p)));
+            if let Some(w) = warps.and_then(|w| w.get(i)) {
+                let name = format!("track{}_warp", i + 1);
+                let raw = doc.param(id, &name);
+                doc.set_param(id, &name, anim::set_key(&raw, frame, &json!(w.to_param())));
+            }
         }
     }
 }

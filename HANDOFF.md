@@ -16,7 +16,7 @@ Last updated 2026-10-28 (session 5). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~12,300 lines of Rust + Python. Tests: 56 library + 10 CLI + 22 GUI
+- ~12,300 lines of Rust + Python. Tests: 58 library + 10 CLI + 22 GUI
   (`cargo test --release`) and 8 Python (see "Working tips"), all passing.
   Clippy is clean apart from two old style lints (`Graph::from_str` name,
   `chunks_exact_mut(4)` in media.rs).
@@ -70,9 +70,6 @@ order of value:
      (originality rule).
 
 1. **Tracker follow-ups** (small to medium, builds on fresh code):
-   - **Use a single track's rotation/scale.** `track()` already estimates a
-     per-track `Warp { angle, scale }` but discards it; keying it (e.g.
-     hidden `track<i>_warp` params) would let one track solve rotate/scale.
    - **Corner pin** from 4 tracks: needs a perspective (homography) warp op.
    - Per-track box sizes; per-frame match score (show weak frames on the
      timeline or curve); "clear keys after/before this frame"; an offset

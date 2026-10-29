@@ -570,8 +570,9 @@ pub static OPS: &[OpInfo] = &[
                change size (needed for features that rotate, or zoom, through the shot). \
                A track stops when its best match falls below Min. correlation. Output: the \
                input unchanged, or the solved motion relative to the reference frame applied \
-               to it (match-move) or removed from it (stabilize). One track solves translation; \
-               two or more can also solve rotation and scale.",
+               to it (match-move) or removed from it (stabilize). One track solves translation, \
+               and also rotation and scale when Track motion followed them; two or more \
+               solve them from the tracks' positions.",
     },
     OpInfo {
         name: "media_out",
@@ -681,6 +682,11 @@ fn add_reference_tracks(params: &Value, resolved: &mut Value) {
     let reference = params.get("reference_frame").and_then(Value::as_i64).unwrap_or(1);
     for (i, p) in track::positions(params, reference).into_iter().enumerate() {
         resolved[format!("ref{}", i + 1)] = json!(p);
+    }
+    for (i, w) in track::warps(params, reference).into_iter().enumerate() {
+        if let Some(w) = w {
+            resolved[format!("refwarp{}", i + 1)] = json!(w.to_param());
+        }
     }
 }
 
@@ -1082,10 +1088,16 @@ fn tracker(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
             Some([r[0].as_f64().unwrap_or(0.0) as f32, r[1].as_f64().unwrap_or(0.0) as f32])
         })
         .collect();
+    let ref_warps: Vec<_> = (1..=now.len())
+        .map(|i| {
+            let w = p[format!("refwarp{i}")].as_array().filter(|a| a.len() >= 2)?;
+            Some(track::Warp { angle: (w[0].as_f64()? as f32).to_radians(), scale: w[1].as_f64()? as f32 })
+        })
+        .collect();
     let kind = Solve::from_choice(p["solve"].as_str(), Solve::Scale);
     // Reference → now. A match-move moves the image along with the
     // tracks, so each output pixel samples where it came from.
-    let m = track::solve_tracks(&refs, &now, kind).context("no tracks enabled")?;
+    let m = track::solve_tracks(&refs, &now, &ref_warps, &track::warps(&p, 0), kind).context("no tracks enabled")?;
     let sample_at = match output {
         "match-move" => track::invert(&m),
         "stabilize" => m,
@@ -1701,6 +1713,26 @@ mod tests {
         params["solve"] = json!("translate");
         let xf = track::transform_params(&params, [40, 30], false).unwrap();
         assert!(xf.contains_key("translate") && !xf.contains_key("rotate") && !xf.contains_key("scale"));
+    }
+
+    #[test]
+    fn one_tracker_track_turns_the_output_by_its_warp() {
+        let mut src = Image::new(40, 30);
+        src.set(25, 15, [1.0, 1.0, 1.0, 1.0]);
+        // The track stays put at (15.5, 15.5) but the feature turns 90°.
+        let params = json!({
+            "track1": [15.5, 15.5],
+            "track1_warp": { "keys": [[1, [0.0, 1.0]], [5, [90.0, 1.0]]], "interp": "linear" },
+            "output": "match-move", "reference_frame": 1, "solve": "translate, rotate",
+        });
+        let out = eval("tracker", &resolve_params("tracker", &params, 5), &[Some(&src)], &CTX).unwrap();
+        // (25.5, 15.5) turned 90° clockwise about the track lands at (15.5, 25.5).
+        assert!(out.get(15, 25)[3] > 0.99, "{:?}", out.get(15, 25));
+        // The export agrees.
+        let xf = Value::Object(track::transform_params(&params, [40, 30], false).unwrap());
+        let got = eval("transform", &resolve_params("transform", &xf, 5), &[Some(&src)], &CTX).unwrap();
+        let diff = out.pixels.iter().zip(&got.pixels).map(|(a, b)| (a[3] - b[3]).abs()).fold(0.0, f32::max);
+        assert!(diff < 1e-3, "off by {diff}");
     }
 
     #[test]

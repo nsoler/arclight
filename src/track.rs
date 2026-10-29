@@ -93,6 +93,16 @@ impl Default for Warp {
 }
 
 impl Warp {
+    /// This warp followed by `next`.
+    pub fn then(&self, next: Warp) -> Warp {
+        Warp { angle: self.angle + next.angle, scale: self.scale * next.scale }
+    }
+
+    /// As stored in a Tracker's `track<i>_warp` param: `[degrees, scale]`.
+    pub fn to_param(&self) -> [f64; 2] {
+        [(self.angle as f64).to_degrees(), self.scale as f64]
+    }
+
     pub fn matrix(&self) -> Mat {
         let (s, c) = self.angle.sin_cos();
         [self.scale * c, -self.scale * s, self.scale * s, self.scale * c]
@@ -295,8 +305,9 @@ pub struct Outcome {
 
 /// Track points through the frames `from` → `to` (either direction) on
 /// `image(frame)`. `start` holds each track's position at `from` (`None`
-/// skips it). `found(frame, positions)` is called after each frame with
-/// the tracks still alive. Stops early when every track is lost.
+/// skips it). `found(frame, positions, warps)` is called after each frame
+/// with the tracks still alive and each one's turn and growth since `from`.
+/// Stops early when every track is lost.
 pub fn track(
     mut image: impl FnMut(i64) -> Result<Image>,
     start: &[Option<Pt>],
@@ -304,7 +315,7 @@ pub fn track(
     to: i64,
     settings: &Settings,
     progress: &Progress,
-    mut found: impl FnMut(i64, &[Option<Pt>]),
+    mut found: impl FnMut(i64, &[Option<Pt>], &[Warp]),
 ) -> Result<Outcome> {
     let (r, s) = settings.radii();
     let step = if to >= from { 1 } else { -1 };
@@ -354,7 +365,7 @@ pub fn track(
                 pats[i] = Pattern::new(&img, q, r, &w.matrix());
             }
         }
-        found(frame, &pos);
+        found(frame, &pos, &warps);
         out.frames += 1;
         progress.done.fetch_add(1, Ordering::Relaxed);
     }
@@ -373,6 +384,19 @@ pub fn input_frames(graph: &Graph, node: &str) -> Result<impl FnMut(i64) -> Resu
         let ctx = EvalContext { frame, write_outputs: false };
         Ok(eval.evaluate(&graph, &src, &ctx)?.as_ref().clone())
     })
+}
+
+/// Each enabled track's turn and growth at `frame` (`track<i>_warp`, keyed
+/// by tracking runs that follow rotation), or `None` where it was never
+/// keyed. The warp param isn't in the op's spec, so it has no default.
+pub fn warps(params: &Value, frame: i64) -> Vec<Option<Warp>> {
+    (1..=TRACKS)
+        .map(|i| {
+            let on = params.get(format!("track{i}_on")).and_then(Value::as_bool).unwrap_or(i == 1);
+            let v = crate::anim::sample(params.get(format!("track{i}_warp"))?, frame as f64);
+            (on && v.len() >= 2).then(|| Warp { angle: (v[0] as f32).to_radians(), scale: v[1] as f32 })
+        })
+        .collect()
 }
 
 /// Each enabled track's position at `frame`, from a Tracker node's params.
@@ -459,9 +483,21 @@ pub fn solve(from: &[Pt], to: &[Pt], kind: Solve) -> Affine {
 }
 
 /// [`solve`] over the tracks that have a position in both `from` and `to`;
-/// `None` when there are none.
-pub fn solve_tracks(from: &[Option<Pt>], to: &[Option<Pt>], kind: Solve) -> Option<Affine> {
-    let (a, b): (Vec<Pt>, Vec<Pt>) = from.iter().zip(to).filter_map(|(a, b)| Some(((*a)?, (*b)?))).unzip();
+/// `None` when there are none. A single track also turns and scales by
+/// its own warp from `from_warps` to `to_warps`, where both are known.
+pub fn solve_tracks(from: &[Option<Pt>], to: &[Option<Pt>], from_warps: &[Option<Warp>], to_warps: &[Option<Warp>], kind: Solve) -> Option<Affine> {
+    let pairs: Vec<usize> = (0..from.len().min(to.len())).filter(|&i| from[i].is_some() && to[i].is_some()).collect();
+    if let [i] = pairs[..] {
+        let warp = |w: &[Option<Warp>]| w.get(i).copied().flatten();
+        if let (Some(a), Some(b), true) = (warp(from_warps), warp(to_warps), kind != Solve::Translate) {
+            let (p, q) = (from[i]?, to[i]?);
+            let scale = if kind == Solve::Scale { b.scale / a.scale.max(1e-6) } else { 1.0 };
+            // x' = s R (x − p) + q
+            let [m0, m1, m3, m4] = Warp { angle: b.angle - a.angle, scale }.matrix();
+            return Some([m0, m1, q[0] - (m0 * p[0] + m1 * p[1]), m3, m4, q[1] - (m3 * p[0] + m4 * p[1])]);
+        }
+    }
+    let (a, b): (Vec<Pt>, Vec<Pt>) = pairs.iter().map(|&i| (from[i].unwrap(), to[i].unwrap())).unzip();
     (!a.is_empty()).then(|| solve(&a, &b, kind))
 }
 
@@ -471,15 +507,18 @@ pub fn solve_tracks(from: &[Option<Pt>], to: &[Option<Pt>], kind: Solve) -> Opti
 
 /// Params for a Transform node that reproduces a Tracker's solved motion on
 /// an image of `size`: the match-move (or, with `stabilize`, its inverse),
-/// keyed on every frame where an enabled track has a key. Rotation and scale
-/// are keyed only when the Tracker's `solve` includes them.
+/// keyed on every frame where an enabled track has a key (position or
+/// warp). Rotation and scale are keyed only when the Tracker's `solve`
+/// includes them.
 pub fn transform_params(params: &Value, size: [usize; 2], stabilize: bool) -> Result<Map<String, Value>> {
     let p = ops::params_with_defaults("tracker", params);
     let kind = Solve::from_choice(p["solve"].as_str(), Solve::Scale);
-    let refs = positions(&p, p["reference_frame"].as_i64().unwrap_or(1));
+    let reference = p["reference_frame"].as_i64().unwrap_or(1);
+    let (refs, ref_warps) = (positions(&p, reference), warps(&p, reference));
     let mut frames: Vec<i64> = (1..=TRACKS)
         .filter(|i| p[format!("track{i}_on")].as_bool() == Some(true))
-        .flat_map(|i| crate::anim::key_frames(&p[format!("track{i}")]))
+        .flat_map(|i| [format!("track{i}"), format!("track{i}_warp")])
+        .flat_map(|name| crate::anim::key_frames(&p[name]))
         .collect();
     frames.sort_unstable();
     frames.dedup();
@@ -493,7 +532,7 @@ pub fn transform_params(params: &Value, size: [usize; 2], stabilize: bool) -> Re
     let (mut translate, mut rotate, mut scale) = (Vec::new(), Vec::new(), Vec::new());
     let mut last_angle = 0.0;
     for f in frames {
-        let m = solve_tracks(&refs, &positions(&p, f), kind).context("no tracks enabled")?;
+        let m = solve_tracks(&refs, &positions(&p, f), &ref_warps, &warps(&p, f), kind).context("no tracks enabled")?;
         let m = if stabilize { invert(&m) } else { m };
         let o = apply(&m, c);
         translate.push(json!([f, [round((o[0] - c[0]) as f64), round((o[1] - c[1]) as f64)]]));
@@ -593,7 +632,7 @@ mod tests {
         let mut seen = Vec::new();
         // The second track sits on a flat corner and can't be followed.
         let start = [Some([30.0, 40.0]), Some([5.0, 120.0]), None];
-        let out = track(frame, &start, 1, 9, &settings, &Progress::default(), |f, p| seen.push((f, p.to_vec()))).unwrap();
+        let out = track(frame, &start, 1, 9, &settings, &Progress::default(), |f, p, _| seen.push((f, p.to_vec()))).unwrap();
         assert_eq!(out.frames, 8);
         assert_eq!(out.lost, vec![(1, 1)]);
         let (f, last) = seen.last().unwrap();
@@ -608,15 +647,16 @@ mod tests {
         let frame = |f: i64| Ok(blobs(128, 128, [2.0 * f as f32, 0.0]));
         let settings = Settings { pattern: 21, search: 41, min_score: 0.8, update: true, motion: Solve::Rotate };
         let mut last = None;
-        track(frame, &[Some([70.0, 30.0])], 5, 2, &settings, &Progress::default(), |_, p| last = p[0]).unwrap();
+        track(frame, &[Some([70.0, 30.0])], 5, 2, &settings, &Progress::default(), |_, p, _| last = p[0]).unwrap();
         let p = last.unwrap();
         assert!((p[0] - 64.0).abs() < 0.02 && (p[1] - 30.0).abs() < 0.02, "{p:?}");
     }
 
     /// The blobs turning `deg` per frame (and growing by `grow`) about
     /// (60, 55) while drifting right; returns the error at each frame
-    /// tracking the point (50, 40), or `None` once it is lost.
-    fn track_turning(deg: f32, grow: f32, motion: Solve, update: bool) -> Vec<Option<f32>> {
+    /// tracking the point (50, 40), or `None` once it is lost, and the
+    /// track's warp at the last frame.
+    fn track_turning(deg: f32, grow: f32, motion: Solve, update: bool) -> (Vec<Option<f32>>, Warp) {
         let at = |f: i64| {
             let t = (f - 1) as f32;
             let (s, c) = (deg * t).to_radians().sin_cos();
@@ -627,35 +667,39 @@ mod tests {
         };
         let frame = |f: i64| Ok(blobs_moved(128, 128, &at(f)));
         let settings = Settings { pattern: 25, search: 45, min_score: 0.8, update, motion };
-        let mut errors = Vec::new();
-        track(frame, &[Some([50.0, 40.0])], 1, 21, &settings, &Progress::default(), |f, p| {
+        let (mut errors, mut warp) = (Vec::new(), Warp::default());
+        track(frame, &[Some([50.0, 40.0])], 1, 21, &settings, &Progress::default(), |f, p, w| {
             let truth = apply(&at(f), [50.0, 40.0]);
             errors.push(p[0].map(|p| ((p[0] - truth[0]).powi(2) + (p[1] - truth[1]).powi(2)).sqrt()));
+            warp = w[0];
         })
         .unwrap();
-        errors
+        (errors, warp)
     }
 
     #[test]
     fn rotating_features_are_followed_without_drift() {
         // 2° a frame: 40° by the end.
         for update in [false, true] {
-            let errors = track_turning(2.0, 1.0, Solve::Rotate, update);
+            let (errors, warp) = track_turning(2.0, 1.0, Solve::Rotate, update);
             assert_eq!(errors.len(), 20);
             let worst = errors.iter().map(|e| e.expect("never lost")).fold(0.0, f32::max);
             assert!(worst < 0.1, "update {update}: worst error {worst} px");
+            assert!((warp.to_param()[0] - 40.0).abs() < 0.2 && warp.scale == 1.0, "update {update}: {warp:?}");
         }
         // Matching shifts only can't follow it.
-        let errors = track_turning(2.0, 1.0, Solve::Translate, false);
+        let (errors, _) = track_turning(2.0, 1.0, Solve::Translate, false);
         assert!(errors.iter().any(|e| e.is_none_or(|e| e > 1.0)), "{errors:?}");
     }
 
     #[test]
     fn scaling_features_are_followed() {
         // Turning 1° and growing 2% a frame: 49% bigger by the end.
-        let errors = track_turning(1.0, 1.02, Solve::Scale, false);
+        let (errors, warp) = track_turning(1.0, 1.02, Solve::Scale, false);
         let worst = errors.iter().map(|e| e.expect("never lost")).fold(0.0, f32::max);
         assert!(worst < 0.15, "worst error {worst} px");
+        let [deg, scale] = warp.to_param();
+        assert!((deg - 20.0).abs() < 0.2 && (scale - 1.02f64.powi(20)).abs() < 0.005, "{warp:?}");
     }
 
     #[test]
@@ -677,5 +721,22 @@ mod tests {
         // Translation only: the mean offset.
         let t = solve(&[[0.0, 0.0], [2.0, 0.0]], &[[1.0, 1.0], [5.0, 1.0]], Solve::Translate);
         assert_eq!(t, [1.0, 0.0, 2.0, 0.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn one_track_solves_rotation_and_scale_from_its_warp() {
+        let w = |deg: f32, scale: f32| Some(Warp { angle: deg.to_radians(), scale });
+        let (from, to) = ([Some([10.0, 10.0]), None], [Some([20.0, 15.0]), None]);
+        // 30° → 120°, 1.0 → 2.0: turns 90° and doubles about the track.
+        let m = solve_tracks(&from, &to, &[w(30.0, 1.0)], &[w(120.0, 2.0)], Solve::Scale).unwrap();
+        let p = apply(&m, [11.0, 10.0]);
+        assert!((p[0] - 20.0).abs() < 1e-4 && (p[1] - 17.0).abs() < 1e-4, "{p:?}");
+        let r = solve_tracks(&from, &to, &[w(30.0, 1.0)], &[w(120.0, 2.0)], Solve::Rotate).unwrap();
+        assert!((apply(&r, [11.0, 10.0])[1] - 16.0).abs() < 1e-4);
+        // Without warps (or solving translation only) it just moves.
+        for (ws, kind) in [(&[None][..], Solve::Scale), (&[w(120.0, 2.0)][..], Solve::Translate)] {
+            let t = solve_tracks(&from, &to, &[w(30.0, 1.0)], ws, kind).unwrap();
+            assert_eq!(apply(&t, [11.0, 10.0]), [21.0, 15.0]);
+        }
     }
 }
