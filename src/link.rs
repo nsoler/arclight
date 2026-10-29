@@ -10,6 +10,11 @@
 //!   Tracker N's solved motion as a Transform's `translate`, `rotate` or
 //!   `scale` (M) about `pivot`, match-move or (B) stabilize.
 //!
+//! Any link may also carry `"multiply"` and `"add"` (a number for every
+//! component, or one per component): the value is then
+//! `linked × multiply + add`, e.g. half a rotation (`"multiply": 0.5`) or a
+//! track followed 10 px to its right (`"add": [10, 0]`).
+//!
 //! The graph resolves links before each node renders, so the cache key
 //! sees the values: changing the source re-renders what follows it.
 
@@ -62,23 +67,60 @@ fn resolve_depth<'a>(lookup: &dyn Fn(&str) -> Option<&'a NodeSpec>, v: &Value, t
     if depth >= MAX_DEPTH {
         return Value::Null;
     }
-    if let Some(what) = l["motion"].as_str() {
+    let value = if let Some(what) = l["motion"].as_str() {
         let pivot = [l["pivot"][0].as_f64().unwrap_or(0.0) as f32, l["pivot"][1].as_f64().unwrap_or(0.0) as f32];
         let (translate, rotate, scale) = track::motion_at(&n.params, t, l["stabilize"].as_bool().unwrap_or(false), pivot);
-        return match what {
+        match what {
             "translate" => json!(translate),
             "rotate" => json!(rotate),
             "scale" => json!([scale, scale]),
             _ => Value::Null,
+        }
+    } else {
+        let Some(name) = l["param"].as_str() else { return Value::Null };
+        let p = ops::params_with_defaults(&n.op, &n.params);
+        let t = match l["at"].as_str() {
+            Some("reference") => p["reference_frame"].as_f64().unwrap_or(1.0),
+            _ => t,
         };
-    }
-    let Some(name) = l["param"].as_str() else { return Value::Null };
-    let p = ops::params_with_defaults(&n.op, &n.params);
-    let t = match l["at"].as_str() {
-        Some("reference") => p["reference_frame"].as_f64().unwrap_or(1.0),
-        _ => t,
+        resolve_depth(lookup, &p[name], t, depth + 1)
     };
-    resolve_depth(lookup, &p[name], t, depth + 1)
+    adjust(value, &l["multiply"], &l["add"])
+}
+
+/// `v × multiply + add`, per component: `multiply` and `add` are a number
+/// for every component or a list (missing ones: 1 and 0). Anything that
+/// isn't a number or a list of numbers passes through.
+pub fn adjust(v: Value, multiply: &Value, add: &Value) -> Value {
+    if multiply.is_null() && add.is_null() {
+        return v;
+    }
+    let pick = |x: &Value, i: usize, default: f64| match x {
+        Value::Array(a) => a.get(i).and_then(Value::as_f64).unwrap_or(default),
+        other => other.as_f64().unwrap_or(default),
+    };
+    let one = |x: f64, i: usize| x * pick(multiply, i, 1.0) + pick(add, i, 0.0);
+    match v {
+        Value::Number(n) => n.as_f64().map_or(Value::Number(n), |x| json!(one(x, 0))),
+        Value::Array(a) if a.iter().all(Value::is_number) => {
+            Value::Array(a.iter().enumerate().map(|(i, x)| json!(one(x.as_f64().unwrap_or(0.0), i))).collect())
+        }
+        other => other,
+    }
+}
+
+/// `link` with its multiply and add set (null removes one).
+pub fn with_adjust(link: &Value, multiply: Value, add: Value) -> Value {
+    let mut l = link.clone();
+    for (key, v) in [("multiply", multiply), ("add", add)] {
+        match v {
+            Value::Null => {
+                l["link"].as_object_mut().map(|m| m.remove(key));
+            }
+            v => l["link"][key] = v,
+        }
+    }
+    l
 }
 
 /// The first of `params` linked to a node that `lookup` can't find: the
@@ -105,15 +147,29 @@ pub fn rename(params: &mut Value, old: &str, new: &str) {
 pub fn describe(v: &Value) -> String {
     let l = &v["link"];
     let node = l["node"].as_str().unwrap_or("?");
-    if l.get("motion").is_some() {
+    let what = if l.get("motion").is_some() {
         let how = if l["stabilize"].as_bool() == Some(true) { "stabilize" } else { "match-move" };
-        return format!("{node} · {how}");
+        format!("{node} · {how}")
+    } else {
+        let param = l["param"].as_str().unwrap_or("?");
+        match l["at"].as_str() {
+            Some("reference") => format!("{node} · {param} at the reference frame"),
+            _ => format!("{node} · {param}"),
+        }
+    };
+    // "× 0.5", "+ [10, 0]" when set.
+    let show = |x: &Value| match x {
+        Value::Array(a) => format!("[{}]", a.iter().map(|v| format!("{}", v.as_f64().unwrap_or(0.0))).collect::<Vec<_>>().join(", ")),
+        other => format!("{}", other.as_f64().unwrap_or(0.0)),
+    };
+    let mut out = what;
+    if !l["multiply"].is_null() {
+        out += &format!(" × {}", show(&l["multiply"]));
     }
-    let param = l["param"].as_str().unwrap_or("?");
-    match l["at"].as_str() {
-        Some("reference") => format!("{node} · {param} at the reference frame"),
-        _ => format!("{node} · {param}"),
+    if !l["add"].is_null() {
+        out += &format!(" + {}", show(&l["add"]));
     }
+    out
 }
 
 #[cfg(test)]
@@ -147,6 +203,37 @@ mod tests {
         rename(&mut p, "a", "z");
         assert_eq!(source(&p["center"]), Some("z"));
         assert_eq!(describe(&at_reference("t", "track1")), "t · track1 at the reference frame");
+    }
+
+    #[test]
+    fn links_multiply_and_add() {
+        // Per component, a number for all, or missing ones left alone.
+        assert_eq!(adjust(json!([2.0, 4.0]), &json!(0.5), &json!([10, 0])), json!([11.0, 2.0]));
+        assert_eq!(adjust(json!(90.0), &json!(0.5), &Value::Null), json!(45.0));
+        assert_eq!(adjust(json!([1.0, 1.0, 1.0]), &json!([2]), &json!(1)), json!([3.0, 2.0, 2.0]));
+        assert_eq!(adjust(json!("text"), &json!(2), &json!(1)), json!("text"));
+        let g = graph(json!([
+            { "id": "a", "op": "rectangle", "params": { "center": { "keys": [[1, [0, 0]], [11, [100, 50]]], "interp": "linear" } } },
+            // Followed 10 px to the right…
+            { "id": "b", "op": "rectangle", "params": { "center": with_adjust(&param("a", "center"), Value::Null, json!([10, 0])) } },
+            // …and a track's rotation, halved.
+            { "id": "t", "op": "tracker", "params": {
+                "track1_on": true, "track1": [10.5, 10.5], "track2_on": true,
+                "track2": { "keys": [[1, [30.5, 10.5]], [5, [10.5, 30.5]]], "interp": "linear" }, "solve": "translate, rotate" } },
+            { "id": "half", "op": "transform", "params": {
+                "rotate": with_adjust(&motion("t", "rotate", false, [10.5, 10.5]), json!(0.5), Value::Null) } },
+        ]));
+        let lookup = |id: &str| g.node(id);
+        let at = |node: &str, param: &str, t: f64| resolve(&lookup, &g.node(node).unwrap().params[param], t);
+        assert_eq!(at("b", "center", 6.0), json!([60.0, 25.0]));
+        // The second track swings 90° about the first by frame 5: half is 45°.
+        let full = resolve(&lookup, &motion("t", "rotate", false, [10.5, 10.5]), 5.0).as_f64().unwrap();
+        let half = at("half", "rotate", 5.0).as_f64().unwrap();
+        assert!((full - 90.0).abs() < 1e-3 && (half - 45.0).abs() < 1e-3, "{full} {half}");
+        // Removing them, and how they read in the panel.
+        let l = with_adjust(&param("a", "center"), json!(0.5), json!([10, 0]));
+        assert_eq!(describe(&l), "a · center × 0.5 + [10, 0]");
+        assert_eq!(with_adjust(&l, Value::Null, Value::Null), param("a", "center"));
     }
 
     /// A Corner Pin linked to four tracks renders like one keyed with a

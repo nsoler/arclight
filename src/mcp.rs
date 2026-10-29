@@ -655,6 +655,24 @@ mod tests {
     }
 
     #[test]
+    fn scripts_set_links_with_offsets() {
+        let mut s = Server::new(Session::default());
+        call(&mut s, "create_node", json!({"op": "rectangle", "name": "a", "params": {"width": 64, "height": 32, "center": [20, 16], "size": [4, 4]}}));
+        call(&mut s, "create_node", json!({"op": "rectangle", "name": "b", "params": {"width": 64, "height": 32, "size": [4, 4]}}));
+        let link = json!({"link": {"node": "a", "param": "center", "add": [10, -4]}});
+        assert_eq!(call(&mut s, "set_params", json!({"node": "b", "params": {"center": link}}))["isError"], false);
+        let window = |s: &mut Server, n: &str| call(s, "render_frame", json!({"node": n}))["structuredContent"]["window"].clone();
+        let (wa, wb) = (window(&mut s, "a"), window(&mut s, "b"));
+        assert_eq!((wb[0].as_i64().unwrap() - wa[0].as_i64().unwrap(), wb[1].as_i64().unwrap() - wa[1].as_i64().unwrap()), (10, -4));
+        // Moving the source moves the follower.
+        call(&mut s, "set_params", json!({"node": "a", "params": {"center": [30, 16]}}));
+        assert_eq!(window(&mut s, "b")[0].as_i64().unwrap() - window(&mut s, "a")[0].as_i64().unwrap(), 10);
+        // A link with no node is refused.
+        let bad = call(&mut s, "set_params", json!({"node": "b", "params": {"center": {"link": {"param": "center"}}}}));
+        assert_eq!(bad["isError"], true);
+    }
+
+    #[test]
     fn sources_follow_the_project_format() {
         let mut s = Server::new(Session::default());
         let stats = |s: &mut Server, node: &str| call(s, "render_frame", json!({"node": node}))["structuredContent"].clone();

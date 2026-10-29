@@ -20,7 +20,7 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.19**.
+  in the same commit as the change. Current: **0.0.20**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -175,7 +175,15 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   "Linked" checkbox (`Properties::copy_exports`). Tests: link chains /
   reference / loop / rename; linked Corner Pin = copy pixel for pixel;
   linked Transform motion blur = blurred copy; MCP live follow of a
-  re-track, rename, delete error; Doc. No Developer ID signing / notarization (needs a paid Apple
+  re-track, rename, delete error; Doc.
+- **Session 8, part 5** (user request), **v0.0.20**: maths on links.
+  Link objects take optional `multiply` / `add` (number or per-component
+  list); `link::adjust` applies `v × m + a` after resolving (numbers and
+  number lists; anything else passes through); `with_adjust` sets or
+  (Null) removes them; `describe` appends "× m + a". Panel
+  `linked_widget` has a second row of × and + DragValues per component
+  (×1 / +0 are stored as absent). Tests: `links_multiply_and_add` (incl.
+  half of a solved 90° rotation), MCP `scripts_set_links_with_offsets`. No Developer ID signing / notarization (needs a paid Apple
   account); ffmpeg not bundled (GPL builds; Homebrew instead).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
@@ -246,7 +254,7 @@ report back after a few milestones.
    - Plugin process isolation: a crashing native plugin kills the app.
    - Package the Python module as a wheel (`maturin build` from `python/`,
      `pyproject.toml` is ready). maturin isn't installed on this machine.
-   - Links could grow into expressions (math on linked values).
+   - Links could grow into full expressions (formulas, several inputs).
    - Not planned: OpenFX hosting (large; its own project), licensing (the
      docs wanted another product's scheme copied; declined), `import_nuke`
      (originality rule).
@@ -840,8 +848,9 @@ windows exist.
 - **Arbitrary channels** in `Image` (named planes such as rgba, mask,
   depth, motion) instead of fixed `[f32; 4]`. A big refactor; do it before
   3D.
-- **Expressions**: live links exist (v0.0.19, `src/link.rs`); math on
-  linked values (offsets, multipliers) would be the next step.
+- **Expressions**: live links with multiply/add exist (v0.0.19–0.0.20,
+  `src/link.rs`); a formula language (several inputs, functions such as
+  sin or noise) would be the next step if needed.
 - **ROI / tiled evaluation** once images get large or graphs get deep.
 
 ## Known issues and gaps

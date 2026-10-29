@@ -231,7 +231,9 @@ impl Properties {
     }
 
     /// A param linked to another node: its value now (read-only), where it
-    /// comes from, and Unlink, which keeps the value as a plain one.
+    /// comes from, and Unlink, which keeps the value as a plain one; below,
+    /// × and + per component (`linked × multiply + add`), e.g. half a
+    /// rotation or a track followed 10 px to the side.
     fn linked_widget(&mut self, ui: &mut egui::Ui, doc: &mut Doc, id: &str, spec: &ParamSpec) {
         let raw = doc.param(id, spec.name);
         let now = doc.param_at(id, spec.name, self.frame);
@@ -240,14 +242,51 @@ impl Properties {
             Value::Number(n) => format!("{:.3}", n.as_f64().unwrap_or(0.0)),
             other => other.to_string(),
         };
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(shown).monospace());
-            ui.label(RichText::new(format!("← {}", arclight::link::describe(&raw))).color(Color32::from_rgb(120, 200, 240)))
-                .on_hover_text("Linked: follows that node live, so it updates when it changes (re-tracking, say)");
-            if ui.small_button("Unlink").on_hover_text("Keep this frame's value as a plain one and stop following").clicked() {
-                doc.set_param(id, spec.name, now.clone());
-            }
+        // Components, and the link's multiply / add spread over them.
+        let n = now.as_array().map_or(1, Vec::len).max(1);
+        let spread = |x: &Value, default: f64| -> Vec<f64> {
+            (0..n)
+                .map(|i| match x {
+                    Value::Array(a) => a.get(i).and_then(Value::as_f64).unwrap_or(default),
+                    other => other.as_f64().unwrap_or(default),
+                })
+                .collect()
+        };
+        let (mut mul, mut add) = (spread(&raw["link"]["multiply"], 1.0), spread(&raw["link"]["add"], 0.0));
+        let mut changed = false;
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(shown).monospace());
+                ui.label(RichText::new(format!("← {}", arclight::link::describe(&raw))).color(Color32::from_rgb(120, 200, 240)))
+                    .on_hover_text("Linked: follows that node live, so it updates when it changes (re-tracking, say)");
+                if ui.small_button("Unlink").on_hover_text("Keep this frame's value as a plain one and stop following").clicked() {
+                    doc.set_param(id, spec.name, now.clone());
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.weak("×").on_hover_text("Multiply the linked value (0.5: half of it; -1: mirrored)");
+                for m in &mut mul {
+                    changed |= ui.add(egui::DragValue::new(m).speed(0.01).max_decimals(3)).changed();
+                }
+                ui.weak("+").on_hover_text("Then add this (an offset)");
+                for a in &mut add {
+                    changed |= ui.add(egui::DragValue::new(a).speed(0.5).max_decimals(3)).changed();
+                }
+            });
         });
+        if changed && arclight::link::is_link(&doc.param(id, spec.name)) {
+            // One number for a single component; ×1 and +0 mean none.
+            let pack = |v: &[f64], identity: f64| {
+                if v.iter().all(|&x| x == identity) {
+                    Value::Null
+                } else if n == 1 {
+                    json!(v[0])
+                } else {
+                    json!(v)
+                }
+            };
+            doc.set_param(id, spec.name, arclight::link::with_adjust(&raw, pack(&mul, 1.0), pack(&add, 0.0)));
+        }
     }
 
     /// What an unset param with an automatic default stands for, when

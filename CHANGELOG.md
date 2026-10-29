@@ -7,6 +7,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.20 — 2026-10-29
+
+- Maths on links: a linked value can be multiplied and offset
+  (`linked × multiply + add`, per component or one number for all): half
+  a rotation, a track followed 10 px to the side, mirrored motion. The
+  panel shows × and + fields under every linked param; scripts set
+  `"multiply"` / `"add"` in the link.
+
 ## 0.0.19 — 2026-10-29
 
 - Live links between nodes: a param can follow another node instead of

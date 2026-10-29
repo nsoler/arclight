@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.0.19** (alpha); see `CHANGELOG.md`.
+Version **0.0.20** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -233,7 +233,11 @@ follows that node live:
 The first reads another node's param (keyframes evaluated, links
 followed); the second reads it at that node's reference frame; the third
 is a Tracker's solved motion as a Transform's `translate`, `rotate` or
-`scale` about `pivot`. The Tracker panel's **To Transform** / **To Corner
+`scale` about `pivot`. Any link can add `"multiply"` and `"add"` (a number
+for every component, or one per component) for `linked × multiply + add`:
+`"multiply": 0.5` on a rotate link turns half as far, `"add": [10, 0]` on
+a translate link follows 10 px to the right. The panel's × and + fields
+under a linked param set them. The Tracker panel's **To Transform** / **To Corner
 Pin** make linked nodes (untick **Linked** for a keyed copy). Linked
 params show their value and source in the panel, with **Unlink** to keep
 the value as a plain one; viewer handles don't move them. Renaming the
