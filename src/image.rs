@@ -186,10 +186,10 @@ impl Image {
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if ext == "exr" {
-            Self::read_exr(path)
-        } else {
-            Self::read_ldr(path)
+        match ext.as_str() {
+            "exr" => Self::read_exr(path),
+            "dpx" => crate::dpx::read(path),
+            _ => Self::read_ldr(path),
         }
     }
 
@@ -257,6 +257,8 @@ impl Image {
             .to_ascii_lowercase();
         if ext == "exr" {
             self.write_exr(path)
+        } else if ext == "dpx" {
+            crate::dpx::write(self, path)
         } else {
             self.write_ldr(path)
         }

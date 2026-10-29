@@ -268,6 +268,12 @@ what loaded, and `arclight ops [OP]` to see the op catalog.
 ## I/O formats
 
 - **EXR**: full 32-bit float, assumed linear + premultiplied.
+- **DPX** (`.dpx`): read at 8, 10, 12 or 16 bits (RGB, RGBA, ABGR or
+  luma; 10/12-bit filled or packed; either byte order; any orientation).
+  Log (printing density) DPX is converted to linear with the Cineon curve
+  (black 95, white 685, gamma 0.6), linear DPX is taken as is, and
+  video-coded DPX is decoded like the 8/16-bit formats. Written as 10-bit
+  log RGB (alpha dropped, color over black), which keeps values above 1.0.
 - **TIFF** (`.tif`/`.tiff`): read at 8, 16 or 32-bit (any common
   compression); written as 16-bit sRGB with straight alpha (tagged as
   alpha), LZW-compressed.
@@ -277,7 +283,7 @@ what loaded, and `arclight ops [OP]` to see the op catalog.
   is written over black. Float files such as Radiance `.hdr` are read as
   linear.
 - **Sequences**: any of the above as numbered files. Pick (or drop) one
-  file of `shot.0001.exr`, `shot.0002.exr`, … and Media In finds the whole
+  file of `shot.0001.exr` (or `.dpx`, `.tif`, …), `shot.0002.exr`, … and Media In finds the whole
   sequence (`shot.####.exr`) and its frame range; a single numbered file is
   a one-frame sequence. A frame missing from the middle holds the nearest
   earlier frame. Media Out and Write take `####` / `%04d` patterns.

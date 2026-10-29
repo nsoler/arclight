@@ -1,0 +1,329 @@
+//! DPX (SMPTE 268M) images: the common film and video variants.
+//!
+//! Reading takes the first image element: 8, 10, 12 or 16 bits per
+//! component; RGB, RGBA, ABGR or luma; 10- and 12-bit data filled into
+//! words (method A or B) or packed as a continuous bit stream; either byte
+//! order; any orientation. Log data (printing density) is converted to
+//! linear with the Cineon curve (black 95, white 685 on the 10-bit scale),
+//! linear data is taken as is, and video-coded data is decoded like the
+//! other 8/16-bit formats (sRGB). Writing is 10-bit log RGB, the usual film
+//! deliverable: values above 1.0 survive it.
+
+use crate::color;
+use crate::image::Image;
+use anyhow::{bail, ensure, Context, Result};
+use std::path::Path;
+
+/// Header layout offsets (bytes from the start of the file).
+const MAGIC: usize = 0;
+const DATA_OFFSET: usize = 4;
+const ORIENTATION: usize = 768;
+const ELEMENTS: usize = 770;
+const WIDTH: usize = 772;
+const HEIGHT: usize = 776;
+/// The first image element; its fields are relative to this.
+const ELEMENT: usize = 780;
+const DESCRIPTOR: usize = 20;
+const TRANSFER: usize = 21;
+const BIT_DEPTH: usize = 23;
+const PACKING: usize = 24;
+const ENCODING: usize = 26;
+const ELEMENT_OFFSET: usize = 28;
+/// Where the image data starts in files we write (headers end at 2048).
+const HEADER_SIZE: usize = 2048;
+
+/// Cineon printing density: code values for black and white.
+const LOG_BLACK: f32 = 95.0;
+const LOG_WHITE: f32 = 685.0;
+/// Density per code value, and the film gamma.
+const DENSITY_STEP: f32 = 0.002;
+const FILM_GAMMA: f32 = 0.6;
+
+fn log_offset() -> f32 {
+    10f32.powf((LOG_BLACK - LOG_WHITE) * DENSITY_STEP / FILM_GAMMA)
+}
+
+/// A 10-bit log code value (0–1023) to linear light.
+fn log_to_linear(code: f32) -> f32 {
+    let off = log_offset();
+    (10f32.powf((code - LOG_WHITE) * DENSITY_STEP / FILM_GAMMA) - off) / (1.0 - off)
+}
+
+/// Linear light to a 10-bit log code value, clamped to 0–1023.
+fn linear_to_log(v: f32) -> f32 {
+    let off = log_offset();
+    let x = (v * (1.0 - off) + off).max(1e-10);
+    (LOG_WHITE + x.log10() * FILM_GAMMA / DENSITY_STEP).clamp(0.0, 1023.0)
+}
+
+struct Reader<'a> {
+    data: &'a [u8],
+    big: bool,
+}
+
+impl Reader<'_> {
+    fn u16(&self, at: usize) -> Result<u16> {
+        let b: [u8; 2] = self.data.get(at..at + 2).context("DPX header is cut short")?.try_into()?;
+        Ok(if self.big { u16::from_be_bytes(b) } else { u16::from_le_bytes(b) })
+    }
+
+    fn u32(&self, at: usize) -> Result<u32> {
+        let b: [u8; 4] = self.data.get(at..at + 4).context("DPX header is cut short")?.try_into()?;
+        Ok(if self.big { u32::from_be_bytes(b) } else { u32::from_le_bytes(b) })
+    }
+}
+
+pub fn read(path: &Path) -> Result<Image> {
+    let data = std::fs::read(path).with_context(|| format!("reading DPX {}", path.display()))?;
+    decode(&data).with_context(|| format!("decoding DPX {}", path.display()))
+}
+
+/// How a pixel's components are laid out, by the element's descriptor.
+fn layout(descriptor: u8) -> Result<&'static [usize]> {
+    // Indices into RGBA for each stored component; luma fills R, G and B.
+    Ok(match descriptor {
+        6 => &[0],
+        50 => &[0, 1, 2],
+        51 => &[0, 1, 2, 3],
+        52 => &[3, 2, 1, 0],
+        4 => &[3],
+        other => bail!("unsupported DPX descriptor {other} (RGB, RGBA, ABGR, luma and alpha are)"),
+    })
+}
+
+fn decode(data: &[u8]) -> Result<Image> {
+    let big = match data.get(MAGIC..MAGIC + 4) {
+        Some(b"SDPX") => true,
+        Some(b"XPDS") => false,
+        _ => bail!("not a DPX file"),
+    };
+    let r = Reader { data, big };
+    ensure!(r.u16(ELEMENTS)? >= 1, "no image element");
+    let (w, h) = (r.u32(WIDTH)? as usize, r.u32(HEIGHT)? as usize);
+    ensure!(w > 0 && h > 0 && w <= 65536 && h <= 65536, "bad size {w}×{h}");
+    let el = |field: usize| ELEMENT + field;
+    let descriptor = data[el(DESCRIPTOR)];
+    let transfer = data[el(TRANSFER)];
+    let bits = data[el(BIT_DEPTH)] as u32;
+    let packing = r.u16(el(PACKING))?;
+    ensure!(r.u16(el(ENCODING))? == 0, "run-length encoded DPX isn't supported");
+    let offset = match r.u32(el(ELEMENT_OFFSET))? {
+        0 | u32::MAX => r.u32(DATA_OFFSET)?,
+        o => o,
+    } as usize;
+    let comps = layout(descriptor)?;
+    let nc = comps.len();
+    let values = unpack(data.get(offset..).context("image data offset past the end")?, big, bits, packing, w * nc, h)?;
+
+    let max = ((1u64 << bits) - 1) as f32;
+    let to_linear = |v: u32| -> f32 {
+        let n = v as f32 / max;
+        match transfer {
+            // Printing density or logarithmic: the Cineon curve.
+            1 | 3 => log_to_linear(n * 1023.0),
+            2 => n,
+            _ => color::srgb_to_linear(n),
+        }
+    };
+    let mut img = Image::new(w, h);
+    let flip_x = matches!(r.u16(ORIENTATION)?, 1 | 3 | 5 | 7);
+    let flip_y = matches!(r.u16(ORIENTATION)?, 2 | 3 | 6 | 7);
+    for y in 0..h {
+        for x in 0..w {
+            let src = &values[(y * w + x) * nc..][..nc];
+            let mut px = [0.0, 0.0, 0.0, 1.0];
+            for (&c, &v) in comps.iter().zip(src) {
+                if c == 3 {
+                    px[3] = v as f32 / max;
+                } else if nc == 1 {
+                    px = [to_linear(v), to_linear(v), to_linear(v), 1.0];
+                } else {
+                    px[c] = to_linear(v);
+                }
+            }
+            let (dx, dy) = (if flip_x { w - 1 - x } else { x }, if flip_y { h - 1 - y } else { y });
+            img.set(dx, dy, color::premultiply(px));
+        }
+    }
+    Ok(img)
+}
+
+/// `rows` lines of `per_row` components each, as stored: `bits` per
+/// component, `packing` 0 (a continuous bit stream within each line), 1
+/// (filled, method A: padding in the low bits) or 2 (method B: padding in
+/// the high bits). Lines start on 32-bit boundaries.
+fn unpack(data: &[u8], big: bool, bits: u32, packing: u16, per_row: usize, rows: usize) -> Result<Vec<u32>> {
+    let word = |i: usize| -> Option<u32> {
+        let b: [u8; 4] = data.get(i * 4..i * 4 + 4)?.try_into().ok()?;
+        Some(if big { u32::from_be_bytes(b) } else { u32::from_le_bytes(b) })
+    };
+    let half = |i: usize| -> Option<u16> {
+        let b: [u8; 2] = data.get(i * 2..i * 2 + 2)?.try_into().ok()?;
+        Some(if big { u16::from_be_bytes(b) } else { u16::from_le_bytes(b) })
+    };
+    let short = || anyhow::anyhow!("image data is cut short");
+    let mut out = Vec::with_capacity(per_row * rows);
+    match (bits, packing) {
+        (8, _) => {
+            let stride = per_row.div_ceil(4) * 4;
+            for y in 0..rows {
+                let line = data.get(y * stride..y * stride + per_row).ok_or_else(short)?;
+                out.extend(line.iter().map(|&b| b as u32));
+            }
+        }
+        (16, _) => {
+            let stride = per_row.div_ceil(2) * 2;
+            for y in 0..rows {
+                for x in 0..per_row {
+                    out.push(half(y * stride + x).ok_or_else(short)? as u32);
+                }
+            }
+        }
+        (10, 1 | 2) => {
+            // Three components per 32-bit word.
+            let stride = per_row.div_ceil(3);
+            let shifts: [u32; 3] = if packing == 1 { [22, 12, 2] } else { [20, 10, 0] };
+            for y in 0..rows {
+                for x in 0..per_row {
+                    let w = word(y * stride + x / 3).ok_or_else(short)?;
+                    out.push((w >> shifts[x % 3]) & 0x3ff);
+                }
+            }
+        }
+        (12, 1 | 2) => {
+            // One component per 16-bit half-word.
+            let stride = per_row.div_ceil(2) * 2;
+            for y in 0..rows {
+                for x in 0..per_row {
+                    let v = half(y * stride + x).ok_or_else(short)?;
+                    out.push(if packing == 1 { (v >> 4) as u32 } else { (v & 0xfff) as u32 });
+                }
+            }
+        }
+        (10 | 12, 0) => {
+            // A continuous stream, most significant bit first within each
+            // 32-bit word; each line starts on a word.
+            let stride = (per_row * bits as usize).div_ceil(32);
+            for y in 0..rows {
+                for x in 0..per_row {
+                    let bit = x * bits as usize;
+                    let (wi, off) = (y * stride + bit / 32, (bit % 32) as u32);
+                    let hi = word(wi).ok_or_else(short)? as u64;
+                    let lo = if off + bits > 32 { word(wi + 1).ok_or_else(short)? as u64 } else { 0 };
+                    let both = (hi << 32) | lo;
+                    out.push(((both >> (64 - off - bits)) & ((1 << bits) - 1)) as u32);
+                }
+            }
+        }
+        (b, p) => bail!("unsupported DPX layout: {b}-bit, packing {p}"),
+    }
+    Ok(out)
+}
+
+/// Write `img` (its frame) as 10-bit log RGB, big-endian, filled method A.
+/// DPX keeps no alpha here, so the color is written over black.
+pub fn write(img: &Image, path: &Path) -> Result<()> {
+    let flat = img.flat();
+    let (w, h) = (flat.width, flat.height);
+    let mut out = vec![0u8; HEADER_SIZE + w * h * 4];
+    let size = out.len() as u32;
+    let put32 = |out: &mut Vec<u8>, at: usize, v: u32| out[at..at + 4].copy_from_slice(&v.to_be_bytes());
+    let put16 = |out: &mut Vec<u8>, at: usize, v: u16| out[at..at + 2].copy_from_slice(&v.to_be_bytes());
+    // File information.
+    out[MAGIC..MAGIC + 4].copy_from_slice(b"SDPX");
+    put32(&mut out, DATA_OFFSET, HEADER_SIZE as u32);
+    out[8..12].copy_from_slice(b"V2.0");
+    put32(&mut out, 16, size);
+    put32(&mut out, 20, 1); // new image, not a ditto of the last
+    put32(&mut out, 24, 1664); // generic header size
+    put32(&mut out, 28, 384); // industry header size
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = name.as_bytes();
+    out[36..36 + name.len().min(99)].copy_from_slice(&name[..name.len().min(99)]);
+    out[160..168].copy_from_slice(b"Arclight");
+    put32(&mut out, 660, u32::MAX); // not encrypted
+    // Image information: one element, top to bottom.
+    put16(&mut out, ORIENTATION, 0);
+    put16(&mut out, ELEMENTS, 1);
+    put32(&mut out, WIDTH, w as u32);
+    put32(&mut out, HEIGHT, h as u32);
+    let el = |field: usize| ELEMENT + field;
+    put32(&mut out, el(4), LOG_BLACK as u32); // reference low data code
+    put32(&mut out, el(12), LOG_WHITE as u32); // reference high data code
+    out[el(DESCRIPTOR)] = 50; // RGB
+    out[el(TRANSFER)] = 1; // printing density
+    out[el(22)] = 1; // colorimetric: printing density
+    out[el(BIT_DEPTH)] = 10;
+    put16(&mut out, el(PACKING), 1); // filled, method A
+    put16(&mut out, el(ENCODING), 0);
+    put32(&mut out, el(ELEMENT_OFFSET), HEADER_SIZE as u32);
+    // The other seven elements and the orientation/film/TV headers stay zero.
+    // Pixels: R, G, B in one word each.
+    for (i, px) in flat.pixels.iter().enumerate() {
+        let code = |v: f32| linear_to_log(v).round() as u32;
+        let word = (code(px[0]) << 22) | (code(px[1]) << 12) | (code(px[2]) << 2);
+        put32(&mut out, HEADER_SIZE + i * 4, word);
+    }
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(path, out).with_context(|| format!("writing DPX {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_curve_round_trips_and_anchors() {
+        assert!(log_to_linear(LOG_BLACK).abs() < 1e-6, "95 is black");
+        assert!((log_to_linear(LOG_WHITE) - 1.0).abs() < 1e-6, "685 is white");
+        for v in [0.0, 0.01, 0.18, 1.0, 4.0] {
+            assert!((log_to_linear(linear_to_log(v)) - v).abs() < 1e-3 * v.max(1.0), "{v}");
+        }
+    }
+
+    #[test]
+    fn written_dpx_reads_back_including_highlights() {
+        let mut img = Image::new(5, 3);
+        for (i, p) in img.pixels.iter_mut().enumerate() {
+            let v = i as f32 * 0.3;
+            *p = [v, 0.18, 0.02 * i as f32, 1.0];
+        }
+        let dir = std::env::temp_dir().join(format!("arclight_dpx_{}", std::process::id()));
+        let path = dir.join("frame.dpx");
+        write(&img, &path).unwrap();
+        let back = read(&path).unwrap();
+        assert_eq!((back.width, back.height), (5, 3));
+        for (a, b) in img.pixels.iter().zip(&back.pixels) {
+            for c in 0..3 {
+                // A 10-bit log step is about 1% of the value.
+                assert!((a[c] - b[c]).abs() <= 0.012 * a[c].max(0.05), "{a:?} vs {b:?}");
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unpacks_every_layout() {
+        // Two rows of four 10-bit components, filled method A: two words a
+        // row (the second half empty).
+        let mut a = Vec::new();
+        for row in [[1u32, 2, 3, 4], [5, 6, 7, 8]] {
+            a.extend(((row[0] << 22) | (row[1] << 12) | (row[2] << 2)).to_be_bytes());
+            a.extend((row[3] << 22).to_be_bytes());
+        }
+        assert_eq!(unpack(&a, true, 10, 1, 4, 2).unwrap(), [1, 2, 3, 4, 5, 6, 7, 8]);
+        // Method B, little-endian.
+        let w = (9u32 << 20) | (10 << 10) | 11;
+        assert_eq!(unpack(&w.to_le_bytes(), false, 10, 2, 3, 1).unwrap(), [9, 10, 11]);
+        // A continuous 10-bit stream: four components span 40 bits.
+        let stream: u64 = (1 << 54) | (2 << 44) | (3 << 34) | (4 << 24);
+        let bytes = stream.to_be_bytes();
+        assert_eq!(unpack(&bytes, true, 10, 0, 4, 1).unwrap(), [1, 2, 3, 4]);
+        // 12-bit method A in 16-bit halves; 16-bit; 8-bit with line padding.
+        assert_eq!(unpack(&[0x12, 0x30, 0xab, 0xc0], true, 12, 1, 2, 1).unwrap(), [0x123, 0xabc]);
+        assert_eq!(unpack(&[0xff, 0xff, 0x00, 0x01], true, 16, 0, 2, 1).unwrap(), [65535, 1]);
+        assert_eq!(unpack(&[1, 2, 3, 0, 4, 5, 6, 0], true, 8, 1, 3, 2).unwrap(), [1, 2, 3, 4, 5, 6]);
+    }
+}

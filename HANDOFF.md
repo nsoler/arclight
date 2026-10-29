@@ -469,6 +469,17 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   ExtraSamples tag, so ImageMagick and others didn't see the alpha); JPEG
   writes RGB over black (RGBA failed); the file dialogs list
   `READ_EXTS` / `WRITE_EXTS` (adds tga, webp, hdr, bmp, mxf, mpg).
+- **Session 7, part 18** (user request): DPX, own reader/writer in
+  `src/dpx.rs` (SMPTE 268M, public spec): first element; 8/10/12/16-bit;
+  packing 0 (bit stream), 1 (method A) and 2 (method B); BE/LE;
+  descriptors 6/50/51/52/4; orientations. Transfer 1/3 → Cineon log
+  (`log_to_linear`, 95/685/0.6), 2 → linear, else sRGB decode. Writes
+  10-bit log RGB BE method A, header 2048. Checked against ffmpeg
+  (8/10/12/16-bit, RGB/RGBA, little-endian, transfer 4) and ImageMagick
+  (10-bit, and log via `-colorspace Log`): all read back to the source
+  color; ffmpeg and ImageMagick read our DPX back to it too. Not handled:
+  RLE-encoded DPX, 1-bit, 32/64-bit float, multi-element files (first
+  element only).
 - **CorridorKey** (AI keyer, github.com/nikopueringer/CorridorKey; the
   OFX port gitcapoom/corridorkey_ofx is Windows/Resolve-only): the user
   deferred it. If revisited: run upstream's PyTorch engine (Linux OK; the

@@ -50,11 +50,11 @@ struct TrackJob {
 /// What the file browser offers to read: image formats (one file or a
 /// numbered sequence) and video.
 const READ_EXTS: &[&str] = &[
-    "exr", "tif", "tiff", "tga", "png", "jpg", "jpeg", "webp", "hdr", "bmp",
+    "exr", "dpx", "tif", "tiff", "tga", "png", "jpg", "jpeg", "webp", "hdr", "bmp",
     "mp4", "mov", "m4v", "mkv", "avi", "webm", "mxf", "mpg", "mpeg",
 ];
 /// …and to write.
-const WRITE_EXTS: &[&str] = &["exr", "tif", "tiff", "tga", "png", "jpg", "webp", "mp4", "mov"];
+const WRITE_EXTS: &[&str] = &["exr", "dpx", "tif", "tiff", "tga", "png", "jpg", "webp", "mp4", "mov"];
 
 #[derive(Default)]
 pub struct Properties {

@@ -8,6 +8,7 @@ pub mod anim;
 pub mod bridge;
 pub mod color;
 pub mod config;
+pub mod dpx;
 pub mod graph;
 pub mod image;
 pub mod media;
