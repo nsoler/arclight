@@ -440,6 +440,15 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   edges repeat), then 3 `box_pass_h/v` of round(softness/3) px, and
   shades color from the filtered matte. Otherwise the old pixel path.
   The matte output is now alpha × input alpha (0 outside the data).
+- **Session 7, part 15** (user request): app launcher entry. `install.sh`
+  / `uninstall.sh` at the repo root (per-user: `~/.local/share/
+  applications/arclight.desktop`, icons in `~/.local/share/icons/hicolor`
+  scalable + 48–256 PNGs via rsvg-convert). The entry's Exec is this
+  checkout's release binary. Placeholder icon `assets/arclight.svg` (+
+  `arclight.png`, built into the GUI as the window icon via
+  `app_icon()`). The window's app id is now `arclight` (it was the
+  title-derived "Arclight"): Hyprland window rules need the new class.
+  Installed on this machine; checked by launching with `gtk-launch`.
 - **CorridorKey** (AI keyer, github.com/nikopueringer/CorridorKey; the
   OFX port gitcapoom/corridorkey_ofx is Windows/Resolve-only): the user
   deferred it. If revisited: run upstream's PyTorch engine (Linux OK; the

@@ -33,6 +33,21 @@ python/build.sh                                   # Python `arclt` module (needs
 Video input/output needs `ffmpeg` and `ffprobe` on `PATH` (e.g. `brew install ffmpeg`).
 Image sequences and stills need nothing extra.
 
+### App launcher (Linux)
+
+```sh
+./install.sh            # add Arclight to the app launcher (builds first if needed)
+./install.sh --build    # rebuild the release binary, then install
+./uninstall.sh          # take it out again
+```
+
+`install.sh` puts `arclight.desktop` in `~/.local/share/applications` and the
+icon (`assets/arclight.svg`, a placeholder while in development) in
+`~/.local/share/icons/hicolor`, so it shows in Omarchy's launcher (Super +
+Space) and any freedesktop desktop's menu. The entry runs this checkout's
+`target/release/arclight-gui`, so later release builds need no reinstall.
+No root needed; nothing outside `~/.local/share` is touched.
+
 ## GUI
 
 ```sh

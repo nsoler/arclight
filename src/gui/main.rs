@@ -60,7 +60,11 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1600.0, 1000.0])
             .with_min_inner_size([900.0, 600.0])
-            .with_title("Arclight"),
+            .with_title("Arclight")
+            // Matches arclight.desktop (install.sh), so launchers and the
+            // compositor pair the window with its icon.
+            .with_app_id("arclight")
+            .with_icon(app_icon()),
         ..Default::default()
     };
     eframe::run_native(
@@ -68,6 +72,13 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| Ok(Box::new(App::new(cc.egui_ctx.clone(), doc)))),
     )
+}
+
+/// The window icon (the placeholder in `assets/`).
+fn app_icon() -> egui::IconData {
+    let png = include_bytes!("../../assets/arclight.png");
+    let img = image::load_from_memory(png).expect("bundled icon").to_rgba8();
+    egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
