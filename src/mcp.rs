@@ -70,11 +70,12 @@ static TOOLS: &[Tool] = &[
         {"type": "object", "properties": {"node": {"type": "string"}, "params": {"type": "object"}}, "required": ["node", "params"]}),
     tool!("set_key", "Set a keyframe on a numeric param at a frame, animating it.",
         {"type": "object", "properties": {"node": {"type": "string"}, "param": {"type": "string"}, "frame": {"type": "integer"}, "value": {}}, "required": ["node", "param", "frame", "value"]}),
-    tool!("export_tracker", "Add a node that carries a Tracker's motion: a Transform keyed with the solved motion on every tracked frame (op 'transform', default), or a Corner Pin following all four tracks in perspective (op 'corner_pin'). Mode 'match-move' (default) moves a layer along with the tracks, 'stabilize' removes the motion. 'input' connects a layer to it. Returns the new node's name.",
+    tool!("export_tracker", "Add a node that carries a Tracker's motion: a Transform following the solved motion (op 'transform', default), or a Corner Pin following all four tracks in perspective (op 'corner_pin'). Mode 'match-move' (default) moves a layer along with the tracks, 'stabilize' removes the motion. 'linked' (default true) makes it follow the Tracker live, so re-tracking updates it; false keys a copy on each tracked frame instead. 'input' connects a layer to it. Returns the new node's name.",
         {"type": "object", "properties": {
             "node": {"type": "string", "description": "The Tracker node."},
             "op": {"type": "string", "enum": ["transform", "corner_pin"]},
             "mode": {"type": "string", "enum": ["match-move", "stabilize"]},
+            "linked": {"type": "boolean", "description": "Follow the Tracker live (default true), or key a copy (false)."},
             "name": {"type": "string"},
             "input": {"type": "string"}
         }, "required": ["node"]}),
@@ -222,7 +223,8 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
                 other => bail!("unknown mode '{other}' (match-move or stabilize)"),
             };
             let op = opt_str(args, "op").unwrap_or("transform");
-            let id = s.export_tracker(str_arg(args, "node")?, op, stabilize, opt_str(args, "name"), opt_str(args, "input"))?;
+            let linked = args.get("linked").and_then(Value::as_bool).unwrap_or(true);
+            let id = s.export_tracker(str_arg(args, "node")?, op, stabilize, linked, opt_str(args, "name"), opt_str(args, "input"))?;
             json!({"node": id})
         }
         "connect" => {
@@ -595,7 +597,7 @@ mod tests {
         call(&mut s, "create_node", json!({"op": "constant", "name": "plate", "params": {"width": 64, "height": 32}}));
         call(&mut s, "create_node", json!({"op": "tracker", "name": "trk", "inputs": ["plate"], "params": {
             "track1": {"keys": [[1, [10.5, 10.5]], [4, [13.5, 9.5]]], "interp": "linear"}}}));
-        let r = call(&mut s, "export_tracker", json!({"node": "trk", "input": "plate"}));
+        let r = call(&mut s, "export_tracker", json!({"node": "trk", "input": "plate", "linked": false}));
         assert_eq!(r["isError"], false, "{r}");
         let xf = call(&mut s, "describe_node", json!({"node": r["structuredContent"]["node"]}))["structuredContent"].clone();
         assert_eq!(xf["inputs"][0]["source"], "plate");
@@ -608,10 +610,48 @@ mod tests {
         let r = call(&mut s, "export_tracker", json!({"node": "trk", "op": "corner_pin"}));
         assert_eq!(r["isError"], true);
         call(&mut s, "set_params", json!({"node": "trk", "params": {"track2_on": true, "track3_on": true, "track4_on": true}}));
-        let r = call(&mut s, "export_tracker", json!({"node": "trk", "op": "corner_pin", "mode": "stabilize"}));
+        let r = call(&mut s, "export_tracker", json!({"node": "trk", "op": "corner_pin", "mode": "stabilize", "linked": false}));
         let pin = call(&mut s, "describe_node", json!({"node": r["structuredContent"]["node"]}))["structuredContent"].clone();
         assert_eq!((pin["op"].as_str(), &pin["params"]["to1"]), (Some("corner_pin"), &json!([10.5, 10.5])));
         assert_eq!(pin["params"]["from1"]["keys"][1], json!([4, [13.5, 9.5]]));
+    }
+
+    #[test]
+    fn linked_exports_follow_the_tracker_live() {
+        let mut s = Server::new(Session::default());
+        // A small layer (its data window shows where it's moved) and a
+        // track sliding right 3 px a frame.
+        call(&mut s, "create_node", json!({"op": "rectangle", "name": "plate", "params": {"width": 64, "height": 32, "center": [20, 16], "size": [8, 8]}}));
+        call(&mut s, "create_node", json!({"op": "tracker", "name": "trk", "inputs": ["plate"], "params": {
+            "track1": {"keys": [[1, [10.5, 10.5]], [4, [19.5, 10.5]]], "interp": "linear"}}}));
+        let linked = call(&mut s, "export_tracker", json!({"node": "trk", "input": "plate"}))["structuredContent"]["node"].clone();
+        let copy = call(&mut s, "export_tracker", json!({"node": "trk", "input": "plate", "linked": false}))["structuredContent"]["node"].clone();
+        let linked = linked.as_str().unwrap().to_string();
+        let copy = copy.as_str().unwrap().to_string();
+        let params = call(&mut s, "describe_node", json!({"node": linked}))["structuredContent"]["params"].clone();
+        assert_eq!(params["translate"]["link"]["node"], "trk", "{params}");
+        let window = |s: &mut Server, node: &str, frame: i64| {
+            let r = call(s, "render_frame", json!({"node": node, "frame": frame}));
+            assert_eq!(r["isError"], false, "{r}");
+            r["structuredContent"]["window"].clone()
+        };
+        // Same picture as a copy on the tracked frames, and in between.
+        for f in [1, 3, 4] {
+            assert_eq!(window(&mut s, &linked, f), window(&mut s, &copy, f), "frame {f}");
+        }
+        assert_eq!(window(&mut s, &linked, 4)[0].as_i64().unwrap() - window(&mut s, &linked, 1)[0].as_i64().unwrap(), 9);
+        // Re-track frame 4 further right: the linked one follows, the copy doesn't.
+        call(&mut s, "set_key", json!({"node": "trk", "param": "track1", "frame": 4, "value": [25.5, 10.5]}));
+        assert_eq!(window(&mut s, &linked, 4)[0].as_i64().unwrap() - window(&mut s, &copy, 4)[0].as_i64().unwrap(), 6);
+        // Renaming the Tracker keeps the link; deleting it is an error naming it.
+        assert_eq!(call(&mut s, "rename_node", json!({"node": "trk", "new_name": "trk2"}))["isError"], false);
+        let params = call(&mut s, "describe_node", json!({"node": linked}))["structuredContent"]["params"].clone();
+        assert_eq!(params["translate"]["link"]["node"], "trk2");
+        window(&mut s, &linked, 4);
+        call(&mut s, "delete_node", json!({"node": "trk2"}));
+        let r = call(&mut s, "render_frame", json!({"node": linked, "frame": 4}));
+        assert_eq!(r["isError"], true);
+        assert!(r["content"][0]["text"].as_str().unwrap().contains("linked to 'trk2'"), "{r}");
     }
 
     #[test]

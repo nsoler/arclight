@@ -427,10 +427,15 @@ pub fn input_frames(graph: &Graph, node: &str) -> Result<impl FnMut(i64) -> Resu
 /// by tracking runs that follow rotation), or `None` where it was never
 /// keyed. The warp param isn't in the op's spec, so it has no default.
 pub fn warps(params: &Value, frame: i64) -> Vec<Option<Warp>> {
+    warps_at(params, frame as f64)
+}
+
+/// [`warps`] at any time, between frames too (for motion blur).
+pub fn warps_at(params: &Value, t: f64) -> Vec<Option<Warp>> {
     (1..=TRACKS)
         .map(|i| {
             let on = params.get(format!("track{i}_on")).and_then(Value::as_bool).unwrap_or(i == 1);
-            let v = crate::anim::sample(params.get(format!("track{i}_warp"))?, frame as f64);
+            let v = crate::anim::sample(params.get(format!("track{i}_warp"))?, t);
             (on && v.len() >= 2).then(|| Warp { angle: (v[0] as f32).to_radians(), scale: v[1] as f32 })
         })
         .collect()
@@ -490,11 +495,16 @@ pub fn weak_frames(params: &Value) -> Vec<i64> {
 
 /// Each enabled track's position at `frame`, from a Tracker node's params.
 pub fn positions(params: &Value, frame: i64) -> Vec<Option<Pt>> {
+    positions_at(params, frame as f64)
+}
+
+/// [`positions`] at any time, between frames too (for motion blur).
+pub fn positions_at(params: &Value, t: f64) -> Vec<Option<Pt>> {
     let p = ops::params_with_defaults("tracker", params);
     (1..=TRACKS)
         .map(|i| {
             let on = p[format!("track{i}_on")].as_bool().unwrap_or(false);
-            let v = crate::anim::sample(&p[format!("track{i}")], frame as f64);
+            let v = crate::anim::sample(&p[format!("track{i}")], t);
             (on && v.len() >= 2).then(|| [v[0] as f32, v[1] as f32])
         })
         .collect()
@@ -641,10 +651,27 @@ pub fn solve_tracks(from: &[Option<Pt>], to: &[Option<Pt>], from_warps: &[Option
 /// A Tracker's solved motion from its reference frame to `frame`, from its
 /// raw (possibly keyed) params; `None` when no track is on.
 pub fn solved(params: &Value, frame: i64) -> Option<Affine> {
+    solved_at(params, frame as f64)
+}
+
+/// [`solved`] at any time, between frames too (for motion blur).
+pub fn solved_at(params: &Value, t: f64) -> Option<Affine> {
     let p = ops::params_with_defaults("tracker", params);
     let kind = Solve::from_choice(p["solve"].as_str(), Solve::Scale);
     let reference = p["reference_frame"].as_i64().unwrap_or(1);
-    solve_tracks(&positions(&p, reference), &positions(&p, frame), &warps(&p, reference), &warps(&p, frame), kind)
+    solve_tracks(&positions(&p, reference), &positions_at(&p, t), &warps(&p, reference), &warps_at(&p, t), kind)
+}
+
+/// A Tracker's motion at time `t` as a Transform's translate, rotate
+/// (degrees, in −180..180) and uniform scale about `pivot` (track
+/// coordinates: pixel i spans i..i+1): the match-move, or with
+/// `stabilize` its inverse. Identity when no track is on. What a linked
+/// Transform follows, and what a baked one is keyed with.
+pub fn motion_at(params: &Value, t: f64, stabilize: bool, pivot: Pt) -> (Pt, f32, f32) {
+    let Some(m) = solved_at(params, t) else { return ([0.0, 0.0], 0.0, 1.0) };
+    let m = if stabilize { invert(&m) } else { m };
+    let o = apply(&m, pivot);
+    ([o[0] - pivot[0], o[1] - pivot[1]], m[3].atan2(m[0]).to_degrees(), m[0].hypot(m[3]))
 }
 
 /// Where a Tracker's output shows each point of its input at `frame`:
@@ -686,17 +713,18 @@ pub fn transform_params(params: &Value, size: [usize; 2], stabilize: bool) -> Re
     let round = |x: f64| (x * 1e4).round() / 1e4;
     let (mut translate, mut rotate, mut scale) = (Vec::new(), Vec::new(), Vec::new());
     let mut last_angle = 0.0;
+    if solved(&p, frames[0]).is_none() {
+        bail!("no tracks enabled");
+    }
     for f in frames {
-        let m = solved(&p, f).context("no tracks enabled")?;
-        let m = if stabilize { invert(&m) } else { m };
-        let o = apply(&m, c);
-        translate.push(json!([f, [round((o[0] - c[0]) as f64), round((o[1] - c[1]) as f64)]]));
+        let (t, angle, s) = motion_at(&p, f as f64, stabilize, c);
+        translate.push(json!([f, [round(t[0] as f64), round(t[1] as f64)]]));
         // Unwrap, so the curve doesn't jump a full turn at ±180°.
-        let mut angle = (m[3] as f64).atan2(m[0] as f64).to_degrees();
+        let mut angle = angle as f64;
         angle -= ((angle - last_angle) / 360.0).round() * 360.0;
         last_angle = angle;
         rotate.push(json!([f, round(angle)]));
-        let s = round((m[0] as f64).hypot(m[3] as f64));
+        let s = round(s as f64);
         scale.push(json!([f, [s, s]]));
     }
     let curve = |keys: Vec<Value>| json!({ "keys": keys, "interp": "linear" });
@@ -733,9 +761,11 @@ pub fn corner_pin_params(params: &Value, stabilize: bool) -> Result<Map<String, 
 }
 
 /// Params for a node of type `op` (`transform` or `corner_pin`) that
-/// carries Tracker node `node`'s motion. A Transform is sized by the
-/// tracker's input at the reference frame.
-pub fn export(graph: &Graph, node: &str, op: &str, stabilize: bool) -> Result<Map<String, Value>> {
+/// carries Tracker node `node`'s motion. Linked (`linked`), they follow the
+/// Tracker live (see [`crate::link`]): re-tracking moves them too. Else
+/// they're a copy: keys on each tracked frame. A Transform pivots on the
+/// center of the tracker's input at the reference frame.
+pub fn export(graph: &Graph, node: &str, op: &str, stabilize: bool, linked: bool) -> Result<Map<String, Value>> {
     let n = graph.node(node).with_context(|| format!("no node named '{node}'"))?;
     if n.op != "tracker" {
         bail!("'{node}' is not a Tracker");
@@ -744,7 +774,38 @@ pub fn export(graph: &Graph, node: &str, op: &str, stabilize: bool) -> Result<Ma
         "transform" => {
             let reference = ops::params_with_defaults("tracker", &n.params)["reference_frame"].as_i64().unwrap_or(1);
             let img = input_frames(graph, node)?(reference)?;
-            transform_params(&n.params, [img.format.width, img.format.height], stabilize)
+            let size = [img.format.width, img.format.height];
+            if !linked {
+                return transform_params(&n.params, size, stabilize);
+            }
+            if solved(&n.params, reference).is_none() {
+                bail!("no tracks enabled");
+            }
+            // The same pivot a copy uses: the image center, in track coordinates.
+            let c = [size[0] as f32 / 2.0 + 0.5, size[1] as f32 / 2.0 + 0.5];
+            let mut out = Map::new();
+            for what in ["translate", "rotate", "scale"] {
+                out.insert(what.into(), crate::link::motion(node, what, stabilize, c));
+            }
+            out.insert("center".into(), json!(c));
+            Ok(out)
+        }
+        "corner_pin" if linked => {
+            let p = ops::params_with_defaults("tracker", &n.params);
+            if (1..=TRACKS).any(|i| p[format!("track{i}_on")].as_bool() != Some(true)) {
+                bail!("a corner pin needs all four tracks on");
+            }
+            // To follows each track, From is it at the reference frame
+            // (swapped to stabilize).
+            let mut out = Map::new();
+            for i in 1..=TRACKS {
+                let track = format!("track{i}");
+                let (moving, still) = (crate::link::param(node, &track), crate::link::at_reference(node, &track));
+                let (from, to) = if stabilize { (moving, still) } else { (still, moving) };
+                out.insert(format!("from{i}"), from);
+                out.insert(format!("to{i}"), to);
+            }
+            Ok(out)
         }
         "corner_pin" => corner_pin_params(&n.params, stabilize),
         other => bail!("can't export a tracker to '{other}' (transform or corner_pin)"),

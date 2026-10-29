@@ -7,6 +7,19 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.19 — 2026-10-29
+
+- Live links between nodes: a param can follow another node instead of
+  holding a value, worked out at every frame (and between frames for
+  motion blur). The Tracker's To Transform / To Corner Pin now make
+  linked nodes by default (a "Linked" checkbox; off makes a keyed copy as
+  before), so re-tracking moves everything that follows the Tracker. In
+  the panel, linked params show their value, their source and an Unlink
+  button. Links survive renaming their source; a deleted source is an
+  error naming it. Scripts: `export_tracker` / `to_transform` /
+  `to_corner_pin` take `linked` (default true), and `set_params` accepts
+  `{"link": {...}}` values (see README).
+
 ## 0.0.18 — 2026-10-29
 
 - Video color: exported video now converts RGB to YUV with the BT.709

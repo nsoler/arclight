@@ -1,7 +1,8 @@
 # Build the Apple Silicon macOS app and DMG (packaging/macos/build-dmg.sh)
 # on a GitHub-hosted M-series Mac. Runs when started by hand (Actions tab →
-# "macOS build" → Run workflow) or on a version tag (v0.1.0, …); the DMG is
-# attached to the run as an artifact. Not run on every push: macOS minutes
+# "macOS build" → Run workflow) or on a version tag (v0.0.19, …); the DMG is
+# attached to the run as an artifact and, for a tag, to that tag's GitHub
+# release (created if it doesn't exist yet). Not run on every push: macOS minutes
 # on private repositories count against the account's allowance.
 name: macOS build
 
@@ -13,6 +14,8 @@ on:
 jobs:
   dmg:
     runs-on: macos-14 # Apple Silicon (arm64)
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Tools
@@ -28,3 +31,12 @@ jobs:
           name: Arclight-macOS-arm64
           path: dist/*.dmg
           if-no-files-found: error
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          gh release view "$tag" >/dev/null 2>&1 \
+            || gh release create "$tag" --title "Arclight ${tag#v} (alpha)" --prerelease --notes "See CHANGELOG.md."
+          gh release upload "$tag" dist/*.dmg --clobber

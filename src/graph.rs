@@ -221,7 +221,7 @@ impl Evaluator {
         let mut keys = HashMap::new();
         for id in &order {
             let node = index[id.as_str()];
-            let mut params = ops::resolve_params(&node.op, &node.params, ctx.frame);
+            let mut params = linked_params(&index, node, ctx.frame)?;
             ops::apply_format(&node.op, &mut params, graph.project.format);
             let k = node_key(node, &params, &keys, ctx);
             keys.insert(id.as_str(), k);
@@ -241,9 +241,10 @@ impl Evaluator {
         let empty = Image::blank(graph_format, IRect::default());
         for id in order {
             let node = index[id.as_str()];
-            // Keyframes are resolved first and the resolved values hashed, so a
-            // curve that holds between frames still hits the cache.
-            let mut params = ops::resolve_params(&node.op, &node.params, ctx.frame);
+            // Keyframes and links are resolved first and the resolved values
+            // hashed, so a curve that holds between frames still hits the
+            // cache, and a changed link source re-renders.
+            let mut params = linked_params(index, node, ctx.frame)?;
             ops::apply_format(&node.op, &mut params, graph_format);
             let key = node_key(node, &params, &keys, ctx);
             keys.insert(id.as_str(), key);
@@ -279,6 +280,18 @@ impl Evaluator {
         }
         Ok(())
     }
+}
+
+/// `node`'s params at `frame`: keyframes evaluated and live links
+/// (`crate::link`) followed through the graph's other nodes. A link to a
+/// node that's gone is an error naming it.
+fn linked_params(index: &HashMap<&str, &NodeSpec>, node: &NodeSpec, frame: i64) -> Result<Value, NodeError> {
+    let lookup = |id: &str| index.get(id).copied();
+    if let Some((param, gone)) = crate::link::missing(&lookup, &node.params) {
+        return Err(node_err(&node.id, format!("'{param}' is linked to '{gone}', which doesn't exist")));
+    }
+    let follow = |v: &Value, t: f64| crate::link::resolve(&lookup, v, t);
+    Ok(ops::resolve_params_linked(&node.op, &node.params, frame, Some(&follow)))
 }
 
 /// `params` are the node's params already resolved at `ctx.frame`.

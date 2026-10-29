@@ -11,6 +11,7 @@ pub mod config;
 pub mod dpx;
 pub mod graph;
 pub mod image;
+pub mod link;
 pub mod media;
 #[cfg(unix)]
 pub mod mcp;

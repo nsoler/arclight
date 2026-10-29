@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.0.18** (alpha); see `CHANGELOG.md`.
+Version **0.0.19** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -201,6 +201,27 @@ blur on, an animated shape is drawn at each sample time across the shutter
 and the coverage averaged. Edges are
 anti-aliased from the signed distance to the outline, so the alpha is a
 clean matte for any `mask` input.
+
+### Live links
+
+A param can hold a **link** instead of a value; it's worked out from
+another node at every frame (and between frames, for motion blur), so it
+follows that node live:
+
+```json
+{"link": {"node": "tracker1", "param": "track1"}}
+{"link": {"node": "tracker1", "param": "track1", "at": "reference"}}
+{"link": {"node": "tracker1", "motion": "translate", "stabilize": false, "pivot": [960.5, 540.5]}}
+```
+
+The first reads another node's param (keyframes evaluated, links
+followed); the second reads it at that node's reference frame; the third
+is a Tracker's solved motion as a Transform's `translate`, `rotate` or
+`scale` about `pivot`. The Tracker panel's **To Transform** / **To Corner
+Pin** make linked nodes (untick **Linked** for a keyed copy). Linked
+params show their value and source in the panel, with **Unlink** to keep
+the value as a plain one; viewer handles don't move them. Renaming the
+source updates its links; deleting it makes the linked node report it.
 
 ## Scripting and automation
 

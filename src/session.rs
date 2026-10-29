@@ -205,11 +205,12 @@ impl Session {
         Ok(id)
     }
 
-    /// Add a node of type `op` (`transform` or `corner_pin`) keyed with
+    /// Add a node of type `op` (`transform` or `corner_pin`) carrying
     /// Tracker `id`'s motion (the match-move, or with `stabilize` its
-    /// inverse), fed by `input` if given.
-    pub fn export_tracker(&mut self, id: &str, op: &str, stabilize: bool, name: Option<&str>, input: Option<&str>) -> Result<String> {
-        let params = track::export(&self.graph, id, op, stabilize)?;
+    /// inverse), linked to it live or (not `linked`) keyed with a copy, fed
+    /// by `input` if given.
+    pub fn export_tracker(&mut self, id: &str, op: &str, stabilize: bool, linked: bool, name: Option<&str>, input: Option<&str>) -> Result<String> {
+        let params = track::export(&self.graph, id, op, stabilize, linked)?;
         self.create_node(op, name, &params, &[input.unwrap_or_default().to_string()])
     }
 
@@ -249,6 +250,7 @@ impl Session {
                     *inp = new.to_string();
                 }
             }
+            crate::link::rename(&mut n.params, old, new);
         }
         Ok(())
     }
@@ -421,6 +423,13 @@ fn param_spec<'a>(info: &'a OpInfo, name: &str) -> Result<&'a ops::ParamSpec> {
 /// (ints rounded, a 3-component color given alpha 1).
 pub fn validate_param(info: &OpInfo, name: &str, value: &Value) -> Result<Value> {
     let spec = param_spec(info, name)?;
+    // A live link to another node's value (see `crate::link`).
+    if crate::link::is_link(value) {
+        if crate::link::source(value).is_none() {
+            bail!("'{name}': a link needs a \"node\"");
+        }
+        return Ok(value.clone());
+    }
     // Null puts back an automatic default (a Transform's center).
     if value.is_null() && spec.default_value().is_null() {
         return Ok(Value::Null);

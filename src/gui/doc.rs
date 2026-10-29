@@ -316,6 +316,7 @@ impl Doc {
                     *inp = new.to_string();
                 }
             }
+            arclight::link::rename(&mut n.params, old, new);
         }
         for id in [&mut self.selected, &mut self.view_override].into_iter().flatten() {
             if id == old {
@@ -392,15 +393,21 @@ impl Doc {
             .unwrap_or(Value::Null)
     }
 
-    /// A param's value at `frame`, with keyframes evaluated.
+    /// A param's value at `frame`, with keyframes evaluated and a live
+    /// link followed.
     pub fn param_at(&self, id: &str, name: &str, frame: i64) -> Value {
-        anim::evaluate(&self.param(id, name), frame as f64)
+        let lookup = |n: &str| self.node(n);
+        arclight::link::resolve(&lookup, &self.param(id, name), frame as f64)
     }
 
     /// Edit a param from the UI: animated params get a key at `frame`
     /// (auto-key); static ones are simply replaced.
     pub fn edit_param(&mut self, id: &str, name: &str, frame: i64, value: Value) {
         let raw = self.param(id, name);
+        // A linked value follows its source; Unlink (in the panel) first.
+        if arclight::link::is_link(&raw) {
+            return;
+        }
         if anim::is_animated(&raw) {
             self.set_param(id, name, anim::set_key(&raw, frame, &value));
         } else {
@@ -538,6 +545,27 @@ impl Doc {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn linked_params_show_live_values_and_survive_renames() {
+        let mut d = Doc::new(Graph::default(), None);
+        let a = d.add_node("rectangle", [0.0, 0.0]);
+        let b = d.add_node("rectangle", [200.0, 0.0]);
+        d.set_param(&a, "center", json!({ "keys": [[1, [0, 0]], [11, [100, 50]]], "interp": "linear" }));
+        d.set_param(&b, "center", arclight::link::param(&a, "center"));
+        assert_eq!(d.param_at(&b, "center", 6), json!([50.0, 25.0]));
+        // A drag (or typing) doesn't overwrite a link.
+        d.edit_param(&b, "center", 6, json!([1, 2]));
+        assert!(arclight::link::is_link(&d.param(&b, "center")));
+        // Renaming the source keeps the link pointing at it.
+        d.rename(&a, "src").unwrap();
+        assert_eq!(arclight::link::source(&d.param(&b, "center")), Some("src"));
+        assert_eq!(d.param_at(&b, "center", 11), json!([100.0, 50.0]));
+        // Unlink (what the panel does): the value stays, plain.
+        let now = d.param_at(&b, "center", 11);
+        d.set_param(&b, "center", now);
+        assert_eq!(d.param(&b, "center"), json!([100.0, 50.0]));
+    }
 
     #[test]
     fn new_shapes_land_in_the_viewed_picture() {

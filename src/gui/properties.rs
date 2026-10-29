@@ -73,6 +73,8 @@ pub struct Properties {
     /// window and frame: they place a Transform's automatic center and a
     /// Corner Pin's image corners.
     pub layer: Option<(String, arclight::image::IRect, arclight::image::Size)>,
+    /// The Tracker panel's exports copy the keys instead of linking.
+    copy_exports: bool,
 }
 
 impl Properties {
@@ -167,8 +169,9 @@ impl Properties {
                 ui.end_row();
 
                 for spec in info.params {
+                    let linked = arclight::link::is_link(&doc.param(id, spec.name));
                     ui.horizontal(|ui| {
-                        if spec.animatable {
+                        if spec.animatable && !linked {
                             self.key_button(ui, doc, id, spec.name);
                         } else {
                             ui.add_space(KEY_SIZE + ui.spacing().item_spacing.x);
@@ -180,7 +183,11 @@ impl Properties {
                             ui.label(spec.label);
                         }
                     });
-                    self.param_widget(ui, doc, id, &op, spec);
+                    if linked {
+                        self.linked_widget(ui, doc, id, spec);
+                    } else {
+                        self.param_widget(ui, doc, id, &op, spec);
+                    }
                     ui.end_row();
                 }
             });
@@ -219,6 +226,26 @@ impl Properties {
                     }
                     Err(e) => self.name_error = Some((id.to_string(), e)),
                 }
+            }
+        });
+    }
+
+    /// A param linked to another node: its value now (read-only), where it
+    /// comes from, and Unlink, which keeps the value as a plain one.
+    fn linked_widget(&mut self, ui: &mut egui::Ui, doc: &mut Doc, id: &str, spec: &ParamSpec) {
+        let raw = doc.param(id, spec.name);
+        let now = doc.param_at(id, spec.name, self.frame);
+        let shown = match &now {
+            Value::Array(a) => a.iter().map(|v| format!("{:.3}", v.as_f64().unwrap_or(0.0))).collect::<Vec<_>>().join("  "),
+            Value::Number(n) => format!("{:.3}", n.as_f64().unwrap_or(0.0)),
+            other => other.to_string(),
+        };
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(shown).monospace());
+            ui.label(RichText::new(format!("← {}", arclight::link::describe(&raw))).color(Color32::from_rgb(120, 200, 240)))
+                .on_hover_text("Linked: follows that node live, so it updates when it changes (re-tracking, say)");
+            if ui.small_button("Unlink").on_hover_text("Keep this frame's value as a plain one and stop following").clicked() {
+                doc.set_param(id, spec.name, now.clone());
             }
         });
     }
@@ -644,15 +671,23 @@ impl Properties {
             doc.set_param(id, "reference_frame", json!(frame));
         }
         let mut export = None;
+        let mut linked = !self.copy_exports;
+        if ui
+            .checkbox(&mut linked, "Linked")
+            .on_hover_text("Exported nodes follow this Tracker live, so re-tracking updates them. Off: they get a copy of the keys")
+            .changed()
+        {
+            self.copy_exports = !linked;
+        }
         let four = doc.node(id).is_some_and(|n| track::positions(&n.params, frame).iter().all(Option::is_some));
         for (op, label, enabled) in [("transform", "Transform", true), ("corner_pin", "Corner Pin", four)] {
             ui.horizontal(|ui| {
                 ui.label(format!("To {label}:"));
                 ui.add_enabled_ui(enabled, |ui| {
-                    if ui.button("Match-move").on_hover_text(format!("Add a {label} keyed to move a layer along with the tracks")).clicked() {
+                    if ui.button("Match-move").on_hover_text(format!("Add a {label} that moves a layer along with the tracks")).clicked() {
                         export = Some((op, false));
                     }
-                    if ui.button("Stabilize").on_hover_text(format!("Add a {label} keyed to remove the tracked motion")).clicked() {
+                    if ui.button("Stabilize").on_hover_text(format!("Add a {label} that removes the tracked motion")).clicked() {
                         export = Some((op, true));
                     }
                 })
@@ -664,8 +699,8 @@ impl Properties {
             self.start_tracking(doc, id, frame, to);
         }
         if let Some((op, stabilize)) = export {
-            let result = match export_tracker(doc, id, op, stabilize) {
-                Ok(xf) => (true, format!("Added {xf}")),
+            let result = match export_tracker(doc, id, op, stabilize, !self.copy_exports) {
+                Ok(xf) => (true, format!("Added {xf}{}", if self.copy_exports { "" } else { ", linked" })),
                 Err(e) => (false, format!("{e:#}")),
             };
             let job = TrackJob { progress: Default::default(), handle: None, found: Default::default(), result: Some(result) };
@@ -773,8 +808,8 @@ impl Properties {
 
 /// Add a node of type `op` below tracker `id`, keyed with its motion, and
 /// select it. Returns its name.
-fn export_tracker(doc: &mut Doc, id: &str, op: &str, stabilize: bool) -> anyhow::Result<String> {
-    let params = track::export(&doc.graph, id, op, stabilize)?;
+fn export_tracker(doc: &mut Doc, id: &str, op: &str, stabilize: bool, linked: bool) -> anyhow::Result<String> {
+    let params = track::export(&doc.graph, id, op, stabilize, linked)?;
     let at = doc.node(id).and_then(|n| n.pos).unwrap_or_default();
     let mut pos = [at[0], at[1] + NODE_H + 40.0];
     while doc.graph.nodes.iter().filter_map(|n| n.pos).any(|q| (q[0] - pos[0]).abs() < NODE_W + 20.0 && (q[1] - pos[1]).abs() < NODE_H + 20.0) {

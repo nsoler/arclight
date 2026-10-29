@@ -20,7 +20,7 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.18**.
+  in the same commit as the change. Current: **0.0.19**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -139,7 +139,29 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   200,100,50 as ~209,105,45. Arclight's own decode follows the tags (reads
   back 200,100,50). `video_codecs_keep_their_depth` checks the tags.
   Not done: RLE and 1-bit DPX (rare; ffmpeg, ImageMagick and OIIO can't
-  make them, so there's nothing to test against). No Developer ID signing / notarization (needs a paid Apple
+  make them, so there's nothing to test against).
+- **Session 8, part 4** (user request), **v0.0.19**: live links.
+  `src/link.rs`: a param value `{"link": {"node", "param"[, "at":
+  "reference"]}}` or `{"link": {"node", "motion": translate|rotate|scale,
+  "stabilize", "pivot"}}`; `link::resolve(lookup, v, t)` (chains ≤ 8,
+  loops → Null), `missing`, `rename`, `describe`. Engine:
+  `ops::resolve_params_linked(op, params, frame, links)` follows links in
+  `resolve_at` (so motion blur samples follow them too); `graph.rs`'s
+  `linked_params` does it for `run` and `key` (cache keys see resolved
+  values) and errors on a missing source. Tracker: `positions_at` /
+  `warps_at` / `solved_at` (fractional frames) and `motion_at` (shared
+  with the baked export); `track::export(.., linked)` makes motion links
+  (Transform, pivot = image center like the copy) or track-param links
+  (Corner Pin: To = track, From = track at the reference frame).
+  `Session::export_tracker`, MCP `export_tracker` (`linked`, default
+  true), Python `to_transform` / `to_corner_pin(linked=True)`;
+  `validate_param` accepts links; renames update them (Session and Doc).
+  GUI: `Doc::param_at` resolves links, `edit_param` ignores linked params;
+  panel `linked_widget` (value, "← source", Unlink); Tracker panel
+  "Linked" checkbox (`Properties::copy_exports`). Tests: link chains /
+  reference / loop / rename; linked Corner Pin = copy pixel for pixel;
+  linked Transform motion blur = blurred copy; MCP live follow of a
+  re-track, rename, delete error; Doc. No Developer ID signing / notarization (needs a paid Apple
   account); ffmpeg not bundled (GPL builds; Homebrew instead).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
@@ -210,6 +232,7 @@ report back after a few milestones.
    - Plugin process isolation: a crashing native plugin kills the app.
    - Package the Python module as a wheel (`maturin build` from `python/`,
      `pyproject.toml` is ready). maturin isn't installed on this machine.
+   - Links could grow into expressions (math on linked values).
    - Not planned: OpenFX hosting (large; its own project), licensing (the
      docs wanted another product's scheme copied; declined), `import_nuke`
      (originality rule).

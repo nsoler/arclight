@@ -800,13 +800,15 @@ impl eframe::App for App {
 /// The project shown on a fresh launch: the bundled test clip, transformed
 /// over a checkerboard, graded, viewed, and ready to render.
 fn starter_graph() -> Graph {
-    // The example clip: in the app bundle's Resources on macOS, else the
-    // source checkout this was built from.
+    // The example clip: in the app bundle's Resources on macOS, in
+    // share/arclight beside bin/ in a Linux release, else the source
+    // checkout this was built from.
     let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from));
     let checkout = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let clip = exe_dir
-        .map(|d| d.join("../Resources/examples/media/testsrc.mp4"))
-        .filter(|p| p.exists())
+        .into_iter()
+        .flat_map(|d| ["../Resources", "../share/arclight"].map(|r| d.join(r).join("examples/media/testsrc.mp4")))
+        .find(|p| p.exists())
         .unwrap_or_else(|| checkout.join("examples/media/testsrc.mp4"));
     // Renders go to the checkout's out/, or, installed, to ~/Movies/Arclight.
     let render = if checkout.is_dir() {

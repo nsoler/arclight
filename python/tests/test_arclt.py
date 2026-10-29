@@ -86,16 +86,19 @@ class ArcltTest(unittest.TestCase):
         plate = arclt.create_node("constant", width=64, height=32)
         trk = arclt.create_node("tracker", plate, name="trk")
         trk["track1"] = {"keys": [[1, [10.5, 10.5]], [4, [13.5, 9.5]]], "interp": "linear"}
-        xf = trk.to_transform(input=plate)
+        xf = trk.to_transform(input=plate, linked=False)
         self.assertEqual(xf.input(), plate)
         self.assertEqual(xf["translate"]["keys"][1], [4, [3.0, -1.0]])
-        steady = trk.to_transform("stabilize")
+        steady = trk.to_transform("stabilize", linked=False)
         self.assertEqual(steady["translate"]["keys"][1], [4, [-3.0, 1.0]])
+        # By default it follows the Tracker live.
+        live = trk.to_transform(input=plate)
+        self.assertEqual(live["translate"]["link"]["node"], "trk")
         with self.assertRaises(arclt.ArcltError):
             plate.to_transform()
         for i in (2, 3, 4):
             trk[f"track{i}_on"] = True
-        pin = trk.to_corner_pin(input=plate)
+        pin = trk.to_corner_pin(input=plate, linked=False)
         self.assertEqual(pin["from1"], [10.5, 10.5])
         self.assertEqual(pin["to1"]["keys"][1], [4, [13.5, 9.5]])
 

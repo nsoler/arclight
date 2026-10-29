@@ -825,31 +825,44 @@ pub fn params_with_defaults(op: &str, params: &Value) -> Value {
 /// `params` with every keyframed value replaced by its value at `frame`.
 /// Integer params are rounded so they still deserialize as integers.
 pub fn resolve_params(op: &str, params: &Value, frame: i64) -> Value {
+    resolve_params_linked(op, params, frame, None)
+}
+
+/// Resolves [`crate::link`]s too, with `links` (the graph's resolver: a
+/// value and a time to the value there), at the frame and at each motion
+/// blur sample.
+pub type Links<'a> = Option<&'a dyn Fn(&Value, f64) -> Value>;
+
+/// [`resolve_params`], following live links through `links`.
+pub fn resolve_params_linked(op: &str, params: &Value, frame: i64, links: Links) -> Value {
     let Value::Object(map) = params else { return params.clone() };
-    if !map.values().any(anim::is_animated) {
+    if !map.values().any(|v| anim::is_animated(v) || crate::link::is_link(v)) {
         let mut out = params.clone();
         if op == "tracker" {
             add_reference_tracks(params, &mut out);
         }
         return out;
     }
-    let mut resolved = resolve_at(op, map, frame as f64);
+    let mut resolved = resolve_at(op, map, frame as f64, links);
     if op == "tracker" {
         add_reference_tracks(params, &mut resolved);
     }
     if MOTION_BLUR_OPS.contains(&op) {
-        add_motion_samples(op, params, frame, &mut resolved);
+        add_motion_samples(op, params, frame, &mut resolved, links);
     }
     resolved
 }
 
 /// `map`'s values at time `t` (a frame, or between frames).
-fn resolve_at(op: &str, map: &Map<String, Value>, t: f64) -> Value {
+fn resolve_at(op: &str, map: &Map<String, Value>, t: f64, links: Links) -> Value {
     let specs = info(op).map(|i| i.params).unwrap_or(&[]);
     let resolved = map
         .iter()
         .map(|(k, v)| {
-            let mut v = anim::evaluate(v, t);
+            let mut v = match links {
+                Some(follow) if crate::link::is_link(v) => follow(v, t),
+                _ => anim::evaluate(v, t),
+            };
             if specs.iter().any(|s| s.name == k && matches!(s.kind, ParamKind::Int { .. })) {
                 if let Some(x) = v.as_f64() {
                     v = json!(x.round() as i64);
@@ -863,7 +876,7 @@ fn resolve_at(op: &str, map: &Map<String, Value>, t: f64) -> Value {
 
 /// For an animated shape or warp with motion blur on, its params at each
 /// sample time across the shutter, as `_motion` (also in the cache key).
-fn add_motion_samples(op: &str, params: &Value, frame: i64, out: &mut Value) {
+fn add_motion_samples(op: &str, params: &Value, frame: i64, out: &mut Value, links: Links) {
     let Value::Object(map) = params else { return };
     let n = out.get("motion_blur").and_then(Value::as_i64).unwrap_or(0);
     let shutter = out.get("shutter").and_then(Value::as_f64).unwrap_or(0.5);
@@ -879,7 +892,7 @@ fn add_motion_samples(op: &str, params: &Value, frame: i64, out: &mut Value) {
     };
     let samples: Vec<Value> = (0..n)
         .map(|i| {
-            let mut p = resolve_at(op, map, frame as f64 + start + shutter * i as f64 / (n - 1) as f64);
+            let mut p = resolve_at(op, map, frame as f64 + start + shutter * i as f64 / (n - 1) as f64, links);
             if op == "tracker" {
                 add_reference_tracks(params, &mut p);
             }
