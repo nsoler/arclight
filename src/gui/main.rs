@@ -44,6 +44,9 @@ const UNDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z)
 const REDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Z);
 const REDO_ALT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Y);
 const NODE_BROWSER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::SHIFT, Key::E);
+const SELECT_ALL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::A);
+const GROUP: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::G);
+const UNGROUP: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::G);
 
 fn main() -> eframe::Result {
     arclight::plugin::init();
@@ -421,9 +424,28 @@ impl App {
         } else if ctx.input_mut(|i| i.consume_shortcut(&UNDO)) {
             self.undo();
         }
-        // ⌘A: every vertex of the selected shape.
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(Key::A)) {
-            self.viewer.select_all_points(&self.doc);
+        // ⌘A: every node, over the node graph; else every vertex of the
+        // selected shape.
+        let over_graph = self.tab == BottomTab::Graph && ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| self.editor.rect.contains(p));
+        if ctx.input_mut(|i| i.consume_shortcut(&SELECT_ALL)) {
+            if over_graph {
+                self.doc.select_all();
+            } else {
+                self.viewer.select_all_points(&self.doc);
+            }
+        }
+        // Ungroup first: shortcut matching ignores an extra Shift.
+        if ctx.input_mut(|i| i.consume_shortcut(&UNGROUP)) {
+            if let Some(b) = self.doc.selected_backdrop.clone() {
+                self.doc.delete_backdrop(&b);
+            }
+        } else if ctx.input_mut(|i| i.consume_shortcut(&GROUP)) {
+            self.doc.group_selection();
+        }
+        // Esc clears the node graph's selection (text fields returned above;
+        // the node browser handles its own).
+        if !self.editor.browser_open() && ctx.input(|i| i.key_pressed(Key::Escape)) {
+            self.doc.clear_selection();
         }
         // Shift+E before any plain-E binding: shortcut matching ignores Shift.
         if ctx.input_mut(|i| i.consume_shortcut(&NODE_BROWSER)) {
@@ -482,8 +504,8 @@ impl App {
             if self.tab == BottomTab::Curves && self.curves.has_selection() {
                 self.curves.delete_selected(&mut self.doc);
             } else if self.viewer.delete_points(&mut self.doc) {
-            } else if let Some(id) = self.doc.selected.clone() {
-                self.doc.delete_node(&id);
+            } else {
+                self.doc.delete_selection();
             }
         }
         if pressed(Key::V) {
@@ -703,10 +725,28 @@ impl App {
                 }
                 ui.separator();
                 let sel = self.doc.selected.clone();
-                if ui.add_enabled(sel.is_some(), egui::Button::new("Delete node").shortcut_text("⌫")).clicked() {
-                    self.doc.delete_node(sel.as_deref().unwrap());
+                let any = !self.doc.selection().is_empty() || self.doc.selected_backdrop.is_some();
+                if ui.add_enabled(any, egui::Button::new("Delete selected").shortcut_text("⌫")).clicked() {
+                    self.doc.delete_selection();
                     ui.close();
                 }
+                if ui.add(egui::Button::new("Select all nodes").shortcut_text(ui.ctx().format_shortcut(&SELECT_ALL))).clicked() {
+                    self.doc.select_all();
+                    ui.close();
+                }
+                let group = egui::Button::new("Group in a backdrop").shortcut_text(ui.ctx().format_shortcut(&GROUP));
+                if ui.add_enabled(!self.doc.selection().is_empty(), group).clicked() {
+                    self.doc.group_selection();
+                    ui.close();
+                }
+                let ungroup = egui::Button::new("Ungroup (delete the backdrop)").shortcut_text(ui.ctx().format_shortcut(&UNGROUP));
+                if ui.add_enabled(self.doc.selected_backdrop.is_some(), ungroup).clicked() {
+                    if let Some(b) = self.doc.selected_backdrop.clone() {
+                        self.doc.delete_backdrop(&b);
+                    }
+                    ui.close();
+                }
+                ui.separator();
                 if ui.add_enabled(sel.is_some(), egui::Button::new("View node").shortcut_text("V")).clicked() {
                     self.doc.view_node(sel.as_deref().unwrap());
                     ui.close();
@@ -733,6 +773,8 @@ impl App {
                 ui.label(
                     "Node graph: right-click to add · drag ports to connect · \
                      double-click or V to view · ⌫ delete · F frame all\n\
+                     Selecting: click · ⇧ or ⌘ click to add / remove · drag a box on empty space (⇧ adds) · \
+                     ⌘A all · Esc none · ⌘G group in a backdrop · ⇧⌘G ungroup · middle-drag or ⌥-drag to pan\n\
                      Viewer: drag to pan · scroll / pinch to zoom · double-click or F to fit\n\
                      Player: Space play/pause · J / K / L back / stop / forward · \
                      ← → step · ⌥← ⌥→ previous / next key · Home / End\n\

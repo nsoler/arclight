@@ -11,6 +11,18 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.8.3 — 2026-10-29
+
+- Node graph multi-selection and backdrops: Shift/Cmd-click, box select
+  (Shift adds), Cmd+A and Esc; drag to move the selection, Delete deletes
+  it. Cmd+G (or right-click a node, Group) puts a titled, colored box
+  behind the selected nodes: drag its title to move it with the nodes
+  fully inside it, a corner to resize, double-click to rename, the swatch
+  or the Properties panel for color and title size; saved in the project
+  (`backdrops`), undoable; Shift+Cmd+G or Delete removes the box and
+  keeps the nodes. Panning the graph is now middle-drag or Alt-drag (a
+  plain drag on empty space selects).
+
 ## 0.8.2 — 2026-10-29
 
 - Adding a Camera in the node editor now brings a Scene and a Scanline

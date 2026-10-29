@@ -82,7 +82,7 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
   phase, the middle number goes up and the last restarts at 1 (0.9.1).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.8.2**.
+  in the same commit as the change. Current: **0.8.3**.
 - ~23,200 lines of Rust + Python. Tests: 134 library + 10 CLI + 46 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.
@@ -368,6 +368,30 @@ the user asks, usually after a visible feature lands.
    - Not planned: OpenFX hosting (large; its own project), licensing (the
      docs wanted another product's scheme copied; declined), `import_nuke`
      (originality rule).
+
+## Node graph selection and backdrops (v0.8.3, mathwiz/wD:p3)
+
+- `Doc` keeps `selected` (the primary node: Properties, viewer handles,
+  MCP `select_node`) plus a private selection list and `selection_for`;
+  code that only sets `selected` selects just that node, so viewer,
+  overlay and MCP work unchanged. `selected_backdrop` for the panel.
+- `graph.rs`: `Backdrop {id ("backdrop1"…), title, pos, size, color
+  (sRGB 0..1), font_size}`, `Graph.backdrops` (serde default, skipped
+  when empty: old files load, unchanged files save the same).
+- Gestures: click / Shift or Cmd-click toggle / box select on empty
+  space (Shift adds) / Cmd+A (over the graph; elsewhere it still selects
+  a shape's points in the viewer) / Esc (after main.rs's text-field
+  guard, and not while the node browser is open). Dragging moves the
+  whole selection (one undo step). **Pan moved:** left-drag on empty
+  space used to pan; now middle-drag or Alt-drag pans.
+- Backdrops: Cmd+G / right-click Group; title-bar drag moves the nodes
+  (and backdrops) *fully inside* when the drag starts; corner resize;
+  double-click renames in place; swatch palette; Shift+Cmd+G or Delete
+  removes the box and keeps the nodes. Fit (F) and the minimap include
+  backdrops. Shake-to-extract and drop-into-wire act only when a single
+  node is dragged.
+- Not done: MCP/session backdrop tools. Not checked by hand: the inline
+  rename, the palette popup and the corner cursors (tested headlessly).
 
 ## Session 4: automation, plugins, Python
 

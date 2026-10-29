@@ -61,12 +61,82 @@ impl Default for Project {
     }
 }
 
+/// A group box drawn behind nodes in the node editor (ignored by the
+/// engine). Nodes belong to it by position only: those fully inside it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Backdrop {
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    /// Top-left corner and size, in node editor coordinates.
+    pub pos: [f32; 2],
+    pub size: [f32; 2],
+    /// sRGB, 0..1.
+    #[serde(default = "default_backdrop_color")]
+    pub color: [f32; 3],
+    #[serde(default = "default_backdrop_font")]
+    pub font_size: f32,
+}
+
+fn default_backdrop_color() -> [f32; 3] {
+    Backdrop::COLORS[0]
+}
+
+fn default_backdrop_font() -> f32 {
+    Backdrop::FONT_SIZE
+}
+
+impl Backdrop {
+    /// The palette offered for backdrops (muted, so nodes stay readable
+    /// on them): slate, teal, green, olive, amber, rust, plum, blue.
+    pub const COLORS: [[f32; 3]; 8] = [
+        [0.36, 0.40, 0.46],
+        [0.25, 0.48, 0.47],
+        [0.30, 0.48, 0.30],
+        [0.47, 0.47, 0.25],
+        [0.58, 0.44, 0.20],
+        [0.56, 0.30, 0.24],
+        [0.45, 0.30, 0.48],
+        [0.26, 0.36, 0.58],
+    ];
+    pub const FONT_SIZE: f32 = 14.0;
+    /// Room around the nodes it's made to fit, and above them for the title.
+    pub const PAD: f32 = 20.0;
+    pub const TITLE_PAD: f32 = 30.0;
+
+    /// A backdrop around `rects` (min and max corners), with padding and
+    /// room for its title; None for no rects.
+    pub fn around(id: &str, title: &str, rects: impl IntoIterator<Item = ([f32; 2], [f32; 2])>) -> Option<Backdrop> {
+        let (mut lo, mut hi) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
+        for (a, b) in rects {
+            for k in 0..2 {
+                lo[k] = lo[k].min(a[k]);
+                hi[k] = hi[k].max(b[k]);
+            }
+        }
+        if !lo[0].is_finite() {
+            return None;
+        }
+        let pos = [lo[0] - Self::PAD, lo[1] - Self::PAD - Self::TITLE_PAD];
+        let size = [hi[0] - lo[0] + 2.0 * Self::PAD, hi[1] - lo[1] + 2.0 * Self::PAD + Self::TITLE_PAD];
+        Some(Backdrop { id: id.into(), title: title.into(), pos, size, color: Self::COLORS[0], font_size: Self::FONT_SIZE })
+    }
+
+    /// Whether the box from `a` to `b` lies fully inside it.
+    pub fn contains(&self, a: [f32; 2], b: [f32; 2]) -> bool {
+        (0..2).all(|k| a[k] >= self.pos[k] && b[k] <= self.pos[k] + self.size[k])
+    }
+}
+
 /// A whole graph document.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct Graph {
     pub nodes: Vec<NodeSpec>,
     #[serde(default)]
     pub project: Project,
+    /// Group boxes in the node editor, back to front.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backdrops: Vec<Backdrop>,
 }
 
 /// An evaluation failure, attributed to a node where possible.
@@ -104,6 +174,15 @@ impl Graph {
 
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).expect("graph serializes")
+    }
+
+    pub fn backdrop(&self, id: &str) -> Option<&Backdrop> {
+        self.backdrops.iter().find(|b| b.id == id)
+    }
+
+    /// A backdrop id not yet used: "backdrop1", "backdrop2", …
+    pub fn new_backdrop_id(&self) -> String {
+        (1..).map(|i| format!("backdrop{i}")).find(|id| self.backdrop(id).is_none()).expect("ids run out")
     }
 
     pub fn node(&self, id: &str) -> Option<&NodeSpec> {
@@ -336,4 +415,32 @@ fn node_key(node: &NodeSpec, params: &Value, keys: &HashMap<&str, u64>, ctx: &Ev
         ctx.write_outputs.hash(&mut h);
     }
     h.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backdrops_fit_their_nodes_and_round_trip() {
+        // Two nodes, 100×30 each, at (0, 0) and (200, 100).
+        let b = Backdrop::around("backdrop1", "Keying", [([0.0, 0.0], [100.0, 30.0]), ([200.0, 100.0], [300.0, 130.0])]).unwrap();
+        assert_eq!(b.pos, [-20.0, -50.0]);
+        assert_eq!(b.size, [340.0, 200.0]);
+        assert!(b.contains([0.0, 0.0], [100.0, 30.0]) && b.contains([200.0, 100.0], [300.0, 130.0]));
+        assert!(!b.contains([250.0, 100.0], [350.0, 130.0]), "only partly inside");
+        assert!(Backdrop::around("b", "", []).is_none());
+
+        let mut g = Graph::from_str(r#"{"nodes": [{"id": "a", "op": "blur"}]}"#).unwrap();
+        assert!(g.backdrops.is_empty(), "old files load without backdrops");
+        assert!(!g.to_json().contains("backdrops"), "and save without them");
+        assert_eq!(g.new_backdrop_id(), "backdrop1");
+        g.backdrops.push(b);
+        assert_eq!(g.new_backdrop_id(), "backdrop2");
+        let back = Graph::from_str(&g.to_json()).unwrap();
+        assert_eq!(back, g);
+        // Title, color and font size are optional in the file.
+        let g = Graph::from_str(r#"{"nodes": [], "backdrops": [{"id": "x", "pos": [0, 0], "size": [10, 10]}]}"#).unwrap();
+        assert_eq!((g.backdrops[0].color, g.backdrops[0].font_size), (Backdrop::COLORS[0], Backdrop::FONT_SIZE));
+    }
 }

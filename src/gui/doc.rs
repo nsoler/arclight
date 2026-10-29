@@ -7,7 +7,7 @@
 //! into a single undo step by committing only once the gesture has ended.
 
 use arclight::anim::{self, Interp};
-use arclight::graph::{Graph, NodeSpec};
+use arclight::graph::{Backdrop, Graph, NodeSpec};
 use arclight::ops;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -27,7 +27,17 @@ struct History {
 
 pub struct Doc {
     pub graph: Graph,
+    /// The primary selected node: the one the Properties panel, the viewer's
+    /// handles and scripts' `select_node` work on.
     pub selected: Option<String>,
+    /// Every selected node, the primary among them (see [`Doc::selection`]:
+    /// code that only sets `selected` selects just that node).
+    selection: Vec<String>,
+    /// The primary `selection` was made with: if `selected` has been set to
+    /// something else since, the selection is just that.
+    selection_for: Option<String>,
+    /// A selected backdrop (selecting one deselects the nodes).
+    pub selected_backdrop: Option<String>,
     /// A node shown in place of the Viewer node's input (double-click, V),
     /// until the Viewer is viewed again. View state: not saved or undone.
     pub view_override: Option<String>,
@@ -47,7 +57,7 @@ pub struct Doc {
 impl Doc {
     pub fn new(graph: Graph, path: Option<PathBuf>) -> Doc {
         let history = History { undo: Vec::new(), redo: Vec::new(), committed: Graph::default(), committed_edits: 0 };
-        let mut doc = Doc { graph, selected: None, view_override: None, view_format: None, revision: 1, path, dirty: false, edits: 0, history };
+        let mut doc = Doc { graph, selected: None, selection: Vec::new(), selection_for: None, selected_backdrop: None, view_override: None, view_format: None, revision: 1, path, dirty: false, edits: 0, history };
         doc.normalize();
         doc.auto_layout();
         doc.history.committed = doc.graph.clone();
@@ -114,9 +124,172 @@ impl Doc {
         self.history.committed = self.graph.clone();
         self.changed();
         self.history.committed_edits = self.edits;
-        if self.selected.as_ref().is_some_and(|id| self.node(id).is_none()) {
-            self.selected = None;
+        let sel = self.selection();
+        self.set_selection(sel.into_iter().filter(|id| self.graph.node(id).is_some()).collect());
+        if self.selected_backdrop.as_ref().is_some_and(|b| self.graph.backdrop(b).is_none()) {
+            self.selected_backdrop = None;
         }
+    }
+
+    // ---- Selection ----
+
+    /// The selected nodes, the primary ([`Doc::selected`]) last if it was
+    /// picked last. Only `selected` set (by the viewer, a script…): just it.
+    pub fn selection(&self) -> Vec<String> {
+        match &self.selected {
+            None => Vec::new(),
+            Some(p) if self.selection_for.as_ref() != Some(p) => vec![p.clone()],
+            Some(_) => self.selection.iter().filter(|id| self.graph.node(id).is_some()).cloned().collect(),
+        }
+    }
+
+    pub fn is_selected(&self, id: &str) -> bool {
+        match &self.selected {
+            None => false,
+            Some(p) if self.selection_for.as_ref() != Some(p) => p == id,
+            Some(_) => self.selection.iter().any(|s| s == id),
+        }
+    }
+
+    /// Select `ids` (the last is the primary), and no backdrop.
+    fn set_selection(&mut self, ids: Vec<String>) {
+        self.selected = ids.last().cloned();
+        self.selection_for = self.selected.clone();
+        self.selection = ids;
+        if self.selected.is_some() {
+            self.selected_backdrop = None;
+        }
+    }
+
+    /// Just `id`.
+    pub fn select_only(&mut self, id: &str) {
+        self.set_selection(vec![id.to_string()]);
+    }
+
+    /// Add `id` to the selection (it becomes the primary), or take it out.
+    pub fn toggle_selected(&mut self, id: &str) {
+        let mut sel = self.selection();
+        match sel.iter().position(|s| s == id) {
+            Some(i) => {
+                sel.remove(i);
+            }
+            None => sel.push(id.to_string()),
+        }
+        self.set_selection(sel);
+    }
+
+    /// Select `ids` (a box select), added to the selection with `add`.
+    pub fn select_nodes(&mut self, ids: &[String], add: bool) {
+        let mut sel = if add { self.selection() } else { Vec::new() };
+        for id in ids {
+            if !sel.contains(id) {
+                sel.push(id.clone());
+            }
+        }
+        self.set_selection(sel);
+    }
+
+    pub fn select_all(&mut self) {
+        let ids: Vec<String> = self.graph.nodes.iter().map(|n| n.id.clone()).collect();
+        // Keep the primary the primary.
+        let mut ids: Vec<String> = ids.into_iter().filter(|id| Some(id) != self.selected.as_ref()).collect();
+        ids.extend(self.selected.clone());
+        self.set_selection(ids);
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.set_selection(Vec::new());
+        self.selected_backdrop = None;
+    }
+
+    /// Select backdrop `id` (and no nodes).
+    pub fn select_backdrop(&mut self, id: &str) {
+        self.set_selection(Vec::new());
+        self.selected_backdrop = Some(id.to_string());
+    }
+
+    /// Move nodes `ids` by `d` (graph units).
+    pub fn move_nodes(&mut self, ids: &[String], d: [f32; 2]) {
+        for id in ids {
+            if let Some(n) = self.node_mut(id) {
+                let p = n.pos.get_or_insert([0.0, 0.0]);
+                p[0] += d[0];
+                p[1] += d[1];
+            }
+        }
+        self.touched();
+    }
+
+    /// Delete the selected nodes, or else the selected backdrop. False when
+    /// nothing was selected.
+    pub fn delete_selection(&mut self) -> bool {
+        let sel = self.selection();
+        if !sel.is_empty() {
+            for id in &sel {
+                self.delete_node(id);
+            }
+            return true;
+        }
+        match self.selected_backdrop.clone() {
+            Some(b) => {
+                self.delete_backdrop(&b);
+                true
+            }
+            None => false,
+        }
+    }
+
+    // ---- Backdrops ----
+
+    /// A node's box in graph units: its corner and the opposite one.
+    pub fn node_box(n: &NodeSpec) -> ([f32; 2], [f32; 2]) {
+        let p = n.pos.unwrap_or([0.0, 0.0]);
+        (p, [p[0] + NODE_W, p[1] + NODE_H])
+    }
+
+    /// Put a backdrop behind the selected nodes, fitted to them, and select
+    /// it. None when no nodes are selected.
+    pub fn group_selection(&mut self) -> Option<String> {
+        let sel = self.selection();
+        let id = self.graph.new_backdrop_id();
+        let boxes = sel.iter().filter_map(|s| self.graph.node(s)).map(Self::node_box);
+        let b = Backdrop::around(&id, "Group", boxes)?;
+        // In front of the backdrops it may sit inside, behind every node.
+        self.graph.backdrops.push(b);
+        self.select_backdrop(&id);
+        self.touched();
+        Some(id)
+    }
+
+    /// Remove backdrop `id` (Ungroup); its nodes stay.
+    pub fn delete_backdrop(&mut self, id: &str) {
+        let before = self.graph.backdrops.len();
+        self.graph.backdrops.retain(|b| b.id != id);
+        if self.selected_backdrop.as_deref() == Some(id) {
+            self.selected_backdrop = None;
+        }
+        if self.graph.backdrops.len() != before {
+            self.touched();
+        }
+    }
+
+    /// Replace the backdrop with `b`'s id by `b`.
+    pub fn set_backdrop(&mut self, b: Backdrop) {
+        if let Some(old) = self.graph.backdrops.iter_mut().find(|o| o.id == b.id) {
+            if *old != b {
+                *old = b;
+                self.touched();
+            }
+        }
+    }
+
+    /// The nodes fully inside backdrop `id`: the ones that move with it.
+    pub fn backdrop_nodes(&self, id: &str) -> Vec<String> {
+        let Some(b) = self.graph.backdrop(id) else { return Vec::new() };
+        self.graph.nodes.iter().filter(|n| {
+            let (a, c) = Self::node_box(n);
+            b.contains(a, c)
+        }).map(|n| n.id.clone()).collect()
     }
 
     pub fn node(&self, id: &str) -> Option<&NodeSpec> {
@@ -222,8 +395,9 @@ impl Doc {
                 }
             }
         }
-        if self.selected.as_deref() == Some(id) {
-            self.selected = None;
+        if self.is_selected(id) {
+            let rest: Vec<String> = self.selection().into_iter().filter(|s| s != id).collect();
+            self.set_selection(rest);
         }
         self.changed();
     }
@@ -359,7 +533,8 @@ impl Doc {
             }
             arclight::link::rename(&mut n.params, old, new);
         }
-        for id in [&mut self.selected, &mut self.view_override].into_iter().flatten() {
+        let lists = [&mut self.selected, &mut self.view_override, &mut self.selection_for].into_iter().flatten();
+        for id in lists.chain(self.selection.iter_mut()) {
             if id == old {
                 *id = new.to_string();
             }
@@ -604,6 +779,46 @@ impl Doc {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_selection_holds_several_nodes_beside_the_primary() {
+        let mut d = Doc::new(Graph::default(), None);
+        let a = d.add_node("constant", [0.0, 0.0]);
+        let b = d.add_node("blur", [200.0, 0.0]);
+        let c = d.add_node("blur", [400.0, 0.0]);
+        d.select_nodes(&[a.clone(), b.clone()], false);
+        assert_eq!((d.selection(), d.selected.clone()), (vec![a.clone(), b.clone()], Some(b.clone())));
+        d.toggle_selected(&b);
+        assert_eq!((d.selection(), d.selected.clone()), (vec![a.clone()], Some(a.clone())), "the primary moves to what's left");
+        // Code that only sets `selected` (the viewer, scripts) selects just it.
+        d.select_all();
+        assert_eq!(d.selection().len(), 3);
+        d.selected = Some(c.clone());
+        assert_eq!(d.selection(), std::slice::from_ref(&c));
+        assert!(!d.is_selected(&a));
+        d.selected = None;
+        assert!(d.selection().is_empty());
+        // Renames follow; deleting the selection deletes them all.
+        d.select_nodes(&[a.clone(), b.clone()], false);
+        d.rename(&a, "plate").unwrap();
+        assert_eq!(d.selection(), ["plate".to_string(), b.clone()]);
+        d.commit(false);
+        assert!(d.delete_selection());
+        assert_eq!(d.graph.nodes.len(), 1);
+        assert!(d.selection().is_empty());
+        d.commit(false);
+        d.undo();
+        assert_eq!(d.graph.nodes.len(), 3);
+        // A backdrop: selected on its own, saved with the graph.
+        d.select_nodes(&[b.clone(), c.clone()], false);
+        let bid = d.group_selection().unwrap();
+        assert!(d.selection().is_empty() && d.selected_backdrop.as_ref() == Some(&bid));
+        let again = Doc::new(Graph::from_str(&d.graph.to_json()).unwrap(), None);
+        assert_eq!(again.graph.backdrops, d.graph.backdrops);
+        assert_eq!(again.backdrop_nodes(&bid), [b.clone(), c.clone()]);
+        assert!(d.delete_selection(), "deletes the box");
+        assert!(d.graph.backdrops.is_empty() && d.graph.nodes.len() == 3);
+    }
 
     fn inputs(d: &Doc, id: &str) -> Vec<String> {
         d.node(id).unwrap().inputs.clone()

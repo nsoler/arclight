@@ -124,17 +124,61 @@ impl Properties {
             self.last_selected = doc.selected.clone();
         }
         self.open.retain(|id| doc.node(id).is_some());
+        let backdrop = doc.selected_backdrop.clone().filter(|b| doc.graph.backdrop(b).is_some());
 
-        if self.open.is_empty() {
+        if self.open.is_empty() && backdrop.is_none() {
             ui.weak("Select a node to edit its properties.");
             return;
         }
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            if let Some(b) = &backdrop {
+                self.backdrop_panel(ui, doc, b);
+                ui.add_space(6.0);
+            }
             for id in self.open.clone() {
                 self.panel(ui, doc, &id);
                 ui.add_space(6.0);
             }
         });
+    }
+
+    /// A selected backdrop: its title, color and title size, and Delete
+    /// box (its nodes stay).
+    fn backdrop_panel(&mut self, ui: &mut egui::Ui, doc: &mut Doc, bid: &str) {
+        let Some(mut b) = doc.graph.backdrop(bid).cloned() else { return };
+        let before = b.clone();
+        let frame = egui::Frame::group(ui.style()).stroke(egui::Stroke::new(1.5, Color32::from_rgb(250, 190, 70)));
+        let mut delete = false;
+        frame.show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                ui.painter().rect_filled(r, 2.0, backdrop_color32(b.color));
+                ui.strong(if b.title.is_empty() { bid } else { b.title.as_str() });
+                ui.weak("Backdrop");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    delete = ui.small_button("Delete box").on_hover_text("Remove the box (Ungroup); the nodes in it stay").clicked();
+                });
+            });
+            ui.label(RichText::new("A group box behind nodes. Drag its title bar to move it with the nodes fully inside it; drag a corner to resize.").small().weak());
+            ui.separator();
+            egui::Grid::new(("backdrop", bid)).num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+                ui.label("Title");
+                ui.add(egui::TextEdit::singleline(&mut b.title).desired_width(f32::INFINITY));
+                ui.end_row();
+                ui.label("Color");
+                backdrop_palette(ui, &mut b.color);
+                ui.end_row();
+                ui.label("Title size");
+                ui.add(egui::DragValue::new(&mut b.font_size).range(8.0..=72.0).speed(0.2).suffix(" px"));
+                ui.end_row();
+            });
+        });
+        if delete {
+            doc.delete_backdrop(bid);
+        } else if b != before {
+            doc.set_backdrop(b);
+        }
     }
 
     fn panel(&mut self, ui: &mut egui::Ui, doc: &mut Doc, id: &str) {
@@ -1099,6 +1143,35 @@ fn describe_media(path: &str) -> String {
 fn corner_pin_corners(f: arclight::image::Size) -> [[f32; 2]; 4] {
     let (w, h) = (f.width as f32, f.height as f32);
     [[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]]
+}
+
+/// A backdrop color for painting.
+pub fn backdrop_color32(c: [f32; 3]) -> Color32 {
+    let u = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Color32::from_rgb(u(c[0]), u(c[1]), u(c[2]))
+}
+
+/// The backdrop palette's swatches, then a picker for any other color.
+/// True when `color` changed.
+pub fn backdrop_palette(ui: &mut egui::Ui, color: &mut [f32; 3]) -> bool {
+    let mut changed = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for c in arclight::graph::Backdrop::COLORS {
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::click());
+            let on = *color == c;
+            ui.painter().rect_filled(r, 3.0, backdrop_color32(c));
+            if on || resp.hovered() {
+                ui.painter().rect_stroke(r, 3.0, egui::Stroke::new(if on { 2.0 } else { 1.0 }, Color32::WHITE), egui::StrokeKind::Inside);
+            }
+            if resp.clicked() && !on {
+                *color = c;
+                changed = true;
+            }
+        }
+        changed |= ui.color_edit_button_rgb(color).on_hover_text("Any color").changed();
+    });
+    changed
 }
 
 /// Formula functions for completion and the help: name, call, what it does.

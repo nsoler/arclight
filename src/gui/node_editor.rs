@@ -11,8 +11,17 @@
 //! dragging it to pull it out of its wires. Optional ports draw hollow. The
 //! minimap (lower right) pans on click/drag, zooms on scroll, fits on
 //! double-click.
+//!
+//! Click selects a node, Shift- or Cmd/Ctrl-click adds or removes one, and
+//! a drag on empty space draws a selection box (Shift adds); dragging any
+//! selected node moves them all. Middle-drag or Alt-drag pans. Backdrops
+//! (group boxes) sit behind everything: drag the title bar to move one with
+//! the nodes fully inside it, a corner to resize it; double-click the title
+//! to rename it, click the swatch for its color.
 
 use crate::doc::{Doc, NODE_H, NODE_W};
+use crate::properties::{backdrop_color32, backdrop_palette};
+use arclight::graph::Backdrop;
 use arclight::ops::{self, Category};
 use arclight::ops::OpInfo;
 use eframe::egui::{
@@ -70,8 +79,31 @@ pub struct NodeEditor {
     shake: Shake,
     /// The minimap's graph bounds, held while dragging in it.
     minimap_bounds: Option<Rect>,
+    /// A selection box being dragged: where it started (screen) and whether
+    /// it adds to the selection (Shift).
+    select_box: Option<(Pos2, bool)>,
+    /// A backdrop being moved by its title bar: it, and the nodes and
+    /// backdrops fully inside it when the drag started.
+    backdrop_drag: Option<(String, Vec<String>, Vec<String>)>,
+    /// A backdrop's title being edited in place: id, text, and whether the
+    /// field still needs focus.
+    title_edit: Option<(String, String, bool)>,
     pub rect: Rect,
 }
+
+/// Every node and backdrop, in graph coordinates.
+fn content_bounds(doc: &Doc) -> Rect {
+    let nodes = doc.graph.nodes.iter().map(|n| {
+        let (a, b) = Doc::node_box(n);
+        Rect::from_min_max(Pos2::new(a[0], a[1]), Pos2::new(b[0], b[1]))
+    });
+    let boxes = doc.graph.backdrops.iter().map(|b| Rect::from_min_size(Pos2::new(b.pos[0], b.pos[1]), Vec2::new(b.size[0], b.size[1])));
+    nodes.chain(boxes).fold(Rect::NOTHING, |acc, r| acc.union(r))
+}
+
+/// A backdrop's smallest size (graph units).
+const BACKDROP_MIN: Vec2 = Vec2::new(120.0, 60.0);
+const SELECTED: Color32 = Color32::from_rgb(250, 190, 70);
 
 /// The Shift+E node browser: a search field over every op.
 struct Browser {
@@ -96,6 +128,9 @@ impl Default for NodeEditor {
             drop_wire: None,
             shake: Shake::default(),
             minimap_bounds: None,
+            select_box: None,
+            backdrop_drag: None,
+            title_edit: None,
             rect: Rect::NOTHING,
         }
     }
@@ -195,6 +230,11 @@ impl NodeEditor {
             return;
         }
         self.pan = self.rect.size() / 2.0 - node.center().to_vec2() * self.zoom;
+    }
+
+    /// The node browser is open (it takes Esc and the arrow keys).
+    pub fn browser_open(&self) -> bool {
+        self.browser.is_some()
     }
 
     /// Open the node browser at the pointer, or mid-editor if the pointer
@@ -361,8 +401,9 @@ impl NodeEditor {
         self.navigate(ui, &bg, minimap);
         self.draw_grid(&painter);
 
-        if bg.clicked() {
-            doc.selected = None;
+        let mods = ui.input(|i| i.modifiers);
+        if bg.clicked() && !mods.shift && !mods.command {
+            doc.clear_selection();
         }
         // Right-click opens the node browser there (over a wire, its node
         // goes into the wire).
@@ -383,6 +424,8 @@ impl NodeEditor {
                 Color32::GRAY,
             );
         }
+
+        self.backdrops(ui, &painter, doc);
 
         // Snapshot geometry so we can mutate the doc while handling input.
         let geo: Vec<(String, String, Rect, usize)> = doc
@@ -412,31 +455,37 @@ impl NodeEditor {
         // Nodes.
         for (id, op, r, _) in &geo {
             let resp = ui.interact(*r, Id::unique(("node", id)), Sense::click_and_drag());
-            if resp.clicked() || resp.drag_started() {
-                doc.selected = Some(id.clone());
-                // Selecting the Viewer shows its own input again.
-                if op == "viewer" {
-                    doc.view_override = None;
+            let toggle = mods.shift || mods.command;
+            // Click: just this node; Shift / Cmd-click: add or remove it. A
+            // drag takes an unselected node into the selection first.
+            if resp.clicked() || (resp.drag_started_by(egui::PointerButton::Primary) && !doc.is_selected(id)) {
+                if toggle {
+                    doc.toggle_selected(id);
+                } else {
+                    doc.select_only(id);
                 }
             }
+            // Selecting the Viewer shows its own input again.
+            if (resp.clicked() || resp.drag_started()) && op == "viewer" && doc.is_selected(id) {
+                doc.view_override = None;
+            }
+            resp.context_menu(|ui| self.node_menu(ui, doc, id));
             if resp.drag_started() {
                 self.shake = Shake { node: id.clone(), ..Default::default() };
             }
-            if resp.dragged() {
+            if resp.dragged_by(egui::PointerButton::Primary) {
                 let d = resp.drag_delta() / self.zoom;
-                if let Some(n) = doc.node_mut(id) {
-                    let p = n.pos.get_or_insert([0.0, 0.0]);
-                    p[0] += d.x;
-                    p[1] += d.y;
-                }
-                doc.touched();
+                let moving = doc.selection();
+                let alone = moving.len() <= 1;
+                doc.move_nodes(if alone { std::slice::from_ref(id) } else { &moving }, [d.x, d.y]);
+                // Shaking out of wires and dropping into one: one node only.
                 let now = ui.input(|i| i.time);
-                if self.shake.node == *id && self.shake.shaken(resp.drag_delta(), now) {
+                if alone && self.shake.node == *id && self.shake.shaken(resp.drag_delta(), now) {
                     doc.extract(id);
                 }
                 // An unconnected node can be dropped into a wire.
                 self.drop_wire = None;
-                if is_free(doc, id) {
+                if alone && is_free(doc, id) {
                     if let Some(p) = resp.interact_pointer_pos() {
                         self.drop_wire = self.wire_at(doc, p, Some(id));
                     }
@@ -450,7 +499,7 @@ impl NodeEditor {
             if resp.double_clicked() {
                 doc.view_node(id);
             }
-            let selected = doc.selected.as_deref() == Some(id.as_str());
+            let selected = doc.is_selected(id);
             self.draw_node(&painter, doc, id, op, *r, selected, error_node == Some(id.as_str()));
         }
 
@@ -545,8 +594,170 @@ impl NodeEditor {
         if self.wire.is_some() {
             ui.ctx().request_repaint();
         }
+        self.box_select(ui, &painter, &bg, doc, &geo);
         if let Some(mm) = minimap {
             self.minimap(ui, &painter, doc, mm);
+        }
+    }
+
+    /// A drag on empty space draws a box; on release the nodes it touches
+    /// are selected (added to the selection with Shift).
+    fn box_select(&mut self, ui: &egui::Ui, painter: &egui::Painter, bg: &egui::Response, doc: &mut Doc, geo: &[(String, String, Rect, usize)]) {
+        let (alt, shift, origin, ptr) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift, i.pointer.press_origin(), i.pointer.interact_pos()));
+        if bg.drag_started_by(egui::PointerButton::Primary) && !alt {
+            self.select_box = origin.map(|o| (o, shift));
+        }
+        let Some((start, add)) = self.select_box else { return };
+        let Some(ptr) = ptr else { return };
+        let r = Rect::from_two_pos(start, ptr);
+        painter.rect(r, 0.0, SELECTED.gamma_multiply(0.08), Stroke::new(1.0, SELECTED.gamma_multiply(0.8)), egui::StrokeKind::Inside);
+        if !bg.dragged() {
+            self.select_box = None;
+            let hit: Vec<String> = geo.iter().filter(|g| g.2.intersects(r)).map(|g| g.0.clone()).collect();
+            if !hit.is_empty() || !add {
+                doc.select_nodes(&hit, add);
+            }
+        }
+    }
+
+    /// Right-click on a node: group or delete the selection.
+    fn node_menu(&mut self, ui: &mut egui::Ui, doc: &mut Doc, id: &str) {
+        if !doc.is_selected(id) {
+            doc.select_only(id);
+        }
+        let n = doc.selection().len();
+        let what = if n == 1 { "this node".to_string() } else { format!("{n} nodes") };
+        if ui.add(egui::Button::new(format!("Group {what} in a backdrop")).shortcut_text(ui.ctx().format_shortcut(&egui::KeyboardShortcut::new(Modifiers::COMMAND, Key::G)))).clicked() {
+            doc.group_selection();
+            ui.close();
+        }
+        if ui.add(egui::Button::new(format!("Delete {what}")).shortcut_text("⌫")).clicked() {
+            doc.delete_selection();
+            ui.close();
+        }
+    }
+
+    /// Draw the backdrops, back to front, and handle them: the title bar
+    /// selects and moves (with what's inside), double-click renames, the
+    /// swatch picks a color, corners resize.
+    fn backdrops(&mut self, ui: &mut egui::Ui, painter: &egui::Painter, doc: &mut Doc) {
+        let z = self.zoom;
+        for b in doc.graph.backdrops.clone() {
+            let r = Rect::from_min_size(self.to_screen(Pos2::new(b.pos[0], b.pos[1])), Vec2::new(b.size[0], b.size[1]) * z);
+            let bar = Rect::from_min_size(r.min, Vec2::new(r.width(), (Backdrop::TITLE_PAD * z).min(r.height())));
+            let color = backdrop_color32(b.color);
+            let selected = doc.selected_backdrop.as_deref() == Some(b.id.as_str());
+            let round = 6.0 * z.sqrt();
+            painter.rect_filled(r, round, color.gamma_multiply(0.30));
+            let top = egui::CornerRadius { nw: round as u8, ne: round as u8, sw: 0, se: 0 };
+            painter.rect_filled(bar, top, color.gamma_multiply(0.85));
+            let edge = if selected { Stroke::new(2.0, SELECTED) } else { Stroke::new(1.0, color) };
+            painter.rect_stroke(r, round, edge, egui::StrokeKind::Inside);
+            let sw_side = (bar.height() * 0.5).clamp(6.0, 16.0);
+            let swatch = Rect::from_center_size(Pos2::new(bar.right() - bar.height() * 0.5 - 10.0 * z, bar.center().y), Vec2::splat(sw_side));
+
+            let bar_resp = ui.interact(bar, Id::unique(("backdrop", &b.id)), Sense::click_and_drag());
+            if bar_resp.clicked() || bar_resp.drag_started() {
+                doc.select_backdrop(&b.id);
+            }
+            if bar_resp.double_clicked() {
+                self.title_edit = Some((b.id.clone(), b.title.clone(), true));
+            }
+            if bar_resp.drag_started() {
+                let inner = doc.graph.backdrops.iter().filter(|o| o.id != b.id && b.contains(o.pos, [o.pos[0] + o.size[0], o.pos[1] + o.size[1]])).map(|o| o.id.clone()).collect();
+                self.backdrop_drag = Some((b.id.clone(), doc.backdrop_nodes(&b.id), inner));
+            }
+            if bar_resp.dragged() {
+                if let Some((_, nodes, inner)) = self.backdrop_drag.clone().filter(|d| d.0 == b.id) {
+                    let d = bar_resp.drag_delta() / z;
+                    for bid in std::iter::once(&b.id).chain(&inner) {
+                        if let Some(mut o) = doc.graph.backdrop(bid).cloned() {
+                            o.pos = [o.pos[0] + d.x, o.pos[1] + d.y];
+                            doc.set_backdrop(o);
+                        }
+                    }
+                    doc.move_nodes(&nodes, [d.x, d.y]);
+                }
+            }
+            if bar_resp.drag_stopped() {
+                self.backdrop_drag = None;
+            }
+            bar_resp.context_menu(|ui| {
+                doc.select_backdrop(&b.id);
+                if ui.button("Rename").clicked() {
+                    self.title_edit = Some((b.id.clone(), b.title.clone(), true));
+                    ui.close();
+                }
+                if ui.button("Select its nodes").on_hover_text("The nodes fully inside it").clicked() {
+                    doc.select_nodes(&doc.backdrop_nodes(&b.id), false);
+                    ui.close();
+                }
+                let ungroup = egui::Button::new("Ungroup (delete the box)").shortcut_text(ui.ctx().format_shortcut(&egui::KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::G)));
+                if ui.add(ungroup).on_hover_text("The nodes stay").clicked() {
+                    doc.delete_backdrop(&b.id);
+                    ui.close();
+                }
+            });
+
+            // The title, or the field renaming it.
+            let font = FontId::proportional((b.font_size * z).max(7.0));
+            let text_at = Pos2::new(bar.left() + 8.0 * z, bar.center().y);
+            match &mut self.title_edit {
+                Some((id, text, focus)) if *id == b.id => {
+                    let field = Rect::from_min_max(Pos2::new(text_at.x, bar.top() + 2.0), Pos2::new(swatch.left() - 6.0, bar.bottom() - 2.0));
+                    let fid = Id::unique(("backdrop-title", &b.id));
+                    let resp = ui.put(field, egui::TextEdit::singleline(text).id(fid).font(font.clone()).margin(Vec2::new(2.0, 0.0)));
+                    if *focus {
+                        resp.request_focus();
+                        *focus = false;
+                    } else if resp.lost_focus() {
+                        let mut nb = b.clone();
+                        nb.title = text.trim().to_string();
+                        self.title_edit = None;
+                        doc.set_backdrop(nb);
+                    }
+                }
+                _ => {
+                    let shown = if b.title.is_empty() { "Backdrop" } else { b.title.as_str() };
+                    let clip = painter.with_clip_rect(Rect::from_min_max(bar.min, Pos2::new(swatch.left() - 4.0, bar.max.y)).intersect(painter.clip_rect()));
+                    clip.text(text_at, Align2::LEFT_CENTER, shown, font, Color32::from_gray(235));
+                }
+            }
+
+            // The color swatch and its palette.
+            painter.rect(swatch, 3.0, color, Stroke::new(1.0, Color32::from_gray(230)), egui::StrokeKind::Inside);
+            let sw_resp = ui.interact(swatch.expand(2.0), Id::unique(("backdrop-color", &b.id)), Sense::click()).on_hover_text("Color");
+            egui::Popup::from_toggle_button_response(&sw_resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+                let mut nb = b.clone();
+                if backdrop_palette(ui, &mut nb.color) {
+                    doc.set_backdrop(nb);
+                }
+            });
+
+            // Corners resize: top-left, top-right, bottom-left, bottom-right.
+            let handle = (10.0 * z.sqrt()).max(6.0);
+            for (k, corner) in [r.left_top(), r.right_top(), r.left_bottom(), r.right_bottom()].into_iter().enumerate() {
+                let (right, bottom) = (k % 2 == 1, k >= 2);
+                let at = corner + Vec2::new(if right { -handle } else { handle }, if bottom { -handle } else { handle }) * 0.5;
+                let resp = ui.interact(Rect::from_center_size(at, Vec2::splat(handle)), Id::unique(("backdrop-corner", &b.id, k)), Sense::drag());
+                if resp.hovered() || resp.dragged() {
+                    ui.ctx().set_cursor_icon(if right == bottom { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
+                    painter.circle_filled(at, handle * 0.3, Color32::from_gray(230));
+                }
+                if resp.drag_started() {
+                    doc.select_backdrop(&b.id);
+                }
+                if resp.dragged() {
+                    let d = resp.drag_delta() / z;
+                    let Some(mut o) = doc.graph.backdrop(&b.id).cloned() else { continue };
+                    let (mut x0, mut y0, mut x1, mut y1) = (o.pos[0], o.pos[1], o.pos[0] + o.size[0], o.pos[1] + o.size[1]);
+                    if right { x1 = (x1 + d.x).max(x0 + BACKDROP_MIN.x) } else { x0 = (x0 + d.x).min(x1 - BACKDROP_MIN.x) }
+                    if bottom { y1 = (y1 + d.y).max(y0 + BACKDROP_MIN.y) } else { y0 = (y0 + d.y).min(y1 - BACKDROP_MIN.y) }
+                    o.pos = [x0, y0];
+                    o.size = [x1 - x0, y1 - y0];
+                    doc.set_backdrop(o);
+                }
+            }
         }
     }
 
@@ -580,12 +791,8 @@ impl NodeEditor {
 
     /// The graph's bounds and the current view, in graph coordinates.
     fn graph_bounds(&self, doc: &Doc) -> Rect {
-        let mut b = Rect::from_min_max(self.to_graph(self.rect.min), self.to_graph(self.rect.max));
-        for n in &doc.graph.nodes {
-            let p = n.pos.unwrap_or([0.0, 0.0]);
-            b = b.union(Rect::from_min_size(Pos2::new(p[0], p[1]), Vec2::new(NODE_W, NODE_H)));
-        }
-        b.expand(40.0)
+        let view = Rect::from_min_max(self.to_graph(self.rect.min), self.to_graph(self.rect.max));
+        view.union(content_bounds(doc)).expand(40.0)
     }
 
     /// Where the minimap sits, when there's a graph and room for it.
@@ -627,13 +834,17 @@ impl NodeEditor {
 
         painter.rect(mm, 4.0, Color32::from_black_alpha(170), Stroke::new(1.0, Color32::from_gray(80)), egui::StrokeKind::Inside);
         let clip = painter.with_clip_rect(mm);
+        for b in &doc.graph.backdrops {
+            let r = Rect::from_min_max(to_map(Pos2::new(b.pos[0], b.pos[1])), to_map(Pos2::new(b.pos[0] + b.size[0], b.pos[1] + b.size[1])));
+            clip.rect_filled(r, 1.0, backdrop_color32(b.color).gamma_multiply(0.45));
+        }
         for n in &doc.graph.nodes {
             let p = n.pos.unwrap_or([0.0, 0.0]);
             let r = Rect::from_min_max(to_map(Pos2::new(p[0], p[1])), to_map(Pos2::new(p[0] + NODE_W, p[1] + NODE_H)));
             let color = ops::info(&n.op).map_or(Color32::from_gray(80), |i| category_color(i.category));
             clip.rect_filled(r, 1.0, color);
-            if doc.selected.as_deref() == Some(n.id.as_str()) {
-                clip.rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_rgb(250, 190, 70)), egui::StrokeKind::Outside);
+            if doc.is_selected(&n.id) {
+                clip.rect_stroke(r, 1.0, Stroke::new(1.0, SELECTED), egui::StrokeKind::Outside);
             }
         }
         let view = Rect::from_min_max(to_map(self.to_graph(self.rect.min)), to_map(self.to_graph(self.rect.max)));
@@ -641,8 +852,11 @@ impl NodeEditor {
         clip.rect_stroke(view, 1.0, Stroke::new(1.0, Color32::from_white_alpha(if hot { 230 } else { 150 })), egui::StrokeKind::Inside);
     }
 
+    /// Middle-drag or Alt-drag on empty space pans (a plain drag selects);
+    /// scroll pans, pinch or Cmd-scroll zooms about the pointer.
     fn navigate(&mut self, ui: &egui::Ui, bg: &egui::Response, minimap: Option<Rect>) {
-        if bg.dragged() {
+        let alt = ui.input(|i| i.modifiers.alt);
+        if bg.dragged_by(egui::PointerButton::Middle) || (alt && bg.dragged_by(egui::PointerButton::Primary)) {
             self.pan += bg.drag_delta();
         }
         if !ui.rect_contains_pointer(self.rect) || minimap.is_some_and(|m| ui.rect_contains_pointer(m)) {
@@ -665,12 +879,7 @@ impl NodeEditor {
         if doc.graph.nodes.is_empty() || !self.rect.is_positive() {
             return;
         }
-        let mut b = Rect::NOTHING;
-        for n in &doc.graph.nodes {
-            let p = n.pos.unwrap_or([0.0, 0.0]);
-            b = b.union(Rect::from_min_size(Pos2::new(p[0], p[1]), Vec2::new(NODE_W, NODE_H)));
-        }
-        let b = b.expand(30.0);
+        let b = content_bounds(doc).expand(30.0);
         // Small graphs stop at 70%: fitted any closer, a few nodes fill the
         // editor (scroll or pinch to zoom in further).
         self.zoom = (self.rect.width() / b.width()).min(self.rect.height() / b.height()).clamp(0.3, FIT_MAX_ZOOM);
@@ -872,20 +1081,22 @@ mod tests {
         ctx: egui::Context,
         ed: NodeEditor,
         time: f64,
+        /// Held modifier keys, for the next events.
+        mods: Modifiers,
     }
 
     impl Harness {
         /// At 1:1 zoom (where a Merge's three ports sit 11.5 points apart).
         fn new() -> Harness {
             let ed = NodeEditor { zoom: 1.0, fit_pending: false, ..NodeEditor::default() };
-            Harness { ctx: egui::Context::default(), ed, time: 0.0 }
+            Harness { ctx: egui::Context::default(), ed, time: 0.0, mods: Modifiers::NONE }
         }
 
         fn frame(&mut self, doc: &mut Doc, events: Vec<egui::Event>) {
             let raw = egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 700.0))),
                 time: Some(self.time),
-                events,
+                events: std::iter::once(egui::Event::ModifiersChanged(self.mods)).chain(events).collect(),
                 ..Default::default()
             };
             self.time += 1.0 / 60.0;
@@ -1110,5 +1321,179 @@ mod tests {
         assert!(names.contains(&"unpremult"));
         assert_eq!(browse("channel sel").iter().map(|o| o.name).collect::<Vec<_>>(), ["channel_select"]);
         assert!(browse("zzz").is_empty());
+    }
+
+    impl Harness {
+        fn press(&self, pos: Pos2, button: egui::PointerButton, pressed: bool) -> egui::Event {
+            egui::Event::PointerButton { pos, button, pressed, modifiers: self.mods }
+        }
+
+        fn click(&mut self, doc: &mut Doc, at: Pos2) {
+            self.frame(doc, vec![egui::Event::PointerMoved(at)]);
+            let (down, up) = (self.press(at, egui::PointerButton::Primary, true), self.press(at, egui::PointerButton::Primary, false));
+            self.frame(doc, vec![down]);
+            self.frame(doc, vec![up]);
+            self.frame(doc, vec![]);
+        }
+
+        /// `drag`, with any button and the held modifiers.
+        fn drag_with(&mut self, doc: &mut Doc, button: egui::PointerButton, from: Pos2, to: Pos2) {
+            self.frame(doc, vec![egui::Event::PointerMoved(from)]);
+            let down = self.press(from, button, true);
+            self.frame(doc, vec![down]);
+            for i in 1..=8 {
+                self.frame(doc, vec![egui::Event::PointerMoved(from.lerp(to, i as f32 / 8.0))]);
+            }
+            let up = self.press(to, button, false);
+            self.frame(doc, vec![up]);
+            self.frame(doc, vec![]);
+        }
+
+        fn screen(&self, p: [f32; 2]) -> Pos2 {
+            self.ed.to_screen(Pos2::new(p[0], p[1]))
+        }
+
+        fn pos(doc: &Doc, id: &str) -> [f32; 2] {
+            doc.node(id).unwrap().pos.unwrap()
+        }
+    }
+
+    #[test]
+    fn clicks_boxes_and_drags_select_and_move_several_nodes() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let a = doc.add_node("constant", [0.0, 0.0]);
+        let b = doc.add_node("constant", [300.0, 0.0]);
+        let c = doc.add_node("constant", [0.0, 200.0]);
+        let d = doc.add_node("constant", [600.0, 400.0]);
+        doc.commit(false);
+        let mut h = Harness::new();
+        h.frame(&mut doc, vec![]);
+        let mid = |h: &Harness, doc: &Doc, id: &str| h.rect(doc, id).center();
+        let sel = |doc: &Doc| {
+            let mut s = doc.selection();
+            s.sort();
+            s
+        };
+
+        // Click, Shift-click adds, Cmd/Ctrl-click takes out.
+        let at = mid(&h, &doc, &a);
+        h.click(&mut doc, at);
+        assert_eq!(sel(&doc), std::slice::from_ref(&a));
+        h.mods = Modifiers::SHIFT;
+        let at = mid(&h, &doc, &b);
+        h.click(&mut doc, at);
+        assert_eq!(sel(&doc), [a.clone(), b.clone()]);
+        assert_eq!(doc.selected.as_ref(), Some(&b), "the last picked is the primary");
+        h.mods = Modifiers::COMMAND;
+        let at = mid(&h, &doc, &a);
+        h.click(&mut doc, at);
+        assert_eq!(sel(&doc), std::slice::from_ref(&b));
+
+        // A box on empty space: what it touches; Shift adds.
+        h.mods = Modifiers::NONE;
+        let (from, to) = (h.screen([-20.0, -20.0]), h.screen([320.0, 30.0]));
+        h.drag(&mut doc, from, to);
+        assert_eq!(sel(&doc), [a.clone(), b.clone()]);
+        h.mods = Modifiers::SHIFT;
+        let (from, to) = (h.screen([-20.0, 180.0]), h.screen([40.0, 220.0]));
+        h.drag(&mut doc, from, to);
+        assert_eq!(sel(&doc), [a.clone(), b.clone(), c.clone()]);
+        assert_eq!(h.ed.pan, Vec2::new(40.0, 40.0), "a plain drag on empty space doesn't pan");
+
+        // Dragging one selected node moves them all, as one undo step.
+        h.mods = Modifiers::NONE;
+        let grab = mid(&h, &doc, &b);
+        h.drag(&mut doc, grab, grab + Vec2::new(100.0, 50.0));
+        doc.commit(false);
+        for (id, was) in [(&a, [0.0, 0.0]), (&b, [300.0, 0.0]), (&c, [0.0, 200.0])] {
+            let p = Harness::pos(&doc, id);
+            assert!((p[0] - was[0] - 100.0).abs() < 0.01 && (p[1] - was[1] - 50.0).abs() < 0.01, "{id}: {p:?}");
+        }
+        assert_eq!(Harness::pos(&doc, &d), [600.0, 400.0]);
+        // One undo puts every node back (a step per frame would only undo
+        // the last bit of the drag).
+        doc.undo();
+        assert_eq!((Harness::pos(&doc, &a), Harness::pos(&doc, &b), Harness::pos(&doc, &c)), ([0.0, 0.0], [300.0, 0.0], [0.0, 200.0]));
+
+        // Middle-drag and Alt-drag pan; the selection stays.
+        let before = sel(&doc);
+        let e = h.screen([900.0, 0.0]);
+        // (The first few points go to egui's drag threshold.)
+        let moved = |pan: Vec2, by: Vec2| (pan.x - 40.0) / by.x > 0.8 && (pan.y - 40.0) / by.y > 0.8;
+        h.drag_with(&mut doc, egui::PointerButton::Middle, e, e + Vec2::new(30.0, 20.0));
+        assert!(moved(h.ed.pan, Vec2::new(30.0, 20.0)), "{:?}", h.ed.pan);
+        h.ed.pan = Vec2::new(40.0, 40.0);
+        h.mods = Modifiers::ALT;
+        let e = h.screen([900.0, 0.0]);
+        h.drag(&mut doc, e, e + Vec2::new(-30.0, -20.0));
+        assert!(moved(h.ed.pan, Vec2::new(-30.0, -20.0)), "{:?}", h.ed.pan);
+        assert_eq!(sel(&doc), before);
+        assert_eq!(Harness::pos(&doc, &a), [0.0, 0.0]);
+
+        // A click on empty space selects nothing.
+        h.mods = Modifiers::NONE;
+        let at = h.screen([900.0, 0.0]);
+        h.click(&mut doc, at);
+        assert!(doc.selection().is_empty());
+    }
+
+    #[test]
+    fn backdrops_move_what_is_inside_resize_and_rename() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let a = doc.add_node("constant", [0.0, 0.0]);
+        let b = doc.add_node("blur", [200.0, 100.0]);
+        let outside = doc.add_node("constant", [700.0, 0.0]);
+        let partly = doc.add_node("constant", [300.0, 120.0]);
+        doc.select_nodes(&[a.clone(), b.clone()], false);
+        let bid = doc.group_selection().unwrap();
+        assert_eq!(doc.selected_backdrop.as_ref(), Some(&bid));
+        let bd = doc.graph.backdrop(&bid).unwrap().clone();
+        assert_eq!((bd.pos, bd.size), ([-20.0, -50.0], [390.0, 216.0]), "fits a and b plus padding and the title");
+        assert_eq!(doc.backdrop_nodes(&bid), [a.clone(), b.clone()], "partly inside doesn't count");
+        doc.commit(false);
+
+        let mut h = Harness::new();
+        h.frame(&mut doc, vec![]);
+        // Drag the title bar: the box and the nodes inside it move.
+        let grab = h.screen([bd.pos[0] + 60.0, bd.pos[1] + 15.0]);
+        h.drag(&mut doc, grab, grab + Vec2::new(100.0, 40.0));
+        doc.commit(false);
+        let near = |p: [f32; 2], q: [f32; 2]| (p[0] - q[0]).abs() < 0.01 && (p[1] - q[1]).abs() < 0.01;
+        assert!(near(doc.graph.backdrop(&bid).unwrap().pos, [80.0, -10.0]));
+        assert!(near(Harness::pos(&doc, &a), [100.0, 40.0]) && near(Harness::pos(&doc, &b), [300.0, 140.0]));
+        assert_eq!((Harness::pos(&doc, &outside), Harness::pos(&doc, &partly)), ([700.0, 0.0], [300.0, 120.0]));
+
+        // The bottom-right corner resizes it.
+        let bd = doc.graph.backdrop(&bid).unwrap().clone();
+        let corner = h.screen([bd.pos[0] + bd.size[0] - 5.0, bd.pos[1] + bd.size[1] - 5.0]);
+        h.drag(&mut doc, corner, corner + Vec2::new(50.0, 30.0));
+        doc.commit(false);
+        let grown = doc.graph.backdrop(&bid).unwrap().clone();
+        assert!(near(grown.pos, bd.pos) && near(grown.size, [bd.size[0] + 50.0, bd.size[1] + 30.0]), "{grown:?}");
+
+        // Double-click the title to rename it in place.
+        let title = h.screen([grown.pos[0] + 60.0, grown.pos[1] + 15.0]);
+        h.frame(&mut doc, vec![egui::Event::PointerMoved(title)]);
+        for _ in 0..2 {
+            h.frame(&mut doc, vec![Harness::button(title, true)]);
+            h.frame(&mut doc, vec![Harness::button(title, false)]);
+        }
+        h.frame(&mut doc, vec![]);
+        h.frame(&mut doc, vec![egui::Event::Text(" A".into())]);
+        h.frame(&mut doc, vec![egui::Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+        h.frame(&mut doc, vec![]);
+        assert_eq!(doc.graph.backdrop(&bid).unwrap().title, "Group A");
+        doc.commit(false);
+
+        // Each gesture undoes on its own; deleting the box leaves the nodes.
+        doc.undo();
+        assert_eq!(doc.graph.backdrop(&bid).unwrap().title, "Group");
+        doc.undo();
+        assert!(near(doc.graph.backdrop(&bid).unwrap().size, bd.size));
+        doc.delete_backdrop(&bid);
+        doc.commit(false);
+        assert!(doc.graph.backdrops.is_empty() && doc.node(&a).is_some() && doc.node(&b).is_some());
+        doc.undo();
+        assert!(doc.graph.backdrop(&bid).is_some());
     }
 }
