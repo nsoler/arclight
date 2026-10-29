@@ -136,6 +136,7 @@ result is blended back toward the main input (B for merge/keymix) by
 | `channel_select` | A, B (optional) | `red`, `green`, `blue`, `alpha` | each from `A red` … `B alpha`, `zero`, `one` |
 | `merge` | A, B + mask | `operation` | `over`, `under`, `add`, `multiply`, `screen`, `min`, `max`; outside the mask = B |
 | `keymix` | A, B + mask | — | A where mask alpha is 1, B where 0 |
+| `keyer` | input, clean plate (opt) + mask | `screen` (color, or null = estimated from the image), `balance`, `clip_black`, `clip_white`, `despill`, `output` (`keyed`/`matte`/`despill only`) | green/blue screen color-difference key with despill; a clean plate gives a per-pixel screen color |
 | `dissolve` | A, B | `amount` | cross-fade A → B |
 | `switch` | 5 (optional) | `which` | passes input `which` through; keyframe it to cut |
 | `transform` | 1 + mask | `translate` [2], `scale` [2], `rotate` (deg), `center` [2] or null | affine, bilinear resample, about `center`; null (the default) pivots on the middle of the input's data window, so a Transform after a shape turns it in place |

@@ -257,6 +257,7 @@ fn category(name: Option<&str>) -> Result<Category> {
         "source" => Category::Source,
         "color" => Category::Color,
         "channel" => Category::Channel,
+        "keyer" => Category::Keyer,
         "merge" => Category::Merge,
         "shape" => Category::Shape,
         "transform" => Category::Transform,

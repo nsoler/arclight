@@ -264,9 +264,20 @@ impl Properties {
                 }
                 changed.then(|| json!(v))
             }
+            ParamKind::Color if auto && value.is_null() => {
+                // Worked out by the op (a Keyer's screen color): nothing to
+                // show until set.
+                let mut set = false;
+                ui.horizontal(|ui| {
+                    ui.weak("auto").on_hover_text("Estimated from the image");
+                    set = ui.small_button("Set").on_hover_text("Choose the color yourself").clicked();
+                });
+                set.then(|| json!([0.1, 0.5, 0.1, 1.0]))
+            }
             ParamKind::Color => {
                 let mut c = [f(&value, 0), f(&value, 1), f(&value, 2), f(&value, 3)];
                 let mut changed = false;
+                let mut reset = false;
                 ui.horizontal(|ui| {
                     changed |= ui.color_edit_button_rgba_unmultiplied(&mut c).changed();
                     for (i, x) in c.iter_mut().enumerate() {
@@ -274,7 +285,13 @@ impl Properties {
                             .add(egui::DragValue::new(x).speed(0.005).prefix(["r ", "g ", "b ", "a "][i]).max_decimals(3))
                             .changed();
                     }
+                    if spec.default_value().is_null() {
+                        reset = ui.small_button("Auto").on_hover_text("Estimate it from the image again").clicked();
+                    }
                 });
+                if reset {
+                    doc.set_param(id, spec.name, Value::Null);
+                }
                 changed.then(|| json!(c))
             }
             ParamKind::Bool => {

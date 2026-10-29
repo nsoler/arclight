@@ -16,7 +16,7 @@ Last updated 2026-10-28 (session 7). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~14,400 lines of Rust + Python. Tests: 72 library + 10 CLI + 35 GUI
+- ~14,400 lines of Rust + Python. Tests: 73 library + 10 CLI + 35 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
 - **Release build (end of session 6):** `cargo build --release --workspace`
   and `python/build.sh` were run at the final commit, so
@@ -78,7 +78,8 @@ steps": take them in this order, one milestone at a time (commit, push and
 fast-forward `main` after each, per the standing instruction above), and
 report back after a few milestones.
 
-1. **Small UX debts:** Corner Pin's default
+1. **Small UX debts:** Keyer: pick the screen color in the viewer, matte
+   shrink/grow and softness; Corner Pin's default
    From/To is a 512 square (add "From = image corners"); per-track tracker
    box sizes and offsets are only editable in the viewer; no filtering when
    Transform / Tracker output / Corner Pin shrink the image (aliasing);
@@ -375,6 +376,24 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   writes an explicit `center` (the frame's). Behaviour change: old
   projects with a rotated/scaled Transform over a *small-window* input
   (only possible since Phase 0.6) now pivot on that layer.
+- **Session 7, part 5** (user request): `keyer` op, new `Category::Keyer`
+  (plugin category "keyer"). Color difference: alpha = 1 − (c[p] −
+  others(c)) / (s[p] − others(s)), p the screen's dominant channel,
+  `others` weighs the larger/smaller of the other two by `balance`; clip
+  black/white; despill limits c[p] to `others(c)`. `screen` defaults to
+  null → `estimate_screen` (per-channel median of pixels where green, or
+  blue if more, leads by 25%). Optional clean plate gives the screen per
+  pixel. Panel: null Color params show "auto" + Set, and an Auto button
+  once set. No viewer color picker yet (would help: sample the *input*,
+  since the viewer shows the keyer's output).
+- **CorridorKey** (AI keyer, github.com/nikopueringer/CorridorKey; the
+  OFX port gitcapoom/corridorkey_ofx is Windows/Resolve-only): the user
+  deferred it. If revisited: run upstream's PyTorch engine (Linux OK; the
+  RTX 5070 12 GB fits) in an out-of-process Python worker, feed it the
+  Keyer's matte as the alpha hint. Licence is CC BY-NC-SA-like with a
+  no-resale / commercial-software-needs-agreement clause: keep it out of
+  the repo, user-installed, and ask the user whether Arclight is
+  commercial first.
 
 ## Architecture in one page
 

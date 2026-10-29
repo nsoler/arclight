@@ -38,6 +38,7 @@ pub enum Category {
     Source,
     Color,
     Channel,
+    Keyer,
     Merge,
     Shape,
     Transform,
@@ -167,6 +168,7 @@ const CHANNEL_SOURCES: &[&str] = &[
     "A red", "A green", "A blue", "A alpha", "B red", "B green", "B blue", "B alpha", "zero", "one",
 ];
 const SWITCH_PORTS: usize = 5;
+const KEYER_OUTPUTS: &[&str] = &["keyed", "matte", "despill only"];
 
 const SIZE: ParamKind = ParamKind::Int { min: 1, max: 16384 };
 /// A source's frame size: 0 takes the project's format.
@@ -430,6 +432,32 @@ pub static OPS: &[OpInfo] = &[
         mask_base: None,
         help: "Divides color by alpha. Nodes after it see straight color, so \
                follow them with Premultiply. (Grade already does this internally.)",
+    },
+    OpInfo {
+        name: "keyer",
+        label: "Keyer",
+        category: Category::Keyer,
+        inputs: &[IN, opt("clean plate"), MASK],
+        params: &[
+            // Null: estimated from the image (its dominant green or blue).
+            p!("screen", "Screen color", ParamKind::Color, Value::Null),
+            p!("balance", "Balance", ParamKind::Float { min: 0.0, max: 1.0 }, 0.5),
+            p!("clip_black", "Clip black", ParamKind::Float { min: 0.0, max: 1.0 }, 0.0),
+            p!("clip_white", "Clip white", ParamKind::Float { min: 0.0, max: 1.0 }, 1.0),
+            p!("despill", "Despill", ParamKind::Float { min: 0.0, max: 1.0 }, 1.0),
+            fixed!("output", "Output", ParamKind::Choice(KEYER_OUTPUTS), "keyed"),
+            MIX,
+        ],
+        overlay: Overlay::None,
+        mask_base: Some(0),
+        help: "Pulls a key from a green or blue screen by color difference: how far \
+               each pixel's screen channel rises above the other two, against the \
+               screen color's. Screen color: picked from the image unless set; a \
+               clean plate (the empty screen) evens out uneven lighting. Balance \
+               weighs the larger of the other two channels (1) against the smaller \
+               (0). Clip black/white crush the matte's ends; despill pulls the \
+               screen channel down to the others. Output: the keyed image \
+               (premultiplied), the matte, or the despilled plate.",
     },
     OpInfo {
         name: "channel_select",
@@ -909,6 +937,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "switch" => switch(params, inputs),
         "dissolve" => dissolve(params, inputs),
         "keymix" => keymix(inputs),
+        "keyer" => keyer(params, inputs),
         "crop" => crop(params, inputs),
         "resize" => resize(params, inputs),
         "tracker" => tracker(params, inputs),
@@ -1513,6 +1542,102 @@ fn keymix(inputs: &[Option<&Image>]) -> Result<Image> {
 }
 
 // ---------------------------------------------------------------------------
+// Keyer
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct Keyer {
+    /// None: estimate it from the image.
+    #[serde(default)]
+    screen: Option<[f32; 4]>,
+    balance: f32,
+    clip_black: f32,
+    clip_white: f32,
+    despill: f32,
+    output: String,
+}
+
+/// A screen color's dominant channel and the other two.
+fn screen_channels(s: Rgba) -> (usize, usize, usize) {
+    if s[2] > s[1] && s[2] > s[0] {
+        (2, 0, 1)
+    } else if s[0] > s[1] && s[0] > s[2] {
+        (0, 1, 2)
+    } else {
+        (1, 0, 2)
+    }
+}
+
+/// The other two channels of `c`, weighted: `balance` 1 takes the larger,
+/// 0 the smaller.
+fn others(c: Rgba, q: usize, r: usize, balance: f32) -> f32 {
+    let (hi, lo) = (c[q].max(c[r]), c[q].min(c[r]));
+    balance * hi + (1.0 - balance) * lo
+}
+
+/// The screen color of a green or blue screen plate: the per-channel
+/// median of the pixels where green (or blue, if more pixels lean that way)
+/// clearly leads the other two, so edges and spill don't pull it. Green
+/// when nothing does.
+pub fn estimate_screen(img: &Image) -> Rgba {
+    let leading = |p: usize, q: usize, r: usize| -> Vec<[f32; 3]> {
+        img.pixels
+            .par_iter()
+            .filter(|px| px[3] > 0.0)
+            .map(|&px| color::unpremultiply(px))
+            .filter(|c| c[p] > 0.02 && c[p] > 1.25 * c[q].max(c[r]))
+            .map(|c| [c[0], c[1], c[2]])
+            .collect()
+    };
+    let (green, blue) = (leading(1, 0, 2), leading(2, 0, 1));
+    let mut pick = if blue.len() > green.len() { blue } else { green };
+    if pick.is_empty() {
+        return [0.1, 0.5, 0.1, 1.0];
+    }
+    let mid = pick.len() / 2;
+    let mut out = [0.0, 0.0, 0.0, 1.0];
+    for (i, o) in out.iter_mut().take(3).enumerate() {
+        pick.select_nth_unstable_by(mid, |a, b| a[i].total_cmp(&b[i]));
+        *o = pick[mid][i];
+    }
+    out
+}
+
+/// Color-difference keying (see the op's help).
+fn keyer(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
+    let p: Keyer = parse(params, "keyer")?;
+    let src = input(inputs, 0, "keyer")?;
+    let plate = inputs.get(1).copied().flatten();
+    let screen = p.screen.unwrap_or_else(|| estimate_screen(src));
+    let output = KEYER_OUTPUTS.iter().position(|o| *o == p.output).ok_or_else(|| anyhow!("unknown output '{}'", p.output))?;
+    let span = (p.clip_white - p.clip_black).max(1e-4);
+    let key = |px: Rgba, plate_px: Option<Rgba>| -> Rgba {
+        let c = color::unpremultiply(px);
+        // The screen here: the clean plate's, where it shows one.
+        let s = plate_px.map(color::unpremultiply).filter(|s| s[3] > 0.0).unwrap_or(screen);
+        let (pc, q, r) = screen_channels(s);
+        let ds = s[pc] - others(s, q, r, p.balance);
+        let dc = c[pc] - others(c, q, r, p.balance);
+        let raw = if ds > 1e-6 { (1.0 - dc / ds).clamp(0.0, 1.0) } else { 1.0 };
+        let alpha = ((raw - p.clip_black) / span).clamp(0.0, 1.0);
+        let mut fg = c;
+        fg[pc] -= p.despill * (c[pc] - others(c, q, r, p.balance)).max(0.0);
+        match output {
+            0 => {
+                let a = alpha * px[3];
+                [fg[0] * a, fg[1] * a, fg[2] * a, a]
+            }
+            1 => [alpha, alpha, alpha, 1.0],
+            _ => color::premultiply(fg),
+        }
+    };
+    let mut windows = vec![src.window()];
+    windows.extend(plate.map(Image::window));
+    let window = pointwise_window(src.format, &windows, key(color::TRANSPARENT, None));
+    Ok(generate(src.format, window, |x, y| key(src.at(x, y), plate.map(|pl| pl.at(x, y)))))
+}
+
+// ---------------------------------------------------------------------------
 // Crop and resize
 // ---------------------------------------------------------------------------
 
@@ -1799,6 +1924,45 @@ mod tests {
         let mut img = Image::blank(Size { width: fw, height: fh }, IRect::new(x, y, x + w as i32, y + h as i32));
         img.pixels.iter_mut().for_each(|p| *p = px);
         img
+    }
+
+    #[test]
+    fn keyer_pulls_a_matte_and_despills() {
+        // A green screen with a neutral subject in a 4×4 square, and a
+        // half-and-half edge pixel at (0, 0).
+        let screen = [0.1, 0.6, 0.1, 1.0];
+        let subject = [0.5, 0.4, 0.3, 1.0];
+        let mut plate = solid(8, 8, screen);
+        for y in 2..6 {
+            for x in 2..6 {
+                plate.pixels[y * 8 + x] = subject;
+            }
+        }
+        plate.pixels[0] = std::array::from_fn(|i| (screen[i] + subject[i]) / 2.0);
+        let close = |a: Rgba, b: Rgba| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-4);
+        // The screen is found on its own, with no subject pixels in it.
+        assert!(close(estimate_screen(&plate), screen), "{:?}", estimate_screen(&plate));
+        let key = |params: Value| eval("keyer", &params, &[Some(&plate), None, None], &CTX).unwrap();
+        let keyed = key(json!({}));
+        assert!(close(keyed.at(3, 3), subject), "subject kept: {:?}", keyed.at(3, 3));
+        assert!(close(keyed.at(7, 7), [0.0; 4]), "screen gone: {:?}", keyed.at(7, 7));
+        // The edge: half transparent, and despill takes the screen's green
+        // out (down to the mean of red and blue), premultiplied.
+        let edge = keyed.at(0, 0);
+        assert!((edge[3] - 0.5).abs() < 1e-4, "{edge:?}");
+        assert!(close(edge, [0.15, 0.125, 0.1, 0.5]), "{edge:?}");
+        // Matte output, and clipping.
+        assert!(close(key(json!({ "output": "matte" })).at(0, 0), [0.5, 0.5, 0.5, 1.0]));
+        assert!(close(key(json!({ "output": "matte", "clip_white": 0.5 })).at(0, 0), [1.0, 1.0, 1.0, 1.0]));
+        assert!(close(key(json!({ "output": "matte", "clip_black": 0.5 })).at(0, 0), [0.0, 0.0, 0.0, 1.0]));
+        // A clean plate of a darker screen keys that instead.
+        let dark = solid(8, 8, [0.05, 0.3, 0.05, 1.0]);
+        let mut dim = plate.clone();
+        dim.pixels[63] = [0.05, 0.3, 0.05, 1.0];
+        let alpha = |img: &Image| img.at(7, 7)[3];
+        let without = eval("keyer", &json!({}), &[Some(&dim), None, None], &CTX).unwrap();
+        let with = eval("keyer", &json!({}), &[Some(&dim), Some(&dark), None], &CTX).unwrap();
+        assert!(alpha(&without) > 0.4 && alpha(&with) < 1e-4, "{} {}", alpha(&without), alpha(&with));
     }
 
     #[test]
