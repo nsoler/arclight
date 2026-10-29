@@ -11,6 +11,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.10 — 2026-10-29
+
+- Camera Tracker: frames the neighbouring camera can't explain (after a
+  jump, a gap or a cut) are placed from the points they see (PnP), and
+  the solve restarts past unusable frames instead of stopping; the panel
+  has a collapsible **Frames** list with each frame's error, marking PnP
+  and unsolved frames. A refused tripod shot returns a typed `NoParallax`
+  error (M11 step b).
+
 ## 0.9.9 — 2026-10-29
 
 - Camera solving: perspective-n-point (`solve::pnp`): a camera from the

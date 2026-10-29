@@ -74,6 +74,10 @@ pub struct Solution {
     /// `points` (empty in solves saved before it was kept).
     #[serde(default)]
     pub point_rms: Vec<f64>,
+    /// Frames placed by perspective-n-point (after a jump, in a gap or past
+    /// a cut) rather than from a neighbouring frame's camera.
+    #[serde(default)]
+    pub pnp_frames: Vec<i64>,
 }
 
 /// Computer-vision frame (y down, z forward) ↔ the scene's (y up, z back).
@@ -107,6 +111,7 @@ impl Solution {
             rms: sol.rms,
             frame_rms,
             point_rms: sol.points.iter().zip(&sol.point_rms).filter(|(p, _)| p.is_some()).map(|(_, e)| e.unwrap_or(0.0)).collect(),
+            pnp_frames: sol.pnp.iter().copied().collect(),
         }
     }
 
@@ -313,6 +318,7 @@ mod tests {
             rms: 0.3,
             frame_rms: vec![0.3, 0.3],
             point_rms: Vec::new(),
+            pnp_frames: Vec::new(),
         }
     }
 

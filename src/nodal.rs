@@ -596,6 +596,7 @@ pub fn solve(tracks: &[FeatureTrack], first: i64, last: i64, intr: Intrinsics, s
         rms: rms(all),
         frame_rms: sums.into_iter().map(|(f, sn)| (f, rms(sn))).collect(),
         point_rms,
+        pnp: Default::default(),
     })
 }
 

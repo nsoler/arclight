@@ -2,10 +2,17 @@
 //! frame and a cloud of 3D points.
 //!
 //! 1. Start from two frames with enough parallax ([`solve::initial_pair`]).
-//! 2. Add frames one at a time, nearest to the solved ones first: each
-//!    starts at its neighbour's pose (carried on at the same velocity past
-//!    the ends) and is refined against the points it sees (a cameras-only
-//!    bundle adjustment); tracks that miss by too much there don't count.
+//! 2. Add frames one at a time, next to the solved ones, the one seeing the
+//!    most points first: each starts at its neighbour's pose (carried on at
+//!    the same velocity past the ends) and is refined against the points it
+//!    sees (a cameras-only bundle adjustment); tracks that miss by too much
+//!    there don't count. When that start is too far off (a jump: a cut, a
+//!    dropped stretch, a whip pan), so the fit misses by more than the
+//!    allowed error or fewer than half the tracks agree, the frame is
+//!    placed from the points it sees instead ([`solve::pnp`]). When no
+//!    frame next to the solved ones can be added, any other frame that sees
+//!    enough known points (in a gap, or past a cut) is placed by PnP and
+//!    the solve carries on from there.
 //! 3. Triangulate tracks seen from far enough apart.
 //! 4. Every so often, and at the end, adjust everything together
 //!    ([`bundle`]), optionally with the focal length, then drop points
@@ -18,7 +25,7 @@ use crate::bundle::{Obs, Problem};
 use crate::features::FeatureTrack;
 use crate::solve::{self, Intrinsics, Pose, V3};
 use anyhow::{bail, Result};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug)]
 pub struct Settings {
@@ -40,6 +47,19 @@ impl Default for Settings {
     }
 }
 
+/// The error when no two frames see enough parallax to start a solve from
+/// (as when the camera only turns): a tripod shot's cue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NoParallax;
+
+impl std::fmt::Display for NoParallax {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("no two frames see enough parallax to start from: the camera may only be turning, not moving")
+    }
+}
+
+impl std::error::Error for NoParallax {}
+
 /// A solved shot.
 #[derive(Clone, Debug)]
 pub struct Solution {
@@ -53,6 +73,19 @@ pub struct Solution {
     pub rms: f64,
     pub frame_rms: BTreeMap<i64, f64>,
     pub point_rms: Vec<Option<f64>>,
+    /// Frames placed by PnP (not from a neighbour's camera).
+    pub pnp: BTreeSet<i64>,
+}
+
+/// A frame's camera fitted to the points it sees.
+struct Fit {
+    pose: Pose,
+    /// Tracks it sees with points, and those within three times the allowed
+    /// error.
+    seen: usize,
+    good: usize,
+    /// Root-mean-square error of the good ones, pixels.
+    rms: f64,
 }
 
 /// The working state while solving.
@@ -63,6 +96,8 @@ struct State<'a> {
     points: Vec<Option<V3>>,
     /// Tracks thrown out as outliers: not triangulated again.
     rejected: Vec<bool>,
+    /// Frames placed by PnP.
+    pnp: BTreeSet<i64>,
     s: &'a Settings,
 }
 
@@ -124,40 +159,98 @@ impl State<'_> {
         }
     }
 
-    /// Solve frame `f`'s camera from the points it sees, starting at `guess`.
-    fn add_frame(&mut self, f: i64, guess: Pose) -> bool {
-        let seen = |st: &State, t: usize| st.points[t].is_some() && st.pos(t, f).is_some();
-        if (0..self.points.len()).filter(|&t| seen(self, t)).count() < 6 {
-            return false;
-        }
-        self.poses.insert(f, guess);
-        // Twice: the second time without the tracks the first found off.
+    /// Tracks with a point that frame `f` sees.
+    fn known(&self, f: i64) -> Vec<usize> {
+        (0..self.points.len()).filter(|&t| self.points[t].is_some() && self.pos(t, f).is_some()).collect()
+    }
+
+    /// Frame `f`'s camera refined from `start` against the points it sees
+    /// (twice: the second time without the tracks the first found off).
+    fn fit(&mut self, f: i64, start: Pose) -> Option<Fit> {
+        self.poses.insert(f, start);
         let mut skip: Vec<bool> = vec![false; self.points.len()];
-        for round in 0..2 {
+        let mut out = None;
+        for _ in 0..2 {
             let (mut p, ids) = self.problem(&[f], &|_| false, true);
+            let seen = p.obs.len();
             p.obs.retain(|o| !skip[ids[o.point]]);
-            p.huber = self.s.max_error;
             p.adjust(30);
-            let pose = p.poses[0];
-            self.poses.insert(f, pose);
-            let mut good = 0;
+            self.poses.insert(f, p.poses[0]);
+            let (mut good, mut sq) = (0, 0.0);
             for o in &p.obs {
                 let e = p.residual(o).map_or(f64::INFINITY, |r| r[0].hypot(r[1]));
                 if e > 3.0 * self.s.max_error {
                     skip[ids[o.point]] = true;
                 } else {
                     good += 1;
+                    sq += e * e;
                 }
             }
             if good < 6 {
-                self.poses.remove(&f);
-                return false;
+                out = None;
+                break;
             }
-            if round == 1 {
-                return true;
+            out = Some(Fit { pose: p.poses[0], seen, good, rms: (sq / good as f64).sqrt() });
+        }
+        self.poses.remove(&f);
+        out
+    }
+
+    /// Whether a fit can be taken as it is: within the allowed error, with
+    /// at least half the tracks agreeing.
+    fn trusted(&self, fit: &Fit) -> bool {
+        fit.rms <= self.s.max_error && fit.good * 2 >= fit.seen
+    }
+
+    /// Frame `f`'s camera placed by PnP from the points it sees, then
+    /// refined.
+    fn fit_pnp(&mut self, f: i64) -> Option<Fit> {
+        let ids = self.known(f);
+        let x: Vec<V3> = ids.iter().map(|&t| self.points[t].unwrap()).collect();
+        let px: Vec<[f64; 2]> = ids.iter().map(|&t| self.pos(t, f).unwrap()).collect();
+        let (pose, inliers) = solve::pnp(&x, &px, &self.intr, self.s.max_error)?;
+        if inliers.len() < 8 {
+            return None;
+        }
+        self.fit(f, pose)
+    }
+
+    /// Solve frame `f`'s camera from the points it sees, starting at `guess`
+    /// and falling back to PnP when that doesn't fit. Whether it was solved.
+    fn add_frame(&mut self, f: i64, guess: Pose) -> bool {
+        if self.known(f).len() < 6 {
+            return false;
+        }
+        let from_guess = self.fit(f, guess);
+        if let Some(fit) = from_guess.as_ref().filter(|fit| self.trusted(fit)) {
+            self.poses.insert(f, fit.pose);
+            return true;
+        }
+        let from_pnp = self.fit_pnp(f);
+        match (from_guess, from_pnp) {
+            (a, Some(b)) if a.as_ref().is_none_or(|a| b.good > a.good) => {
+                self.poses.insert(f, b.pose);
+                self.pnp.insert(f);
             }
+            (Some(a), _) => {
+                self.poses.insert(f, a.pose);
+            }
+            _ => return false,
         }
         true
+    }
+
+    /// Place frame `f` by PnP alone (a gap, or a restart past a cut), when
+    /// the fit can be trusted.
+    fn place(&mut self, f: i64) -> bool {
+        match self.fit_pnp(f).filter(|fit| self.trusted(fit)) {
+            Some(fit) => {
+                self.poses.insert(f, fit.pose);
+                self.pnp.insert(f);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Triangulate tracks not yet placed that two solved frames see from
@@ -204,9 +297,9 @@ pub fn solve(tracks: &[FeatureTrack], first: i64, last: i64, intr: Intrinsics, s
         a += step;
     }
     let Some((a, b, tv)) = start else {
-        bail!("no two frames see enough parallax to start from: the camera may only be turning, not moving")
+        return Err(NoParallax.into());
     };
-    let mut st = State { tracks, intr, poses: BTreeMap::new(), points: vec![None; tracks.len()], rejected: vec![false; tracks.len()], s };
+    let mut st = State { tracks, intr, poses: BTreeMap::new(), points: vec![None; tracks.len()], rejected: vec![false; tracks.len()], pnp: BTreeSet::new(), s };
     st.poses.insert(a, Pose::identity());
     st.poses.insert(b, tv.pose);
     for (t, x) in tv.points {
@@ -214,18 +307,30 @@ pub fn solve(tracks: &[FeatureTrack], first: i64, last: i64, intr: Intrinsics, s
     }
     st.adjust_all(false, 30);
     let total = (last - first + 1) as f32;
-    let mut failed: Vec<i64> = Vec::new();
+    let mut failed: BTreeSet<i64> = BTreeSet::new();
     let mut since_adjust = 0;
     loop {
         if !progress(st.poses.len() as f32 / total) {
             bail!("cancelled");
         }
-        let (lo, hi) = (*st.poses.keys().next().unwrap(), *st.poses.keys().next_back().unwrap());
-        // Unsolved frames next to or between solved ones, the one seeing
-        // the most points first.
-        let candidates = (lo.max(first + 1) - 1..=(hi + 1).min(last)).filter(|f| !st.poses.contains_key(f) && !failed.contains(f));
-        let count = |f: i64| (0..tracks.len()).filter(|&t| st.points[t].is_some() && st.pos(t, f).is_some()).count();
-        let Some(f) = candidates.max_by_key(|&f| (count(f), -(f - a).abs())) else { break };
+        // Unsolved frames next to solved ones, the one seeing the most
+        // points first.
+        let solved = |f: i64| st.poses.contains_key(&f);
+        let candidates = (first..=last).filter(|&f| !solved(f) && !failed.contains(&f) && (solved(f - 1) || solved(f + 1)));
+        let count = |f: i64| st.known(f).len();
+        let Some(f) = candidates.max_by_key(|&f| (count(f), -(f - a).abs())) else {
+            // Stuck: place another frame that sees enough known points by
+            // PnP (in a gap, or past a cut) and carry on from it, retrying
+            // the frames that failed (more points are known now).
+            let mut rest: Vec<(usize, i64)> = (first..=last).filter(|&f| !solved(f)).map(|f| (count(f), f)).filter(|c| c.0 >= 8).collect();
+            rest.sort_by_key(|&(n, f)| (std::cmp::Reverse(n), f));
+            if !rest.into_iter().any(|(_, f)| st.place(f)) {
+                break;
+            }
+            st.triangulate_new();
+            failed.clear();
+            continue;
+        };
         // Start at the nearest solved frame's pose, carried on at the same
         // velocity past the ends.
         let near = |d: i64| st.poses.get(&(f - d)).or_else(|| st.poses.get(&(f + d))).copied();
@@ -248,7 +353,7 @@ pub fn solve(tracks: &[FeatureTrack], first: i64, last: i64, intr: Intrinsics, s
                 since_adjust = 0;
             }
         } else {
-            failed.push(f);
+            failed.insert(f);
         }
     }
     // Last, everything together (with the focal length if asked), twice:
@@ -278,7 +383,8 @@ pub fn solve(tracks: &[FeatureTrack], first: i64, last: i64, intr: Intrinsics, s
     for (j, &t) in ids.iter().enumerate() {
         point_rms[t] = Some(rms(per_point[j]));
     }
-    Ok(Solution { intr: st.intr, poses: st.poses, points: st.points, rms: rms(all), frame_rms, point_rms })
+    let pnp = st.pnp.into_iter().filter(|f| st.poses.contains_key(f)).collect();
+    Ok(Solution { intr: st.intr, poses: st.poses, points: st.points, rms: rms(all), frame_rms, point_rms, pnp })
 }
 
 /// The similarity (scale `s`, rotation `r`, translation `t`) taking points
@@ -421,7 +527,109 @@ mod tests {
         let poses: Vec<Pose> = (0..20).map(|f| Pose::from_center(Rotation3::from_euler_angles(0.0, 0.01 * f as f64, 0.0), V3::zeros())).collect();
         let tracks = crate::solve::tests::synthetic_tracks(&k, &poses, &crate::solve::tests::cloud(300, 4), 0.2);
         let e = solve(&tracks, 0, 19, k, &Settings::default(), &mut |_| true).unwrap_err();
-        assert!(e.to_string().contains("only be turning"), "{e}");
+        assert!(e.to_string().contains("only be turning") && e.downcast_ref::<NoParallax>().is_some(), "{e}");
+    }
+
+    /// Tracks of `pts` seen by `poses` (frame `f` is `poses[f]`), each
+    /// running while its point stays in view, with 0.3 px noise; and the
+    /// point each track follows.
+    fn follow(k: &Intrinsics, poses: &[Pose], pts: &[V3]) -> (Vec<FeatureTrack>, Vec<usize>) {
+        let mut r = Rng(23);
+        let (mut tracks, mut which) = (Vec::new(), Vec::new());
+        for (j, x) in pts.iter().enumerate() {
+            let seen: Vec<Option<[f32; 2]>> = poses
+                .iter()
+                .map(|p| {
+                    let q = k.project(&p.apply(x))?;
+                    (q[0] > 5.0 && q[1] > 5.0 && q[0] < FMT.width as f64 - 5.0 && q[1] < FMT.height as f64 - 5.0).then_some([q[0] as f32, q[1] as f32])
+                })
+                .collect();
+            let mut start = 0;
+            // A point that leaves the view and comes back is a new track.
+            while let Some(s) = seen[start..].iter().position(Option::is_some).map(|s| s + start) {
+                let points: Vec<[f32; 2]> = seen[s..].iter().map_while(|q| *q).map(|q| [q[0] + noise(&mut r, 0.3) as f32, q[1] + noise(&mut r, 0.3) as f32]).collect();
+                start = s + points.len();
+                if points.len() >= 2 {
+                    tracks.push(FeatureTrack { start: s as i64, points });
+                    which.push(j);
+                }
+            }
+        }
+        (tracks, which)
+    }
+
+    /// Points spread wide and deep around the path of [`moving`].
+    fn wide_cloud() -> Vec<V3> {
+        let mut r = Rng(29);
+        let mut u = || r.below(1_000_000) as f64 / 1e6;
+        (0..2500).map(|_| V3::new(u() * 40.0 - 15.0, u() * 6.0 - 3.0, 4.0 + u() * 14.0)).collect()
+    }
+
+    /// The camera of [`shot`] at time `t` (frames), panned right by `pan`
+    /// degrees.
+    fn moving(t: f64, pan: f64) -> Pose {
+        let p = Pose::from_center(Rotation3::from_euler_angles(0.002 * t, -0.006 * t, 0.001 * t), V3::new(0.15 * t, -0.01 * t, 0.02 * t));
+        Pose::from_center(Rotation3::from_euler_angles(0.0, pan.to_radians(), 0.0) * p.r, p.center())
+    }
+
+    #[test]
+    fn jumps_and_dropped_frames_are_solved() {
+        let k = Intrinsics::new(30.0, 36.0, FMT);
+        // Ten frames' motion dropped between frames 14 and 15, and a 30°
+        // pan between 27 and 28.
+        let truth: Vec<Pose> = (0..40).map(|f| moving(if f < 15 { f as f64 } else { f as f64 + 10.0 }, if f < 28 { 0.0 } else { 30.0 })).collect();
+        let pts = wide_cloud();
+        let (tracks, which) = follow(&k, &truth, &pts);
+        let sol = solve(&tracks, 0, 39, k, &Settings::default(), &mut |_| true).unwrap();
+        assert_eq!(sol.poses.len(), 40, "every frame solved");
+        // (The neighbour's camera, refined, recovers from these on clean
+        // tracks; PnP may step in only after a jump.)
+        assert!(sol.pnp.iter().all(|f| [15, 16, 28, 29].contains(f)), "only frames after a jump from PnP: {:?}", sol.pnp);
+        let (center, rot) = compare(&sol, &truth, &pts, &which);
+        assert!(sol.rms < 0.5 && center < 0.005 && rot < 0.1, "rms {}, center {center} of the path, rotation {rot}°", sol.rms);
+    }
+
+    #[test]
+    fn a_frame_the_guess_cant_fit_is_placed_by_pnp() {
+        let k = Intrinsics::new(30.0, 36.0, FMT);
+        let truth: Vec<Pose> = (0..12).map(|f| moving(f as f64, 0.0)).collect();
+        let pts = wide_cloud();
+        let (tracks, which) = follow(&k, &truth, &pts);
+        let s = Settings::default();
+        let mut st = State { tracks: &tracks, intr: k, poses: (0..10).map(|f| (f, truth[f as usize])).collect(), points: which.iter().map(|&j| Some(pts[j])).collect(), rejected: vec![false; tracks.len()], pnp: BTreeSet::new(), s: &s };
+        let close = |p: &Pose, q: &Pose| (p.center() - q.center()).norm() < 0.01 && (p.r * q.r.inverse()).matrix().trace() > 3.0 - 1e-5;
+        // A fair guess is refined.
+        assert!(st.add_frame(10, truth[9]) && !st.pnp.contains(&10) && close(&st.poses[&10], &truth[10]));
+        // Turned round, every point behind it: PnP places the frame.
+        let away = Pose::from_center(Rotation3::from_euler_angles(0.0, std::f64::consts::PI, 0.0) * truth[10].r, truth[10].center());
+        assert!(st.add_frame(11, away) && st.pnp.contains(&11), "placed by PnP");
+        assert!(close(&st.poses[&11], &truth[11]), "{:?} vs {:?}", st.poses[&11], truth[11]);
+    }
+
+    #[test]
+    fn the_solve_restarts_after_a_cut() {
+        let k = Intrinsics::new(30.0, 36.0, FMT);
+        let truth: Vec<Pose> = (0..40).map(|f| moving(f as f64, 0.0)).collect();
+        let pts = wide_cloud();
+        let (mut tracks, which) = follow(&k, &truth, &pts);
+        // Frames 20 and 21 are unusable (a flash at a cut): every position
+        // on them is off by 10–40 px.
+        let mut r = Rng(31);
+        for t in tracks.iter_mut() {
+            for f in [20, 21] {
+                if let Some(i) = (f - t.start).try_into().ok().filter(|&i: &usize| i < t.points.len()) {
+                    let (a, d) = (r.below(628) as f32 / 100.0, 10.0 + r.below(30) as f32);
+                    t.points[i][0] += d * a.cos();
+                    t.points[i][1] += d * a.sin();
+                }
+            }
+        }
+        let sol = solve(&tracks, 0, 39, k, &Settings::default(), &mut |_| true).unwrap();
+        let unsolved: Vec<i64> = (0..40).filter(|f| !sol.poses.contains_key(f)).collect();
+        assert_eq!(unsolved, vec![20, 21], "the frames past the cut solved, the unusable ones not");
+        assert!(sol.pnp.contains(&22), "restarted at 22 by PnP: {:?}", sol.pnp);
+        let (center, rot) = compare(&sol, &truth, &pts, &which);
+        assert!(sol.rms < 0.5 && center < 0.005 && rot < 0.1, "rms {}, center {center} of the path, rotation {rot}°", sol.rms);
     }
 
     /// The whole pipeline on pictures: a camera moving through a small

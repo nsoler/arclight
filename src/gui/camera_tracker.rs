@@ -1,5 +1,6 @@
 //! The Camera Tracker in the GUI: its panel (Track & Solve on a worker
-//! thread with progress and Stop, the result, Export) and the viewer's
+//! thread with progress and Stop, the result with its per-frame list,
+//! Export) and the viewer's
 //! point picker (the solved points drawn through the frame's camera;
 //! click, ⇧-click or drag a box to select, then place a Card or a Locator
 //! on them, or set the origin, ground and scale).
@@ -59,13 +60,16 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, id: &str, jobs: &mut std::collect
         job.result = Some(match job.handle.take().unwrap().join() {
             Ok(Ok(sol)) => {
                 let first = sol.frames.first().copied().unwrap_or(0);
-                let msg = format!(
+                let mut msg = format!(
                     "Solved {} frame(s) from {first}: {} points, error {:.2} px, focal {:.1} mm.",
                     sol.frames.len(),
                     sol.points.len(),
                     sol.rms,
                     sol.focal
                 );
+                if !sol.pnp_frames.is_empty() {
+                    msg += &format!(" {} placed by PnP (see Frames).", sol.pnp_frames.len());
+                }
                 doc.set_param(id, "solution", sol.to_value());
                 (true, msg)
             }
@@ -99,6 +103,7 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, id: &str, jobs: &mut std::collect
     if let Some(sol) = &sol {
         let worst = sol.frame_rms.iter().copied().fold(0.0, f64::max);
         ui.label(format!("{} frames, {} points · error {:.2} px (worst frame {:.2}) · {:.1} mm", sol.frames.len(), sol.points.len(), sol.rms, worst, sol.focal));
+        frame_list(ui, id, sol);
         ui.weak("Select points in the viewer (click, ⇧-click, drag a box) to place a Card or Locator, or to set the origin, ground and scale.");
         ui.horizontal(|ui| {
             if ui.button("Export").on_hover_text("Add a keyed Camera, the point cloud, a Scene and a Scanline Render over the plate").clicked() {
@@ -114,6 +119,55 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, id: &str, jobs: &mut std::collect
         let color = if *ok { Color32::from_rgb(110, 200, 120) } else { Color32::from_rgb(235, 100, 90) };
         ui.colored_label(color, msg);
     }
+}
+
+/// One row of the per-frame list: a frame from the first solved to the
+/// last, its error (None when it wasn't solved), and whether PnP placed it.
+fn frame_rows(sol: &Solution) -> Vec<(i64, Option<f64>, bool)> {
+    let (Some(&lo), Some(&hi)) = (sol.frames.first(), sol.frames.last()) else { return Vec::new() };
+    (lo..=hi)
+        .map(|f| {
+            let i = sol.frames.iter().position(|&g| g == f);
+            (f, i.map(|i| sol.frame_rms.get(i).copied().unwrap_or(0.0)), sol.pnp_frames.contains(&f))
+        })
+        .collect()
+}
+
+/// The solve frame by frame, collapsed: each frame's error, frames placed
+/// by PnP marked, unsolved frames in between listed.
+fn frame_list(ui: &mut egui::Ui, id: &str, sol: &Solution) {
+    let rows = frame_rows(sol);
+    let unsolved = rows.iter().filter(|r| r.1.is_none()).count();
+    let mut title = "Frames".to_string();
+    if !sol.pnp_frames.is_empty() {
+        title += &format!(" · {} by PnP", sol.pnp_frames.len());
+    }
+    if unsolved > 0 {
+        title += &format!(" · {unsolved} unsolved");
+    }
+    egui::CollapsingHeader::new(title).id_salt(("camera_tracker_frames", id)).show(ui, |ui| {
+        egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+            egui::Grid::new(("camera_tracker_frame_grid", id)).num_columns(3).striped(true).show(ui, |ui| {
+                ui.strong("Frame");
+                ui.strong("Error");
+                ui.strong("");
+                ui.end_row();
+                for (f, err, pnp) in rows {
+                    ui.label(f.to_string());
+                    match err {
+                        Some(e) => ui.label(format!("{e:.2} px")),
+                        None => ui.weak("not solved"),
+                    };
+                    if pnp {
+                        ui.label("PnP").on_hover_text("Placed from the points it sees (after a jump, in a gap or past a cut), not from a neighbouring frame's camera");
+                    } else {
+                        ui.label("");
+                    }
+                    ui.end_row();
+                }
+            });
+        });
+    });
 }
 
 /// Add a keyed Camera, a Point Cloud, a Scene of both and a Scanline Render
@@ -331,12 +385,27 @@ mod tests {
     fn solved() -> Doc {
         let sol = Solution {
             format: [200, 100], focal: 35.0, film_back: [36.0, 24.0], frames: vec![1], cameras: vec![[0.0, 0.0, 0.0, -15.0, 0.0, 0.0]],
-            points: (0..9).map(|i| [(i % 3) as f64 - 1.0, -2.0, -8.0 - (i / 3) as f64]).collect(), rms: 0.1, frame_rms: vec![0.1], point_rms: Vec::new(),
+            points: (0..9).map(|i| [(i % 3) as f64 - 1.0, -2.0, -8.0 - (i / 3) as f64]).collect(), rms: 0.1, frame_rms: vec![0.1], point_rms: Vec::new(), pnp_frames: Vec::new(),
         };
         let node = NodeSpec { id: "ct".into(), op: "camera_tracker".into(), inputs: vec![String::new()], params: json!({ "solution": sol.to_value() }), pos: Some([0.0, 0.0]) };
         let mut d = Doc::new(Graph { nodes: vec![node], ..Default::default() }, None);
         d.selected = Some("ct".into());
         d
+    }
+
+    #[test]
+    fn the_frame_list_marks_pnp_frames_and_gaps() {
+        let mut sol = Solution::from_params(&solved().node("ct").unwrap().params).unwrap();
+        sol.frames = vec![1, 2, 5];
+        sol.cameras = vec![sol.cameras[0]; 3];
+        sol.frame_rms = vec![0.1, 0.2, 0.4];
+        sol.pnp_frames = vec![5];
+        assert_eq!(frame_rows(&sol), vec![(1, Some(0.1), false), (2, Some(0.2), false), (3, None, false), (4, None, false), (5, Some(0.4), true)]);
+        let _ = egui::Context::default().run_ui(egui::RawInput::default(), |ui| frame_list(ui, "ct", &sol));
+        // Solutions saved before PnP frames were kept still load.
+        let mut v = sol.to_value();
+        v.as_object_mut().unwrap().remove("pnp_frames");
+        assert!(Solution::from_params(&json!({ "solution": v })).unwrap().pnp_frames.is_empty());
     }
 
     #[test]
