@@ -64,7 +64,10 @@ steps": take them in this order, one milestone at a time (commit, push and
 fast-forward `main` after each, per the standing instruction above), and
 report back after a few milestones.
 
-1. **Phase 0.6 bounding boxes / format** (large, foundational; next). Images are
+1. **Phase 0.6 bounding boxes / format** (large, foundational; in
+   progress). **Plan: `docs/phase-0.6-plan.md`** (decisions D1–D4 agreed:
+   capped overscan, a project format, plugin ABI v1 via flattening,
+   milestones in order). Images are
    always full frame from origin 0,0. Overlays assume a node's input is
    the viewed image's size (Transform's pivot and layer frame, Tracker
    boxes, the Transform export's pivot), which is wrong for a smaller layer
