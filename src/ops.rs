@@ -1308,14 +1308,53 @@ fn transform(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
         let (dx, dy) = ((x - cx) * sx, (y - cy) * sy);
         Some([dx * c + dy * s + cx + p.translate[0], -dx * s + dy * c + cy + p.translate[1]])
     });
-    Ok(generate(src.format, window, |ox, oy| {
-        // Undo translate, then rotate+scale about center (inverse).
-        let dx = ox as f32 - p.translate[0] - cx;
-        let dy = oy as f32 - p.translate[1] - cy;
-        let rx = (dx * c - dy * s) / sx + cx;
-        let ry = (dx * s + dy * c) / sy + cy;
-        src.sample_bilinear(rx, ry)
-    }))
+    // Undo translate, then rotate+scale about center (inverse).
+    let inverse = |[ox, oy]: [f32; 2]| {
+        let dx = ox - p.translate[0] - cx;
+        let dy = oy - p.translate[1] - cy;
+        Some([(dx * c - dy * s) / sx + cx, (dx * s + dy * c) / sy + cy])
+    };
+    Ok(generate(src.format, window, |ox, oy| sample_warped(src, ox, oy, inverse)))
+}
+
+/// The most taps a side [`sample_warped`] averages: shrinking by more than
+/// this much aliases a little again, but costs no more.
+const MAX_TAPS: usize = 16;
+
+/// Output pixel (`ox`, `oy`) of a warp whose `inverse` maps output
+/// positions to source positions (both with pixel centers on integers;
+/// None: nothing there). Bilinear where the warp keeps or enlarges the
+/// image; where it shrinks it, the mean of a grid of bilinear taps spread
+/// over the source area the pixel covers (its footprint, from the warp's
+/// local derivatives), so detail averages out instead of aliasing (as
+/// Resize does). Works for any warp: turned, uneven, or in perspective.
+fn sample_warped(src: &Image, ox: i32, oy: i32, inverse: impl Fn([f32; 2]) -> Option<[f32; 2]>) -> Rgba {
+    let (x, y) = (ox as f32, oy as f32);
+    let Some(a) = inverse([x, y]) else { return color::TRANSPARENT };
+    // Source distance per output pixel along the output's x and y.
+    let (du, dv) = match (inverse([x + 1.0, y]), inverse([x, y + 1.0])) {
+        (Some(ax), Some(ay)) => ([ax[0] - a[0], ax[1] - a[1]], [ay[0] - a[0], ay[1] - a[1]]),
+        _ => return src.sample_bilinear(a[0], a[1]),
+    };
+    // (A hair of slack: a turn at scale 1 measures 1.0000001, not 1.)
+    let taps = |d: [f32; 2]| ((d[0].hypot(d[1]) - 1e-3).ceil().max(1.0) as usize).min(MAX_TAPS);
+    let (nu, nv) = (taps(du), taps(dv));
+    if nu == 1 && nv == 1 {
+        return src.sample_bilinear(a[0], a[1]);
+    }
+    let mut acc = [0.0f32; 4];
+    for j in 0..nv {
+        let t = (j as f32 + 0.5) / nv as f32 - 0.5;
+        for k in 0..nu {
+            let s = (k as f32 + 0.5) / nu as f32 - 0.5;
+            let px = src.sample_bilinear(a[0] + du[0] * s + dv[0] * t, a[1] + du[1] * s + dv[1] * t);
+            for c in 0..4 {
+                acc[c] += px[c];
+            }
+        }
+    }
+    let n = (nu * nv) as f32;
+    acc.map(|v| v / n)
 }
 
 // ---------------------------------------------------------------------------
@@ -1385,10 +1424,8 @@ fn corner_pin(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let forward = track::homography(&from, &to).context("corner_pin: three of the corners are in a line")?;
     // In track coordinates pixel centers sit at +0.5.
     let window = moved_window(src.window(), src.format, |[x, y]| track::project(&forward, [x + 0.5, y + 0.5]).map(|[u, v]| [u - 0.5, v - 0.5]));
-    Ok(generate(src.format, window, |x, y| match track::project(&h, [x as f32 + 0.5, y as f32 + 0.5]) {
-        Some(q) => src.sample_bilinear(q[0] - 0.5, q[1] - 0.5),
-        None => color::TRANSPARENT,
-    }))
+    let inverse = |[x, y]: [f32; 2]| track::project(&h, [x + 0.5, y + 0.5]).map(|[u, v]| [u - 0.5, v - 0.5]);
+    Ok(generate(src.format, window, |x, y| sample_warped(src, x, y, inverse)))
 }
 
 /// Resample `src`: each output pixel center `o` reads `src` at `m(o)`.
@@ -1398,11 +1435,12 @@ fn warp(src: &Image, m: &track::Affine) -> Image {
         let [u, v] = track::apply(&forward, [x + 0.5, y + 0.5]);
         Some([u - 0.5, v - 0.5])
     });
-    generate(src.format, window, |x, y| {
-        let q = track::apply(m, [x as f32 + 0.5, y as f32 + 0.5]);
-        // `sample_bilinear` puts pixel centers on integers.
-        src.sample_bilinear(q[0] - 0.5, q[1] - 0.5)
-    })
+    // Track coordinates put pixel centers at +0.5; `sample_bilinear` on integers.
+    let inverse = |[x, y]: [f32; 2]| {
+        let [u, v] = track::apply(m, [x + 0.5, y + 0.5]);
+        Some([u - 0.5, v - 0.5])
+    };
+    generate(src.format, window, |x, y| sample_warped(src, x, y, inverse))
 }
 
 // ---------------------------------------------------------------------------
@@ -2586,6 +2624,39 @@ mod tests {
         let out = eval("invert", &json!({ "channels": "alpha" }), &[Some(&src)], &CTX).unwrap();
         let s = color::unpremultiply(out.get(0, 0));
         assert!(approx(s[0], 0.8) && approx(s[3], 0.75));
+    }
+
+    #[test]
+    fn shrinking_warps_average_instead_of_aliasing() {
+        // A one-pixel checkerboard, the worst case: shrunk to a quarter, it
+        // should come out an even grey, not a pattern of 0s and 1s.
+        let check = checkerboard(&json!({ "width": 128, "height": 128, "size": 1,
+            "color_a": [0, 0, 0, 1], "color_b": [1, 1, 1, 1] })).unwrap();
+        // Over the middle of the shrunk image, away from its edges: the
+        // spread of values (an aliased result has 0s and 1s).
+        let spread = |img: &Image| {
+            let vals: Vec<f32> = (56..72).flat_map(|y| (56..72).map(move |x| (x, y))).map(|(x, y)| img.at(x, y)[0]).collect();
+            let mean = vals.iter().sum::<f32>() / vals.len() as f32;
+            (mean, vals.iter().map(|v| (v - mean).abs()).fold(0.0, f32::max))
+        };
+        let shrunk = eval("transform", &json!({ "scale": [0.25, 0.25], "rotate": 30 }), &[Some(&check), None], &CTX).unwrap();
+        let (mean, off) = spread(&shrunk);
+        assert!((mean - 0.5).abs() < 0.03 && off < 0.08, "transform: mean {mean}, off by {off}");
+        // Corner Pin squeezing the whole frame into the middle quarter.
+        let pin = json!({ "from1": [0, 0], "from2": [128, 0], "from3": [128, 128], "from4": [0, 128],
+                          "to1": [48, 48], "to2": [80, 48], "to3": [80, 80], "to4": [48, 80] });
+        let pinned = eval("corner_pin", &pin, &[Some(&check), None], &CTX).unwrap();
+        let (mean, off) = spread(&pinned);
+        assert!((mean - 0.5).abs() < 0.03 && off < 0.08, "corner pin: mean {mean}, off by {off}");
+        // The tracker's warp (an affine) the same.
+        let m: track::Affine = [4.0, 0.0, -192.0, 0.0, 4.0, -192.0];
+        let (mean, off) = spread(&warp(&check, &m));
+        assert!((mean - 0.5).abs() < 0.03 && off < 0.08, "tracker warp: mean {mean}, off by {off}");
+        // Enlarging is untouched: still plain bilinear.
+        let big = eval("transform", &json!({ "scale": [2, 2] }), &[Some(&check), None], &CTX).unwrap();
+        let p = big.at(64, 64);
+        let q = check.sample_bilinear(63.75, 63.75);
+        assert_eq!(p, q);
     }
 
     #[test]
