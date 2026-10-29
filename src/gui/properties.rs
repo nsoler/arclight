@@ -639,6 +639,7 @@ impl Properties {
                 }
             }
         });
+        self.track_boxes(ui, doc, id);
         if ui.button("Reference = this frame").on_hover_text("Solve the output transform relative to the current frame").clicked() {
             doc.set_param(id, "reference_frame", json!(frame));
         }
@@ -685,6 +686,58 @@ impl Properties {
                 }
             }
         }
+    }
+
+    /// Each track's own pattern and search box sizes and its offset, as a
+    /// table (the viewer edits the same by dragging box corners and
+    /// Ctrl-dragging boxes). A size with no override shows the shared one,
+    /// greyed; editing it gives the track its own. ↺ puts the track back on
+    /// the shared sizes with no offset.
+    fn track_boxes(&mut self, ui: &mut egui::Ui, doc: &mut Doc, id: &str) {
+        let Some(node) = doc.node(id) else { return };
+        let params = node.params.clone();
+        let p = ops::params_with_defaults("tracker", &params);
+        let sizes = track::box_sizes(&params);
+        let offsets = track::offsets(&params);
+        egui::CollapsingHeader::new("Per-track boxes").id_salt(("track_boxes", id)).default_open(false).show(ui, |ui| {
+            egui::Grid::new(("track_boxes_grid", id)).num_columns(6).spacing([8.0, 4.0]).show(ui, |ui| {
+                for h in ["", "Pattern", "Search", "Offset x", "Offset y", ""] {
+                    ui.weak(h);
+                }
+                ui.end_row();
+                for i in 0..track::TRACKS {
+                    let n = i + 1;
+                    let on = p[format!("track{n}_on")].as_bool() == Some(true);
+                    let own = |which: &str| params.get(format!("track{n}_{which}")).is_some_and(|v| !v.is_null());
+                    let has_own = own("pattern") || own("search") || offsets[i] != [0.0, 0.0];
+                    ui.add_enabled_ui(on, |ui| ui.label(format!("Track {n}")));
+                    let [mut pattern, mut search] = sizes[i].map(|s| s as i64);
+                    for (which, value, range) in [
+                        ("pattern", &mut pattern, 5..=(sizes[i][1] as i64 - 2).min(255)),
+                        ("search", &mut search, (sizes[i][0] as i64 + 2)..=511),
+                    ] {
+                        let field = egui::DragValue::new(value).range(range).speed(0.5);
+                        let field = if own(which) { field } else { field.custom_formatter(|v, _| format!("{v:.0} ·")) };
+                        let tip = if own(which) { "This track's own size" } else { "The shared size (·); edit to give this track its own" };
+                        if ui.add_enabled(on, field).on_hover_text(tip).changed() {
+                            doc.set_param(id, &format!("track{n}_{which}"), json!(*value));
+                        }
+                    }
+                    let mut o = offsets[i];
+                    for c in 0..2 {
+                        if ui.add_enabled(on, egui::DragValue::new(&mut o[c]).speed(0.5).max_decimals(2)).on_hover_text("The boxes' offset from the track's point, in pixels").changed() {
+                            doc.set_param(id, &format!("track{n}_offset"), json!(o));
+                        }
+                    }
+                    if ui.add_enabled(on && has_own, egui::Button::new("↺").small()).on_hover_text("Back to the shared sizes, no offset").clicked() {
+                        for which in ["pattern", "search", "offset"] {
+                            doc.remove_param(id, &format!("track{n}_{which}"));
+                        }
+                    }
+                    ui.end_row();
+                }
+            });
+        });
     }
 
     fn start_tracking(&mut self, doc: &mut Doc, id: &str, from: i64, to: i64) {
