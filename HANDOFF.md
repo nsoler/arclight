@@ -9,18 +9,17 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
 
 ## Start here (next session)
 
-- **State:** version **0.9.11** on branch **`wip-ns-3dwork`**, commit
-  `aca56fd` (M11 complete, handoff notes after it), merged to `main`.
-  The local build (`target/release`) is 0.9.11, so the Omarchy launcher
-  entry (repo `install.sh`) runs 0.9.11. (The Python `.so` in `python/`
-  is still 0.9.7; rebuild with `python/build.sh` if needed.)
-- **Latest release: v0.9.11**
-  (github.com/nsoler/arclight/releases/tag/v0.9.11): Linux x86_64 tarball
-  `arclight-0.9.11-linux-x86_64.tar.gz`, macOS universal DMG
-  `Arclight-0.9.11-universal.dmg` (Apple Silicon + Intel), and the `arclt`
-  wheels (Linux manylinux2014, macOS universal2) + sdist. Both
-  workflows passed. Earlier: v0.9.7, v0.9.5, v0.8.4, v0.8.3 and the
-  0.0.x pre-releases.
+- **State:** version **0.9.27** on branch **`wip-ns-3dwork`**, commit
+  `7c178ff` (M10 complete), merged to `main`. The local build
+  (`target/release`) is 0.9.27, so the Omarchy launcher entry runs
+  0.9.27. (The Python `.so` in `python/` is older; rebuild with
+  `python/build.sh` if needed.)
+- **Latest release: v0.9.27**
+  (github.com/nsoler/arclight/releases/tag/v0.9.27): Linux x86_64 tarball,
+  macOS universal DMG `Arclight-0.9.27-universal.dmg` (Apple Silicon +
+  Intel), `arclt` wheels (Linux manylinux2014, macOS universal2) + sdist.
+  Both workflows passed. Earlier: v0.9.11, v0.9.7, v0.9.5, v0.8.4,
+  v0.8.3 and the 0.0.x pre-releases.
 - **Done (session 10): M10, 3D objects and render passes**
   ("Milestone 10 in detail" in `docs/phase-4-plan.md`), at **0.9.22**
   (`d422ffb`); steps (a) objects, (b) passes and (c) OBJ are done; (d)
@@ -93,10 +92,10 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
     lit by scene lights); Area light has engine support (`shade.rs`) but
     no node (M12); shadows (M12); true ortho texture path (M9).
   - Next version: **0.9.28**. (CHANGELOG has one entry per version.)
-- **Ask the user first** how the Mac builds (v0.9.11 universal DMG) went
+- **Ask the user first** how the Mac builds (v0.9.27 universal DMG) went
   on their M4 Pro, and whether anyone tried an Intel Mac. Mac-only bugs
   come first.
-- **Next work, in order:** (1) finish M10 and release; (2) Mac feedback
+- **Next work, in order:** (1) the user's local test of 0.9.27 (objects, lights, passes, multi-object G / R / S); (2) Mac feedback
   and hand checks of the 3D view (below) and the Camera Tracker's tripod
   / PnP on real footage; (3) M9 leftovers: a true orthographic texture
   path in render3d (ortho views now use a 1000×-away long lens), the
