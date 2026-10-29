@@ -11,6 +11,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.26 — 2026-10-29
+
+- 3D view: with several objects selected, G / R / S and the gizmos
+  move, rotate and scale them together about their median point (the
+  gizmo sits there), as Blender's Median Point pivot does; objects whose
+  params are linked are left out (or turn in place), and the whole
+  gesture is one undo step (M9 leftovers).
+
 ## 0.9.25 — 2026-10-29
 
 - Lit rendering: Lambert and Blinn shading (with specular, roughness

@@ -190,18 +190,21 @@ impl Viewer {
             });
             if let Some((mode, reset)) = pressed {
                 let now = ui.input(|i| i.time);
-                let result = match doc.selected.clone() {
-                    None => Err(format!("Select an object to {} it", mode.name().to_lowercase())),
-                    Some(node) if reset => gizmo3d::reset(doc, &node, mode, frame),
-                    Some(node) => match (&view, resp.hover_pos()) {
+                let selection = doc.selection();
+                let result = if selection.is_empty() {
+                    Err(format!("Select an object to {} it", mode.name().to_lowercase()))
+                } else if reset {
+                    // Each that can be; the first refusal if none could.
+                    let results: Vec<Result<(), String>> = selection.iter().map(|n| gizmo3d::reset(doc, n, mode, frame)).collect();
+                    if results.iter().any(Result::is_ok) { Ok(()) } else { results.into_iter().next().unwrap_or(Ok(())) }
+                } else {
+                    match (&view, resp.hover_pos()) {
                         (Some(_), Some(at)) => {
-                            // Its place in the viewed scene, or its own params
-                            // if it isn't in it.
-                            let world = self.viewport3d.object_world(&node).unwrap_or_else(|| gizmo3d::trs_at(doc, &node, frame).matrix());
-                            Transforming::start(doc, &node, mode, &world, at, frame).map(|t| self.transforming = Some(t))
+                            let objects = self.objects(doc, &selection, frame);
+                            Transforming::start_many(doc, &objects, mode, at, frame).map(|t| self.transforming = Some(t))
                         }
                         _ => Err("The 3D view isn't ready yet".into()),
-                    },
+                    }
                 };
                 if let Err(why) = result {
                     self.notice = Some((why, now));
@@ -210,15 +213,26 @@ impl Viewer {
         }
     }
 
-    /// The selected object's gizmo for the current tool, from the view as
-    /// last drawn, and whether its handles can move it (per mode: why not).
+    /// Each of `nodes` with its place in the viewed scene, or its own
+    /// params' if it isn't in it.
+    fn objects(&self, doc: &Doc, nodes: &[String], frame: i64) -> Vec<(String, arclight::geom::Mat4)> {
+        nodes.iter().map(|n| (n.clone(), self.viewport3d.object_world(n).unwrap_or_else(|| gizmo3d::trs_at(doc, n, frame).matrix()))).collect()
+    }
+
+    /// The gizmo for the current tool on the selected objects in the view
+    /// (at their median point, with the primary's axes), from the view as
+    /// last drawn; the primary; and per mode why no handle can move any of
+    /// them, if none can.
     fn gizmo(&self, doc: &Doc) -> Option<(Layout, String, [Option<String>; 3])> {
-        let node = doc.selected.clone()?;
         let view = self.viewport3d.projector()?;
-        let world = self.viewport3d.object_world(&node)?;
-        let origin = arclight::geom::transform_point(&world, &arclight::geom::Vec3::zeros());
+        let placed: Vec<(String, arclight::geom::Mat4)> = doc.selection().into_iter().filter_map(|n| Some((n.clone(), self.viewport3d.object_world(&n)?))).collect();
+        let (node, world) = placed.last()?.clone();
+        let origin = gizmo3d::median(placed.iter().map(|(_, w)| w))?;
         let layout = Layout::new(&view, self.tool, origin, gizmo3d::axes_of(&world, self.space))?;
-        let refused = [Mode::Move, Mode::Rotate, Mode::Scale].map(|m| gizmo3d::refusal(doc, &node, m));
+        let refused = [Mode::Move, Mode::Rotate, Mode::Scale].map(|m| {
+            let why: Vec<Option<String>> = placed.iter().map(|(n, _)| gizmo3d::refusal(doc, n, m)).collect();
+            if why.iter().any(Option::is_none) { None } else { why.into_iter().last().flatten() }
+        });
         Some((layout, node, refused))
     }
 
@@ -229,13 +243,14 @@ impl Viewer {
         if self.transforming.is_some() {
             return self.dragged;
         }
-        let (layout, node, refused) = self.gizmo(doc)?;
+        let (layout, _, refused) = self.gizmo(doc)?;
         let at = resp.hover_pos()?;
         let h = layout.hit(at)?;
         let mode = h.gesture(self.space).0;
         if ui.input(|i| i.pointer.primary_pressed()) {
-            let world = self.viewport3d.object_world(&node).unwrap_or_else(|| gizmo3d::trs_at(doc, &node, frame).matrix());
-            match Transforming::drag(doc, &node, h, self.space, &world, at, frame) {
+            let placed: Vec<String> = doc.selection().into_iter().filter(|n| self.viewport3d.object_world(n).is_some()).collect();
+            let objects = self.objects(doc, &placed, frame);
+            match Transforming::drag_many(doc, &objects, h, self.space, at, frame) {
                 Ok(t) => {
                     self.transforming = Some(t);
                     self.dragged = Some(h);

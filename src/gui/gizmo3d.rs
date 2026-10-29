@@ -17,7 +17,10 @@
 //! the world's (global) or the object's (local). Pure maths, so it's
 //! tested without a window; the viewport supplies a [`View`].
 //! [`Transforming`] runs one on a node through `Doc`, and puts the param
-//! back exactly as it was on cancel.
+//! back exactly as it was on cancel. With several objects selected it runs
+//! one gesture about their median point (the mean of their origins, the
+//! pivot): moves add the same offset to each, rotate and scale turn and
+//! scale each about its own origin and carry its position round the pivot.
 
 use crate::doc::Doc;
 use arclight::geom::{self, Mat4, Vec3};
@@ -159,6 +162,19 @@ pub struct Gesture {
     /// screen) and the pointer's last angle about the center.
     turned: f64,
     last_angle: Option<f64>,
+    /// The pivot, when it isn't the object's origin (several objects).
+    center: Option<Vec3>,
+}
+
+/// What the pointer asks for, in the scene: the same for every object of a
+/// multi-object gesture.
+#[derive(Clone, Copy, Debug)]
+pub enum Change {
+    Move(Vec3),
+    /// A turn; `snap`: round the resulting angles (the trackball's Ctrl).
+    Turn(Rotation3<f64>, bool),
+    /// A factor along the axes `on` of `axes` (scene directions).
+    Scale { factor: f64, on: [bool; 3], axes: [Vec3; 3] },
 }
 
 impl Gesture {
@@ -167,7 +183,14 @@ impl Gesture {
     pub fn new(mode: Mode, start: Trs, world: &Mat4, from: Pos2) -> Gesture {
         let own = start.matrix();
         let parent = own.try_inverse().map_or_else(Mat4::identity, |inv| world * inv);
-        Gesture { mode, start, parent, from, constraint: Constraint::Free, typed: String::new(), negate: false, turned: 0.0, last_angle: None }
+        Gesture { mode, start, parent, from, constraint: Constraint::Free, typed: String::new(), negate: false, turned: 0.0, last_angle: None, center: None }
+    }
+
+    /// The same about pivot `c` (scene) instead of the object's origin: where
+    /// the move's axis and plane go through, rotate and scale center.
+    pub fn about(mut self, c: Vec3) -> Gesture {
+        self.center = Some(c);
+        self
     }
 
     /// A gizmo drag: like [`Gesture::new`], constrained from the start.
@@ -176,16 +199,13 @@ impl Gesture {
         self
     }
 
-    /// The object's origin in the scene.
+    /// The pivot in the scene: the object's origin, or the one given.
     pub fn origin(&self) -> Vec3 {
-        geom::transform_point(&self.parent, &Vec3::from(self.start.translate))
+        self.center.unwrap_or_else(|| geom::transform_point(&self.parent, &Vec3::from(self.start.translate)))
     }
 
-    /// The parent's rotation (its scale taken out).
     fn parent_rotation(&self) -> Rotation3<f64> {
-        let m = self.parent.fixed_view::<3, 3>(0, 0).into_owned();
-        let cols: Vec<Vec3> = (0..3).map(|i| m.column(i).into_owned().try_normalize(1e-12).unwrap_or_else(|| Vec3::ith(i, 1.0))).collect();
-        Rotation3::from_matrix(&nalgebra::Matrix3::from_columns(&cols))
+        rotation_of(&self.parent)
     }
 
     /// Axis `k` in the scene: the world's, or the object's own (as it was
@@ -272,8 +292,13 @@ impl Gesture {
     }
 
     fn moved(&self, view: &dyn View, mouse: Pos2, snap: bool) -> Trs {
+        moved_by(&self.start, &self.parent, self.move_delta(view, mouse, snap))
+    }
+
+    /// The move in the scene.
+    fn move_delta(&self, view: &dyn View, mouse: Pos2, snap: bool) -> Vec3 {
         let o = self.origin();
-        let delta = match (self.typed(), self.constraint) {
+        match (self.typed(), self.constraint) {
             (Some(v), Constraint::Axis(k, s)) => self.axis(k, s) * v,
             // Excluding an axis: the first one left.
             (Some(v), Constraint::Plane(k, s)) => self.axis((k + 1) % 3, s) * v,
@@ -303,17 +328,22 @@ impl Gesture {
                     _ => Vec3::zeros(),
                 }
             }
-        };
-        // Into the params' space.
-        let local = self.parent.fixed_view::<3, 3>(0, 0).try_inverse().map_or(delta, |inv| inv * delta);
-        let mut t = self.start;
-        for i in 0..3 {
-            t.translate[i] += local[i];
         }
-        t
     }
 
     fn rotated(&mut self, view: &dyn View, mouse: Pos2, snap: bool) -> Trs {
+        match self.turn(view, mouse, snap) {
+            Turn::Exact(k, angle) => {
+                let mut t = self.start;
+                t.rotate[k] += angle;
+                t
+            }
+            Turn::By(q, snap) => self.rotated_by(q, snap),
+        }
+    }
+
+    /// The turn the pointer asks for.
+    fn turn(&mut self, view: &dyn View, mouse: Pos2, snap: bool) -> Turn {
         let toward_viewer = -view.view_dir();
         if self.constraint == Constraint::Trackball && self.typed().is_none() {
             // Left / right turns about the view's up, up / down about its right.
@@ -322,7 +352,7 @@ impl Gesture {
             let up = right.cross(&view.view_dir());
             let q = Rotation3::from_axis_angle(&Unit::new_normalize(up), (d.x as f64 * TRACKBALL_RATE).to_radians())
                 * Rotation3::from_axis_angle(&Unit::new_normalize(right), (d.y as f64 * TRACKBALL_RATE).to_radians());
-            return self.rotated_by(q, snap);
+            return Turn::By(q, snap);
         }
         let (axis, space) = match self.constraint {
             Constraint::Axis(k, s) | Constraint::Plane(k, s) => (self.axis(k, s), Some((k, s))),
@@ -352,49 +382,107 @@ impl Gesture {
             Some((2, Space::Global)) if self.parent_rotation().angle() < 1e-9 => Some(2),
             _ => None,
         };
-        if let Some(k) = exact {
-            let mut t = self.start;
-            t.rotate[k] += angle;
-            return t;
+        match exact {
+            Some(k) if self.center.is_none() => Turn::Exact(k, angle),
+            _ => Turn::By(Rotation3::from_axis_angle(&Unit::new_normalize(axis), angle.to_radians()), false),
         }
-        let q = Rotation3::from_axis_angle(&Unit::new_normalize(axis), angle.to_radians());
-        self.rotated_by(q, false)
     }
 
     /// The start rotation turned by `q` (scene space), as params nearest
     /// the start's.
     fn rotated_by(&self, q: Rotation3<f64>, snap: bool) -> Trs {
-        let p = self.parent_rotation();
-        let r = p.inverse() * q * p * geom::rotation(self.start.rotate);
-        let mut t = self.start;
-        t.rotate = nearest_angles(geom::angles(&r), self.start.rotate);
-        if snap {
-            t.rotate = t.rotate.map(|a| snapped(a, SNAP_ANGLE, true));
-        }
-        t
+        turned_by(&self.start, &self.parent, q, snap)
     }
 
     fn scaled(&self, view: &dyn View, mouse: Pos2, snap: bool) -> Trs {
-        let factor = match self.typed() {
+        scaled_by(&self.start, self.factor(view, mouse, snap), self.scale_axes())
+    }
+
+    /// How much the pointer scales by.
+    fn factor(&self, view: &dyn View, mouse: Pos2, snap: bool) -> f64 {
+        match self.typed() {
             Some(v) => v,
             None => {
                 let c = view.project(self.origin()).map_or(self.from, |(c, _)| c);
                 let r0 = (self.from - c).length() as f64;
                 if r0 < 1.0 { 1.0 } else { snapped((mouse - c).length() as f64 / r0, SNAP_SCALE, snap) }
             }
-        };
-        // Scale is always along the object's own axes.
-        let on = |i: usize| match self.constraint {
+        }
+    }
+
+    /// Which axes a scale acts on.
+    fn scale_axes(&self) -> [bool; 3] {
+        std::array::from_fn(|i| match self.constraint {
             Constraint::Axis(k, _) => i == k,
             Constraint::Plane(k, _) => i != k,
             _ => true,
-        };
-        let mut t = self.start;
-        for i in (0..3).filter(|&i| on(i)) {
-            t.scale[i] *= factor;
-        }
-        t
+        })
     }
+
+    /// What the pointer at `mouse` asks for, in the scene (for several
+    /// objects at once).
+    pub fn change(&mut self, view: &dyn View, mouse: Pos2, snap: bool) -> Change {
+        match self.mode {
+            Mode::Move => Change::Move(self.move_delta(view, mouse, snap)),
+            Mode::Rotate => match self.turn(view, mouse, snap) {
+                Turn::By(q, s) => Change::Turn(q, s),
+                Turn::Exact(..) => unreachable!("exact turns are single-object"),
+            },
+            Mode::Scale => {
+                let space = match self.constraint {
+                    Constraint::Axis(_, s) | Constraint::Plane(_, s) => s,
+                    _ => Space::Global,
+                };
+                Change::Scale { factor: self.factor(view, mouse, snap), on: self.scale_axes(), axes: std::array::from_fn(|k| self.axis(k, space)) }
+            }
+        }
+    }
+}
+
+/// A turn: by a scene rotation (`.1`: round the angles), or exactly by an
+/// angle on one param (a single object's own X, or world Z).
+enum Turn {
+    By(Rotation3<f64>, bool),
+    Exact(usize, f64),
+}
+
+/// The rotation in `m` (its scale taken out).
+fn rotation_of(m: &Mat4) -> Rotation3<f64> {
+    let m = m.fixed_view::<3, 3>(0, 0).into_owned();
+    let cols: Vec<Vec3> = (0..3).map(|i| m.column(i).into_owned().try_normalize(1e-12).unwrap_or_else(|| Vec3::ith(i, 1.0))).collect();
+    Rotation3::from_matrix(&nalgebra::Matrix3::from_columns(&cols))
+}
+
+/// `start` (params under `parent`) moved by `delta` in the scene.
+fn moved_by(start: &Trs, parent: &Mat4, delta: Vec3) -> Trs {
+    let local = parent.fixed_view::<3, 3>(0, 0).try_inverse().map_or(delta, |inv| inv * delta);
+    let mut t = *start;
+    for i in 0..3 {
+        t.translate[i] += local[i];
+    }
+    t
+}
+
+/// `start`'s rotation (params under `parent`) turned by scene rotation `q`,
+/// as angles nearest the start's (`snap`: rounded to 15°).
+fn turned_by(start: &Trs, parent: &Mat4, q: Rotation3<f64>, snap: bool) -> Trs {
+    let p = rotation_of(parent);
+    let r = p.inverse() * q * p * geom::rotation(start.rotate);
+    let mut t = *start;
+    t.rotate = nearest_angles(geom::angles(&r), start.rotate);
+    if snap {
+        t.rotate = t.rotate.map(|a| snapped(a, SNAP_ANGLE, true));
+    }
+    t
+}
+
+/// `start` scaled by `factor` along its own axes `on`.
+fn scaled_by(start: &Trs, factor: f64, on: [bool; 3]) -> Trs {
+    let mut t = *start;
+    for i in (0..3).filter(|&i| on[i]) {
+        t.scale[i] *= factor;
+    }
+    t
 }
 
 /// The param a mode edits.
@@ -516,6 +604,77 @@ pub struct Transforming {
     pub now: Trs,
     /// Started by dragging a gizmo handle: releasing the button confirms.
     pub by_drag: bool,
+    /// Several objects at once: each of them, the gesture running about
+    /// their pivot (empty for one object).
+    group: Vec<Member>,
+}
+
+/// One of several objects transformed together.
+struct Member {
+    node: String,
+    start: Trs,
+    /// Scene from its params' space.
+    parent: Mat4,
+    /// Whether its position follows the pivot as it turns or scales (its
+    /// translate isn't linked).
+    carried: bool,
+    /// The params it changes, as stored when it started (None: unset).
+    stored: Vec<(&'static str, Option<Value>)>,
+    now: Trs,
+}
+
+impl Member {
+    fn new(doc: &Doc, node: &str, world: &Mat4, mode: Mode, frame: i64) -> Member {
+        let start = trs_at(doc, node, frame);
+        let parent = start.matrix().try_inverse().map_or_else(Mat4::identity, |inv| world * inv);
+        let carried = mode != Mode::Move && refusal(doc, node, Mode::Move).is_none();
+        let mut names = vec![param_of(mode)];
+        if carried {
+            names.push("translate");
+        }
+        let stored = names.into_iter().map(|n| (n, doc.node(node).and_then(|x| x.params.get(n).cloned()))).collect();
+        Member { node: node.into(), start, parent, carried, stored, now: start }
+    }
+
+    /// Its params after `c` about `pivot`.
+    fn place(&self, c: &Change, pivot: Vec3) -> Trs {
+        let at = geom::transform_point(&self.parent, &Vec3::from(self.start.translate));
+        let (mut t, to) = match *c {
+            Change::Move(d) => (moved_by(&self.start, &self.parent, d), None),
+            Change::Turn(q, snap) => (turned_by(&self.start, &self.parent, q, snap), Some(pivot + q * (at - pivot))),
+            Change::Scale { factor, on, axes } => {
+                let rel = at - pivot;
+                let stretch: Vec3 = (0..3).filter(|&k| on[k]).map(|k| axes[k] * (axes[k].dot(&rel) * (factor - 1.0))).sum();
+                (scaled_by(&self.start, factor, on), Some(pivot + rel + stretch))
+            }
+        };
+        if let (Some(p), true, Some(inv)) = (to, self.carried, self.parent.try_inverse()) {
+            t.translate = geom::transform_point(&inv, &p).into();
+        }
+        t
+    }
+}
+
+/// The median point of objects placed by `worlds`: the mean of their
+/// origins (the pivot of a multi-object gesture).
+pub fn median<'a>(worlds: impl IntoIterator<Item = &'a Mat4>) -> Option<Vec3> {
+    let pts: Vec<Vec3> = worlds.into_iter().map(|w| geom::transform_point(w, &Vec3::zeros())).collect();
+    (!pts.is_empty()).then(|| pts.iter().sum::<Vec3>() / pts.len() as f64)
+}
+
+/// Put `node`'s param `name` back as `stored` (None: unset).
+fn put_back(doc: &mut Doc, node: &str, name: &str, stored: &Option<Value>) {
+    if let Some(m) = doc.node_mut(node).and_then(|n| n.params.as_object_mut()) {
+        match stored {
+            Some(v) => {
+                m.insert(name.into(), v.clone());
+            }
+            None => {
+                m.remove(name);
+            }
+        }
+        doc.changed();
+    }
 }
 
 impl Transforming {
@@ -527,15 +686,33 @@ impl Transforming {
         }
         let start = trs_at(doc, node, frame);
         let stored = doc.node(node).and_then(|n| n.params.get(param_of(mode)).cloned());
-        Ok(Transforming { node: node.into(), gesture: Gesture::new(mode, start, world, mouse), stored, frame, now: start, by_drag: false })
+        Ok(Transforming { node: node.into(), gesture: Gesture::new(mode, start, world, mouse), stored, frame, now: start, by_drag: false, group: Vec::new() })
     }
 
-    /// A drag on gizmo handle `h` (axes in `space`): releasing confirms.
-    pub fn drag(doc: &Doc, node: &str, h: Handle, space: Space, world: &Mat4, mouse: Pos2, frame: i64) -> Result<Transforming, String> {
+    /// Start `mode` on the selected `objects` (node, place in the scene),
+    /// the primary last: one alone as [`Transforming::start`], several about
+    /// their median point. Objects that can't take `mode` (see [`refusal`])
+    /// are left out; Err when none can.
+    pub fn start_many(doc: &Doc, objects: &[(String, Mat4)], mode: Mode, mouse: Pos2, frame: i64) -> Result<Transforming, String> {
+        let can: Vec<&(String, Mat4)> = objects.iter().filter(|(n, _)| refusal(doc, n, mode).is_none()).collect();
+        let Some((lead, world)) = can.last().copied().or(objects.last()) else { return Err(format!("Select an object to {} it", mode.name().to_lowercase())) };
+        let mut t = Transforming::start(doc, lead, mode, world, mouse, frame)?;
+        if can.len() > 1 {
+            let pivot = median(can.iter().map(|(_, w)| w)).unwrap_or_default();
+            t.gesture = t.gesture.about(pivot);
+            t.group = can.iter().map(|(n, w)| Member::new(doc, n, w, mode, frame)).collect();
+        }
+        Ok(t)
+    }
+
+    /// A drag on gizmo handle `h` (axes in `space`) on the selected
+    /// `objects` (see [`Transforming::start_many`]): releasing confirms.
+    pub fn drag_many(doc: &Doc, objects: &[(String, Mat4)], h: Handle, space: Space, mouse: Pos2, frame: i64) -> Result<Transforming, String> {
         let (mode, c) = h.gesture(space);
-        let t = Transforming::start(doc, node, mode, world, mouse, frame)?;
+        let t = Transforming::start_many(doc, objects, mode, mouse, frame)?;
         Ok(Transforming { gesture: t.gesture.with_constraint(c), by_drag: true, ..t })
     }
+
 
     /// One frame: handle `input`, write the param. Done or Cancelled ends it.
     pub fn step(&mut self, input: &Input, view: &dyn View, doc: &mut Doc) -> Outcome {
@@ -549,10 +726,35 @@ impl Transforming {
         // (Without a pointer, e.g. it left the window, a typed amount still
         // applies.)
         let m = input.mouse.unwrap_or(self.gesture.from);
-        let t = self.gesture.apply(view, m, input.snap);
-        if t != self.now {
-            self.write(doc, &t);
-            self.now = t;
+        if self.group.is_empty() {
+            let t = self.gesture.apply(view, m, input.snap);
+            if t != self.now {
+                self.write(doc, &t);
+                self.now = t;
+            }
+        } else {
+            let c = self.gesture.change(view, m, input.snap);
+            let pivot = self.gesture.origin();
+            let mode = self.gesture.mode;
+            for member in &mut self.group {
+                let t = member.place(&c, pivot);
+                if t == member.now {
+                    continue;
+                }
+                let own = match mode {
+                    Mode::Move => t.translate,
+                    Mode::Rotate => t.rotate,
+                    Mode::Scale => t.scale,
+                };
+                doc.edit_param(&member.node, param_of(mode), self.frame, json!(own));
+                if member.carried && t.translate != member.now.translate {
+                    doc.edit_param(&member.node, "translate", self.frame, json!(t.translate));
+                }
+                member.now = t;
+            }
+            if let Some(lead) = self.group.iter().find(|m| m.node == self.node) {
+                self.now = lead.now;
+            }
         }
         if input.confirm { Outcome::Done } else { Outcome::Going }
     }
@@ -566,20 +768,15 @@ impl Transforming {
         doc.edit_param(&self.node, param_of(self.gesture.mode), self.frame, json!(v));
     }
 
-    /// Put the param back as stored when it started.
+    /// Put the params back as stored when it started.
     fn restore(&self, doc: &mut Doc) {
-        let name = param_of(self.gesture.mode);
-        if let Some(n) = doc.node_mut(&self.node) {
-            match (&self.stored, n.params.as_object_mut()) {
-                (Some(v), Some(m)) => {
-                    m.insert(name.into(), v.clone());
-                }
-                (None, Some(m)) => {
-                    m.remove(name);
-                }
-                _ => {}
+        if self.group.is_empty() {
+            put_back(doc, &self.node, param_of(self.gesture.mode), &self.stored);
+        }
+        for m in &self.group {
+            for (name, stored) in &m.stored {
+                put_back(doc, &m.node, name, stored);
             }
-            doc.changed();
         }
     }
 }
@@ -1172,6 +1369,80 @@ pub mod tests {
     }
 
     #[test]
+    fn several_objects_move_turn_and_scale_about_their_median() {
+        use arclight::graph::Graph;
+        let view = front();
+        let mut doc = Doc::new(Graph::default(), None);
+        let (a, b) = (doc.add_node("card", [0.0, 0.0]), doc.add_node("card", [0.0, 100.0]));
+        doc.set_param(&a, "translate", json!([-2, 0, 1]));
+        doc.set_param(&b, "translate", json!([2, 0, -1]));
+        // Unset on a, as in a file that leaves it out.
+        doc.node_mut(&a).unwrap().params.as_object_mut().unwrap().remove("rotate");
+        // Something else selected too, with no transform: left out.
+        let grade = doc.add_node("grade", [200.0, 0.0]);
+        doc.commit(false);
+        let placed = |doc: &Doc| [a.as_str(), b.as_str()].map(|n| trs_at(doc, n, 1));
+        let start = placed(&doc);
+        let objects: Vec<(String, Mat4)> = [&a, &grade, &b].iter().map(|n| (n.to_string(), trs_at(&doc, n, 1).matrix())).collect();
+        assert_eq!(median([start[0].matrix(), start[1].matrix()].iter()), Some(Vec3::zeros()));
+        assert_eq!(median([].iter()), None);
+        let typed = |g: &mut Transforming, doc: &mut Doc, axis: usize, v: &str| {
+            let mut keys = vec![GestureKey::Axis(axis, false)];
+            keys.extend(v.chars().map(GestureKey::Digit));
+            g.step(&Input { keys, ..input(Pos2::ZERO) }, &view, doc);
+        };
+        // G X 1: both move by one; Enter; one undo step for both.
+        let mut g = Transforming::start_many(&doc, &objects, Mode::Move, Pos2::ZERO, 1).unwrap();
+        typed(&mut g, &mut doc, 0, "1");
+        assert_eq!(g.step(&Input { confirm: true, ..input(Pos2::ZERO) }, &view, &mut doc), Outcome::Done);
+        let moved = placed(&doc);
+        assert!(near(moved[0].translate, [-1.0, 0.0, 1.0], 1e-9) && near(moved[1].translate, [3.0, 0.0, -1.0], 1e-9));
+        doc.commit(false);
+        doc.undo();
+        assert_eq!(placed(&doc), start);
+        // R Z 90 about the median (0, 0, 0): each turns, and goes round it.
+        let mut g = Transforming::start_many(&doc, &objects, Mode::Rotate, Pos2::ZERO, 1).unwrap();
+        typed(&mut g, &mut doc, 2, "90");
+        let turned = placed(&doc);
+        assert!(near(turned[0].translate, [0.0, -2.0, 1.0], 1e-9) && near(turned[1].translate, [0.0, 2.0, -1.0], 1e-9), "{turned:?}");
+        assert!(turned.iter().all(|t| near(t.rotate, [0.0, 0.0, 90.0], 1e-9)));
+        // Cancel: both exactly as before, a's rotate unset again.
+        g.step(&Input { cancel: true, ..Input::default() }, &view, &mut doc);
+        assert_eq!(placed(&doc), start);
+        assert_eq!(doc.node(&a).unwrap().params.get("rotate"), None);
+        // S 2: each twice the size, twice as far from the median.
+        let mut g = Transforming::start_many(&doc, &objects, Mode::Scale, Pos2::ZERO, 1).unwrap();
+        g.step(&Input { keys: vec![GestureKey::Digit('2')], ..input(Pos2::ZERO) }, &view, &mut doc);
+        let scaled = placed(&doc);
+        assert!(near(scaled[0].translate, [-4.0, 0.0, 2.0], 1e-9) && near(scaled[1].scale, [2.0; 3], 1e-9), "{scaled:?}");
+        g.step(&Input { cancel: true, ..Input::default() }, &view, &mut doc);
+        // Scaling along X only stretches positions along X.
+        let mut g = Transforming::start_many(&doc, &objects, Mode::Scale, Pos2::ZERO, 1).unwrap();
+        typed(&mut g, &mut doc, 0, "3");
+        let stretched = placed(&doc);
+        assert!(near(stretched[1].translate, [6.0, 0.0, -1.0], 1e-9) && near(stretched[1].scale, [3.0, 1.0, 1.0], 1e-9), "{stretched:?}");
+        g.step(&Input { cancel: true, ..Input::default() }, &view, &mut doc);
+        assert_eq!(placed(&doc), start);
+        // b's translate linked: a move leaves it out; a turn turns it in
+        // place (its position can't follow).
+        let loc = doc.add_node("locator", [0.0, 200.0]);
+        doc.set_param(&b, "translate", arclight::link::param(&loc, "translate"));
+        let linked = doc.node(&b).unwrap().params["translate"].clone();
+        let mut g = Transforming::start_many(&doc, &objects, Mode::Move, Pos2::ZERO, 1).unwrap();
+        typed(&mut g, &mut doc, 0, "1");
+        assert_eq!(doc.node(&b).unwrap().params["translate"], linked);
+        assert!(near(trs_at(&doc, &a, 1).translate, [-1.0, 0.0, 1.0], 1e-9));
+        g.step(&Input { cancel: true, ..Input::default() }, &view, &mut doc);
+        let mut g = Transforming::start_many(&doc, &objects, Mode::Rotate, Pos2::ZERO, 1).unwrap();
+        typed(&mut g, &mut doc, 2, "90");
+        assert_eq!(doc.node(&b).unwrap().params["translate"], linked);
+        assert!(near(trs_at(&doc, &b, 1).rotate, [0.0, 0.0, 90.0], 1e-9));
+        g.step(&Input { cancel: true, ..Input::default() }, &view, &mut doc);
+        // Nothing that can move: refused with the reason.
+        assert!(Transforming::start_many(&doc, &[(grade.clone(), Mat4::identity())], Mode::Move, Pos2::ZERO, 1).err().unwrap().contains("no translate"));
+    }
+
+    #[test]
     fn linked_or_missing_params_refuse_and_alt_resets() {
         use arclight::graph::Graph;
         let mut doc = Doc::new(Graph::default(), None);
@@ -1251,7 +1522,7 @@ pub mod tests {
         // x = 3 + len is: 3 along X. Released.
         let (_, tip) = lay.arrows[0].unwrap();
         let len = GIZMO_SIZE as f64 / view.pixels_per_unit(view.project(Vec3::zeros()).unwrap().1);
-        let mut t = Transforming::drag(&doc, &card, Handle::Arrow(0), Space::Global, &Mat4::identity(), tip, 1).unwrap();
+        let mut t = Transforming::drag_many(&doc, &[(card.clone(), Mat4::identity())], Handle::Arrow(0), Space::Global, tip, 1).unwrap();
         let to = at(&view, [3.0 + len, 0.0, 0.0]);
         assert_eq!(t.step(&input(to), &view, &mut doc), Outcome::Going);
         assert_eq!(t.step(&Input { confirm: true, ..input(to) }, &view, &mut doc), Outcome::Done);
@@ -1261,17 +1532,17 @@ pub mod tests {
         let c = view.project(Vec3::new(3.0, 0.0, 0.0)).unwrap().0;
         let lay = Layout::new(&view, Tool::Scale, Vec3::new(3.0, 0.0, 0.0), axes).unwrap();
         let cube = lay.cubes[1].unwrap();
-        let mut t = Transforming::drag(&doc, &card, Handle::Cube(1), Space::Global, &moved.matrix(), cube, 1).unwrap();
+        let mut t = Transforming::drag_many(&doc, &[(card.clone(), moved.matrix())], Handle::Cube(1), Space::Global, cube, 1).unwrap();
         t.step(&input(c + (cube - c) * 2.0), &view, &mut doc);
         assert!(near(trs_at(&doc, &card, 1).scale, [1.0, 2.0, 1.0], 1e-4), "{:?}", trs_at(&doc, &card, 1).scale);
         // The Z ring: a rotation about Z only.
         let lay = Layout::new(&view, Tool::Rotate, Vec3::new(3.0, 0.0, 0.0), axes).unwrap();
-        let mut t = Transforming::drag(&doc, &card, Handle::Ring(2), Space::Global, &moved.matrix(), lay.rings[2][0].0, 1).unwrap();
+        let mut t = Transforming::drag_many(&doc, &[(card.clone(), moved.matrix())], Handle::Ring(2), Space::Global, lay.rings[2][0].0, 1).unwrap();
         t.step(&input(lay.rings[2][8].0), &view, &mut doc);
         let r = trs_at(&doc, &card, 1).rotate;
         assert!(r[0] == 0.0 && r[1] == 0.0 && r[2].abs() > 1.0, "{r:?}");
         // A gizmo can't take a linked param (refused like G).
         doc.set_param(&card, "translate", arclight::link::expr("[1, 2, 3]"));
-        assert!(Transforming::drag(&doc, &card, Handle::Arrow(0), Space::Global, &Mat4::identity(), tip, 1).is_err());
+        assert!(Transforming::drag_many(&doc, &[(card.clone(), Mat4::identity())], Handle::Arrow(0), Space::Global, tip, 1).is_err());
     }
 }
