@@ -1,6 +1,7 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
+Last updated 2026-10-29 (session 7; several herdr sessions since, see
+"Several agent sessions" below). Read this, then `README.md`
 (user-facing features, file format, shortcuts, scripting) and
 `docs/spec-coverage.md` (what the planning docs ask for vs. what exists).
 
@@ -16,6 +17,22 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
+- **Several agent sessions (herdr), one master (2026-10-29, user
+  instruction):** the user runs several Claude sessions in herdr on this
+  one checkout. One of them is the **master** (herdr agent name `master`;
+  see `herdr agent list`). Only the master commits, pushes, fast-forwards
+  `main`, bumps the version, writes CHANGELOG version headers, tags
+  releases and keeps this file's status current. **Every other session
+  is a worker:** don't commit, push, tag, bump the version, or
+  `git add`/stash/reset/checkout anything. Before starting, tell the
+  master what you'll work on and which files you expect to touch (two
+  workers mustn't edit the same file at once). When a milestone is done
+  (`cargo test --release` and `cargo clippy --release --all-targets`
+  clean), report it: `herdr agent prompt master "<report>"` with a
+  one-line title, the exact paths changed or added, a CHANGELOG bullet and
+  any README/HANDOFF notes. The master checks and commits only those
+  paths, and replies when it's in. (A `git add -A` by one session once
+  swept another's unfinished files into its commit; this prevents that.)
 - **Versioning (standing instruction, 2026-10-28):** Arclight is alpha,
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
