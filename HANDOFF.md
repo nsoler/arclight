@@ -32,27 +32,21 @@ done), `docs/help.md` (the in-app help) and
 - **Next (no plan yet):** M12/M13 follow-ups above; the M9 leftover
   (true ortho texture path), the viewport's solid view lit by scene
   lights; other items under "Next steps". Ask the user what's next.
-- **M12 status (3DWorker): DONE (0.9.35–0.9.43).** Done (a) Area Light, falloff, radius,
-  exposure / enabled, look at (0.9.35); (b) 3D view handles + Look
-  through selected (0.9.37); (d) shadows + shadow pass (0.9.40); engine
-  for (c) Light 2D by MathWiz (0.9.38). (c) Light 2D node (0.9.42); (e) scene_objects for MCP / Python (0.9.43). Formerly remaining: (e) MCP / Python check (`create_node` types,
-  `scene_objects` lists lights), README rows, help text.
-- **M13 status (MathWiz):** engine `particles.rs` (0.9.36) and render
-  engine `particles_render.rs` (0.9.39) committed. Node plan approved:
-  a lazy `ParticleStream` riding in `Scene.particles` (only consumers
-  simulate), `ops::Kind::Particles`, nodes in NEW `src/particle_nodes.rs`
-  (Particle Emitter with geometry / mask inputs; modifier nodes Gravity,
-  Wind, Turbulence, Attractor, Vortex, Bounce, Kill, Speed Limit;
-  Particle Render: points / sprites / objects; Particles 2D), per-frame
-  param sampling via an Evaluator snapshot (keys, links, expressions
-  work at every frame), Scanline Render growable inputs (`ops::port`,
-  doc.rs keeps one spare port), particles drawn as dots in the viewport
-  (capped). **Order:** (A) `particle_nodes.rs` alone (done, 0.9.41); (B) hooks
-  in graph.rs, scene.rs, render3d.rs, gui/doc.rs, gui/node_editor.rs,
-  gui/viewport3d.rs (while 3DWorker is in ops.rs), then ops.rs hooks
-  after the Light 2D node is committed; (C) MCP `particles(node, frame)`
-  + Python, help / README.
-- **After M12 + M13:** done — released v0.9.46.
+- **M12 (lights), done 0.9.35–0.9.43:** Area Light, falloff, radius,
+  exposure / enabled, look at (0.9.35, 3DWorker); 3D view handles + Look
+  through selected (0.9.37); Light 2D engine (0.9.38, MathWiz) and node
+  (0.9.42); shadows + shadow pass (0.9.40); `scene_objects` for MCP /
+  Python (0.9.43). Per-version notes further down.
+- **M13 (particles), done 0.9.36–0.9.46 (MathWiz; scripting / docs by
+  3DWorker):** engine `particles.rs` (0.9.36), render engine
+  `particles_render.rs` (0.9.39), nodes `particle_nodes.rs` (0.9.41),
+  hooks (0.9.44: lazy `ParticleStream` in `Scene.particles`,
+  `ops::Kind::Particles`, `ops::port` / `growable`, Scanline Render's
+  growable inputs, `src/render3d/particles.rs`, viewport dots),
+  `particles` MCP / Python (0.9.45), emitter / force icons and 2D
+  handles (0.9.46).
+- **Release v0.9.46 checked:** both GitHub workflows passed, all five
+  assets attached, marked Latest.
 - **Still unanswered from earlier:** whether `musicmen.MP4` plays from
   the GUI (0.9.32), the file-dialog fix when navigating folders (0.9.31),
   0.9.30 features (Fit to project, Project Settings, 3D setup), 0.9.33
