@@ -80,6 +80,8 @@ enum Part {
     /// A corner of track `i`'s pattern (or search) box: sizes that box for
     /// every track.
     TrackBox { i: usize, search: bool },
+    /// Corner `i` of a corner pin's To quad, or of its From quad.
+    Corner { i: usize, from: bool },
 }
 
 /// The selected node's overlay, resolved at the current frame.
@@ -103,6 +105,8 @@ enum Geo {
     /// Tracker boxes: each track's position (`None` when it is off) and the
     /// shared box sizes, in image pixels.
     Tracker { names: [&'static str; 2], pos: Vec<Option<Vec2>>, pattern: f32, search: f32 },
+    /// Corner pin quads, in image pixels.
+    CornerPin { names: [[&'static str; 4]; 2], to: [Vec2; 4], from: [Vec2; 4] },
 }
 
 impl Geo {
@@ -193,6 +197,11 @@ fn geo(doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
             pos: track::positions(&doc.node(id)?.params, frame).into_iter().map(|p| p.map(|[x, y]| Vec2::new(x, y))).collect(),
             pattern: num(&at(pattern)),
             search: num(&at(search)),
+        },
+        Overlay::CornerPin { to, from } => Geo::CornerPin {
+            names: [to, from],
+            to: to.map(|n| vec2(&at(n))),
+            from: from.map(|n| vec2(&at(n))),
         },
     })
 }
@@ -324,6 +333,11 @@ fn inset_rect(xf: &Xf, v: [f32; 4], size: Vec2) -> Rect {
 fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
     match *g {
         Geo::Point { value, .. } => (xf.screen(value).distance(p) < GRAB * 1.5).then_some(Part::Point),
+        Geo::CornerPin { to, from, .. } => {
+            // To corners first: they're what's usually adjusted.
+            let near = |q: &[Vec2; 4]| (0..4).find(|&i| xf.screen(q[i]).distance(p) < GRAB * 1.5);
+            near(&to).map(|i| Part::Corner { i, from: false }).or_else(|| near(&from).map(|i| Part::Corner { i, from: true }))
+        }
         Geo::Transform { center, translate, rotate, scale, .. } => {
             let (c, x, y) = gizmo(xf, center, translate, rotate);
             let frame = layer_frame(xf, center, translate, rotate, scale);
@@ -676,6 +690,20 @@ impl Overlays {
                 let c = xf.screen(center);
                 painter.circle(c, 5.0, color(Part::Move, HANDLE), outline);
             }
+            Geo::CornerPin { to, from, .. } => {
+                let quad = |q: [Vec2; 4]| q.map(|v| xf.screen(v));
+                let mut ring = quad(from).to_vec();
+                ring.push(ring[0]);
+                painter.add(Shape::dashed_line(&ring, Stroke::new(1.0, Color32::from_white_alpha(150)), 5.0, 4.0));
+                outline_path(painter, quad(to).to_vec(), HANDLE);
+                for (i, (t, f)) in quad(to).into_iter().zip(quad(from)).enumerate() {
+                    let fill = color(Part::Corner { i, from: true }, Color32::from_white_alpha(150));
+                    painter.rect(Rect::from_center_size(f, Vec2::splat(6.0)), 1.0, fill, outline, egui::StrokeKind::Middle);
+                    let col = color(Part::Corner { i, from: false }, HANDLE);
+                    painter.circle(t, 5.0, col, outline);
+                    painter.text(t + Vec2::new(7.0, -7.0), egui::Align2::LEFT_BOTTOM, format!("{}", i + 1), egui::FontId::proportional(12.0), col);
+                }
+            }
             Geo::Tracker { pos, pattern, search, .. } => {
                 let node = doc.node(id);
                 for (i, c) in pos.iter().enumerate() {
@@ -801,6 +829,11 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
         Geo::Point { param, value } => {
             let v = value + delta;
             doc.edit_param(&id, param, frame, json!([v.x, v.y]));
+        }
+        Geo::CornerPin { names, to, from } => {
+            let Part::Corner { i, from: is_from } = drag.part else { return };
+            let v = if is_from { from[i] } else { to[i] } + if shift { constrain(delta) } else { delta };
+            doc.edit_param(&id, names[is_from as usize][i], frame, json!([v.x, v.y]));
         }
         Geo::Transform { names, center, translate, rotate, scale } => {
             let pivot = center + translate;
@@ -958,7 +991,7 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
 
 fn cursor(part: Part) -> CursorIcon {
     match part {
-        Part::Point | Part::Move | Part::Vertex(_) | Part::Tangent { .. } | Part::Pull(_) | Part::Track(_) => CursorIcon::Move,
+        Part::Point | Part::Move | Part::Vertex(_) | Part::Tangent { .. } | Part::Pull(_) | Part::Track(_) | Part::Corner { .. } => CursorIcon::Move,
         Part::TrackBox { .. } => CursorIcon::ResizeNwSe,
         Part::Edge(..) => CursorIcon::Crosshair,
         Part::Size { x: true, y: true } => CursorIcon::ResizeNwSe,
@@ -1095,6 +1128,16 @@ mod tests {
         let mut d = doc("tracker", json!({ "track1_on": false, "track1": [50, 50] }));
         let missed = gesture(&mut Overlays::default(), &mut d, Pos2::new(50.0, 50.0), Pos2::new(60.0, 50.0), 1, Mods::default());
         assert_eq!(missed, None);
+    }
+
+    #[test]
+    fn corner_pin_corners_drag_to_and_from() {
+        let mut d = doc("corner_pin", json!({ "to3": [150, 80], "from3": [140, 80] }));
+        // To corners win where both are in reach.
+        assert_eq!(drag(&mut d, Pos2::new(148.0, 80.0), Pos2::new(160.0, 90.0), 1), Part::Corner { i: 2, from: false });
+        assert_eq!(vec2(&d.param("n", "to3")), Vec2::new(162.0, 90.0));
+        assert_eq!(drag(&mut d, Pos2::new(140.0, 80.0), Pos2::new(130.0, 70.0), 1), Part::Corner { i: 2, from: true });
+        assert_eq!(vec2(&d.param("n", "from3")), Vec2::new(130.0, 70.0));
     }
 
     #[test]

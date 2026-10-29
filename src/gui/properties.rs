@@ -537,20 +537,27 @@ impl Properties {
             doc.set_param(id, "reference_frame", json!(frame));
         }
         let mut export = None;
-        ui.horizontal(|ui| {
-            ui.label("To Transform:");
-            if ui.button("Match-move").on_hover_text("Add a Transform keyed to move a layer along with the tracks").clicked() {
-                export = Some(false);
-            }
-            if ui.button("Stabilize").on_hover_text("Add a Transform keyed to remove the tracked motion").clicked() {
-                export = Some(true);
-            }
-        });
+        let four = doc.node(id).is_some_and(|n| track::positions(&n.params, frame).iter().all(Option::is_some));
+        for (op, label, enabled) in [("transform", "Transform", true), ("corner_pin", "Corner Pin", four)] {
+            ui.horizontal(|ui| {
+                ui.label(format!("To {label}:"));
+                ui.add_enabled_ui(enabled, |ui| {
+                    if ui.button("Match-move").on_hover_text(format!("Add a {label} keyed to move a layer along with the tracks")).clicked() {
+                        export = Some((op, false));
+                    }
+                    if ui.button("Stabilize").on_hover_text(format!("Add a {label} keyed to remove the tracked motion")).clicked() {
+                        export = Some((op, true));
+                    }
+                })
+                .response
+                .on_disabled_hover_text("Turn on all four tracks");
+            });
+        }
         if let Some(to) = run.filter(|&to| to != frame) {
             self.start_tracking(doc, id, frame, to);
         }
-        if let Some(stabilize) = export {
-            let result = match export_transform(doc, id, stabilize) {
+        if let Some((op, stabilize)) = export {
+            let result = match export_tracker(doc, id, op, stabilize) {
                 Ok(xf) => (true, format!("Added {xf}")),
                 Err(e) => (false, format!("{e:#}")),
             };
@@ -594,16 +601,16 @@ impl Properties {
     }
 }
 
-/// Add a Transform below tracker `id`, keyed with its solved motion, and
+/// Add a node of type `op` below tracker `id`, keyed with its motion, and
 /// select it. Returns its name.
-fn export_transform(doc: &mut Doc, id: &str, stabilize: bool) -> anyhow::Result<String> {
-    let params = track::export_transform(&doc.graph, id, stabilize)?;
+fn export_tracker(doc: &mut Doc, id: &str, op: &str, stabilize: bool) -> anyhow::Result<String> {
+    let params = track::export(&doc.graph, id, op, stabilize)?;
     let at = doc.node(id).and_then(|n| n.pos).unwrap_or_default();
     let mut pos = [at[0], at[1] + NODE_H + 40.0];
     while doc.graph.nodes.iter().filter_map(|n| n.pos).any(|q| (q[0] - pos[0]).abs() < NODE_W + 20.0 && (q[1] - pos[1]).abs() < NODE_H + 20.0) {
         pos[1] += NODE_H + 40.0;
     }
-    let xf = doc.add_node("transform", pos);
+    let xf = doc.add_node(op, pos);
     for (name, v) in params {
         doc.set_param(&xf, &name, v);
     }

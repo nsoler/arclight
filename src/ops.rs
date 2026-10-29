@@ -104,6 +104,8 @@ pub enum Overlay {
     /// Tracker boxes: each enabled `track<i>` position with the shared
     /// pattern and search box sizes.
     Tracker { pattern: &'static str, search: &'static str },
+    /// A quad of four Vec2 corners (`to`), and the four it is mapped from.
+    CornerPin { to: [&'static str; 4], from: [&'static str; 4] },
 }
 
 /// An input port.
@@ -575,6 +577,29 @@ pub static OPS: &[OpInfo] = &[
                solve them from the tracks' positions.",
     },
     OpInfo {
+        name: "corner_pin",
+        label: "Corner Pin",
+        category: Category::Transform,
+        inputs: &[IN, MASK],
+        params: &[
+            p!("to1", "To 1", ParamKind::Vec2, [0.0, 0.0]),
+            p!("to2", "To 2", ParamKind::Vec2, [512.0, 0.0]),
+            p!("to3", "To 3", ParamKind::Vec2, [512.0, 512.0]),
+            p!("to4", "To 4", ParamKind::Vec2, [0.0, 512.0]),
+            p!("from1", "From 1", ParamKind::Vec2, [0.0, 0.0]),
+            p!("from2", "From 2", ParamKind::Vec2, [512.0, 0.0]),
+            p!("from3", "From 3", ParamKind::Vec2, [512.0, 512.0]),
+            p!("from4", "From 4", ParamKind::Vec2, [0.0, 512.0]),
+            MIX,
+        ],
+        overlay: Overlay::CornerPin { to: ["to1", "to2", "to3", "to4"], from: ["from1", "from2", "from3", "from4"] },
+        mask_base: Some(0),
+        help: "Warps the image in perspective so the four From points land on the four To \
+               points. In the viewer, drag the To corners (solid) or the From corners (dashed). \
+               A Tracker with four tracks exports one (To Corner Pin) to pin a layer onto a \
+               moving plane, or to stabilize it.",
+    },
+    OpInfo {
         name: "media_out",
         label: "Media Out",
         category: Category::Output,
@@ -789,6 +814,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "crop" => crop(params, inputs),
         "resize" => resize(params, inputs),
         "tracker" => tracker(params, inputs),
+        "corner_pin" => corner_pin(params, inputs),
         "rectangle" | "ellipse" | "polygon" | "roto" => shape_op(op, params, inputs),
         "write" => write(params, inputs, ctx),
         // Rendering to disk is driven by `render`; in the graph these pass through.
@@ -1104,6 +1130,41 @@ fn tracker(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
         other => bail!("unknown tracker output '{other}'"),
     };
     Ok(warp(src, &sample_at))
+}
+
+// ---------------------------------------------------------------------------
+// Corner pin
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct CornerPin {
+    to1: Pt,
+    to2: Pt,
+    to3: Pt,
+    to4: Pt,
+    from1: Pt,
+    from2: Pt,
+    from3: Pt,
+    from4: Pt,
+}
+
+/// Perspective warp taking the `from` quad onto the `to` quad. Output pixels
+/// that map from behind the source's horizon stay transparent.
+fn corner_pin(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
+    let p: CornerPin = parse(params, "corner_pin")?;
+    let src = input(inputs, 0, "corner_pin")?;
+    let to = [p.to1, p.to2, p.to3, p.to4];
+    let from = [p.from1, p.from2, p.from3, p.from4];
+    // Each output pixel reads where it came from: to → from.
+    let h = track::homography(&to, &from).context("corner_pin: three of the corners are in a line")?;
+    let mut out = Image::new(src.width, src.height);
+    let w = src.width;
+    out.pixels.par_iter_mut().enumerate().for_each(|(i, px)| {
+        if let Some(q) = track::project(&h, [(i % w) as f32 + 0.5, (i / w) as f32 + 0.5]) {
+            *px = src.sample_bilinear(q[0] - 0.5, q[1] - 0.5);
+        }
+    });
+    Ok(out)
 }
 
 /// Resample `src`: each output pixel center `o` reads `src` at `m(o)`.
@@ -1733,6 +1794,37 @@ mod tests {
         let got = eval("transform", &resolve_params("transform", &xf, 5), &[Some(&src)], &CTX).unwrap();
         let diff = out.pixels.iter().zip(&got.pixels).map(|(a, b)| (a[3] - b[3]).abs()).fold(0.0, f32::max);
         assert!(diff < 1e-3, "off by {diff}");
+    }
+
+    #[test]
+    fn corner_pin_from_four_tracks_matches_the_tracker_output() {
+        let mut src = Image::new(40, 30);
+        for (i, px) in src.pixels.iter_mut().enumerate() {
+            let (x, y) = ((i % 40) as f32, (i / 40) as f32);
+            *px = [x / 40.0, y / 30.0, ((x * 0.7).sin() * (y * 0.5).cos()).abs(), 1.0];
+        }
+        // Four tracks moved by one similarity (turn, grow, shift) by frame 5,
+        // so the tracker's own solve and the corner pin should agree.
+        let m = track::solve(&[[0.0, 0.0], [1.0, 0.0]], &[[2.0, 1.0], [2.9, 0.4]], Solve::Scale);
+        let starts = [[8.5, 8.5], [30.5, 7.5], [31.5, 22.5], [9.5, 21.5]];
+        let mut params = json!({ "reference_frame": 1 });
+        for (i, s0) in starts.iter().enumerate() {
+            params[format!("track{}_on", i + 1)] = json!(true);
+            params[format!("track{}", i + 1)] = json!({ "keys": [[1, s0], [5, track::apply(&m, *s0)]], "interp": "linear" });
+        }
+        for (output, stabilize) in [("match-move", false), ("stabilize", true)] {
+            params["output"] = json!(output);
+            let pin = Value::Object(track::corner_pin_params(&params, stabilize).unwrap());
+            let want = eval("tracker", &resolve_params("tracker", &params, 5), &[Some(&src)], &CTX).unwrap();
+            let got = eval("corner_pin", &resolve_params("corner_pin", &pin, 5), &[Some(&src)], &CTX).unwrap();
+            let diff = want.pixels.iter().zip(&got.pixels).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0, f32::max);
+            assert!(diff < 2e-3, "{output}: off by {diff}");
+            // At the reference frame it's the identity.
+            let still = eval("corner_pin", &resolve_params("corner_pin", &pin, 1), &[Some(&src)], &CTX).unwrap();
+            assert!(still.pixels.iter().zip(&src.pixels).all(|(a, b)| (0..4).all(|c| (a[c] - b[c]).abs() < 1e-4)));
+        }
+        params["track4_on"] = json!(false);
+        assert!(track::corner_pin_params(&params, false).is_err());
     }
 
     #[test]

@@ -204,11 +204,12 @@ impl Session {
         Ok(id)
     }
 
-    /// Add a Transform node keyed with Tracker `id`'s solved motion (the
-    /// match-move, or with `stabilize` its inverse), fed by `input` if given.
-    pub fn tracker_to_transform(&mut self, id: &str, stabilize: bool, name: Option<&str>, input: Option<&str>) -> Result<String> {
-        let params = track::export_transform(&self.graph, id, stabilize)?;
-        self.create_node("transform", name, &params, &[input.unwrap_or_default().to_string()])
+    /// Add a node of type `op` (`transform` or `corner_pin`) keyed with
+    /// Tracker `id`'s motion (the match-move, or with `stabilize` its
+    /// inverse), fed by `input` if given.
+    pub fn export_tracker(&mut self, id: &str, op: &str, stabilize: bool, name: Option<&str>, input: Option<&str>) -> Result<String> {
+        let params = track::export(&self.graph, id, op, stabilize)?;
+        self.create_node(op, name, &params, &[input.unwrap_or_default().to_string()])
     }
 
     /// Remove a node. Ports it fed are reconnected to its first input, so

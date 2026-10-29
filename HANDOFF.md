@@ -16,7 +16,7 @@ Last updated 2026-10-28 (session 5). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~12,300 lines of Rust + Python. Tests: 58 library + 10 CLI + 22 GUI
+- ~12,300 lines of Rust + Python. Tests: 60 library + 10 CLI + 23 GUI
   (`cargo test --release`) and 8 Python (see "Working tips"), all passing.
   Clippy is clean apart from two old style lints (`Graph::from_str` name,
   `chunks_exact_mut(4)` in media.rs).
@@ -24,7 +24,7 @@ Last updated 2026-10-28 (session 5). Read this, then `README.md`
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
   (Rectangle, Ellipse, Polygon, Roto), Transform layer dragging in the viewer,
   and Phase 3's 2D Tracker (NCC with rotation/scale, match-move, stabilize,
-  export to a keyed Transform).
+  export to a keyed Transform or Corner Pin).
   Session 4: MCP server, Python `arclt` module, live GUI scripting bridge,
   native plugin host, XDG config (from the planning docs).
 - **Not done:** Phase 0.6 (bounding boxes / format), tracker follow-ups,
@@ -70,7 +70,6 @@ order of value:
      (originality rule).
 
 1. **Tracker follow-ups** (small to medium, builds on fresh code):
-   - **Corner pin** from 4 tracks: needs a perspective (homography) warp op.
    - Per-track box sizes; per-frame match score (show weak frames on the
      timeline or curve); "clear keys after/before this frame"; an offset
      point (track one spot, place the result at another).
@@ -179,6 +178,42 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   (`to_rgba8`), `main.rs` (CLI `mcp`/`plugins`/`ops`), `gui/main.rs`
   (bridge), `gui/doc.rs` (`place_new_nodes`), `gui/node_editor.rs`
   (`ops::all()`), `gui/worker.rs` (cache size from settings).
+- **Session 5, part 1** (`655e5f6`): Tracker → Transform export.
+  `track::transform_params` turns the solve at each tracked frame into
+  linear keys on `translate` / `rotate` (unwrapped across ±180°) / `scale`,
+  pivoting where Transform does (`size/2 + 0.5` in track coordinates, since
+  Transform puts pixel centers on integers). The Transform is sized by
+  rendering the tracker's input at the reference frame (assumes the layer
+  it moves is the same size: no bbox yet). Keys are a snapshot: re-export
+  after re-tracking. `track::solve_tracks` / `Solve::from_choice` are shared
+  with the `tracker` op. A test checks the Transform renders the tracker's
+  own match-move/stabilize output pixel for pixel.
+- **Session 5, part 2** (`d2c26fb`): one track can solve rotation/scale.
+  Runs whose Track motion follows rotation key `track<i>_warp` =
+  `[degrees, scale]` next to each position (a param *outside* the op's
+  spec, so the panel and curve editor don't list it and it has no default;
+  `track::warps` reads it, `None` when absent). The GUI continues from the
+  warp keyed at the run's start frame (`Warp::then`), since `track()`
+  reports warps relative to its start. `resolve_params` adds `refwarp<i>`
+  beside `ref<i>`. `solve_tracks` uses the warp only when exactly one track
+  is usable and both warps are known; two or more tracks still solve from
+  positions. Dragging a box keys only its position (the warp curve
+  interpolates).
+- **Session 5, part 3**: Corner Pin. Op `corner_pin` (`to1..4`, `from1..4`,
+  mask/mix) warps by `track::homography(to, from)` (8×8 elimination; sign
+  fixed so w > 0 near the source points; `None` for three collinear) and
+  `track::project` (`None` past the horizon → transparent). Overlay kind
+  `CornerPin` / `Geo::CornerPin` / `Part::Corner { i, from }`. Tracker
+  export: `track::corner_pin_params` copies each track's curve into `to<i>`
+  with `from<i>` = the reference position (swapped to stabilize), so it
+  needs no image size; `track::export(graph, node, op, stabilize)` picks
+  Transform or Corner Pin, shared by `Session::export_tracker` (MCP tool
+  `export_tracker` with `op`; it was briefly `tracker_to_transform`),
+  Python `Node.to_transform` / `to_corner_pin`, and the Tracker panel's
+  "To Transform" / "To Corner Pin" rows. Known gaps: no filtering when a
+  warp shrinks the image (aliasing, same as Transform); the default
+  From/To is a 512 square, so a hand-made Corner Pin on another size needs
+  its From corners set (a "From = image corners" button would help).
 
 ## Architecture in one page
 

@@ -482,6 +482,54 @@ pub fn solve(from: &[Pt], to: &[Pt], kind: Solve) -> Affine {
     [a, b, cb[0] - (a * ca[0] + b * ca[1]), d, e, cb[1] - (d * ca[0] + e * ca[1])]
 }
 
+/// A perspective map `x' = (H x) / w`, row-major 3×3.
+pub type Homography = [f64; 9];
+
+/// The homography taking each `from[i]` to `to[i]`, or `None` when three
+/// of either set's points are (nearly) in a line. The points may be in any
+/// order, as long as both sets use the same one.
+pub fn homography(from: &[Pt; 4], to: &[Pt; 4]) -> Option<Homography> {
+    // Eight equations in h0..h7 (h8 = 1), solved by Gaussian elimination
+    // with partial pivoting.
+    let mut a = [[0.0f64; 9]; 8];
+    for i in 0..4 {
+        let ([x, y], [u, v]) = (from[i].map(f64::from), to[i].map(f64::from));
+        a[2 * i] = [x, y, 1.0, 0.0, 0.0, 0.0, -u * x, -u * y, u];
+        a[2 * i + 1] = [0.0, 0.0, 0.0, x, y, 1.0, -v * x, -v * y, v];
+    }
+    let scale = a.iter().flat_map(|r| r[..8].iter()).fold(0.0f64, |m, x| m.max(x.abs())).max(1.0);
+    for c in 0..8 {
+        let pivot = (c..8).max_by(|&i, &j| a[i][c].abs().total_cmp(&a[j][c].abs()))?;
+        if a[pivot][c].abs() < 1e-9 * scale {
+            return None;
+        }
+        a.swap(c, pivot);
+        let row = a[c];
+        for (_, other) in a.iter_mut().enumerate().filter(|&(r, _)| r != c) {
+            let f = other[c] / row[c];
+            other[c..].iter_mut().zip(&row[c..]).for_each(|(x, y)| *x -= f * y);
+        }
+    }
+    let mut h = [1.0; 9];
+    for (i, row) in a.iter().enumerate() {
+        h[i] = row[8] / row[i];
+    }
+    // Scale so that w > 0 around the `from` points: the side of the
+    // horizon they are on.
+    let c = from.iter().fold([0.0, 0.0], |c, p| [c[0] + p[0] as f64 / 4.0, c[1] + p[1] as f64 / 4.0]);
+    if h[6] * c[0] + h[7] * c[1] + h[8] < 0.0 {
+        h.iter_mut().for_each(|x| *x = -*x);
+    }
+    Some(h)
+}
+
+/// `h` applied to `p`, or `None` for points that map to or past infinity.
+pub fn project(h: &Homography, p: Pt) -> Option<Pt> {
+    let (x, y) = (p[0] as f64, p[1] as f64);
+    let w = h[6] * x + h[7] * y + h[8];
+    (w > 1e-9).then(|| [((h[0] * x + h[1] * y + h[2]) / w) as f32, ((h[3] * x + h[4] * y + h[5]) / w) as f32])
+}
+
 /// [`solve`] over the tracks that have a position in both `from` and `to`;
 /// `None` when there are none. A single track also turns and scales by
 /// its own warp from `from_warps` to `to_warps`, where both are known.
@@ -556,16 +604,42 @@ pub fn transform_params(params: &Value, size: [usize; 2], stabilize: bool) -> Re
     Ok(out)
 }
 
-/// [`transform_params`] for Tracker node `node` of `graph`, sized by its
-/// input at the reference frame.
-pub fn export_transform(graph: &Graph, node: &str, stabilize: bool) -> Result<Map<String, Value>> {
+/// Params for a Corner Pin that reproduces four tracks' motion in
+/// perspective: From is each track at the reference frame and To its
+/// curve (match-move), or the other way round (stabilize).
+pub fn corner_pin_params(params: &Value, stabilize: bool) -> Result<Map<String, Value>> {
+    let p = ops::params_with_defaults("tracker", params);
+    if (1..=TRACKS).any(|i| p[format!("track{i}_on")].as_bool() != Some(true)) {
+        bail!("a corner pin needs all four tracks on");
+    }
+    let refs = positions(&p, p["reference_frame"].as_i64().unwrap_or(1));
+    let mut out = Map::new();
+    for (i, r) in refs.into_iter().enumerate() {
+        let (still, moving) = (json!(r), p[format!("track{}", i + 1)].clone());
+        let (from, to) = if stabilize { (moving, still) } else { (still, moving) };
+        out.insert(format!("from{}", i + 1), from);
+        out.insert(format!("to{}", i + 1), to);
+    }
+    Ok(out)
+}
+
+/// Params for a node of type `op` (`transform` or `corner_pin`) that
+/// carries Tracker node `node`'s motion. A Transform is sized by the
+/// tracker's input at the reference frame.
+pub fn export(graph: &Graph, node: &str, op: &str, stabilize: bool) -> Result<Map<String, Value>> {
     let n = graph.node(node).with_context(|| format!("no node named '{node}'"))?;
     if n.op != "tracker" {
         bail!("'{node}' is not a Tracker");
     }
-    let reference = ops::params_with_defaults("tracker", &n.params)["reference_frame"].as_i64().unwrap_or(1);
-    let img = input_frames(graph, node)?(reference)?;
-    transform_params(&n.params, [img.width, img.height], stabilize)
+    match op {
+        "transform" => {
+            let reference = ops::params_with_defaults("tracker", &n.params)["reference_frame"].as_i64().unwrap_or(1);
+            let img = input_frames(graph, node)?(reference)?;
+            transform_params(&n.params, [img.width, img.height], stabilize)
+        }
+        "corner_pin" => corner_pin_params(&n.params, stabilize),
+        other => bail!("can't export a tracker to '{other}' (transform or corner_pin)"),
+    }
 }
 
 #[cfg(test)]
@@ -721,6 +795,30 @@ mod tests {
         // Translation only: the mean offset.
         let t = solve(&[[0.0, 0.0], [2.0, 0.0]], &[[1.0, 1.0], [5.0, 1.0]], Solve::Translate);
         assert_eq!(t, [1.0, 0.0, 2.0, 0.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn homography_maps_the_corners_and_keeps_perspective() {
+        let square = [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]];
+        // A keystone: the top edge pinched in.
+        let trap = [[30.0, 10.0], [70.0, 10.0], [100.0, 90.0], [0.0, 90.0]];
+        let h = homography(&square, &trap).unwrap();
+        for (a, b) in square.iter().zip(&trap) {
+            let q = project(&h, *a).unwrap();
+            assert!((q[0] - b[0]).abs() < 1e-3 && (q[1] - b[1]).abs() < 1e-3, "{q:?} vs {b:?}");
+        }
+        // The square's center goes where the trapezoid's diagonals cross
+        // (x = 50; y from the line (30, 10)–(100, 90) meeting x = 50), not
+        // to the corners' average (y = 50).
+        let c = project(&h, [50.0, 50.0]).unwrap();
+        let y = 10.0 + 80.0 * 20.0 / 70.0;
+        assert!((c[0] - 50.0).abs() < 1e-3 && (c[1] - y).abs() < 1e-3, "{c:?}");
+        // Same correspondences in another order give the same map.
+        let order = [0, 2, 1, 3];
+        let h2 = homography(&order.map(|i| square[i]), &order.map(|i| trap[i])).unwrap();
+        assert!((project(&h2, [50.0, 50.0]).unwrap()[1] - y).abs() < 1e-3);
+        // Three in a line: no map.
+        assert!(homography(&[[0.0, 0.0], [50.0, 0.0], [100.0, 0.0], [0.0, 100.0]], &trap).is_none());
     }
 
     #[test]

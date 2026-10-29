@@ -70,9 +70,10 @@ static TOOLS: &[Tool] = &[
         {"type": "object", "properties": {"node": {"type": "string"}, "params": {"type": "object"}}, "required": ["node", "params"]}),
     tool!("set_key", "Set a keyframe on a numeric param at a frame, animating it.",
         {"type": "object", "properties": {"node": {"type": "string"}, "param": {"type": "string"}, "frame": {"type": "integer"}, "value": {}}, "required": ["node", "param", "frame", "value"]}),
-    tool!("tracker_to_transform", "Add a Transform node keyed with a Tracker's solved motion on every tracked frame: 'match-move' (default) moves a layer along with the tracks, 'stabilize' removes the motion. 'input' connects a layer to it. Returns the new node's name.",
+    tool!("export_tracker", "Add a node that carries a Tracker's motion: a Transform keyed with the solved motion on every tracked frame (op 'transform', default), or a Corner Pin following all four tracks in perspective (op 'corner_pin'). Mode 'match-move' (default) moves a layer along with the tracks, 'stabilize' removes the motion. 'input' connects a layer to it. Returns the new node's name.",
         {"type": "object", "properties": {
             "node": {"type": "string", "description": "The Tracker node."},
+            "op": {"type": "string", "enum": ["transform", "corner_pin"]},
             "mode": {"type": "string", "enum": ["match-move", "stabilize"]},
             "name": {"type": "string"},
             "input": {"type": "string"}
@@ -213,13 +214,14 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
             s.set_key(str_arg(args, "node")?, str_arg(args, "param")?, frame, value)?;
             ok()
         }
-        "tracker_to_transform" => {
+        "export_tracker" => {
             let stabilize = match opt_str(args, "mode").unwrap_or("match-move") {
                 "match-move" => false,
                 "stabilize" => true,
                 other => bail!("unknown mode '{other}' (match-move or stabilize)"),
             };
-            let id = s.tracker_to_transform(str_arg(args, "node")?, stabilize, opt_str(args, "name"), opt_str(args, "input"))?;
+            let op = opt_str(args, "op").unwrap_or("transform");
+            let id = s.export_tracker(str_arg(args, "node")?, op, stabilize, opt_str(args, "name"), opt_str(args, "input"))?;
             json!({"node": id})
         }
         "connect" => {
@@ -579,20 +581,28 @@ mod tests {
     }
 
     #[test]
-    fn tracker_exports_a_keyed_transform() {
+    fn tracker_exports_a_keyed_transform_or_corner_pin() {
         let mut s = Server::new(Session::default());
         call(&mut s, "create_node", json!({"op": "constant", "name": "plate", "params": {"width": 64, "height": 32}}));
         call(&mut s, "create_node", json!({"op": "tracker", "name": "trk", "inputs": ["plate"], "params": {
             "track1": {"keys": [[1, [10.5, 10.5]], [4, [13.5, 9.5]]], "interp": "linear"}}}));
-        let r = call(&mut s, "tracker_to_transform", json!({"node": "trk", "input": "plate"}));
+        let r = call(&mut s, "export_tracker", json!({"node": "trk", "input": "plate"}));
         assert_eq!(r["isError"], false, "{r}");
         let xf = call(&mut s, "describe_node", json!({"node": r["structuredContent"]["node"]}))["structuredContent"].clone();
         assert_eq!(xf["inputs"][0]["source"], "plate");
         assert_eq!(xf["params"]["translate"]["keys"][1], json!([4, [3.0, -1.0]]));
-        let r = call(&mut s, "tracker_to_transform", json!({"node": "trk", "mode": "stabilize"}));
+        let r = call(&mut s, "export_tracker", json!({"node": "trk", "mode": "stabilize"}));
         assert_eq!(r["isError"], false, "{r}");
-        let r = call(&mut s, "tracker_to_transform", json!({"node": "plate"}));
+        let r = call(&mut s, "export_tracker", json!({"node": "plate"}));
         assert_eq!(r["isError"], true);
+        // A corner pin needs all four tracks.
+        let r = call(&mut s, "export_tracker", json!({"node": "trk", "op": "corner_pin"}));
+        assert_eq!(r["isError"], true);
+        call(&mut s, "set_params", json!({"node": "trk", "params": {"track2_on": true, "track3_on": true, "track4_on": true}}));
+        let r = call(&mut s, "export_tracker", json!({"node": "trk", "op": "corner_pin", "mode": "stabilize"}));
+        let pin = call(&mut s, "describe_node", json!({"node": r["structuredContent"]["node"]}))["structuredContent"].clone();
+        assert_eq!((pin["op"].as_str(), &pin["params"]["to1"]), (Some("corner_pin"), &json!([10.5, 10.5])));
+        assert_eq!(pin["params"]["from1"]["keys"][1], json!([4, [13.5, 9.5]]));
     }
 
     #[test]

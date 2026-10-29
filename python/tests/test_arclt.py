@@ -86,6 +86,11 @@ class ArcltTest(unittest.TestCase):
         self.assertEqual(steady["translate"]["keys"][1], [4, [-3.0, 1.0]])
         with self.assertRaises(arclt.ArcltError):
             plate.to_transform()
+        for i in (2, 3, 4):
+            trk[f"track{i}_on"] = True
+        pin = trk.to_corner_pin(input=plate)
+        self.assertEqual(pin["from1"], [10.5, 10.5])
+        self.assertEqual(pin["to1"]["keys"][1], [4, [13.5, 9.5]])
 
     def test_view_tools_need_a_gui(self):
         c = arclt.create_node("constant")

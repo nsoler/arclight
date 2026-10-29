@@ -96,8 +96,16 @@ class Node:
     def to_transform(self, mode: str = "match-move", name: str | None = None, input: "Node | str | None" = None) -> "Node":
         """For a Tracker: a new Transform node keyed with its solved motion
         ("match-move" or "stabilize"), fed by ``input`` if given."""
+        return self._export("transform", mode, name, input)
+
+    def to_corner_pin(self, mode: str = "match-move", name: str | None = None, input: "Node | str | None" = None) -> "Node":
+        """For a Tracker with all four tracks on: a new Corner Pin that
+        follows them in perspective ("match-move" or "stabilize")."""
+        return self._export("corner_pin", mode, name, input)
+
+    def _export(self, op: str, mode: str, name: str | None, input: "Node | str | None") -> "Node":
         src = None if input is None else _name(input)
-        return Node(_call("tracker_to_transform", node=self._name, mode=mode, name=name, input=src)["node"])
+        return Node(_call("export_tracker", node=self._name, op=op, mode=mode, name=name, input=src)["node"])
 
     def input(self, port: int | str = 0) -> "Node | None":
         for p in self.info()["inputs"]:
