@@ -22,8 +22,10 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
   workflows passed. Earlier: v0.9.7, v0.9.5, v0.8.4, v0.8.3 and the
   0.0.x pre-releases.
 - **In progress (session 10): M10, 3D objects and render passes**
-  ("Milestone 10 in detail" in `docs/phase-4-plan.md`), at **0.9.16**
-  (`41fa79a`). **The user asked for a release (Linux tarball +
+  ("Milestone 10 in detail" in `docs/phase-4-plan.md`), at **0.9.22**
+  (`d422ffb`); steps (a) objects, (b) passes and (c) OBJ are done; (d)
+  lights / materials and (e) motion remain (glTF and zmerge of (e) are
+  done). **The user asked for a release (Linux tarball +
   universal DMG + wheels) when all of M10 lands**, steps (a)–(e).
   - **Committed (engine side mostly by MathWiz):**
     - 0.9.12 `src/mesh.rs`: `Mesh { name, positions: Vec<Vec3>, normals,
@@ -69,24 +71,30 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
     - 0.9.22 (3DWorker) (b2): `ParamKind::Flags`, scanline_render
       `passes` (default ['depth']), `holdout` on mesh nodes, Read Geo
       file filter, Shuffle ▾ from real input layers. (a) and (b) done.
-  - **Working now (uncommitted in the tree at this update):**
-    - **3DWorker** (wD:p4, `worker3d`), owns scene.rs, render3d.rs,
-      ops.rs, graph.rs, gui/*: step (a2): Scene meshes, Cube / Sphere /
-      Cylinder / Plane and Read Geo nodes, viewport3d drawing / selecting
-      / moving meshes (files touched so far: scene.rs, render3d.rs,
-      ops.rs, gui/viewport3d.rs, gui/worker.rs).
-    - **MathWiz** (wD:p3), owns mesh.rs, image.rs, shade.rs, new
-      `src/gltf.rs`: glTF 2.0 import (.gltf/.glb → `Vec<Part>`, may add
-      the `gltf` crate), then a zmerge engine function in image.rs.
-  - **Still to assign / do:** 3DWorker after (a2): (b) passes in
-    render3d (depth, P, N, uv, id, matte.<node>, holdout, nearest vs
-    coverage filtering); light nodes, materials on primitives, calling
-    `shade` in render3d and the lighting passes (diffuse / specular /
-    emission / ambient, `light.<node>`); motion vectors. When ops.rs is
-    free: the Shuffle node and Merge's zmerge option (MathWiz has the
-    engine for both), Read Geo choosing glTF by extension. Then README
-    node table, `docs/help.md`, MCP / Python, and the release.
-  - Next version: **0.9.23**.
+  - **Working now (assigned at this update; nothing uncommitted yet):**
+    - **3DWorker** (wD:p4, `worker3d`), owns ops.rs, scene.rs,
+      render3d.rs, session.rs, gui/properties.rs, README.md,
+      docs/help.md: step (d). First, on its own: `Scene.lights:
+      Vec<shade::Light>` (extend / tag / describe) and light nodes
+      `light_ambient` / `light_directional` / `light_point` / `light_spot`
+      (translate / rotate, color, intensity, decay, cone, penumbra). Then
+      material params on the mesh nodes (Read Geo keeps the file's unless
+      overridden), `shade::shade` per hit in render3d (no lights or Unlit
+      must stay bit-identical), and lighting passes diffuse / specular /
+      emission / ambient (+ optional `light.<node>`) in `Passes::NAMES`.
+    - **MathWiz** (wD:p3), owns `src/gui/viewport3d.rs` for this: lights
+      in the 3D view (point = star, spot = cone with angle and penumbra,
+      directional = parallel arrows, area = outline + normal), pickable,
+      framed, moved by G / R / S and gizmos via the node's translate /
+      rotate. Codes against `Scene.lights` until 3DWorker's first piece
+      is committed (tell MathWiz when it is).
+  - **Still to do after that:** (e) motion vectors (`motion` pass from
+    camera and object animation; likely MathWiz or 3DWorker, whoever is
+    free, in render3d / graph); MCP / Python check that lights, passes
+    and Shuffle work through `create_node` / params (they should);
+    README rows for the light nodes; `docs/help.md` lights; then the
+    **release** (tarball + universal DMG + wheels) per the user's request.
+  - Next version: **0.9.23**. (CHANGELOG has one entry per version.)
 - **Ask the user first** how the Mac builds (v0.9.11 universal DMG) went
   on their M4 Pro, and whether anyone tried an Intel Mac. Mac-only bugs
   come first.
