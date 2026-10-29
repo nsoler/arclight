@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.9.6** (alpha); see `CHANGELOG.md`.
+Version **0.9.7** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -168,7 +168,9 @@ animated (at the current frame) and is one undo step; a linked param
 (e.g. a Card linked to tracker points) shows the gizmo gray and says what
 it's linked to: Unlink it in Properties to move it by hand.
 
-**Help** lists these shortcuts; **Help → About Arclight Compositor…** shows
+**Help → Arclight Help…** (or **F1**) opens a scrollable help window with
+these controls and more (the text is `docs/help.md`, built into the app;
+edit it to change the help); **Help → About Arclight Compositor…** shows
 the version and when the binary was built (UTC; `build.rs` stamps it, or
 uses `SOURCE_DATE_EPOCH` when set).
 

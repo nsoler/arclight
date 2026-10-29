@@ -11,6 +11,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.7 — 2026-10-29
+
+- Help → Arclight Help… (or F1) opens a help window: scrollable,
+  resizable, Esc or its close button closes it. It covers the node graph,
+  selecting, the viewer, player, keyframes, curve editor, the 3D view
+  (navigation with mouse and trackpad, the views and pie, selection,
+  G / R / S and the gizmos) and the Camera Tracker. The text is
+  `docs/help.md`, built into the app (rendered with egui_commonmark, MIT
+  / Apache); the Help menu no longer lists shortcuts inline.
+
 ## 0.9.6 — 2026-10-29
 
 - 3D viewport: ` (backtick) opens a pie of views around the pointer

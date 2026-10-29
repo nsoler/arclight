@@ -103,6 +103,17 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
     `camtrack::Solution.point_rms` (`#[serde(default)]`),
     `Scene.point_errors` (negative = unknown). Also mathwiz's small
     `with_constraint` cleanup and the README "3D view" section.
+  - **0.9.7 (3DWorker): Help window.** `src/gui/help.rs`: `HELP =
+    include_str!("../../docs/help.md")`, `Help {open, cache}` with
+    `shortcuts(ctx)` (F1 opens, Esc closes and consumes the key; called
+    first in `App::shortcuts`) and `ui(ctx)` (`egui::Window` +
+    `ScrollArea` + egui_commonmark `CommonMarkViewer`). New dependency
+    `egui_commonmark` 0.26 (MIT OR Apache-2.0, egui 0.37; optional, in
+    the `gui` feature, default features off + `pulldown_cmark`);
+    dev-dependency `pulldown-cmark` 0.13 for the test. **Edit
+    `docs/help.md` to change the help**; tests check its sections, lists
+    and tables parse, and that F1 opens / Esc closes the window. Keep it
+    in step with new features.
   - **Process note:** twice a worker kept editing after reporting, and a
     commit took newer files than were tested (0.9.4 didn't build alone;
     fixed by `f61ec6e`). The master now snapshots reported files first
@@ -165,7 +176,7 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.6**.
+  in the same commit as the change. Current: **0.9.7**.
 - ~23,200 lines of Rust + Python. Tests: 134 library + 10 CLI + 46 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

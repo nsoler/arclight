@@ -8,6 +8,7 @@ mod camera_tracker;
 mod curve_editor;
 mod doc;
 mod gizmo3d;
+mod help;
 mod node_editor;
 mod overlay;
 mod properties;
@@ -125,6 +126,8 @@ struct App {
     closing: bool,
     /// Help > About is open.
     about: bool,
+    /// Help > Arclight Help (F1).
+    help: help::Help,
     /// The window icon as a texture, for the About dialog (made on first use).
     /// and the part of it with artwork (UV), its transparent border cut off.
     logo: Option<(egui::TextureHandle, egui::Rect)>,
@@ -164,6 +167,7 @@ impl App {
             scripts: ScriptJobs::default(),
             closing: false,
             about: false,
+            help: help::Help::default(),
             logo: None,
         }
     }
@@ -404,6 +408,8 @@ impl App {
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        // First, so Esc closes the help rather than deselecting.
+        self.help.shortcuts(ctx);
         if ctx.input_mut(|i| i.consume_shortcut(&SAVE_AS)) {
             self.save(true);
         }
@@ -777,29 +783,16 @@ impl App {
                 }
             });
             ui.menu_button("Help", |ui| {
+                if ui.add(egui::Button::new("Arclight Help…").shortcut_text("F1")).clicked() {
+                    self.help.open = true;
+                    ui.close();
+                }
                 if ui.button("About Arclight Compositor…").clicked() {
                     self.about = true;
                     ui.close();
                 }
                 ui.separator();
-                ui.strong(concat!("Arclight ", env!("CARGO_PKG_VERSION"), " (alpha)"));
-                ui.separator();
-                ui.label(
-                    "Node graph: right-click to add · drag ports to connect · \
-                     double-click or V to view · ⌫ delete · F frame all\n\
-                     Selecting: click · ⇧ or ⌘ click to add / remove · drag a box on empty space (⇧ adds) · \
-                     ⌘A all · Esc none · ⌘G group in a backdrop · ⇧⌘G ungroup · middle-drag or ⌥-drag to pan\n\
-                     Viewer: drag to pan · scroll / pinch to zoom · double-click or F to fit\n\
-                     Player: Space play/pause · J / K / L back / stop / forward · \
-                     ← → step · ⌥← ⌥→ previous / next key · Home / End\n\
-                     Keyframes: click a parameter's ◇ to set or remove a key at the current frame; \
-                     editing an animated parameter keys it automatically; right-click ◇ for \
-                     interpolation and key navigation\n\
-                     Curve editor: click / Shift-click / box-drag to select keys · drag to move · \
-                     double-click a curve to add a key · ⌫ delete · scroll pan · ⌘-scroll or \
-                     pinch zoom (⌥ value only, ⇧ time only) · middle-drag pan · F frame all\n\
-                     Undo / redo: ⌘Z / ⇧⌘Z",
-                );
+                ui.weak(concat!("Arclight ", env!("CARGO_PKG_VERSION"), " (alpha)"));
             });
             if let Some(s) = &self.status {
                 ui.separator();
@@ -852,6 +845,7 @@ impl eframe::App for App {
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         self.about_dialog(&ctx);
+        self.help.ui(&ctx);
         egui::Panel::right("properties")
             .default_size(380.0)
             .min_size(280.0)
