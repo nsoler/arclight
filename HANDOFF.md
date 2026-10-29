@@ -50,8 +50,7 @@ Last updated 2026-10-28 (session 7). Read this, then `README.md`
 - Development is on Linux (Omarchy/Hyprland): use `sed -i` (not
   `sed -i ''`); ffmpeg/ffprobe are in `/usr/bin`. Hyprland tiles the window
   narrower than its 1600 px default, so screenshots come out ~920–1030 px
-  wide, and at that width the viewer toolbar text overlaps (layout issue,
-  not yet fixed).
+  wide (or the full monitor when it's the only window).
 
 ```sh
 cargo run --release --bin arclight-gui        # GUI with the animated starter project
@@ -79,7 +78,7 @@ steps": take them in this order, one milestone at a time (commit, push and
 fast-forward `main` after each, per the standing instruction above), and
 report back after a few milestones.
 
-1. **Small UX debts:** viewer toolbar overlap at narrow widths; Corner Pin's default
+1. **Small UX debts:** Corner Pin's default
    From/To is a 512 square (add "From = image corners"); per-track tracker
    box sizes and offsets are only editable in the viewer; no filtering when
    Transform / Tracker output / Corner Pin shrink the image (aliasing);
@@ -360,6 +359,10 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   dialog, then `Close` with `closing` set so the next request passes).
   Checked on Hyprland by dirtying a window over the bridge and closing it
   with `hyprctl dispatch "hl.dsp.window.close({ window = 'pid:<pid>' })"`.
+- **Session 7, part 3**: the viewer toolbar's status text (Viewing …,
+  size, frame, ms) moves to a second row when it doesn't fit beside the
+  controls (`Viewer::status`, width remembered in `status_w`). Checked by
+  screenshot with a temporarily widened properties panel.
 
 ## Architecture in one page
 
@@ -550,7 +553,6 @@ windows exist.
   panel; only the viewer shows them.
 - Corner Pin and every other warp sample bilinearly with no filtering, so
   strong shrinking aliases.
-- Viewer toolbar text overlaps when the window is narrow.
 - First frame after launch takes ~1.5 s (ffprobe + ffmpeg start); later
   frames are ~5 ms for the starter graph.
 - Viewer display conversion is on the CPU (rayon); fine to ~4K.

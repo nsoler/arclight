@@ -49,6 +49,9 @@ pub struct Viewer {
     pan: Vec2,
     fit_pending: bool,
     overlays: Overlays,
+    /// The toolbar's status text width last frame, to tell whether it fits
+    /// beside the controls or needs a row of its own.
+    status_w: f32,
     pub rect: Rect,
 }
 
@@ -63,6 +66,7 @@ impl Default for Viewer {
             exposure: 0.0,
             zoom: 1.0,
             pan: Vec2::ZERO,
+            status_w: 0.0,
             fit_pending: true,
             overlays: Overlays::default(),
             rect: Rect::NOTHING,
@@ -194,6 +198,7 @@ impl Viewer {
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui, d: &Display<'_>) {
+        let mut fits = true;
         ui.horizontal(|ui| {
             for (ch, label) in Channel::ALL {
                 ui.selectable_value(&mut self.channel, ch, label);
@@ -213,7 +218,20 @@ impl Viewer {
                 self.pan = Vec2::ZERO;
             }
             ui.label(format!("{:.0}%", self.zoom * 100.0));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            fits = ui.available_width() >= self.status_w + ui.spacing().item_spacing.x * 2.0;
+            if fits {
+                self.status(ui, d);
+            }
+        });
+        if !fits {
+            ui.horizontal(|ui| self.status(ui, d));
+        }
+    }
+
+    /// What's viewed, its size, frame and timing, right-aligned.
+    fn status(&mut self, ui: &mut egui::Ui, d: &Display<'_>) {
+        self.status_w = ui
+            .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(img) = d.image {
                     ui.label(format!("{}x{}  ·  frame {}  ·  {:.1} ms", img.format.width, img.format.height, d.frame, d.millis));
                     let w = img.window();
@@ -227,8 +245,9 @@ impl Viewer {
                     ui.strong(t);
                     ui.label("Viewing");
                 }
-            });
-        });
+                ui.min_rect().width()
+            })
+            .inner;
     }
 
     fn upload(&mut self, ctx: &egui::Context, img: &Arc<Image>) {
