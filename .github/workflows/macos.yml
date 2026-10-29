@@ -1,5 +1,6 @@
-# Build the Apple Silicon macOS app and DMG (packaging/macos/build-dmg.sh)
-# on a GitHub-hosted M-series Mac. Runs when started by hand (Actions tab →
+# Build the macOS app and DMG (packaging/macos/build-dmg.sh) on a
+# GitHub-hosted M-series Mac: one universal app, Apple Silicon (arm64) and
+# Intel (x86_64, cross-compiled here) joined with lipo. Runs when started by hand (Actions tab →
 # "macOS build" → Run workflow) or on a version tag (v0.0.19, …); the DMG is
 # attached to the run as an artifact and, for a tag, to that tag's GitHub
 # release (created if it doesn't exist yet). Not run on every push: macOS minutes
@@ -21,14 +22,28 @@ jobs:
       - name: Tools
         run: |
           brew install librsvg ffmpeg
-          rustup target add aarch64-apple-darwin
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - name: Test
         run: cargo test --release
       - name: Build the app and DMG
         run: packaging/macos/build-dmg.sh
+      - name: Check both architectures
+        run: |
+          for bin in arclight-gui arclight; do
+            archs="$(lipo -archs dist/Arclight.app/Contents/MacOS/$bin)"
+            echo "$bin: $archs"
+            [[ "$archs" == *arm64* && "$archs" == *x86_64* ]]
+          done
+          arch -arm64 dist/Arclight.app/Contents/MacOS/arclight --version
+          # The Intel half runs here only if the runner has Rosetta 2.
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            arch -x86_64 dist/Arclight.app/Contents/MacOS/arclight --version
+          else
+            echo "No Rosetta on this runner: the Intel half was built and linked, not run."
+          fi
       - uses: actions/upload-artifact@v4
         with:
-          name: Arclight-macOS-arm64
+          name: Arclight-macOS-universal
           path: dist/*.dmg
           if-no-files-found: error
       - name: Attach to the release

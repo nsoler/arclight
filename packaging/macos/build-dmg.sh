@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# Build Arclight for Apple Silicon macOS and package it as a DMG:
-#   dist/Arclight.app            the app (GUI, plus the `arclight` CLI inside)
-#   dist/Arclight-<ver>-arm64.dmg drag-to-Applications installer
+# Build Arclight for macOS and package it as a DMG:
+#   dist/Arclight.app                 the app (GUI, plus the `arclight` CLI inside)
+#   dist/Arclight-<ver>-universal.dmg drag-to-Applications installer
+# The binaries are universal: built for Apple Silicon (arm64) and Intel
+# (x86_64) and joined with lipo, so one app runs natively on any Mac from
+# macOS 11. ARCHS="arm64" (or "x86_64") builds one architecture only, and
+# names the DMG after it.
 #
 # Run on a Mac (Apple's SDK and tools only run there), from anywhere:
 #   packaging/macos/build-dmg.sh
@@ -15,7 +19,7 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-target=aarch64-apple-darwin
+archs="${ARCHS:-arm64 x86_64}"
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/Cargo.toml" | head -1)"
 dist="$repo/dist"
 app="$dist/Arclight.app"
@@ -23,17 +27,29 @@ app="$dist/Arclight.app"
 [[ "$(uname -s)" == Darwin ]] || { echo "build-dmg.sh runs on macOS (it needs Apple's SDK, iconutil and hdiutil)." >&2; exit 1; }
 command -v rsvg-convert >/dev/null || { echo "rsvg-convert not found: brew install librsvg" >&2; exit 1; }
 
-echo "Building Arclight ${version} for ${target}..."
-rustup target add "$target" >/dev/null 2>&1 || true
-# Big Sur (11) is the first macOS on Apple Silicon.
+# Big Sur (11) is the first macOS on Apple Silicon; Intel builds use the
+# same floor so both halves of the universal app agree.
 export MACOSX_DEPLOYMENT_TARGET=11.0
-cargo build --release --manifest-path "$repo/Cargo.toml" --target "$target" --bin arclight-gui --bin arclight
+for arch in $archs; do
+  if [[ "$arch" == arm64 ]]; then target=aarch64-apple-darwin; else target=x86_64-apple-darwin; fi
+  echo "Building Arclight ${version} for ${target}..."
+  rustup target add "$target" >/dev/null 2>&1 || true
+  cargo build --release --manifest-path "$repo/Cargo.toml" --target "$target" --bin arclight-gui --bin arclight
+done
 
 echo "Assembling Arclight.app..."
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/examples/media"
-install -m755 "$repo/target/$target/release/arclight-gui" "$app/Contents/MacOS/arclight-gui"
-install -m755 "$repo/target/$target/release/arclight" "$app/Contents/MacOS/arclight"
+# One binary per program, holding every architecture built.
+for bin in arclight-gui arclight; do
+  slices=()
+  for arch in $archs; do
+    if [[ "$arch" == arm64 ]]; then target=aarch64-apple-darwin; else target=x86_64-apple-darwin; fi
+    slices+=("$repo/target/$target/release/$bin")
+  done
+  lipo -create "${slices[@]}" -output "$app/Contents/MacOS/$bin"
+  chmod 755 "$app/Contents/MacOS/$bin"
+done
 install -m644 "$repo/examples/media/testsrc.mp4" "$app/Contents/Resources/examples/media/"
 
 # The icon: the logo without lettering at small sizes, where the word can't
@@ -82,7 +98,8 @@ codesign --force --sign - "$app"
 codesign --verify --strict "$app"
 
 echo "Making the DMG..."
-dmg="$dist/Arclight-$version-arm64.dmg"
+if [[ "$archs" == *" "* ]]; then flavor=universal; else flavor="$archs"; fi
+dmg="$dist/Arclight-$version-$flavor.dmg"
 stage="$dist/dmg"
 rm -rf "$stage" "$dmg" && mkdir -p "$stage"
 cp -R "$app" "$stage/"

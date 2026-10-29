@@ -11,6 +11,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.8.4 — 2026-10-29
+
+- Intel Macs: the macOS app is now universal (Apple Silicon and Intel in
+  one app, joined with lipo; macOS 11+), released as
+  `Arclight-<version>-universal.dmg`, and the macOS Python wheel is
+  universal2. `ARCHS=arm64` (or `x86_64`) builds one architecture only.
+
 ## 0.8.3 — 2026-10-29
 
 - Node graph multi-selection and backdrops: Shift/Cmd-click, box select

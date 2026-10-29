@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.8.3** (alpha); see `CHANGELOG.md`.
+Version **0.8.4** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -64,15 +64,21 @@ icons. Unpack it and run `./install.sh` to put the binaries in
 for elsewhere; `./uninstall.sh` removes it), or run `bin/arclight-gui` in
 place. The binaries link only glibc, so they run on the distribution they
 were built on (Arch / Omarchy for the published releases) and newer ones.
-Releases are on GitHub (`gh release list`), with the macOS DMG beside the
-tarball.
+Releases are on GitHub (`gh release list`), with the macOS DMG (universal:
+Apple Silicon and Intel) and the Python wheels beside the tarball.
 
-### macOS (Apple Silicon)
+### macOS (Apple Silicon and Intel)
 
 ```sh
 brew install librsvg ffmpeg       # icon drawing for the build; video I/O at run time
-packaging/macos/build-dmg.sh      # -> dist/Arclight.app, dist/Arclight-<version>-arm64.dmg
+packaging/macos/build-dmg.sh      # -> dist/Arclight.app, dist/Arclight-<version>-universal.dmg
+ARCHS=arm64 packaging/macos/build-dmg.sh   # one architecture only (-arm64.dmg; or x86_64)
 ```
+
+The app is **universal**: its binaries hold an Apple Silicon (arm64) and
+an Intel (x86_64) build, joined with `lipo`, so the one DMG runs natively
+on any Mac with macOS 11 or later. The Intel half is cross-compiled on
+the Apple Silicon build machine.
 
 Run on a Mac: Apple's SDK, `iconutil` and `hdiutil` only run there. Without
 one, the **macOS build** GitHub Actions workflow (`.github/workflows/macos.yml`)
@@ -83,7 +89,8 @@ app is signed ad hoc, not with a Developer ID, so a downloaded copy opens
 the first time with right-click → **Open** (or `xattr -dr
 com.apple.quarantine /Applications/Arclight.app`). ffmpeg isn't bundled:
 Arclight finds Homebrew's (`/opt/homebrew/bin`) or MacPorts' even when
-opened from the Finder. The CLI is inside the bundle at
+opened from the Finder (on Intel Macs Homebrew lives in `/usr/local/bin`,
+which is searched too). The CLI is inside the bundle at
 `Arclight.app/Contents/MacOS/arclight`. Plugins on macOS are
 `libarclight_plugin_*.dylib`.
 

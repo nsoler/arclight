@@ -82,7 +82,7 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
   phase, the middle number goes up and the last restarts at 1 (0.9.1).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.8.3**.
+  in the same commit as the change. Current: **0.8.4**.
 - ~23,200 lines of Rust + Python. Tests: 134 library + 10 CLI + 46 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.
@@ -160,6 +160,14 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
   24 px inner margin on every side; the logo is drawn trimmed to its
   opaque pixels (UV rect computed once; `App.logo` is `(TextureHandle,
   Rect)`), since the PNG's transparent border made the top gap larger.
+- **Release rule (user, 2026-10-29):** every release carries the Linux
+  x86_64 tarball, the **macOS universal DMG** (Apple Silicon *and*
+  Intel; `Arclight-<ver>-universal.dmg`, since v0.8.4; before that only
+  `-arm64.dmg`), and the `arclt` wheels (Linux manylinux2014 x86_64,
+  macOS universal2) plus sdist. Tag from `main` after the milestone is
+  merged. The Intel half is cross-compiled on the macos-14 runner and
+  checked with `lipo -archs`; it runs there only if the runner has
+  Rosetta, and hasn't been run on a real Intel Mac yet.
 - **Releases (session 7, user request):** GitHub releases, marked
   pre-release, tagged `v<version>`. First: `v0.0.19`. To make one at the
   current commit: tag it (`git tag -a v0.0.N -m "Arclight 0.0.N (alpha)"`)
