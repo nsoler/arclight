@@ -79,6 +79,11 @@ impl Viewer {
         self.fit_pending = true;
     }
 
+    /// Select every vertex of the selected shape (see [`Overlays::select_all_points`]).
+    pub fn select_all_points(&mut self, doc: &Doc) -> bool {
+        self.overlays.select_all_points(doc)
+    }
+
     /// Delete the selected overlay vertices, if any (see [`Overlays::delete_points`]).
     pub fn delete_points(&mut self, doc: &mut Doc) -> bool {
         self.overlays.delete_points(doc)

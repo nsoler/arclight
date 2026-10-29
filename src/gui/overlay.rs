@@ -107,6 +107,9 @@ enum Part {
     TrackBox { i: usize, search: bool },
     /// Track `i`'s boxes alone, away from its point (Ctrl-drag): its offset.
     TrackOffset(usize),
+    /// A selection rectangle over a point list's vertices, dragged from
+    /// empty space.
+    Marquee,
     /// Corner `i` of a corner pin's To quad, or of its From quad.
     Corner { i: usize, from: bool },
 }
@@ -162,6 +165,8 @@ struct Drag {
     /// The mapping when the drag started: a Tracker's shown output moves as
     /// its tracks are dragged, so the pointer is read through this one.
     xf: Xf,
+    /// Pointer now, in image pixels.
+    now: Vec2,
 }
 
 #[derive(Default)]
@@ -170,6 +175,8 @@ pub struct Overlays {
     /// Selected vertices of the selected node's point list, and that node.
     points: Vec<usize>,
     points_node: Option<String>,
+    /// The selection a box selection adds to (empty unless Shift was held).
+    marquee_base: Vec<usize>,
 }
 
 fn vec2(v: &Value) -> Vec2 {
@@ -582,7 +589,14 @@ impl Overlays {
                     // On a spline, dragging on pulls out the new vertex's tangents.
                     part = Some(if spline { Part::Pull(i) } else { Part::Vertex(i) });
                 }
-                None if !mods.shift => self.points.clear(),
+                None => {
+                    // Empty space: box-select (Shift adds to the selection).
+                    if !mods.shift {
+                        self.points.clear();
+                    }
+                    self.marquee_base = self.points.clone();
+                    part = Some(Part::Marquee);
+                }
                 _ => {}
             }
         }
@@ -591,13 +605,28 @@ impl Overlays {
         let Some(g) = geo(doc, &id, frame, size) else { return };
         let start = xf.image(o);
         let d = start - g.pivot();
-        self.drag = Some(Drag { node: id, part, start, geo: g, angle: d.y.atan2(d.x), turned: 0.0, xf: *xf });
+        self.drag = Some(Drag { node: id, part, start, geo: g, angle: d.y.atan2(d.x), turned: 0.0, xf: *xf, now: start });
     }
 
     fn drag_to(&mut self, doc: &mut Doc, frame: i64, p: Vec2, mods: Mods) {
-        if let Some(drag) = &mut self.drag {
-            apply(drag, &self.points, p, mods, doc, frame);
+        let Some(drag) = &mut self.drag else { return };
+        drag.now = p;
+        if drag.part != Part::Marquee {
+            return apply(drag, &self.points, p, mods, doc, frame);
         }
+        let Geo::Points { pts, .. } = &drag.geo else { return };
+        let r = Rect::from_two_pos(drag.start.to_pos2(), p.to_pos2());
+        self.points = self.marquee_base.clone();
+        self.points.extend((0..pts.len()).filter(|&i| r.contains(pts[i].to_pos2()) && !self.marquee_base.contains(&i)));
+    }
+
+    /// Select every vertex of the selected node's point list. False when it
+    /// has none.
+    pub fn select_all_points(&mut self, doc: &Doc) -> bool {
+        self.sync_selection(doc);
+        let Some(Geo::Points { pts, .. }) = doc.selected.as_deref().and_then(|id| geo(doc, id, 0, Vec2::ZERO)) else { return false };
+        self.points = (0..pts.len()).collect();
+        true
     }
 
     /// Delete the selected vertices of the selected node's point list.
@@ -643,6 +672,10 @@ impl Overlays {
         }
         let color = |p: Part, base: Color32| if hot == Some(p) { HOT } else { base };
         let outline = Stroke::new(1.0, Color32::from_black_alpha(200));
+        if let Some(d) = self.drag.as_ref().filter(|d| d.part == Part::Marquee) {
+            let r = Rect::from_two_pos(xf.screen(d.start), xf.screen(d.now));
+            painter.rect(r, 0.0, Color32::from_white_alpha(18), Stroke::new(1.0, Color32::from_white_alpha(170)), egui::StrokeKind::Middle);
+        }
 
         match g {
             Geo::Point { value, .. } => {
@@ -1050,6 +1083,7 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
 fn cursor(part: Part) -> CursorIcon {
     match part {
         Part::Point | Part::Move | Part::Vertex(_) | Part::Tangent { .. } | Part::Pull(_) | Part::Track(_) | Part::TrackOffset(_) | Part::Corner { .. } => CursorIcon::Move,
+        Part::Marquee => CursorIcon::Crosshair,
         Part::TrackBox { .. } => CursorIcon::ResizeNwSe,
         Part::Edge(..) => CursorIcon::Crosshair,
         Part::Size { x: true, y: true } => CursorIcon::ResizeNwSe,
@@ -1312,8 +1346,29 @@ mod tests {
         // Shift-clicking a selected vertex deselects it; clicking empty space clears.
         gesture(&mut ov, &mut d, Pos2::new(50.0, 15.0), Pos2::new(50.0, 15.0), 1, shift);
         assert_eq!(ov.points, vec![1]);
-        assert_eq!(gesture(&mut ov, &mut d, Pos2::new(5.0, 95.0), Pos2::new(5.0, 95.0), 1, Mods::default()), None);
+        assert_eq!(gesture(&mut ov, &mut d, Pos2::new(5.0, 95.0), Pos2::new(5.0, 95.0), 1, Mods::default()), Some(Part::Marquee));
         assert!(ov.points.is_empty());
+    }
+
+    #[test]
+    fn dragging_on_empty_space_box_selects_vertices() {
+        // The square's vertices: (50, 25), (150, 25), (150, 75), (50, 75).
+        let mut d = doc("polygon", json!({ "points": SQUARE }));
+        let mut ov = Overlays::default();
+        let part = gesture(&mut ov, &mut d, Pos2::new(30.0, 10.0), Pos2::new(170.0, 40.0), 1, Mods::default());
+        assert_eq!((part, ov.points.clone()), (Some(Part::Marquee), vec![0, 1]));
+        // Nothing moved.
+        assert_eq!(points(&d, 1), [50.0, 25.0, 150.0, 25.0, 150.0, 75.0, 50.0, 75.0]);
+        // Shift adds; a plain box replaces.
+        let shift = Mods { shift: true, ..Default::default() };
+        gesture(&mut ov, &mut d, Pos2::new(40.0, 90.0), Pos2::new(60.0, 60.0), 1, shift);
+        assert_eq!(ov.points, vec![0, 1, 3]);
+        gesture(&mut ov, &mut d, Pos2::new(140.0, 90.0), Pos2::new(160.0, 60.0), 1, Mods::default());
+        assert_eq!(ov.points, vec![2]);
+        // Select all.
+        assert!(ov.select_all_points(&d));
+        assert_eq!(ov.points, vec![0, 1, 2, 3]);
+        assert!(!Overlays::default().select_all_points(&doc("transform", json!({}))));
     }
 
     #[test]

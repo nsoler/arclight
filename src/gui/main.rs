@@ -363,6 +363,10 @@ impl App {
         } else if ctx.input_mut(|i| i.consume_shortcut(&UNDO)) {
             self.undo();
         }
+        // ⌘A: every vertex of the selected shape.
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(Key::A)) {
+            self.viewer.select_all_points(&self.doc);
+        }
         // Shift+E before any plain-E binding: shortcut matching ignores Shift.
         if ctx.input_mut(|i| i.consume_shortcut(&NODE_BROWSER)) {
             self.tab = BottomTab::Graph;

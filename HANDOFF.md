@@ -16,7 +16,7 @@ Last updated 2026-10-28 (end of session 5). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~13,300 lines of Rust + Python. Tests: 64 library + 10 CLI + 25 GUI
+- ~13,300 lines of Rust + Python. Tests: 64 library + 10 CLI + 26 GUI
   (`cargo test --release`) and 8 Python (see "Working tips"), all passing.
   Clippy is clean apart from two old style lints (`Graph::from_str` name,
   `chunks_exact_mut(4)` in media.rs).
@@ -69,15 +69,6 @@ report back after a few milestones.
    `gui/overlay.rs` (`Geo::Points`, `Overlays::points` = the selected
    vertex indices, `press` / `apply` / `draw`) plus shortcuts in
    `gui/main.rs`:
-   - **Box-select vertices:** dragging on empty viewer space with a
-     Roto/Polygon selected currently pans (`viewer.rs`: pan unless
-     `overlays.dragging()`). Make a drag that starts off the shape (and
-     off any handle) draw a selection rectangle instead, Shift adding to
-     the selection; keep middle-drag panning. The curve editor already has
-     box select (`curve_editor.rs`) to borrow the feel from.
-   - **Select all:** Ctrl+A in the viewer selects every vertex of the
-     selected shape (check it doesn't clash with other Ctrl+A uses; skip
-     while a text field has focus).
    - **Transform box:** with 2+ vertices selected, draw their bounding box
      with corner/edge scale handles, a rotate handle and a center to move.
      Apply through `anim::edit_all`-style edits at the current frame
@@ -270,6 +261,13 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   box → `Part::TrackOffset(i)`; boxes and corner sizing use point +
   offset; a dashed line ties the boxes to the point. Panel: "Clear
   offsets" while any is set.
+- **Session 6, part 1**: box select and select all for Polygon/Roto. A
+  press on empty space (no handle, no Ctrl) starts `Part::Marquee`;
+  `drag_to` reselects the vertices inside the rectangle from
+  `Drag::start` to `Drag::now`, on top of `Overlays::marquee_base` (the
+  selection when Shift was held, else empty). Left-drag no longer pans
+  with a shape selected; middle-drag does. ⌘A → `select_all_points`
+  (`gui/main.rs` shortcuts, skipped while a text field has focus).
 
 ## Architecture in one page
 
