@@ -1323,7 +1323,7 @@ multi-layer out); later session, after M9.
   and build with a separate `CARGO_TARGET_DIR`. Commit only reported
   paths (never `git add -A`); if a shared file holds another worker's
   hunk, stage a filtered copy with `git hash-object -w` + `git
-  update-index --cacheinfo`. Check reported files for leftover debug
+  update-index --add --cacheinfo` (`--add` is needed for new files). Check reported files for leftover debug
   tests before committing (one slipped into 0.0.32). **Snapshot first:**
   copy the reported files to a scratch folder before testing, test that
   copy on HEAD, stage exactly those blobs, and build the committed HEAD
