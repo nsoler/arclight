@@ -42,9 +42,10 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
     (depth, P, N, uv, id, matte.<node>, holdout).
   - **Not assigned yet:** (d) materials, lights and lighting passes;
     (e) motion vectors, zmerge, glTF.
-  - At this update the tree had uncommitted worker files (`src/mesh.rs`,
-    `src/lib.rs`, `src/render3d.rs`); nothing of M10 is committed yet.
-    Next version: **0.9.12**.
+  - **0.9.12 (MathWiz): mesh.rs step 1 committed** (Material also has
+    `opacity`, `specular: [f32;3]`; helpers smooth_normals / flat /
+    face_normal). Next: MathWiz OBJ + MTL (+ `examples/geo/` sample);
+    3DWorker's render3d triangles in progress.
 - **Ask the user first** how the Mac builds (v0.9.11 universal DMG) went
   on their M4 Pro, and whether anyone tried an Intel Mac. Mac-only bugs
   come first.
@@ -255,7 +256,7 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.11**.
+  in the same commit as the change. Current: **0.9.12**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

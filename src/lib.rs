@@ -18,6 +18,7 @@ pub mod graph;
 pub mod image;
 pub mod link;
 pub mod media;
+pub mod mesh;
 #[cfg(unix)]
 pub mod mcp;
 pub mod nodal;

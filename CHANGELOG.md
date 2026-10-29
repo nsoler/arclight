@@ -11,6 +11,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.12 — 2026-10-29
+
+- 3D meshes, engine side (`src/mesh.rs`): triangle meshes with normals
+  and texture coordinates, materials (unlit, Lambert, Blinn; color,
+  opacity, texture, specular, roughness, emission), and Cube, Sphere,
+  Cylinder and Plane generators with sizes and segment counts. Not yet
+  in the node graph or the renderer (M10 step a).
+
 ## 0.9.11 — 2026-10-29
 
 - Camera Tracker: **Solve** setting Auto / Free move / Tripod, and
