@@ -8,8 +8,8 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
 
 ## Start here (next session)
 
-- **State:** version **0.0.36**, commit `075023e` (plus the handoff
-  commit after it). `main`, `wip-ns-effects` and both remote branches
+- **State:** version **0.8.1** (0.0.36 renumbered at the user's
+  request), at the end of session 8. `main`, `wip-ns-effects` and both remote branches
   match; the tree is clean. Latest release: **v0.0.36**
   (github.com/nsoler/arclight/releases/tag/v0.0.36): Apple arm64 DMG,
   Linux x86_64 tarball, `arclt` wheels (macOS arm64, Linux manylinux2014)
@@ -72,11 +72,13 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
   any README/HANDOFF notes. The master checks and commits only those
   paths, and replies when it's in. (A `git add -A` by one session once
   swept another's unfinished files into its commit; this prevents that.)
-- **Versioning (standing instruction, 2026-10-28):** Arclight is alpha,
-  `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
-  → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
+- **Versioning (standing instruction, 2026-10-28; renumbered
+  2026-10-29):** Arclight is alpha, `0.8.x` (the user renumbered 0.0.36
+  to **0.8.1**: their earlier numbering was a mistake; releases before
+  that are v0.0.x). Every feature or change that ships bumps the last
+  number (0.8.1 → 0.8.2 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.36**.
+  in the same commit as the change. Current: **0.8.1**.
 - ~23,200 lines of Rust + Python. Tests: 134 library + 10 CLI + 46 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

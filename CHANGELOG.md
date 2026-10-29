@@ -1,11 +1,18 @@
 # Changelog
 
-Arclight is alpha software: versions are `0.0.x`, and every feature or
-change that ships bumps the last number (0.0.15, 0.0.16, …). The version is
+Arclight is alpha software: versions are `0.8.x` (renumbered from
+`0.0.36` to `0.8.1` on 2026-10-29 at the user's request; nothing else
+changed then), and every feature or change that ships bumps the last
+number (0.8.1, 0.8.2, …). The version is
 set in `Cargo.toml` (also `python/Cargo.toml` and
 `plugins/example/Cargo.toml`, kept in step) and shows in the GUI's Help
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
+
+## 0.8.1 — 2026-10-29
+
+- Version numbering moves to 0.8.x: this is 0.0.36 renumbered, with no
+  other change. Later versions go 0.8.2, 0.8.3, …
 
 ## 0.0.36 — 2026-10-29
 
