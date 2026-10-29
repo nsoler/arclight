@@ -42,6 +42,18 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
     its connected scene input, e.g. Scanline Render's; a Viewer node
     stands for what feeds it). No scene: a message; with a scene, a
     placeholder in `Viewer::ui_3d` until `Viewport3d::ui` replaces it.
+  - **0.9.2 (mathwiz step 2):** `src/gui/gizmo3d.rs`, maths only (under
+    `#[allow(dead_code)]` in main.rs until step 3): a `View` trait
+    (project, ray, pixels_per_unit, view_dir; 3DWorker's `Projector`
+    will implement it) and `Gesture` (Move / Rotate / Scale from an
+    object's Trs and world matrix). Axis move = the axis line's nearest
+    point to the pointer ray; free = view plane; plane / Shift-exclude =
+    ray-plane hit; rotate = accumulated turn about the screen center
+    (past 180°), trackball 0.5°/pt; world turns map back to the Euler
+    triple nearest the start; scale = distance ratio. X/Y/Z cycle global
+    → local → free; typed values win over the pointer; Ctrl snaps 1 /
+    15° / 0.1; `cancel()`, `Trs::reset`, `describe()` for the header.
+    Parented params handled. 8 tests.
 - **Next work, in order:** (1) anything from the Mac test; (2) the
   hand checks listed below for session 8's GUI work; (3) **M9, the 3D
   viewport** (fully specified in `docs/phase-4-plan.md`, "Milestone 9 in
@@ -99,7 +111,7 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.1**.
+  in the same commit as the change. Current: **0.9.2**.
 - ~23,200 lines of Rust + Python. Tests: 134 library + 10 CLI + 46 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

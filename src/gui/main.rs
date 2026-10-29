@@ -7,6 +7,9 @@
 mod camera_tracker;
 mod curve_editor;
 mod doc;
+// Used by the viewer from M9 step 3 (G / R / S); only its tests until then.
+#[allow(dead_code)]
+mod gizmo3d;
 mod node_editor;
 mod overlay;
 mod properties;

@@ -11,6 +11,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.2 — 2026-10-29
+
+- Groundwork for moving, rotating and scaling in the 3D view (no UI
+  yet): the gizmo and G / R / S maths: axis, plane and free moves at the
+  object's depth, ring and trackball rotation, scaling, X / Y / Z
+  constraints (global, local, Shift to exclude), typed values, snapping,
+  cancel and reset.
+
 ## 0.9.1 — 2026-10-29
 
 - Viewer: a 2D / 3D toggle in the toolbar (Tab over the viewer switches,
