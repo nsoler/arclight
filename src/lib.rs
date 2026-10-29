@@ -20,6 +20,7 @@ pub mod mcp;
 pub mod ops;
 pub mod plugin;
 pub mod render;
+pub mod render3d;
 pub mod scene;
 pub mod session;
 pub mod shape;

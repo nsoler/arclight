@@ -37,7 +37,7 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.28**.
+  in the same commit as the change. Current: **0.0.29**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -904,8 +904,25 @@ unchanged. `src/scene.rs`: `Scene {cameras, cards, points}`,
 hand: dragging wires between 3D nodes, blue wire drawing. Tests:
 `scene::cards_and_cameras_from_params`,
 `scene::scenes_travel_along_typed_wires`.
-Next: M4, Scanline Render (and the viewer saying "scene: …" instead of
-an empty frame).
+**M4 done (v0.0.29): Scanline Render.** `render3d::render(scene, cam,
+format, samples, background)`: `triangles()` clips each card quad at the
+near plane (`clip_near`, Sutherland–Hodgman) and fans it into `Tri`s with
+screen bounds; rows in parallel, an n×n sample grid per pixel,
+barycentric tests per card (one hit per card), perspective-correct uv via
+1/depth, bilinear lookup clamped to the card image's frame; hits sorted
+by depth and composited front to back; depth = nearest hit with alpha >
+0. `over_background` keeps the background's window and depth where
+nothing renders. ops.rs: `scanline_render` (in `SIZED_SOURCES`); the
+viewer names a scene's contents. Not done: mipmaps (minified cards alias
+unless samples go up), motion blur, zmerge. Checked: a 1080p scene
+(checkerboard floor and wall, a turned disc, tilted camera) renders
+correctly from the CLI in 0.12 s at 3×3 samples. Tests:
+`render3d::{a_card_filling_the_frame_renders_like_its_image,
+perspective_depth_order_transparency_and_edges,
+the_scanline_render_node_follows_the_camera,
+renders_over_a_background_and_draws_points}`.
+Next: M5, features + KLT (new `src/features.rs`; synthetic test shots
+rendered with Scanline Render).
 
 - 3D needs a scene system first: Camera (focal length, film back, transform,
   animatable), Card / geometry nodes, a Scene node, and a **scanline renderer**

@@ -10,6 +10,7 @@
 use crate::anim;
 use crate::color::{self, Rgba};
 use crate::geom;
+use crate::render3d;
 use crate::scene::{self, Scene};
 use crate::image::{IRect, Image, Size};
 use crate::media;
@@ -239,7 +240,7 @@ pub const DEFAULT_FORMAT: Size = Size { width: 1920, height: 1080 };
 
 /// Ops whose `width` / `height` set their frame when they have no input to
 /// take one from.
-const SIZED_SOURCES: [&str; 6] = ["constant", "checkerboard", "rectangle", "ellipse", "polygon", "roto"];
+const SIZED_SOURCES: [&str; 7] = ["constant", "checkerboard", "rectangle", "ellipse", "polygon", "roto", "scanline_render"];
 
 /// Give a source whose `width` / `height` is 0 (the default) the project's
 /// `format`. The graph evaluator calls this after resolving keyframes, so
@@ -666,6 +667,23 @@ pub static OPS: &[OpInfo] = &[
         overlay: Overlay::None,
         mask_base: None,
         help: "Gathers cameras, cards and other scenes into one scene.",
+    },
+    OpInfo {
+        name: "scanline_render",
+        label: "Scanline Render",
+        category: Category::Scene,
+        inputs: &[scene_in("scene"), scene_in("camera"), opt("background")],
+        params: &[
+            p!("width", "Width", FRAME_SIZE, 0),
+            p!("height", "Height", FRAME_SIZE, 0),
+            fixed!("samples", "Anti-aliasing", ParamKind::Int { min: 1, max: 8 }, 3),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Draws a scene's cards (and points, as dots) through a camera: the one on the camera input, \
+               else the scene's first. Over the background, in its frame, else Width × Height (0: the project's). \
+               Anti-aliasing takes that many samples across each pixel and down (3: nine). \
+               Adds a depth plane: each pixel's distance in front of the camera, 0 where nothing is.",
     },
     OpInfo {
         name: "lens_distort",
@@ -1230,6 +1248,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
             Ok(scene_output(img.format, Scene { cards: vec![scene::card(params, img)], ..Scene::default() }))
         }
         "scene" => gather(inputs),
+        "scanline_render" => scanline_render(params, inputs),
         "tracker" => tracker(params, inputs),
         "corner_pin" => corner_pin(params, inputs),
         "rectangle" | "ellipse" | "polygon" | "roto" => shape_op(op, params, inputs),
@@ -2169,6 +2188,27 @@ fn scene_output(format: Size, scene: Scene) -> Image {
     let mut out = Image::blank(format, IRect::default());
     out.scene = Some(std::sync::Arc::new(scene));
     out
+}
+
+#[derive(Deserialize)]
+struct ScanlineRender {
+    width: usize,
+    height: usize,
+    samples: usize,
+}
+
+fn scanline_render(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
+    let p: ScanlineRender = parse(params, "scanline_render")?;
+    let port = |i: usize| inputs.get(i).copied().flatten();
+    let scene = port(0).and_then(|img| img.scene.clone());
+    let camera = port(1)
+        .and_then(|img| img.scene.as_ref()?.cameras.first().cloned())
+        .or_else(|| scene.as_ref()?.cameras.first().cloned())
+        .context("no camera: connect a Camera to the camera input, or put one in the scene")?;
+    let bg = port(2);
+    let format = bg.map_or(source_size(p.width, p.height), |b| b.format);
+    let empty = Scene::default();
+    Ok(render3d::render(scene.as_deref().unwrap_or(&empty), &camera, format, p.samples, bg))
 }
 
 /// Everything in the connected scenes, in port order; the first one's

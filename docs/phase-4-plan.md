@@ -2,7 +2,7 @@
 
 Status: **agreed** (2026-10-29). The user chose the proposed option for
 D1–D4; D5 (viewport) and D6 (order) stand as proposed until milestone 9.
-Milestones 1–3 done. The work goes one milestone at a time, as in
+Milestones 1–4 done. The work goes one milestone at a time, as in
 `phase-0.6-plan.md`.
 
 ## Goal
@@ -218,7 +218,13 @@ then poses of in-between frames by PnP and a final pass).
    counts card textures for the frame cache.) `Output` enum, port kinds,
    node editor wire kinds; Camera, Card, Scene nodes; scenes in the
    cache. Tests: a scene's contents; refused wires; save / load.
-4. **Scanline Render.** Rasterizer, textures, depth plane, background,
+4. **Done (2026-10-29).** **Scanline Render.** (As built:
+   `src/render3d.rs`; per-pixel sample grid over the triangles in each
+   row (no z-buffer memory), cards composited front to back so their
+   alpha works, texture lookups clamped to the card image's frame (sharp
+   card edges, softened by the samples), no mipmaps yet; ports scene /
+   camera (else the scene's first camera) / background; 1080p with three
+   cards at 3×3 samples renders in ~0.1 s. zmerge still to do.) Rasterizer, textures, depth plane, background,
    anti-aliasing. Tests: a card facing the camera at the distance that
    makes it fill the frame renders like the image; depth equals that
    distance; perspective (a tilted card's near edge is wider); two

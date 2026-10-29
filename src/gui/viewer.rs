@@ -196,6 +196,11 @@ impl Viewer {
             painter.add(egui::Shape::dashed_line(&ring, egui::Stroke::new(1.0, Color32::from_rgb(120, 170, 220)), 6.0, 4.0));
         }
         self.overlays.draw(ui, &painter, &xf(self), size, doc, frame);
+        // A 3D scene has no pixels: say what's in it instead.
+        if let Some(scene) = &img.scene {
+            let text = format!("3D scene: {}\nConnect it to a Scanline Render to see it.", scene.describe());
+            painter.text(rect.center(), Align2::CENTER_CENTER, text, FontId::proportional(14.0), Color32::from_rgb(120, 190, 235));
+        }
 
         // Pixel readout, anywhere pixels are shown (overscan included).
         if let Some(hover) = resp.hover_pos() {

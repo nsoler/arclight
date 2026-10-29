@@ -7,6 +7,19 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.29 — 2026-10-29
+
+- Scanline Render node (3D): draws a scene's cards through a camera (the
+  camera input's, else the scene's first) into an image, over an optional
+  background (else Width × Height, 0 = the project format).
+  Perspective-correct textures, cards sorted by depth and composited front
+  to back (transparent parts of a card show what's behind), near-plane
+  clipping, anti-aliasing (samples across each pixel, default 3 = nine),
+  tracker points as dots, and a depth plane (distance in front of the
+  camera, 0 where empty; the background's depth shows through). Viewing a
+  Camera/Card/Scene node now says what the scene holds instead of showing
+  an empty frame. Phase 4 milestone 4.
+
 ## 0.0.28 — 2026-10-29
 
 - A link or formula that gives one number for a list param (a position,

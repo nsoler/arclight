@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.0.28** (alpha); see `CHANGELOG.md`.
+Version **0.0.29** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -213,11 +213,12 @@ result is blended back toward the main input (B for merge/keymix) by
 | `camera` | 0 | `focal` (mm), `film_back` [2] (mm), `translate`/`rotate`/`scale` [3], `near`, `far` | 3D: outputs a scene holding a camera (right-handed, Y up, looking down −Z; rotate in degrees, X then Y then Z) |
 | `card` | 1 | `translate`/`rotate`/`scale` [3], `size` [2] or null | 3D: puts its input image on a flat card (1 wide by default, keeping the image's aspect); outputs a scene |
 | `scene` | 4 scenes | — | 3D: gathers up to four cameras, cards or scenes into one scene |
+| `scanline_render` | scene, camera (scene, optional), background (optional) | `width`, `height` (0 = project format), `samples` (anti-aliasing, n×n per pixel, default 3) | 3D: draws the scene's cards through a camera (the camera input's, else the scene's first) over the background, with a `depth` plane (distance in front of the camera, 0 where empty; see it with the viewer's depth button); perspective-correct textures, cards composited front to back, tracker points as dots |
 
 3D nodes (Camera, Card, Scene) build a 3D scene: their blue wires carry
 scenes, not images, and only connect to scene inputs (the node editor,
-the session/MCP and the graph all refuse a mismatch). Viewing one shows an
-empty frame until Scanline Render arrives.
+the session/MCP and the graph all refuse a mismatch). Viewing a 3D node directly
+lists what its scene holds; Scanline Render draws it.
 
 Shape params, shared by `rectangle`, `ellipse`, `polygon` and `roto`: `width`,
 `height` (the frame when there's no background, 0 = the project format;
