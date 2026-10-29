@@ -285,7 +285,7 @@ report back after a few milestones.
    - Not planned: OpenFX hosting (large; its own project), licensing (the
      docs wanted another product's scheme copied; declined), `import_nuke`
      (originality rule).
-3. **Phase 4: 3D** — plan separately (see below). A 3D camera tracker
+3. **Phase 4: 3D** — planned in `docs/phase-4-plan.md` (see below). A 3D camera tracker
    would build on the 2D tracker.
 
 ## Session 4: automation, plugins, Python
@@ -857,6 +857,9 @@ only the part a downstream crop or the viewer needs) and tiling, now that
 windows exist.
 
 ### Phase 4: 3D (large; plan it separately)
+
+Plan: `docs/phase-4-plan.md` (proposed 2026-10-29 by worker wD:p4;
+decisions D1–D6 open, waiting for the user).
 
 - 3D needs a scene system first: Camera (focal length, film back, transform,
   animatable), Card / geometry nodes, a Scene node, and a **scanline renderer**
