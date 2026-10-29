@@ -3,7 +3,11 @@
 //! Inputs sit on a node's left edge, its output on the right. Drag from an
 //! output to an input (or the reverse) to connect; drag a connected input away
 //! to reroute or disconnect. Right-click the canvas, or press Shift+E for a
-//! searchable node browser, to add nodes. Optional ports draw hollow.
+//! searchable node browser, to add nodes; over a wire, the new node goes into
+//! it. Drop an unconnected node on a wire to splice it in; shake a node while
+//! dragging it to pull it out of its wires. Optional ports draw hollow. The
+//! minimap (lower right) pans on click/drag, zooms on scroll, fits on
+//! double-click.
 
 use crate::doc::{Doc, NODE_H, NODE_W};
 use arclight::ops::{self, Category};
@@ -13,6 +17,29 @@ use eframe::egui::{
 };
 
 const PORT_R: f32 = 5.5;
+/// How close (screen points) the pointer must be to a wire to pick it.
+const WIRE_GRAB: f32 = 7.0;
+/// A shake: this many reversals of drag direction within `SHAKE_SECS`.
+const SHAKE_FLIPS: usize = 3;
+const SHAKE_SECS: f64 = 0.7;
+const MINIMAP: Vec2 = Vec2::new(190.0, 120.0);
+
+/// A wire: `src`'s output into input `port` of `dst`.
+#[derive(Clone, Debug, PartialEq)]
+struct WireRef {
+    src: String,
+    dst: String,
+    port: usize,
+}
+
+/// Direction reversals while dragging a node, to spot a shake.
+#[derive(Default)]
+struct Shake {
+    node: String,
+    last: Vec2,
+    flips: Vec<f64>,
+    done: bool,
+}
 
 enum Wire {
     /// Dragging from a node's output toward an input.
@@ -29,6 +56,13 @@ pub struct NodeEditor {
     menu_at: Pos2,
     fit_pending: bool,
     browser: Option<Browser>,
+    /// The wire a node added from the menu or browser goes into.
+    target_wire: Option<WireRef>,
+    /// The wire a dragged, unconnected node would be dropped into.
+    drop_wire: Option<WireRef>,
+    shake: Shake,
+    /// The minimap's graph bounds, held while dragging in it.
+    minimap_bounds: Option<Rect>,
     pub rect: Rect,
 }
 
@@ -52,6 +86,10 @@ impl Default for NodeEditor {
             menu_at: Pos2::ZERO,
             fit_pending: true,
             browser: None,
+            target_wire: None,
+            drop_wire: None,
+            shake: Shake::default(),
+            minimap_bounds: None,
             rect: Rect::NOTHING,
         }
     }
@@ -134,11 +172,18 @@ impl NodeEditor {
         self.browser = Some(Browser { query: String::new(), at, sel: 0, just_opened: true });
     }
 
-    /// Add `op` at graph position `at`. With a node selected, the new node
-    /// takes it as its first input.
+    /// Add `op` at graph position `at`. Into the target wire when there is
+    /// one; else, with a node selected, the new node takes it as its first
+    /// input.
     fn place(&mut self, doc: &mut Doc, op: &OpInfo, at: Pos2) {
         let upstream = doc.selected.clone();
         let id = doc.add_node(op.name, [at.x, at.y]);
+        if let Some(w) = self.target_wire.take() {
+            if doc.insert_on_wire(&id, &w.src, &w.dst, w.port) {
+                doc.selected = Some(id);
+                return;
+            }
+        }
         if let Some(up) = upstream {
             if !op.inputs.is_empty() && doc.node(&up).is_some_and(|n| has_output(&n.op)) {
                 doc.connect(&up, &id, 0);
@@ -214,6 +259,9 @@ impl NodeEditor {
         let at = b.at;
         if close {
             self.browser = None;
+            if chosen.is_none() {
+                self.target_wire = None;
+            }
         }
         if let Some(op) = chosen {
             self.place(doc, op, self.to_graph(at));
@@ -249,7 +297,8 @@ impl NodeEditor {
         if self.fit_pending {
             self.fit_to(doc);
         }
-        self.navigate(ui, &bg);
+        let minimap = self.minimap_rect(doc);
+        self.navigate(ui, &bg, minimap);
         self.draw_grid(&painter);
 
         if bg.clicked() {
@@ -258,9 +307,13 @@ impl NodeEditor {
         if bg.secondary_clicked() {
             if let Some(p) = bg.interact_pointer_pos() {
                 self.menu_at = self.to_graph(p);
+                self.target_wire = self.wire_at(doc, p, None);
             }
         }
         bg.context_menu(|ui| self.add_menu(ui, doc));
+        if let Some(at) = self.browser.as_ref().filter(|b| b.just_opened).map(|b| b.at) {
+            self.target_wire = self.wire_at(doc, at, None);
+        }
         self.browser_ui(ui.ctx(), doc);
 
         if doc.graph.nodes.is_empty() {
@@ -282,15 +335,17 @@ impl NodeEditor {
             .collect();
         let rect_of = |id: &str| geo.iter().find(|g| g.0 == id).map(|g| g.2);
 
-        // Wires first, beneath the nodes.
+        // Wires first, beneath the nodes. The one a node would go into is lit.
         let wire_stroke = Stroke::new(2.0 * self.zoom.sqrt(), Color32::from_gray(150));
+        let lit = self.drop_wire.as_ref().or(self.target_wire.as_ref().filter(|_| self.browser.is_some()));
         for n in &doc.graph.nodes {
             let Some(to) = rect_of(&n.id) else { continue };
             for (i, src) in n.inputs.iter().enumerate() {
                 if let Some(from) = rect_of(src) {
                     let a = Self::out_port(from);
                     let b = Self::in_port(to, i, n.inputs.len());
-                    painter.add(bezier(a, b, wire_stroke));
+                    let on = lit.is_some_and(|w| w.src == *src && w.dst == n.id && w.port == i);
+                    painter.add(bezier(a, b, if on { Stroke::new(3.0, Color32::from_rgb(250, 190, 70)) } else { wire_stroke }));
                 }
             }
         }
@@ -301,6 +356,9 @@ impl NodeEditor {
             if resp.clicked() || resp.drag_started() {
                 doc.selected = Some(id.clone());
             }
+            if resp.drag_started() {
+                self.shake = Shake { node: id.clone(), ..Default::default() };
+            }
             if resp.dragged() {
                 let d = resp.drag_delta() / self.zoom;
                 if let Some(n) = doc.node_mut(id) {
@@ -309,6 +367,22 @@ impl NodeEditor {
                     p[1] += d.y;
                 }
                 doc.touched();
+                let now = ui.input(|i| i.time);
+                if self.shake.node == *id && self.shake.shaken(resp.drag_delta(), now) {
+                    doc.extract(id);
+                }
+                // An unconnected node can be dropped into a wire.
+                self.drop_wire = None;
+                if is_free(doc, id) {
+                    if let Some(p) = resp.interact_pointer_pos() {
+                        self.drop_wire = self.wire_at(doc, p, Some(id));
+                    }
+                }
+            }
+            if resp.drag_stopped() {
+                if let Some(w) = self.drop_wire.take() {
+                    doc.insert_on_wire(id, &w.src, &w.dst, w.port);
+                }
             }
             if resp.double_clicked() {
                 doc.view_node(id);
@@ -389,13 +463,97 @@ impl NodeEditor {
         if self.wire.is_some() {
             ui.ctx().request_repaint();
         }
+        if let Some(mm) = minimap {
+            self.minimap(ui, &painter, doc, mm);
+        }
     }
 
-    fn navigate(&mut self, ui: &egui::Ui, bg: &egui::Response) {
+    /// The wire within reach of screen point `p` (nearest first), leaving
+    /// out wires to or from `skip`.
+    fn wire_at(&self, doc: &Doc, p: Pos2, skip: Option<&str>) -> Option<WireRef> {
+        let rect_of = |id: &str| doc.node(id).map(|n| self.node_rect(n.pos.unwrap_or([0.0, 0.0])));
+        let mut best: Option<(f32, WireRef)> = None;
+        for n in &doc.graph.nodes {
+            let Some(to) = rect_of(&n.id) else { continue };
+            for (i, src) in n.inputs.iter().enumerate() {
+                let Some(from) = rect_of(src).filter(|_| skip != Some(src.as_str()) && skip != Some(n.id.as_str())) else { continue };
+                let d = bezier_distance(Self::out_port(from), Self::in_port(to, i, n.inputs.len()), p);
+                if d < WIRE_GRAB && best.as_ref().is_none_or(|b| d < b.0) {
+                    best = Some((d, WireRef { src: src.clone(), dst: n.id.clone(), port: i }));
+                }
+            }
+        }
+        best.map(|b| b.1)
+    }
+
+    /// The graph's bounds and the current view, in graph coordinates.
+    fn graph_bounds(&self, doc: &Doc) -> Rect {
+        let mut b = Rect::from_min_max(self.to_graph(self.rect.min), self.to_graph(self.rect.max));
+        for n in &doc.graph.nodes {
+            let p = n.pos.unwrap_or([0.0, 0.0]);
+            b = b.union(Rect::from_min_size(Pos2::new(p[0], p[1]), Vec2::new(NODE_W, NODE_H)));
+        }
+        b.expand(40.0)
+    }
+
+    /// Where the minimap sits, when there's a graph and room for it.
+    fn minimap_rect(&self, doc: &Doc) -> Option<Rect> {
+        let fits = self.rect.width() > MINIMAP.x * 2.0 && self.rect.height() > MINIMAP.y * 1.6;
+        (!doc.graph.nodes.is_empty() && fits).then(|| Rect::from_min_size(self.rect.right_bottom() - MINIMAP - Vec2::splat(10.0), MINIMAP))
+    }
+
+    /// Draw the minimap and handle it: click or drag to center the view
+    /// there, scroll to zoom about that spot, double-click to fit.
+    fn minimap(&mut self, ui: &egui::Ui, painter: &egui::Painter, doc: &Doc, mm: Rect) {
+        let resp = ui.interact(mm, Id::unique("node_minimap"), Sense::click_and_drag());
+        if resp.drag_started() {
+            self.minimap_bounds = Some(self.graph_bounds(doc));
+        }
+        if !resp.dragged() && !resp.drag_started() {
+            self.minimap_bounds = None;
+        }
+        let b = self.minimap_bounds.unwrap_or_else(|| self.graph_bounds(doc));
+        let s = (mm.width() / b.width()).min(mm.height() / b.height());
+        let to_map = |g: Pos2| mm.center() + (g - b.center()) * s;
+        let to_graph = |m: Pos2| b.center() + (m - mm.center()) / s;
+        let center_on = |ed: &mut NodeEditor, g: Pos2| ed.pan = ed.rect.size() / 2.0 - g.to_vec2() * ed.zoom;
+
+        if resp.double_clicked() {
+            self.fit();
+        } else if resp.clicked() || resp.dragged() {
+            if let Some(p) = resp.interact_pointer_pos() {
+                center_on(self, to_graph(p));
+            }
+        }
+        if let Some(h) = resp.hover_pos() {
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y + (i.zoom_delta() - 1.0) * 200.0);
+            if scroll != 0.0 {
+                self.zoom = (self.zoom * (scroll * 0.004).exp()).clamp(0.25, 3.0);
+                center_on(self, to_graph(h));
+            }
+        }
+
+        painter.rect(mm, 4.0, Color32::from_black_alpha(170), Stroke::new(1.0, Color32::from_gray(80)), egui::StrokeKind::Inside);
+        let clip = painter.with_clip_rect(mm);
+        for n in &doc.graph.nodes {
+            let p = n.pos.unwrap_or([0.0, 0.0]);
+            let r = Rect::from_min_max(to_map(Pos2::new(p[0], p[1])), to_map(Pos2::new(p[0] + NODE_W, p[1] + NODE_H)));
+            let color = ops::info(&n.op).map_or(Color32::from_gray(80), |i| category_color(i.category));
+            clip.rect_filled(r, 1.0, color);
+            if doc.selected.as_deref() == Some(n.id.as_str()) {
+                clip.rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_rgb(250, 190, 70)), egui::StrokeKind::Outside);
+            }
+        }
+        let view = Rect::from_min_max(to_map(self.to_graph(self.rect.min)), to_map(self.to_graph(self.rect.max)));
+        let hot = resp.hovered() || resp.dragged();
+        clip.rect_stroke(view, 1.0, Stroke::new(1.0, Color32::from_white_alpha(if hot { 230 } else { 150 })), egui::StrokeKind::Inside);
+    }
+
+    fn navigate(&mut self, ui: &egui::Ui, bg: &egui::Response, minimap: Option<Rect>) {
         if bg.dragged() {
             self.pan += bg.drag_delta();
         }
-        if !ui.rect_contains_pointer(self.rect) {
+        if !ui.rect_contains_pointer(self.rect) || minimap.is_some_and(|m| ui.rect_contains_pointer(m)) {
             return;
         }
         let (scroll, zoom, hover) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.pointer.hover_pos()));
@@ -501,6 +659,10 @@ impl NodeEditor {
     }
 
     fn add_menu(&mut self, ui: &mut egui::Ui, doc: &mut Doc) {
+        if let Some(w) = &self.target_wire {
+            ui.label(egui::RichText::new(format!("Insert between {} and {}", w.src, w.dst)).weak());
+            ui.separator();
+        }
         for (cat, name) in CATEGORIES {
             ui.menu_button(name, |ui| {
                 for op in ops::all().into_iter().filter(|o| o.category == cat) {
@@ -524,6 +686,50 @@ fn bezier(a: Pos2, b: Pos2, stroke: Stroke) -> CubicBezierShape {
     )
 }
 
+impl Shake {
+    /// Note a drag step `d` (screen points) at time `now`; true once, when
+    /// the drag direction has reversed `SHAKE_FLIPS` times within
+    /// `SHAKE_SECS`.
+    fn shaken(&mut self, d: Vec2, now: f64) -> bool {
+        if self.done || d.length() < 3.0 {
+            return false;
+        }
+        let dir = d.normalized();
+        if self.last != Vec2::ZERO && dir.dot(self.last) < -0.5 {
+            self.flips.push(now);
+        }
+        self.last = dir;
+        self.flips.retain(|&t| now - t <= SHAKE_SECS);
+        self.done = self.flips.len() >= SHAKE_FLIPS;
+        self.done
+    }
+}
+
+/// A node with an input and an output and no connections either way: one
+/// that can be dropped into a wire.
+fn is_free(doc: &Doc, id: &str) -> bool {
+    let Some(n) = doc.node(id) else { return false };
+    !n.inputs.is_empty() && has_output(&n.op) && n.inputs.iter().all(String::is_empty) && !doc.graph.nodes.iter().any(|m| m.inputs.iter().any(|i| i == id))
+}
+
+/// Distance from `p` to the wire drawn from `a` to `b` (see [`bezier`]).
+fn bezier_distance(a: Pos2, b: Pos2, p: Pos2) -> f32 {
+    let dx = ((b.x - a.x).abs() * 0.5).max(40.0);
+    let [c1, c2] = [a + Vec2::new(dx, 0.0), b - Vec2::new(dx, 0.0)];
+    let at = |t: f32| {
+        let u = 1.0 - t;
+        (a.to_vec2() * (u * u * u) + c1.to_vec2() * (3.0 * u * u * t) + c2.to_vec2() * (3.0 * u * t * t) + b.to_vec2() * (t * t * t)).to_pos2()
+    };
+    let pts: Vec<Pos2> = (0..=32).map(|i| at(i as f32 / 32.0)).collect();
+    pts.windows(2)
+        .map(|w| {
+            let (s, e) = (w[0], w[1]);
+            let t = ((p - s).dot(e - s) / (e - s).length_sq().max(1e-6)).clamp(0.0, 1.0);
+            s.lerp(e, t).distance(p)
+        })
+        .fold(f32::INFINITY, f32::min)
+}
+
 fn port_dot(painter: &egui::Painter, p: Pos2, zoom: f32, hot: bool, optional: bool) {
     let r = PORT_R * zoom.max(0.6);
     let color = if hot { Color32::from_rgb(250, 190, 70) } else { Color32::from_gray(210) };
@@ -538,7 +744,33 @@ fn port_dot(painter: &egui::Painter, p: Pos2, zoom: f32, hot: bool, optional: bo
 
 #[cfg(test)]
 mod tests {
-    use super::browse;
+    use super::*;
+
+    #[test]
+    fn shaking_needs_quick_reversals() {
+        let mut s = Shake::default();
+        let (r, l) = (Vec2::new(10.0, 0.0), Vec2::new(-10.0, 0.0));
+        // Steady motion and tiny jitters don't count.
+        assert!(!(0..10).any(|i| s.shaken(r, i as f64 * 0.01)));
+        assert!(!s.shaken(Vec2::new(-1.0, 0.0), 0.11));
+        // Three reversals in quick succession do, once.
+        assert!(!s.shaken(l, 0.2));
+        assert!(!s.shaken(r, 0.3));
+        assert!(s.shaken(l, 0.4));
+        assert!(!s.shaken(r, 0.5));
+        // Slow back-and-forth doesn't.
+        let mut s = Shake::default();
+        assert!(!s.shaken(r, 0.0) && !s.shaken(l, 1.0) && !s.shaken(r, 2.0) && !s.shaken(l, 3.0));
+    }
+
+    #[test]
+    fn wire_distance_follows_the_curve() {
+        let (a, b) = (Pos2::new(0.0, 0.0), Pos2::new(200.0, 100.0));
+        // The curve passes through its midpoint (by symmetry).
+        assert!(bezier_distance(a, b, Pos2::new(100.0, 50.0)) < 0.5);
+        assert!(bezier_distance(a, b, Pos2::new(100.0, 80.0)) > 10.0);
+        assert!(bezier_distance(a, b, a) < 1e-3);
+    }
 
     #[test]
     fn browser_search_matches_words_and_ranks_prefixes() {

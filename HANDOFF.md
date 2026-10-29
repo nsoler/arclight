@@ -16,7 +16,7 @@ Last updated 2026-10-28 (end of session 5). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~13,300 lines of Rust + Python. Tests: 66 library + 10 CLI + 27 GUI
+- ~13,300 lines of Rust + Python. Tests: 66 library + 10 CLI + 30 GUI
   (`cargo test --release`) and 8 Python (see "Working tips"), all passing.
   Clippy is clean apart from two old style lints (`Graph::from_str` name,
   `chunks_exact_mut(4)` in media.rs).
@@ -274,6 +274,19 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   through `flat()`: file writes, video encode, `image_stats`, previews,
   Python `pixels`, plugin inputs (ABI v1), tracker `Luma`, the viewer.
   Every op still outputs window = frame.
+- **Session 6, part 4** (user request, between Phase 0.6 milestones): node
+  graph insert / shake / minimap. `Doc::insert_on_wire(node, src, dst,
+  port)` and `Doc::extract(node)` (heals like delete, keeps the node).
+  `node_editor.rs`: `wire_at` (nearest wire within `WIRE_GRAB`, via
+  `bezier_distance` on the same curve `bezier` draws); `target_wire` (set
+  on right-click / Shift+E over a wire, used by `place`) and `drop_wire`
+  (while dragging a node that `is_free`, spliced in on release; lit while
+  pending); `Shake::shaken` (3 direction reversals within 0.7 s →
+  `extract`, once per drag); `minimap` (lower right, hidden when the
+  editor is small; graph bounds frozen while dragging in it, scroll zooms
+  about the hovered spot). Unit tests cover the graph edits, shake
+  detection and wire distance; the drag gestures themselves haven't been
+  tried with a mouse.
 
 ## Architecture in one page
 

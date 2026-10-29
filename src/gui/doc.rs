@@ -212,6 +212,48 @@ impl Doc {
         true
     }
 
+    /// Splice `node` into the wire from `src` to input `port` of `dst`:
+    /// `src` feeds the node's first input and the node feeds that port.
+    /// Refuses (returning false, changing nothing) when the node has no
+    /// input, is an end of the wire, or would close a cycle.
+    pub fn insert_on_wire(&mut self, node: &str, src: &str, dst: &str, port: usize) -> bool {
+        let ok = node != src
+            && node != dst
+            && self.node(node).is_some_and(|n| !n.inputs.is_empty() && n.op != "viewer")
+            && self.node(dst).is_some_and(|n| n.inputs.get(port).is_some_and(|s| s == src))
+            && !self.is_upstream(node, src)
+            && !self.is_upstream(dst, node);
+        if !ok {
+            return false;
+        }
+        self.node_mut(node).unwrap().inputs[0] = src.to_string();
+        self.node_mut(dst).unwrap().inputs[port] = node.to_string();
+        self.changed();
+        true
+    }
+
+    /// Take `node` out of the graph's wires, keeping it: everything it fed
+    /// is fed by its first input instead (as when deleting it), and its own
+    /// inputs are cleared. False when it had no connections.
+    pub fn extract(&mut self, id: &str) -> bool {
+        let Some(heal) = self.node(id).map(|n| n.inputs.first().cloned().unwrap_or_default()) else { return false };
+        let mut changed = false;
+        for n in &mut self.graph.nodes {
+            for inp in n.inputs.iter_mut().filter(|i| *i == id) {
+                *inp = heal.clone();
+                changed = true;
+            }
+        }
+        for inp in self.node_mut(id).unwrap().inputs.iter_mut().filter(|i| !i.is_empty()) {
+            inp.clear();
+            changed = true;
+        }
+        if changed {
+            self.changed();
+        }
+        changed
+    }
+
     pub fn disconnect(&mut self, to: &str, port: usize) {
         if let Some(n) = self.node_mut(to) {
             if let Some(slot) = n.inputs.get_mut(port) {
@@ -450,6 +492,29 @@ mod tests {
         assert!(pos("src")[1] > 0.0, "a new source goes below the graph");
         assert_eq!(pos("b")[0], NODE_W + 50.0, "right of its input");
         assert!(pos("b")[1] > 0.0, "moved down off the occupied spot");
+    }
+
+    #[test]
+    fn nodes_splice_into_wires_and_extract_from_them() {
+        let mut d = Doc::new(Graph::default(), None);
+        let src = d.add_node("constant", [0.0, 0.0]);
+        let merge = d.add_node("merge", [0.0, 0.0]);
+        let blur = d.add_node("blur", [0.0, 0.0]);
+        d.connect(&src, &merge, 1);
+        assert!(d.insert_on_wire(&blur, &src, &merge, 1));
+        let inputs = |d: &Doc, id: &str| d.node(id).unwrap().inputs.clone();
+        assert_eq!((inputs(&d, &blur)[0].as_str(), inputs(&d, &merge)[1].as_str()), (src.as_str(), blur.as_str()));
+        // Not onto a wire that isn't there, nor into its own wire.
+        assert!(!d.insert_on_wire(&blur, &src, &merge, 0));
+        assert!(!d.insert_on_wire(&blur, &blur, &merge, 1));
+        // A source has no input to take the wire.
+        let other = d.add_node("constant", [0.0, 0.0]);
+        assert!(!d.insert_on_wire(&other, &blur, &merge, 1));
+        // Extracting heals the wire and frees the node.
+        assert!(d.extract(&blur));
+        assert_eq!(inputs(&d, &merge)[1], src);
+        assert!(inputs(&d, &blur).iter().all(String::is_empty));
+        assert!(!d.extract(&blur));
     }
 
     fn doc() -> Doc {
