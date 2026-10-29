@@ -11,6 +11,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.39 — 2026-10-29
+
+- Particle rendering engine (`src/particles_render.rs`): round or square
+  sprites, textured by an image or a sequence by age, opacity over
+  life, over or additive, through a camera with depth (hidden behind
+  nearer geometry) or straight onto frame pixels in 2D; per-particle
+  object instances (oriented by velocity or spin) for the 3D renderer.
+  No nodes yet (M13 steps c–d, engine).
+
 ## 0.9.38 — 2026-10-29
 
 - Light 2D engine (`src/light2d.rs`): spot, area (rect / ellipse),
