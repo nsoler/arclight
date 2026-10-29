@@ -8,6 +8,11 @@ app (`arclight-gui`) with a node editor, viewer, player and properties panels.
 This is original work — its design and code are not derived from any existing
 compositing product.
 
+**Download the latest release:**
+[github.com/nsoler/arclight/releases/latest](https://github.com/nsoler/arclight/releases/latest)
+(Linux x86_64 tarball, macOS universal DMG for Apple Silicon and Intel,
+Python wheels). All releases: [Releases](https://github.com/nsoler/arclight/releases).
+
 ## Design
 
 - **Pixels**: 32-bit float RGBA.

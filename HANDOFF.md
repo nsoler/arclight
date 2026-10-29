@@ -395,8 +395,12 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
   merged. The Intel half is cross-compiled on the macos-14 runner and
   checked with `lipo -archs`; it runs there only if the runner has
   Rosetta, and hasn't been run on a real Intel Mac yet.
-- **Releases (session 7, user request):** GitHub releases, marked
-  pre-release, tagged `v<version>`. First: `v0.0.19`. To make one at the
+- **Releases (session 7, user request):** GitHub releases tagged
+  `v<version>`. **Since v0.9.27 (user request, session 10) each new
+  release is marked Latest, not pre-release** (`gh release create …
+  --latest`; the workflows' fallback create uses `--latest` too), so
+  github.com/nsoler/arclight/releases/latest and the repo's Releases
+  sidebar point at it; README links there. Older ones stay pre-release. First: `v0.0.19`. To make one at the
   current commit: tag it (`git tag -a v0.0.N -m "Arclight 0.0.N (alpha)"`)
   and push the tag; the macOS workflow builds the DMG and attaches it to
   the tag's release (`gh release upload`, creating the release if needed).

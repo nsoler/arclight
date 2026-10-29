@@ -55,7 +55,7 @@ jobs:
           # wheels.yml may be creating the same release at the same moment:
           # a failed create is fine as long as the release then exists.
           gh release view "$tag" >/dev/null 2>&1 \
-            || gh release create "$tag" --title "Arclight ${tag#v} (alpha)" --prerelease --notes "See CHANGELOG.md." \
+            || gh release create "$tag" --title "Arclight ${tag#v} (alpha)" --latest --notes "See CHANGELOG.md." \
             || true
           gh release view "$tag" >/dev/null 2>&1 || { sleep 10; gh release view "$tag" >/dev/null; }
           gh release upload "$tag" dist/*.dmg --clobber
