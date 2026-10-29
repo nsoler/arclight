@@ -16,7 +16,7 @@ Last updated 2026-10-28 (session 7). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~14,400 lines of Rust + Python. Tests: 73 library + 10 CLI + 37 GUI
+- ~14,400 lines of Rust + Python. Tests: 74 library + 10 CLI + 37 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
 - **Release build (end of session 6):** `cargo build --release --workspace`
   and `python/build.sh` were run at the final commit, so
@@ -82,7 +82,7 @@ report back after a few milestones.
    From/To is a 512 square (add "From = image corners"); per-track tracker
    box sizes and offsets are only editable in the viewer; no filtering when
    Transform / Tracker output / Corner Pin shrink the image (aliasing);
-   shape motion blur.
+   motion blur for Transform / Corner Pin (shapes have it).
 2. **Session-4 follow-ups** (small to medium):
    - Python plugins (custom ops written in Python): embed Python in the
      host via the `python/` crate, or run them out of process.
@@ -407,6 +407,15 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
 - **Session 7, part 8**: `merge_into_wire` now puts the dropped node in A
   (over) and the wire's source in B, so a keyed foreground lands over its
   background.
+- **Session 7, part 9** (user request): shape motion blur. Shapes have
+  `motion_blur` (samples, 0/1 off), `shutter` (frames, 0.5) and
+  `shutter_offset` (centered/start/end), all fixed (not animatable).
+  `resolve_params` → `add_motion_samples`: when any param is animated, the
+  shape's params at each sample time (`resolve_at`, f64 frames) go into a
+  hidden `_motion` array, so the cache key sees them. `shape_op` builds an
+  outline per sample (`shape_outline`), reaches over their union
+  (`outline_bounds`), and averages coverage. Viewer handles show the
+  shape at the frame itself.
 - **CorridorKey** (AI keyer, github.com/nikopueringer/CorridorKey; the
   OFX port gitcapoom/corridorkey_ofx is Windows/Resolve-only): the user
   deferred it. If revisited: run upstream's PyTorch engine (Linux OK; the

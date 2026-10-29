@@ -239,6 +239,12 @@ fn source_size(width: usize, height: usize) -> Size {
 const FEATHER: ParamKind = ParamKind::Float { min: 0.0, max: 200.0 };
 const OPACITY: ParamKind = ParamKind::Float { min: 0.0, max: 1.0 };
 const SHAPE_OPS: &[&str] = &["over", "subtract"];
+/// Motion blur samples per frame; 0 or 1 is off.
+const MOTION_SAMPLES: ParamKind = ParamKind::Int { min: 0, max: 64 };
+/// How long the shutter is open, in frames.
+const SHUTTER: ParamKind = ParamKind::Float { min: 0.0, max: 2.0 };
+const SHUTTER_OFFSETS: &[&str] = &["centered", "start", "end"];
+const SHAPE_OP_NAMES: [&str; 4] = ["rectangle", "ellipse", "polygon", "roto"];
 const FILL_RULES: &[&str] = &["non-zero", "even-odd"];
 /// Help text for shape ops: their own sentence plus what they share.
 macro_rules! shape_help {
@@ -247,7 +253,10 @@ macro_rules! shape_help {
             $s,
             " Without a background the canvas is Width × Height; with one, the shape \
              is drawn over it (or, with Subtract, cut out of its alpha). Feather is the \
-             width of the soft edge, centered on the outline. The alpha feeds mask inputs directly."
+             width of the soft edge, centered on the outline. Motion blur (samples per \
+             frame, 0 for off) averages the animated shape over the shutter: Shutter frames \
+             long, centered on the frame or starting or ending there. The alpha feeds mask \
+             inputs directly."
         )
     };
 }
@@ -560,6 +569,9 @@ pub static OPS: &[OpInfo] = &[
             p!("feather", "Feather", FEATHER, 0.0),
             fixed!("invert", "Invert", ParamKind::Bool, false),
             fixed!("operation", "Operation", ParamKind::Choice(SHAPE_OPS), "over"),
+            fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
+            fixed!("shutter", "Shutter", SHUTTER, 0.5),
+            fixed!("shutter_offset", "Shutter offset", ParamKind::Choice(SHUTTER_OFFSETS), "centered"),
         ],
         overlay: Overlay::Box { center: "center", size: "size", rotate: "rotate", ellipse: false },
         mask_base: None,
@@ -581,6 +593,9 @@ pub static OPS: &[OpInfo] = &[
             p!("feather", "Feather", FEATHER, 0.0),
             fixed!("invert", "Invert", ParamKind::Bool, false),
             fixed!("operation", "Operation", ParamKind::Choice(SHAPE_OPS), "over"),
+            fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
+            fixed!("shutter", "Shutter", SHUTTER, 0.5),
+            fixed!("shutter_offset", "Shutter offset", ParamKind::Choice(SHUTTER_OFFSETS), "centered"),
         ],
         overlay: Overlay::Box { center: "center", size: "size", rotate: "rotate", ellipse: true },
         mask_base: None,
@@ -601,6 +616,9 @@ pub static OPS: &[OpInfo] = &[
             p!("feather", "Feather", FEATHER, 0.0),
             fixed!("invert", "Invert", ParamKind::Bool, false),
             fixed!("operation", "Operation", ParamKind::Choice(SHAPE_OPS), "over"),
+            fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
+            fixed!("shutter", "Shutter", SHUTTER, 0.5),
+            fixed!("shutter_offset", "Shutter offset", ParamKind::Choice(SHUTTER_OFFSETS), "centered"),
         ],
         overlay: Overlay::Points("points"),
         mask_base: None,
@@ -628,6 +646,9 @@ pub static OPS: &[OpInfo] = &[
             p!("feather", "Feather", FEATHER, 0.0),
             fixed!("invert", "Invert", ParamKind::Bool, false),
             fixed!("operation", "Operation", ParamKind::Choice(SHAPE_OPS), "over"),
+            fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
+            fixed!("shutter", "Shutter", SHUTTER, 0.5),
+            fixed!("shutter_offset", "Shutter offset", ParamKind::Choice(SHUTTER_OFFSETS), "centered"),
         ],
         overlay: Overlay::Points("points"),
         mask_base: None,
@@ -779,11 +800,23 @@ pub fn resolve_params(op: &str, params: &Value, frame: i64) -> Value {
         }
         return out;
     }
+    let mut resolved = resolve_at(op, map, frame as f64);
+    if op == "tracker" {
+        add_reference_tracks(params, &mut resolved);
+    }
+    if SHAPE_OP_NAMES.contains(&op) {
+        add_motion_samples(op, map, frame, &mut resolved);
+    }
+    resolved
+}
+
+/// `map`'s values at time `t` (a frame, or between frames).
+fn resolve_at(op: &str, map: &Map<String, Value>, t: f64) -> Value {
     let specs = info(op).map(|i| i.params).unwrap_or(&[]);
     let resolved = map
         .iter()
         .map(|(k, v)| {
-            let mut v = anim::evaluate(v, frame as f64);
+            let mut v = anim::evaluate(v, t);
             if specs.iter().any(|s| s.name == k && matches!(s.kind, ParamKind::Int { .. })) {
                 if let Some(x) = v.as_f64() {
                     v = json!(x.round() as i64);
@@ -792,11 +825,25 @@ pub fn resolve_params(op: &str, params: &Value, frame: i64) -> Value {
             (k.clone(), v)
         })
         .collect();
-    let mut resolved = Value::Object(resolved);
-    if op == "tracker" {
-        add_reference_tracks(params, &mut resolved);
+    Value::Object(resolved)
+}
+
+/// For an animated shape with motion blur on, the shape's params at each
+/// sample time across the shutter, as `_motion` (also in the cache key).
+fn add_motion_samples(op: &str, map: &Map<String, Value>, frame: i64, out: &mut Value) {
+    let n = out.get("motion_blur").and_then(Value::as_i64).unwrap_or(0);
+    let shutter = out.get("shutter").and_then(Value::as_f64).unwrap_or(0.5);
+    if n < 2 || shutter <= 0.0 {
+        return;
     }
-    resolved
+    let start = match out.get("shutter_offset").and_then(Value::as_str) {
+        Some("start") => 0.0,
+        Some("end") => -shutter,
+        _ => -shutter / 2.0,
+    };
+    let samples: Vec<Value> =
+        (0..n).map(|i| resolve_at(op, map, frame as f64 + start + shutter * i as f64 / (n - 1) as f64)).collect();
+    out["_motion"] = Value::Array(samples);
 }
 
 /// Give a Tracker's resolved params its tracks' positions at the reference
@@ -1759,11 +1806,9 @@ struct Polygon {
     fill_rule: String,
 }
 
-fn shape_op(op: &str, params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
-    let style: ShapeStyle = parse(params, op)?;
-    let bg = inputs.first().copied().flatten();
-    let format = bg.map_or(source_size(style.width, style.height), |b| b.format);
-    let (outline, rule) = match op {
+/// A shape op's outline (and fill rule) from its resolved params.
+fn shape_outline(op: &str, params: &Value) -> Result<(Vec<Pt>, FillRule)> {
+    Ok(match op {
         "rectangle" | "ellipse" => {
             let b: BoxShape = parse(params, op)?;
             let f = if op == "rectangle" { shape::rectangle } else { shape::ellipse };
@@ -1775,28 +1820,59 @@ fn shape_op(op: &str, params: &Value, inputs: &[Option<&Image>]) -> Result<Image
             let outline = if op == "roto" { shape::spline(&p.points) } else { p.points.as_chunks::<2>().0.to_vec() };
             (outline, rule)
         }
+    })
+}
+
+/// Pixels an outline can touch with a soft edge `feather` wide (centered
+/// on it).
+fn outline_bounds(outline: &[Pt], feather: f32) -> IRect {
+    let pad = (feather.max(1.0) / 2.0).ceil() as i32 + 1;
+    let (lo, hi) = outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).fold(
+        ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]),
+        |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]),
+    );
+    if lo[0] <= hi[0] {
+        IRect::new(lo[0].floor() as i32, lo[1].floor() as i32, hi[0].ceil() as i32, hi[1].ceil() as i32).expand(pad)
+    } else {
+        IRect::default()
+    }
+}
+
+fn shape_op(op: &str, params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
+    let style: ShapeStyle = parse(params, op)?;
+    let bg = inputs.first().copied().flatten();
+    let format = bg.map_or(source_size(style.width, style.height), |b| b.format);
+    // One outline (with its feather), or with motion blur one per sample
+    // across the shutter, averaged.
+    let samples: Vec<(Vec<Pt>, FillRule, f32)> = match params.get("_motion").and_then(Value::as_array) {
+        Some(motion) => motion
+            .iter()
+            .map(|p| {
+                let feather = p.get("feather").and_then(Value::as_f64).map_or(style.feather, |f| f as f32);
+                shape_outline(op, p).map(|(o, r)| (o, r, feather))
+            })
+            .collect::<Result<_>>()?,
+        None => {
+            let (o, r) = shape_outline(op, params)?;
+            vec![(o, r, style.feather)]
+        }
     };
-    // Coverage only where the shape can reach: its outline's bounds plus
-    // the feather (centered on the edge), within the frame. Inverted, it
-    // covers the rest of the frame.
+    // Coverage only where the shape can reach: its outlines' bounds plus
+    // the feather, within the frame. Inverted, it covers the rest of the
+    // frame.
     let frame = IRect::frame(format);
     let reach = if style.invert {
         frame
     } else {
-        let pad = (style.feather.max(1.0) / 2.0).ceil() as i32 + 1;
-        let (lo, hi) = outline.iter().filter(|p| p.iter().all(|v| v.is_finite())).fold(
-            ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]),
-            |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]),
-        );
-        let bounds = if lo[0] <= hi[0] {
-            IRect::new(lo[0].floor() as i32, lo[1].floor() as i32, hi[0].ceil() as i32, hi[1].ceil() as i32).expand(pad)
-        } else {
-            IRect::default()
-        };
-        bounds.intersect(&frame)
+        samples.iter().fold(IRect::default(), |u, (o, _, f)| u.union(&outline_bounds(o, *f))).intersect(&frame)
     };
-    let shifted: Vec<Pt> = outline.iter().map(|p| [p[0] - reach.x0 as f32, p[1] - reach.y0 as f32]).collect();
-    let cov = shape::coverage(&[shifted], reach.width(), reach.height(), style.feather, rule);
+    let mut cov = vec![0.0f32; reach.width() * reach.height()];
+    let weight = 1.0 / samples.len() as f32;
+    for (outline, rule, feather) in &samples {
+        let shifted: Vec<Pt> = outline.iter().map(|p| [p[0] - reach.x0 as f32, p[1] - reach.y0 as f32]).collect();
+        let c = shape::coverage(&[shifted], reach.width(), reach.height(), *feather, *rule);
+        cov.iter_mut().zip(c).for_each(|(a, b)| *a += b * weight);
+    }
     let at = |x: i32, y: i32| {
         if reach.contains(x, y) { cov[(y - reach.y0) as usize * reach.width() + (x - reach.x0) as usize] } else { 0.0 }
     };
@@ -1928,6 +2004,38 @@ mod tests {
         let mut img = Image::blank(Size { width: fw, height: fh }, IRect::new(x, y, x + w as i32, y + h as i32));
         img.pixels.iter_mut().for_each(|p| *p = px);
         img
+    }
+
+    #[test]
+    fn shape_motion_blur_smears_over_the_shutter() {
+        // A 10×10 square moving 20 px a frame to the right.
+        let params = |mb: i64, offset: &str| json!({
+            "width": 100, "height": 40, "size": [10, 10], "motion_blur": mb, "shutter": 1.0, "shutter_offset": offset,
+            "center": { "keys": [[0, [20, 20]], [10, [220, 20]]], "interp": "linear" },
+        });
+        let render = |p: &Value| {
+            let r = resolve_params("rectangle", p, 2);
+            eval("rectangle", &r, &[None], &CTX).unwrap()
+        };
+        let alpha = |img: &Image, x: i32| img.at(x, 20)[3];
+        let total = |img: &Image| img.flat().pixels.iter().map(|p| p[3]).sum::<f32>();
+        // Off: a sharp square at x 55–65 (frame 2).
+        let sharp = render(&params(0, "centered"));
+        assert!(approx(alpha(&sharp, 60), 1.0) && approx(alpha(&sharp, 50), 0.0) && approx(alpha(&sharp, 70), 0.0));
+        // Centered: spread over 45–75. It moves twice its width while the
+        // shutter is open, so the middle is covered half the time; the ends
+        // fainter; the total coverage kept.
+        let blurred = render(&params(32, "centered"));
+        assert!((alpha(&blurred, 60) - 0.5).abs() < 0.05, "{}", alpha(&blurred, 60));
+        assert!(alpha(&blurred, 47) > 0.0 && alpha(&blurred, 47) < 0.3, "{}", alpha(&blurred, 47));
+        assert!(alpha(&blurred, 72) > 0.0 && alpha(&blurred, 72) < 0.3);
+        assert!((total(&blurred) - total(&sharp)).abs() < 2.0, "{} {}", total(&blurred), total(&sharp));
+        // Starting at the frame: the smear trails ahead, to 85.
+        let ahead = render(&params(32, "start"));
+        assert!(alpha(&ahead, 50) == 0.0 && alpha(&ahead, 80) > 0.0);
+        // Nothing animated: no samples, no blur.
+        let still = json!({ "width": 100, "height": 40, "size": [10, 10], "center": [60, 20], "motion_blur": 32 });
+        assert!(resolve_params("rectangle", &still, 2).get("_motion").is_none());
     }
 
     #[test]

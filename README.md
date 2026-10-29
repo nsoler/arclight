@@ -156,7 +156,11 @@ Shape params, shared by `rectangle`, `ellipse`, `polygon` and `roto`: `width`,
 `height` (the frame when there's no background, 0 = the project format;
 with one, its frame is used), `color` (straight), `opacity`, `feather` (soft-edge width in pixels,
 centered on the outline), `invert`, `operation` (`over` draws the shape over
-the background; `subtract` cuts it out of the background). Edges are
+the background; `subtract` cuts it out of the background), `motion_blur`
+(samples per frame, 0 = off), `shutter` (frames the shutter is open,
+default 0.5) and `shutter_offset` (`centered`/`start`/`end`): with motion
+blur on, an animated shape is drawn at each sample time across the shutter
+and the coverage averaged. Edges are
 anti-aliased from the signed distance to the outline, so the alpha is a
 clean matte for any `mask` input.
 
