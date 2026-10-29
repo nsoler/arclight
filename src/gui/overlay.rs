@@ -1415,9 +1415,13 @@ mod tests {
         let part = gesture(&mut ov, &mut d, Pos2::new(50.0, 25.0), Pos2::new(25.0, 12.5), 1, Mods::default());
         assert_eq!(part, Some(Part::Size { x: true, y: true }));
         assert_eq!(vec2(&d.param("n", "scale")), Vec2::new(1.5, 1.5));
-        // …while without it the same spot is just inside the frame: a move.
+        // …while without it the layer is the whole frame, so a spot like
+        // (30, 20) (clear of the rotation ring) is inside it: a move.
         let mut d = doc("transform", json!({}));
-        assert_eq!(drag(&mut d, Pos2::new(50.0, 25.0), Pos2::new(55.0, 25.0), 1), Part::Move);
+        assert_eq!(drag(&mut d, Pos2::new(30.0, 20.0), Pos2::new(35.0, 20.0), 1), Part::Move);
+        let mut ov = Overlays::default();
+        ov.set_input_window(Some(("n".into(), IRect::new(50, 25, 100, 50))));
+        assert_eq!(gesture(&mut ov, &mut d, Pos2::new(30.0, 20.0), Pos2::new(35.0, 20.0), 1, Mods::default()), None, "outside the small layer");
     }
 
     #[test]
