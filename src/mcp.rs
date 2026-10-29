@@ -108,7 +108,7 @@ static TOOLS: &[Tool] = &[
         {"type": "object", "properties": {}}),
     tool!("select_node", "In an attached GUI: select a node (its properties open, the node graph scrolls to it). null clears the selection.",
         {"type": "object", "properties": {"node": {"type": ["string", "null"]}}, "required": ["node"]}),
-    tool!("view_node", "In an attached GUI: show a node in the viewer (routes it into the Viewer node, creating one if needed) and select it; 'frame' also moves the playhead.",
+    tool!("view_node", "In an attached GUI: show a node in the viewer and select it. With a Viewer node, the node is shown in place of the Viewer's input until the Viewer itself is viewed (view_node on the Viewer goes back); with none, a Viewer is created and wired to it. 'frame' also moves the playhead.",
         {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}}, "required": ["node"]}),
     tool!("get_view", "In an attached GUI: what the user is looking at: selected node, viewed node, current frame, playing.",
         {"type": "object", "properties": {}}),

@@ -372,6 +372,10 @@ impl NodeEditor {
             let resp = ui.interact(*r, Id::unique(("node", id)), Sense::click_and_drag());
             if resp.clicked() || resp.drag_started() {
                 doc.selected = Some(id.clone());
+                // Selecting the Viewer shows its own input again.
+                if op == "viewer" {
+                    doc.view_override = None;
+                }
             }
             if resp.drag_started() {
                 self.shake = Shake { node: id.clone(), ..Default::default() };
@@ -670,6 +674,20 @@ impl NodeEditor {
             FontId::proportional(13.0 * z),
             Color32::WHITE,
         );
+        if doc.overridden() == Some(id) {
+            // Shown in the viewer in place of the Viewer's input: an eye.
+            let c = Pos2::new(r.left() + 11.0 * z, r.top() + 10.0 * z);
+            let eye = Color32::from_rgb(120, 200, 240);
+            painter.add(egui::Shape::convex_polygon(
+                (0..16).map(|i| {
+                    let t = i as f32 / 16.0 * std::f32::consts::TAU;
+                    c + Vec2::new(5.5 * t.cos(), 3.2 * t.sin() * t.sin().abs().sqrt()) * z
+                }).collect(),
+                Color32::TRANSPARENT,
+                Stroke::new(1.2, eye),
+            ));
+            painter.circle_filled(c, 1.8 * z, eye);
+        }
         if doc.is_node_animated(id) {
             // Keyframed params: a small diamond in the top-right corner.
             let c = Pos2::new(r.right() - 10.0 * z, r.top() + 10.0 * z);

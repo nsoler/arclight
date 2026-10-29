@@ -28,6 +28,9 @@ struct History {
 pub struct Doc {
     pub graph: Graph,
     pub selected: Option<String>,
+    /// A node shown in place of the Viewer node's input (double-click, V),
+    /// until the Viewer is viewed again. View state: not saved or undone.
+    pub view_override: Option<String>,
     pub revision: u64,
     pub path: Option<PathBuf>,
     pub dirty: bool,
@@ -40,7 +43,7 @@ pub struct Doc {
 impl Doc {
     pub fn new(graph: Graph, path: Option<PathBuf>) -> Doc {
         let history = History { undo: Vec::new(), redo: Vec::new(), committed: Graph::default(), committed_edits: 0 };
-        let mut doc = Doc { graph, selected: None, revision: 1, path, dirty: false, edits: 0, history };
+        let mut doc = Doc { graph, selected: None, view_override: None, revision: 1, path, dirty: false, edits: 0, history };
         doc.normalize();
         doc.auto_layout();
         doc.history.committed = doc.graph.clone();
@@ -310,37 +313,64 @@ impl Doc {
                 }
             }
         }
-        if self.selected.as_deref() == Some(old) {
-            self.selected = Some(new.to_string());
+        for id in [&mut self.selected, &mut self.view_override].into_iter().flatten() {
+            if id == old {
+                *id = new.to_string();
+            }
         }
         self.changed();
         Ok(())
     }
 
-    /// What the viewer shows: the first Viewer node, else the selection.
+    /// The node viewed in place of the Viewer's input, if it still exists.
+    pub fn overridden(&self) -> Option<&str> {
+        self.view_override.as_deref().filter(|id| self.node(id).is_some())
+    }
+
+    /// What the viewer shows: a node viewed by double-click (or V), else
+    /// the first Viewer node, else the selection.
     pub fn view_target(&self) -> Option<String> {
-        self.graph
-            .nodes
-            .iter()
-            .find(|n| n.op == "viewer")
-            .map(|n| n.id.clone())
+        self.overridden()
+            .map(str::to_string)
+            .or_else(|| self.graph.nodes.iter().find(|n| n.op == "viewer").map(|n| n.id.clone()))
             .or_else(|| self.selected.clone())
     }
 
-    /// The node whose image the viewer shows: the Viewer node's input, or
-    /// the selected node when there is no Viewer.
+    /// The node whose image the viewer shows: the overriding node, the
+    /// Viewer node's input, or the selected node when there is no Viewer.
     pub fn viewed(&self) -> Option<String> {
+        if let Some(id) = self.overridden() {
+            return Some(id.to_string());
+        }
         match self.graph.nodes.iter().find(|n| n.op == "viewer") {
             Some(v) => v.inputs.first().filter(|i| !i.is_empty()).cloned(),
             None => self.selected.clone(),
         }
     }
 
-    /// Route `id` into the Viewer, creating a Viewer node if there is none.
+    /// Show `id` in the viewer. A Viewer node goes back to showing its own
+    /// input; any other node is shown in its place, leaving the graph
+    /// alone. With no Viewer yet, one is made and `id` wired into it.
     pub fn view_node(&mut self, id: &str) {
+        let Some(n) = self.node(id) else { return };
+        if n.op == "viewer" {
+            self.view_override = None;
+            return;
+        }
+        if self.graph.nodes.iter().any(|n| n.op == "viewer") {
+            self.view_override = Some(id.to_string());
+            return;
+        }
+        self.route_to_viewer(id);
+    }
+
+    /// Wire `id` into the Viewer node, creating one if there is none, and
+    /// show the Viewer.
+    pub fn route_to_viewer(&mut self, id: &str) {
         if self.node(id).is_none_or(|n| n.op == "viewer") {
             return;
         }
+        self.view_override = None;
         let viewer = match self.graph.nodes.iter().find(|n| n.op == "viewer") {
             Some(v) => v.id.clone(),
             None => {
@@ -504,6 +534,32 @@ impl Doc {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn viewing_a_node_overrides_the_viewer_until_the_viewer_is_viewed() {
+        let mut d = Doc::new(Graph::default(), None);
+        let plate = d.add_node("constant", [0.0, 0.0]);
+        // No Viewer yet: one is made and wired up.
+        d.view_node(&plate);
+        let viewer = d.graph.nodes.iter().find(|n| n.op == "viewer").unwrap().id.clone();
+        assert_eq!((d.view_target(), d.viewed()), (Some(viewer.clone()), Some(plate.clone())));
+        // Another node shows in its place, without rewiring the Viewer…
+        let grade = d.add_node("grade", [200.0, 0.0]);
+        let rev = d.revision;
+        d.view_node(&grade);
+        assert_eq!((d.view_target(), d.viewed()), (Some(grade.clone()), Some(grade.clone())));
+        assert_eq!((d.node(&viewer).unwrap().inputs[0].as_str(), d.revision), (plate.as_str(), rev));
+        // …follows a rename, ends when the node goes…
+        d.rename(&grade, "look").unwrap();
+        assert_eq!(d.view_target().as_deref(), Some("look"));
+        d.delete_node("look");
+        assert_eq!(d.view_target(), Some(viewer.clone()));
+        // …or when the Viewer itself is viewed.
+        d.view_node(&plate);
+        assert_eq!(d.view_target(), Some(plate.clone()));
+        d.view_node(&viewer);
+        assert_eq!((d.view_target(), d.viewed()), (Some(viewer), Some(plate)));
+    }
 
     #[test]
     fn scripted_nodes_are_placed_clear_of_existing_ones() {

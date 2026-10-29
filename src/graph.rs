@@ -4,8 +4,8 @@
 //! node's op, params, inputs' keys and (for time-varying ops) the frame. A
 //! change to one node therefore only re-renders that node and its downstream.
 
-use crate::image::{Image, Size};
-use crate::ops::{self, EvalContext};
+use crate::image::{IRect, Image, Size};
+use crate::ops::{self, Category, EvalContext};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -237,6 +237,8 @@ impl Evaluator {
         graph_format: Size,
     ) -> Result<(), NodeError> {
         let mut keys: HashMap<&str, u64> = HashMap::with_capacity(order.len());
+        // What an unconnected input sees: nothing, in the project's format.
+        let empty = Image::blank(graph_format, IRect::default());
         for id in order {
             let node = index[id.as_str()];
             // Keyframes are resolved first and the resolved values hashed, so a
@@ -249,16 +251,24 @@ impl Evaluator {
                 continue;
             }
 
-            let ports = ops::info(&node.op).map(|i| i.inputs).unwrap_or(&[]);
+            let info = ops::info(&node.op);
+            let ports = info.map(|i| i.inputs).unwrap_or(&[]);
+            // Outputs (viewer, writes) refuse to show or write nothing;
+            // other ops take an unconnected input as empty, so one node left
+            // unplugged doesn't blank everything below it.
+            let strict = info.is_some_and(|i| i.category == Category::Output);
             let n_ports = ports.len().max(node.inputs.len());
             let mut inputs: Vec<Option<&Image>> = Vec::with_capacity(n_ports);
             for i in 0..n_ports {
                 let dep = node.inputs.get(i).map_or("", String::as_str);
                 if dep.is_empty() {
-                    if let Some(port) = ports.get(i).filter(|p| !p.optional) {
-                        return Err(node_err(id, format!("input '{}' is not connected", port.label)));
+                    match ports.get(i).filter(|p| !p.optional) {
+                        Some(port) if strict => {
+                            return Err(node_err(id, format!("input '{}' is not connected", port.label)));
+                        }
+                        Some(_) => inputs.push(Some(&empty)),
+                        None => inputs.push(None),
                     }
-                    inputs.push(None);
                 } else {
                     inputs.push(Some(self.cache[dep].1.as_ref()));
                 }

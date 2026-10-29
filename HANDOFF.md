@@ -16,7 +16,7 @@ Last updated 2026-10-28 (session 7). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~14,400 lines of Rust + Python. Tests: 73 library + 10 CLI + 36 GUI
+- ~14,400 lines of Rust + Python. Tests: 73 library + 10 CLI + 37 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
 - **Release build (end of session 6):** `cargo build --release --workspace`
   and `python/build.sh` were run at the final commit, so
@@ -391,6 +391,20 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   probe now returns the input `Arc<Image>` (small cache of 8) instead of
   its window, for Transform and Pick overlays alike;
   `Overlays::set_input`, `Display::input`.
+- **Session 7, part 7** (user bug: adding a Keyer, which joined the
+  Viewer's wire with a Merge, blanked the viewer): (1) `Evaluator::run`
+  feeds an unconnected *required* input an empty image in the project
+  format; only `Category::Output` ops (viewer, write, media_out) still
+  error. (2) Viewing is an override, not a rewire: `Doc::view_override`
+  (view state, not saved/undone; follows renames, lapses when the node is
+  deleted), `Doc::overridden`, `view_target`/`viewed` prefer it.
+  `view_node` on a Viewer clears it, on another node sets it (or, with no
+  Viewer yet, `route_to_viewer` makes and wires one, which file drops
+  still use). Clicking the Viewer node clears it too. Status line: "(click
+  viewer1 to go back)"; the node graph draws an eye on the overriding
+  node. MCP `view_node` follows the same rule. Note `merge_into_wire` puts
+  the wire's source in A (over) and the dropped node in B, as the user
+  asked.
 - **CorridorKey** (AI keyer, github.com/nikopueringer/CorridorKey; the
   OFX port gitcapoom/corridorkey_ofx is Windows/Resolve-only): the user
   deferred it. If revisited: run upstream's PyTorch engine (Linux OK; the

@@ -323,19 +323,28 @@ mod tests {
     }
 
     #[test]
-    fn unconnected_input_names_the_port() {
+    fn unconnected_inputs_are_empty_except_into_outputs() {
         use arclight::graph::Evaluator;
         use arclight::ops::EvalContext;
+        // A Merge with A unplugged (a Keyer just added, say) passes B
+        // through, so the viewer downstream still shows the comp…
         let g = Graph::from_str(r#"{
             "nodes": [
-                { "id": "bg", "op": "constant", "params": { "width": 2, "height": 2 } },
-                { "id": "m", "op": "merge", "inputs": ["", "bg"] }
+                { "id": "bg", "op": "constant", "params": { "width": 2, "height": 2, "color": [0.2, 0.4, 0.6, 1] } },
+                { "id": "k", "op": "keyer" },
+                { "id": "m", "op": "merge", "inputs": ["k", "bg"] },
+                { "id": "v", "op": "viewer", "inputs": ["m"] },
+                { "id": "lost", "op": "viewer" }
             ]
         }"#).unwrap();
         let ctx = EvalContext { frame: 1, write_outputs: false };
-        let err = Evaluator::new().evaluate(&g, "m", &ctx).err().unwrap();
-        assert_eq!(err.node.as_deref(), Some("m"));
-        assert!(err.message.contains("'A'"), "{}", err.message);
+        let mut ev = Evaluator::new();
+        let img = ev.evaluate(&g, "v", &ctx).unwrap();
+        assert_eq!(img.at(1, 1), [0.2, 0.4, 0.6, 1.0]);
+        // …while an output with nothing to show says which port is empty.
+        let err = ev.evaluate(&g, "lost", &ctx).err().unwrap();
+        assert_eq!(err.node.as_deref(), Some("lost"));
+        assert!(err.message.contains("'input'"), "{}", err.message);
     }
 
     #[test]

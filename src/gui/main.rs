@@ -502,7 +502,7 @@ impl App {
             let id = self.doc.add_node("media_in", [x, y + 90.0 + k as f32 * 70.0]);
             properties::apply_media(&mut self.doc, &id, &path);
             if self.doc.view_target().is_none() || self.error.is_some() {
-                self.doc.view_node(&id);
+                self.doc.route_to_viewer(&id);
             }
             self.doc.selected = Some(id);
             self.transport.seek(self.doc.graph.project.first_frame, &self.doc.graph.project);
@@ -759,12 +759,14 @@ impl eframe::App for App {
             egui::CentralPanel::no_frame().show(ui, |ui| {
                 let error = self.error.as_ref().map(|e| e.to_string());
                 let target = self.doc.view_target();
+                let returns_to = self.doc.overridden().and_then(|_| self.doc.graph.nodes.iter().find(|n| n.op == "viewer")).map(|v| v.id.clone());
                 self.viewer.ui(
                     ui,
                     Display {
                         image: self.image.as_ref(),
                         error: error.as_deref(),
                         target: target.as_deref(),
+                        returns_to: returns_to.as_deref(),
                         frame: self.shown_frame,
                         millis: self.millis,
                         input: self.probe.as_ref(),

@@ -79,6 +79,8 @@ pub struct Display<'a> {
     pub image: Option<&'a Arc<Image>>,
     pub error: Option<&'a str>,
     pub target: Option<&'a str>,
+    /// The Viewer node, while another node is shown in its place.
+    pub returns_to: Option<&'a str>,
     pub frame: i64,
     pub millis: f32,
     /// A node and its input's image, for that node's overlay.
@@ -242,6 +244,10 @@ impl Viewer {
                     }
                 }
                 if let Some(t) = d.target {
+                    if let Some(v) = d.returns_to {
+                        ui.weak(format!("(click {v} to go back)"))
+                            .on_hover_text(format!("Double-clicked nodes show in place of {v}'s input until {v} is clicked or double-clicked"));
+                    }
                     ui.strong(t);
                     ui.label("Viewing");
                 }
