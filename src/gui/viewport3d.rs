@@ -6,6 +6,9 @@
 //! icons (a star for a point light, a cone for a spot, parallel arrows for
 //! a directional light, the rectangle for an area light, a ring for
 //! ambient light) and are picked, selected, framed and moved like cameras.
+//! A selected spot light shows handles on its cone's edge (drag one to
+//! change the cone angle) and a selected area light on its edges (drag
+//! one to resize it about its middle).
 //!
 //! Navigation: middle-drag orbits (turntable: yaw about world Y, pitch
 //! short of the poles), ⇧ + middle-drag pans, scroll or ⌃ + middle-drag
@@ -13,7 +16,8 @@
 //! pinch or ⌃ zooms; with "emulate 3-button mouse", Alt + left-drag stands
 //! in for the middle button. Keys (over the viewport, when no gizmo gesture
 //! owns them): 1 / 3 / 7 front / right / top (⌃: the opposite side), 5
-//! perspective / orthographic, 0 through the scene camera, 2 / 4 / 6 / 8
+//! perspective / orthographic, 0 through the selected camera, spot or area
+//! light (else the scene's first camera), or back out, 2 / 4 / 6 / 8
 //! orbit 15°, . or F frame the selection, Home frame everything, A select
 //! all, Alt+A or Esc deselect, Z solid / wireframe meshes, ` a pie of
 //! views. (egui doesn't tell the numpad from the
@@ -561,17 +565,106 @@ struct Ask {
     frame: i64,
     revision: u64,
     view: ViewCam,
-    look_through: Option<usize>,
+    look_through: Option<Through>,
+    /// The camera looked through as it was (it moves with its node).
+    through: Option<geom::Camera>,
     pixels: [usize; 2],
+}
+
+/// What the view looks through instead of the free camera.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Through {
+    /// Scene camera `i`.
+    Camera(usize),
+    /// The spot or area light of this node (see [`light_camera`]).
+    Light(String),
+}
+
+/// A camera at a spot or area light, looking the way it shines (for aiming
+/// it), for frames of `format`: a spot's cone just fits the frame's height;
+/// an area light sees 90° high. None for other lights.
+pub fn light_camera(l: &Light, format: Size) -> Option<geom::Camera> {
+    let high = match l.kind {
+        LightKind::Spot { cone, .. } => cone.clamp(1.0, 170.0),
+        LightKind::Area { .. } => 90.0,
+        _ => return None,
+    };
+    let aspect = format.width.max(1) as f64 / format.height.max(1) as f64;
+    let across = (high / 2.0).to_radians().tan() * aspect;
+    Some(geom::Camera { focal: FILM / (2.0 * across), film_back: [FILM, FILM / aspect], world: l.world, near: 0.01, far: 1e5 })
+}
+
+/// A light handle: a dot on a spot's cone edge (at its X, Y, −X, −Y), or
+/// the middle of an area light's edge (+X, −X, +Y, −Y).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LightHandle {
+    Cone(usize),
+    Edge(usize),
+}
+
+/// The handles of light `l` drawn at icon size `size` (see
+/// [`light_lines`]), where they are in the scene.
+pub fn light_handles(l: &Light, size: f64) -> Vec<(LightHandle, Vec3)> {
+    let (at, dir, u, v) = (l.position(), l.direction(), l.axis(0), l.axis(1));
+    match l.kind {
+        LightKind::Spot { cone, .. } => {
+            let len = size * 2.0;
+            let r = len * (cone / 2.0).clamp(0.0, 89.0).to_radians().tan();
+            [u, v, -u, -v].iter().enumerate().map(|(k, a)| (LightHandle::Cone(k), at + dir * len + a * r)).collect()
+        }
+        LightKind::Area { size: wh, .. } => {
+            [u * wh[0] / 2.0, -u * wh[0] / 2.0, v * wh[1] / 2.0, -v * wh[1] / 2.0].iter().enumerate().map(|(k, a)| (LightHandle::Edge(k), at + a)).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Where along the line `from + along × a` the ray `o + d t` passes
+/// nearest: `a` (None when they're parallel).
+fn nearest_along(from: Vec3, along: Vec3, o: Vec3, d: Vec3) -> Option<f64> {
+    let w = from - o;
+    let (b, dd, aa) = (along.dot(&d), d.dot(&d), along.dot(&along));
+    let den = aa * dd - b * b;
+    (den.abs() > 1e-12 * aa * dd).then(|| (b * d.dot(&w) - dd * along.dot(&w)) / den)
+}
+
+/// Dragging handle `h` of light `l` (icon size `size`) to where the ray
+/// `o + d t` points: the param to set and its value — a spot's cone angle
+/// (its edge through the pointer) or an area light's size (that edge at
+/// the pointer, the opposite one mirroring it).
+pub fn drag_light(l: &Light, h: LightHandle, size: f64, o: Vec3, d: Vec3) -> Option<(&'static str, serde_json::Value)> {
+    let (at, dir) = (l.position(), l.direction());
+    match (h, l.kind) {
+        (LightHandle::Cone(k), LightKind::Spot { .. }) => {
+            let len = size * 2.0;
+            let out = [l.axis(0), l.axis(1), -l.axis(0), -l.axis(1)][k % 4];
+            let r = nearest_along(at + dir * len, out, o, d)?.max(0.0);
+            let cone = (2.0 * (r / len).atan().to_degrees()).clamp(0.0, 179.0);
+            Some(("cone", serde_json::json!(cone)))
+        }
+        (LightHandle::Edge(k), LightKind::Area { size: wh, .. }) => {
+            let axis = l.axis(k / 2);
+            let half = nearest_along(at, axis, o, d)?.abs().max(0.0005);
+            let mut wh = wh;
+            wh[k / 2] = 2.0 * half;
+            Some(("size", serde_json::json!(wh)))
+        }
+        _ => None,
+    }
+}
+
+/// The size lights, cameras and locators are drawn at in `scene`.
+fn icon_size(scene: &Scene) -> f64 {
+    bounds(scene, None).map_or(1.0, |(_, r)| (r * 0.08).max(0.15))
 }
 
 /// The camera and frame size that render the cards for projector `p` at
 /// `pixels`, matching what it draws: the scene camera through it; the free
 /// camera; for orthographic, a long lens from far away (as good as flat).
-fn render_camera(view: &ViewCam, p: &Projector, through: Option<&geom::Camera>, pixels: [usize; 2]) -> (geom::Camera, Size) {
+fn render_camera(view: &ViewCam, p: &Projector, through: Option<geom::Camera>, pixels: [usize; 2]) -> (geom::Camera, Size) {
     let format = Size { width: pixels[0].max(1), height: pixels[1].max(1) };
     if let Some(cam) = through {
-        return (cam.clone(), format);
+        return (cam, format);
     }
     let film = [FILM, FILM * format.height as f64 / format.width as f64];
     if view.ortho {
@@ -588,8 +681,14 @@ fn render_camera(view: &ViewCam, p: &Projector, through: Option<&geom::Camera>, 
 /// The 3D viewport (see the module notes).
 pub struct Viewport3d {
     pub view: ViewCam,
-    /// Through scene camera `i` instead of the free camera.
-    pub look_through: Option<usize>,
+    /// Through a scene camera or a light instead of the free camera.
+    pub look_through: Option<Through>,
+    /// The project's frame size (for looking through a light).
+    format: Size,
+    /// A light handle being dragged (its node), and the one under the
+    /// pointer.
+    light_drag: Option<(String, LightHandle)>,
+    light_hot: Option<LightHandle>,
     /// Alt + left-drag navigates, as Blender's "emulate 3-button mouse".
     pub emulate_three_button: bool,
     worker: Option<SceneWorker>,
@@ -632,6 +731,9 @@ impl Default for Viewport3d {
         Viewport3d {
             view: ViewCam::default(),
             look_through: None,
+            format: Size { width: 1920, height: 1080 },
+            light_drag: None,
+            light_hot: None,
             emulate_three_button: false,
             worker: None,
             scene: None,
@@ -713,9 +815,22 @@ impl Viewport3d {
         Some(Mat4::new_translation(&s.points[i]))
     }
 
-    /// The scene camera to look through (`look_through`, if it's still there).
-    fn through_camera(&self) -> Option<&geom::Camera> {
-        self.scene.as_ref()?.cameras.get(self.look_through?)
+    /// The camera to look through (`look_through`, if it's still there).
+    fn through_camera(&self) -> Option<geom::Camera> {
+        let s = self.scene.as_ref()?;
+        match self.look_through.as_ref()? {
+            Through::Camera(i) => s.cameras.get(*i).cloned(),
+            Through::Light(n) => light_camera(s.lights.iter().find(|l| &l.node == n)?, self.format),
+        }
+    }
+
+    /// What's looked through, by name ("" for an unnamed camera).
+    fn through_name(&self) -> String {
+        match (&self.look_through, &self.scene) {
+            (Some(Through::Camera(i)), Some(s)) => s.camera_node(*i).to_string(),
+            (Some(Through::Light(n)), _) => n.clone(),
+            _ => String::new(),
+        }
     }
 
     /// Take what the worker sent back, and ask it again when the viewed
@@ -760,7 +875,8 @@ impl Viewport3d {
             return;
         };
         let now = ctx.input(|i| i.time);
-        let view_changed = self.asked.as_ref().is_some_and(|a| a.view != self.view || a.look_through != self.look_through);
+        let through = self.through_camera();
+        let view_changed = self.asked.as_ref().is_some_and(|a| a.view != self.view || a.look_through != self.look_through || a.through != through);
         if view_changed {
             self.moved_at = now;
         }
@@ -773,7 +889,7 @@ impl Viewport3d {
         let target = p.frame.unwrap_or(p.rect);
         let ppp = ctx.pixels_per_point() * scale;
         let pixels = [(target.width() * ppp).round() as usize, (target.height() * ppp).round() as usize];
-        let ask = Ask { node: node.clone(), frame, revision: doc.revision, view: self.view, look_through: self.look_through, pixels };
+        let ask = Ask { node: node.clone(), frame, revision: doc.revision, view: self.view, look_through: self.look_through.clone(), through: through.clone(), pixels };
         if self.asked.as_ref() == Some(&ask) {
             return;
         }
@@ -781,7 +897,7 @@ impl Viewport3d {
             self.graph = Some((doc.revision, Arc::new(doc.graph.clone())));
         }
         let graph = self.graph.as_ref().unwrap().1.clone();
-        let render = self.scene.is_some().then(|| render_camera(&self.view, p, self.through_camera(), pixels));
+        let render = self.scene.is_some().then(|| render_camera(&self.view, p, through, pixels));
         if let Some(w) = &self.worker {
             w.request(SceneRequest { graph, node, frame, render, solid: !self.view.wireframe, rect: Some(target) });
         }
@@ -793,6 +909,7 @@ impl Viewport3d {
     /// left button and the keys; navigation still works.
     pub fn ui(&mut self, ui: &mut egui::Ui, rect: Rect, resp: &Response, doc: &mut Doc, frame: i64, blocked: bool) {
         self.restore(doc);
+        self.format = doc.graph.project.format;
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, Color32::from_gray(38));
         self.navigate(ui, rect, resp, blocked);
@@ -800,7 +917,7 @@ impl Viewport3d {
             self.keys(ui, doc);
         }
         let p = match self.through_camera() {
-            Some(cam) => Projector::through(cam, doc.graph.project.format, rect),
+            Some(cam) => Projector::through(&cam, doc.graph.project.format, rect),
             None => {
                 self.look_through = None;
                 self.view.projector(rect)
@@ -813,9 +930,10 @@ impl Viewport3d {
             self.frame_all();
         }
         self.save(doc);
+        let on_handle = !blocked && self.pie.is_none() && self.light_handle_input(ui, resp, doc, frame, &p);
         if self.pie.is_some() {
             self.pie_ui(ui, &painter, blocked);
-        } else if !blocked {
+        } else if !blocked && !on_handle {
             self.select(ui, resp, doc, &p);
         } else {
             self.marquee = None;
@@ -1101,9 +1219,57 @@ impl Viewport3d {
         }
     }
 
+    /// Hovering and dragging the handles of the selected spot or area light
+    /// (the primary selection): true while one is under the pointer or
+    /// being dragged, so the click doesn't also select. A drag sets the
+    /// param (a key at `frame` if it's animated), one undo step.
+    fn light_handle_input(&mut self, ui: &egui::Ui, resp: &Response, doc: &mut Doc, frame: i64, p: &Projector) -> bool {
+        self.light_hot = None;
+        let Some(scene) = self.scene.clone() else {
+            self.light_drag = None;
+            return false;
+        };
+        let size = icon_size(&scene);
+        if let Some((node, h)) = self.light_drag.clone() {
+            if !ui.input(|i| i.pointer.primary_down()) {
+                self.light_drag = None;
+                return true;
+            }
+            self.light_hot = Some(h);
+            if let (Some(l), Some(at)) = (scene.lights.iter().find(|l| l.node == node), ui.input(|i| i.pointer.hover_pos())) {
+                let (o, d) = p.ray(at);
+                if let Some((name, v)) = drag_light(l, h, size, o, d) {
+                    doc.edit_param(&node, name, frame, v);
+                }
+            }
+            return true;
+        }
+        let Some(node) = doc.selection().last().cloned() else { return false };
+        let Some(l) = scene.lights.iter().find(|l| l.node == node) else { return false };
+        let Some(at) = resp.hover_pos() else { return false };
+        let hot = light_handles(l, size)
+            .into_iter()
+            .filter_map(|(h, w)| p.project(w).map(|(s, _)| (h, s.distance(at))))
+            .filter(|(_, d)| *d <= PICK_RADIUS)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(h, _)| h);
+        let Some(h) = hot else { return false };
+        self.light_hot = Some(h);
+        if ui.input(|i| i.pointer.primary_pressed()) {
+            let name = if matches!(h, LightHandle::Cone(_)) { "cone" } else { "size" };
+            let raw = doc.param(&node, name);
+            if arclight::link::is_link(&raw) {
+                self.message = Some(format!("{node}'s {name} is linked ({}): Unlink it in Properties to change it here", arclight::link::describe(&raw)));
+            } else {
+                self.light_drag = Some((node, h));
+            }
+        }
+        true
+    }
+
     /// Leave a look-through for the free camera, where that camera was.
     fn leave_camera(&mut self) {
-        let Some(cam) = self.through_camera().cloned() else { return };
+        let Some(cam) = self.through_camera() else { return };
         let eye = geom::transform_point(&cam.world, &Vec3::zeros());
         let fwd = (cam.world.fixed_view::<3, 3>(0, 0) * -Vec3::z()).normalize();
         let d = self.view.distance;
@@ -1130,7 +1296,10 @@ impl Viewport3d {
                     self.view.ortho = !self.view.ortho;
                     self.view.auto_ortho = false;
                 }
-                Key::Num0 => self.toggle_camera(),
+                Key::Num0 => {
+                    let sel = doc.selection();
+                    self.look_through_selected(&sel);
+                }
                 Key::Num4 => self.step(15.0, 0.0),
                 Key::Num6 => self.step(-15.0, 0.0),
                 Key::Num8 => self.step(0.0, 15.0),
@@ -1173,7 +1342,30 @@ impl Viewport3d {
         if self.look_through.is_some() {
             self.leave_camera();
         } else if self.scene.as_ref().is_some_and(|s| !s.cameras.is_empty()) {
-            self.look_through = Some(0);
+            self.look_through = Some(Through::Camera(0));
+        }
+    }
+
+    /// Look through the primary selected object of `selection` (the last)
+    /// if it's a camera, spot or area light, else the scene's first camera;
+    /// or back out if already looking through something. Says why not
+    /// when there's nothing to look through.
+    pub fn look_through_selected(&mut self, selection: &[String]) {
+        if self.look_through.is_some() {
+            self.leave_camera();
+            return;
+        }
+        let Some(s) = self.scene.as_ref() else { return };
+        let pick = selection.last().and_then(|n| {
+            if let Some(i) = (0..s.cameras.len()).find(|&i| s.camera_node(i) == n) {
+                return Some(Through::Camera(i));
+            }
+            let l = s.lights.iter().find(|l| &l.node == n)?;
+            light_camera(l, self.format).map(|_| Through::Light(n.clone()))
+        });
+        match pick.or_else(|| (!s.cameras.is_empty()).then_some(Through::Camera(0))) {
+            Some(t) => self.look_through = Some(t),
+            None => self.message = Some("Nothing to look through: select a camera, spot light or area light".into()),
         }
     }
 
@@ -1288,10 +1480,10 @@ impl Viewport3d {
                 line(world[*a as usize], world[*b as usize], stroke);
             }
         }
-        let size = bounds(&scene, None).map_or(1.0, |(_, r)| (r * 0.08).max(0.15));
+        let size = icon_size(&scene);
         let aspect = doc.graph.project.format.width as f64 / doc.graph.project.format.height.max(1) as f64;
         for (i, cam) in scene.cameras.iter().enumerate() {
-            if self.look_through == Some(i) {
+            if self.look_through == Some(Through::Camera(i)) {
                 continue;
             }
             let node = scene.camera_node(i);
@@ -1308,7 +1500,11 @@ impl Viewport3d {
             line(up, k[1], stroke);
             self.draw_path(painter, p, doc, node, frame);
         }
+        let primary = doc.selection().last().cloned();
         for l in &scene.lights {
+            if self.look_through == Some(Through::Light(l.node.clone())) {
+                continue;
+            }
             let on = selected(&l.node);
             let stroke = Stroke::new(if on { 2.0 } else { 1.2 }, if on { SELECTED } else { LIGHT });
             for (a, b) in light_lines(l, size) {
@@ -1322,6 +1518,17 @@ impl Viewport3d {
                     painter.circle_stroke(s, 2.0, stroke);
                 } else {
                     painter.circle_filled(s, 2.5, stroke.color);
+                }
+            }
+            // The primary selection's handles: squares, the one under the
+            // pointer (or dragged) white.
+            if primary.as_deref() == Some(l.node.as_str()) {
+                for (h, w) in light_handles(l, size) {
+                    if let Some((s, _)) = p.project(w) {
+                        let hot = self.light_hot == Some(h);
+                        let r = Rect::from_center_size(s, Vec2::splat(if hot { 9.0 } else { 7.0 }));
+                        painter.rect(r, 1.0, if hot { Color32::WHITE } else { SELECTED }, Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Outside);
+                    }
                 }
             }
         }
@@ -1357,7 +1564,7 @@ impl Viewport3d {
                 painter.rect_filled(band, 0.0, dim);
             }
             painter.rect_stroke(f, 0.0, Stroke::new(1.0, Color32::from_gray(200)), egui::StrokeKind::Outside);
-            let name = self.look_through.map(|i| scene.camera_node(i).to_string()).unwrap_or_default();
+            let name = self.through_name();
             painter.text(f.left_top() + Vec2::new(4.0, -4.0), Align2::LEFT_BOTTOM, format!("Through {name}"), FontId::proportional(12.0), Color32::from_gray(220));
         }
         let _ = ui;
@@ -1468,7 +1675,7 @@ impl Viewport3d {
             let tip = match what {
                 "pan" => "Drag to pan (⇧ + middle-drag)",
                 "zoom" => "Drag to zoom (scroll, or ⌃ + middle-drag)",
-                "camera" => "Look through the scene camera (0)",
+                "camera" => "Look through the scene camera (0: the selected camera, spot or area light)",
                 _ => "Perspective / orthographic (5)",
             };
             let b = b.on_hover_text(tip);
@@ -1552,6 +1759,7 @@ fn icon(painter: &egui::Painter, at: Pos2, what: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn rect() -> Rect {
         Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(800.0, 450.0))
@@ -1788,6 +1996,157 @@ mod tests {
         assert!((panel[4].1 - panel[4].0).normalize().dot(&-Vec3::z()) > 1.0 - 1e-9);
         // Ambient light has no icon lines (a ring is drawn instead).
         assert!(light_lines(&s.lights[4], 1.0).is_empty());
+    }
+
+    /// A doc with a spot light "spot" and an area light "panel" (params as
+    /// given), and the scene they make, tagged.
+    fn light_doc(spot: serde_json::Value, panel: serde_json::Value) -> (Doc, Scene) {
+        use arclight::graph::{Graph, NodeSpec};
+        let node = |id: &str, op: &str, params: serde_json::Value| NodeSpec { id: id.into(), op: op.into(), inputs: vec![], params, pos: None };
+        let doc = Doc::new(Graph { nodes: vec![node("spot", "light_spot", spot.clone()), node("panel", "light_area", panel.clone())], ..Default::default() }, None);
+        let light = |n: &str, op: &str, p: &serde_json::Value| Light { node: n.into(), ..arclight::scene::light(op, p, None).unwrap() };
+        let scene = Scene { lights: vec![light("spot", "light_spot", &spot), light("panel", "light_area", &panel)], ..Scene::default() };
+        (doc, scene)
+    }
+
+    #[test]
+    fn dragging_a_cone_edge_sets_the_angle_and_an_area_edge_the_size() {
+        // A spot at the origin shining down, 40° across; an icon size of
+        // 1 puts its cone's end 2 below.
+        let (_, s) = light_doc(json!({ "rotate": [-90, 0, 0], "cone": 40 }), json!({ "translate": [0, 0, -5], "size": [2, 1] }));
+        let (spot, panel) = (&s.lights[0], &s.lights[1]);
+        let hs = light_handles(spot, 1.0);
+        assert_eq!(hs.len(), 4);
+        for (_, at) in &hs {
+            let r = Vec3::new(at.x, 0.0, at.z).norm();
+            assert!((at.y + 2.0).abs() < 1e-9 && (r - 2.0 * 20f64.to_radians().tan()).abs() < 1e-9, "on the cone's edge ring: {at}");
+        }
+        // A ray from the front through the point on the +X handle's line
+        // at the radius of a 60° cone (and from above, down the axis).
+        let want = Vec3::new(2.0 * 30f64.to_radians().tan(), -2.0, 0.0);
+        let x_handle = hs.iter().find(|(_, at)| at.x > 0.1).unwrap().0;
+        for o in [want + Vec3::new(0.0, 0.0, 10.0), want + Vec3::new(0.3, 10.0, 0.2)] {
+            let (name, v) = drag_light(spot, x_handle, 1.0, o, (want - o).normalize()).unwrap();
+            assert_eq!(name, "cone");
+            assert!((v.as_f64().unwrap() - 60.0).abs() < 0.5, "{v}");
+        }
+        // Past the apex side: a closed cone, not a negative one.
+        let (_, v) = drag_light(spot, x_handle, 1.0, Vec3::new(-3.0, -2.0, 10.0), -Vec3::z()).unwrap();
+        assert_eq!(v.as_f64(), Some(0.0));
+        // The area light's handles sit on its edges' middles; dragging the
+        // right edge to x = 1.5 makes it 3 wide (about its middle), the
+        // height kept; the bottom edge to y = −1 makes it 2 high.
+        let hp = light_handles(panel, 1.0);
+        let pts: Vec<Vec3> = hp.iter().map(|h| h.1).collect();
+        assert_eq!(pts, [Vec3::new(1.0, 0.0, -5.0), Vec3::new(-1.0, 0.0, -5.0), Vec3::new(0.0, 0.5, -5.0), Vec3::new(0.0, -0.5, -5.0)]);
+        let o = Vec3::new(0.0, 0.0, 10.0);
+        let toward = |p: Vec3| (p - o).normalize();
+        let (_, v) = drag_light(panel, hp[0].0, 1.0, o, toward(Vec3::new(1.5, 0.0, -5.0))).unwrap();
+        assert!((v[0].as_f64().unwrap() - 3.0).abs() < 1e-9 && v[1].as_f64() == Some(1.0), "{v}");
+        let (name, v) = drag_light(panel, hp[3].0, 1.0, o, toward(Vec3::new(0.0, -1.0, -5.0))).unwrap();
+        assert!(name == "size" && (v[0].as_f64().unwrap() - 2.0).abs() < 1e-9 && (v[1].as_f64().unwrap() - 2.0).abs() < 1e-9, "{v}");
+        assert!(light_handles(&Light::new(LightKind::Point, Mat4::identity()), 1.0).is_empty());
+    }
+
+    /// The handles in the view: pressing one and dragging edits the param
+    /// (not the selection), one undo step; elsewhere a click still selects.
+    #[test]
+    fn handle_drags_in_the_view_are_one_undo_step() {
+        let (mut doc, s) = light_doc(json!({ "translate": [0, 0, -8], "rotate": [0, 0, 0], "cone": 40 }), json!({ "translate": [5, 0, -8] }));
+        doc.select_nodes(&["spot".to_string()], false);
+        doc.commit(false);
+        let p = ViewCam { center: [0.0, 0.0, -8.0], yaw: 0.0, pitch: 60.0, distance: 8.0, ortho: false, auto_ortho: false, wireframe: false }.projector(rect());
+        let size = icon_size(&s);
+        let mut v = Viewport3d { scene: Some(Arc::new(s.clone())), ..Viewport3d::default() };
+        let (h, at) = light_handles(&s.lights[0], size).into_iter().find(|(_, w)| p.project(*w).is_some()).unwrap();
+        let start = p.project(at).unwrap().0;
+        let end = start + (start - p.project(s.lights[0].position() + s.lights[0].direction() * size * 2.0).unwrap().0) * 0.5;
+        let ctx = egui::Context::default();
+        let pointer = |pos: Pos2, pressed: Option<bool>| {
+            let mut e = vec![egui::Event::PointerMoved(pos)];
+            if let Some(pressed) = pressed {
+                e.push(egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            }
+            e
+        };
+        let mut handled = Vec::new();
+        for events in [pointer(start, None), pointer(start, Some(true)), pointer((start + end.to_vec2()) / 2.0, None), pointer(end, None), pointer(end, Some(false)), vec![]] {
+            let raw = egui::RawInput { screen_rect: Some(rect()), events, ..Default::default() };
+            let _ = ctx.run_ui(raw, |ui| {
+                let resp = ui.interact(rect(), ui.scope_id().with("vp"), Sense::click_and_drag());
+                handled.push(v.light_handle_input(ui, &resp, &mut doc, 1, &p));
+                doc.commit(ui.input(|i| i.pointer.any_down()));
+            });
+        }
+        // (egui knows the hover from the second frame.)
+        assert_eq!(&handled[1..5], [true; 4], "hovered, pressed, dragged, released: {handled:?}");
+        assert!(matches!(h, LightHandle::Cone(_)) && v.light_drag.is_none());
+        let cone = doc.param("spot", "cone").as_f64().unwrap();
+        assert!(cone > 50.0, "pulled out: {cone}");
+        assert_eq!(doc.selection(), ["spot"], "the selection stays");
+        doc.undo();
+        assert_eq!(doc.param("spot", "cone").as_f64(), Some(40.0), "one undo step back to where it was");
+        // Not on a handle: nothing taken.
+        let raw = egui::RawInput { screen_rect: Some(rect()), events: pointer(rect().left_top() + Vec2::splat(5.0), None), ..Default::default() };
+        let _ = ctx.run_ui(raw, |ui| {
+            let resp = ui.interact(rect(), ui.scope_id().with("vp"), Sense::click_and_drag());
+            assert!(!v.light_handle_input(ui, &resp, &mut doc, 1, &p));
+        });
+    }
+
+    #[test]
+    fn looking_through_a_spot_or_area_light() {
+        let (_, mut s) = light_doc(json!({ "translate": [0, 3, 0], "rotate": [-90, 0, 0], "cone": 50 }), json!({ "translate": [2, 0, 0], "rotate": [0, 90, 0] }));
+        s.lights.push(Light { node: "bulb".into(), ..Light::new(LightKind::Point, Mat4::identity()) });
+        s.cameras.push(geom::Camera::default());
+        s.camera_nodes.push("cam".into());
+        let format = Size { width: 1920, height: 1080 };
+        // Through the spot, its cone's edge meets the frame's top and bottom.
+        let cam = light_camera(&s.lights[0], format).unwrap();
+        let edge = Vec3::new(0.0, 0.0, -3.0 * 25f64.to_radians().tan());
+        let (px, _) = cam.project(&edge, format).unwrap();
+        assert!(px[1].abs() < 0.5 || (px[1] - 1080.0).abs() < 0.5, "{px:?}");
+        assert!((px[0] - 960.0).abs() < 1e-6);
+        let a = light_camera(&s.lights[1], format).unwrap();
+        assert!((geom::transform_point(&a.world, &Vec3::zeros()) - Vec3::new(2.0, 0.0, 0.0)).norm() < 1e-12 && (a.fov() - 2.0 * (45f64.to_radians().tan() * 16.0 / 9.0).atan().to_degrees()).abs() < 1e-9);
+        assert!(light_camera(&s.lights[2], format).is_none());
+        // 0: the selected spot or area light, else the camera; again leaves.
+        let mut v = Viewport3d { scene: Some(Arc::new(s)), ..Viewport3d::default() };
+        v.look_through_selected(&["spot".to_string()]);
+        assert_eq!(v.look_through, Some(Through::Light("spot".into())));
+        assert_eq!(v.through_camera(), Some(cam));
+        assert_eq!(v.through_name(), "spot");
+        v.look_through_selected(&["spot".to_string()]);
+        assert_eq!(v.look_through, None, "out again, where the light was");
+        assert!((Vec3::from(v.view.center) - Vec3::new(0.0, 3.0 - v.view.distance, 0.0)).norm() < 1e-6, "{:?}", v.view.center);
+        v.look_through_selected(&["cam".to_string(), "panel".to_string()]);
+        assert_eq!(v.look_through, Some(Through::Light("panel".into())), "the primary (last) selected");
+        v.look_through = None;
+        v.look_through_selected(&["bulb".to_string()]);
+        assert_eq!(v.look_through, Some(Through::Camera(0)), "a point light has no view: the camera");
+        v.look_through = None;
+        v.scene = Some(Arc::new(Scene { lights: vec![Light { node: "bulb".into(), ..Light::new(LightKind::Point, Mat4::identity()) }], ..Scene::default() }));
+        v.look_through_selected(&["bulb".to_string()]);
+        assert!(v.look_through.is_none() && v.message.as_deref().is_some_and(|m| m.contains("Nothing to look through")));
+    }
+
+    /// G X 2 Enter on a selected light moves it 2 along X; undo puts it
+    /// back.
+    #[test]
+    fn g_x_2_enter_moves_a_light() {
+        use crate::gizmo3d::{tests::front, GestureKey, Input, Mode, Outcome, Transforming};
+        let (mut doc, s) = light_doc(json!({ "translate": [1, 2, 3] }), json!({}));
+        doc.commit(false);
+        let view = front();
+        let world = s.lights[0].world;
+        let mut g = Transforming::start(&doc, "spot", Mode::Move, &world, Pos2::new(400.0, 300.0), 1).unwrap();
+        let keys = vec![GestureKey::Axis(0, false), GestureKey::Digit('2')];
+        assert_eq!(g.step(&Input { mouse: Some(Pos2::new(410.0, 300.0)), keys, ..Input::default() }, &view, &mut doc), Outcome::Going);
+        assert_eq!(g.step(&Input { confirm: true, ..Input::default() }, &view, &mut doc), Outcome::Done);
+        assert_eq!(doc.param("spot", "translate"), json!([3.0, 2.0, 3.0]));
+        doc.commit(false);
+        doc.undo();
+        assert_eq!(doc.param("spot", "translate"), json!([1, 2, 3]));
     }
 
     #[test]

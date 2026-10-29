@@ -893,6 +893,14 @@ impl App {
                     self.editor.fit();
                     ui.close();
                 }
+                ui.separator();
+                let scene = self.viewer.viewport3d.has_scene();
+                let look = egui::Button::new("Look through selected").shortcut_text("0");
+                if ui.add_enabled(scene, look).on_hover_text("In the 3D view, look through the selected camera, spot light or area light (else the scene's camera); again to come back out").on_disabled_hover_text("View a node with a 3D scene first").clicked() {
+                    self.viewer.mode3d = true;
+                    self.viewer.viewport3d.look_through_selected(&self.doc.selection());
+                    ui.close();
+                }
             });
             ui.menu_button("Help", |ui| {
                 if ui.add(egui::Button::new("Arclight Help…").shortcut_text("F1")).clicked() {

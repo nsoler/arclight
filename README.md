@@ -27,7 +27,7 @@ Python wheels). All releases: [Releases](https://github.com/nsoler/arclight/rele
 
 ## Build
 
-Version **0.9.36** (alpha); see `CHANGELOG.md`.
+Version **0.9.37** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -133,8 +133,9 @@ project.
   scroll orbits, **⇧** pans, pinch or **Ctrl** zooms. Without a middle
   button, turn on *Emulate 3-button mouse* (Alt + left-drag).
 - **Views:** numpad **1 / 3 / 7** front, right, top (**Ctrl**: the
-  opposite sides), **5** perspective / orthographic, **0** through the
-  scene camera (its film frame, outside darkened), **2 / 4 / 6 / 8**
+  opposite sides), **5** perspective / orthographic, **0** (or **View ▸
+  Look through selected**) through the selected camera, spot light or area
+  light, else the scene camera (its film frame, outside darkened), **2 / 4 / 6 / 8**
   orbit 15°, **.** or **F** frame the selection, **Home** frame all;
   **`** (backtick) opens a pie of views around the pointer. The
   navigation gizmo (top right) does the same with the mouse: click an
@@ -171,7 +172,10 @@ that axis, the center to scale evenly. **Global / Local** sets the
 gizmo's axes. Every move, rotate or scale sets a key when the param is
 animated (at the current frame) and is one undo step; a linked param
 (e.g. a Card linked to tracker points) shows the gizmo gray and says what
-it's linked to: Unlink it in Properties to move it by hand.
+it's linked to: Unlink it in Properties to move it by hand. A selected spot
+light shows handles on its cone's edge (drag to change the cone angle) and
+an area light on its edges' middles (drag to resize it about its middle);
+these key and undo the same way.
 
 **Help → Arclight Help…** (or **F1**) opens a scrollable help window with
 these controls and more (the text is `docs/help.md`, built into the app;

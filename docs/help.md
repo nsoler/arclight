@@ -167,7 +167,7 @@ orthographic.
 | **3** / **⌘3** | Right / left |
 | **7** / **⌘7** | Top / bottom |
 | **5** | Perspective / orthographic |
-| **0** | Through the scene camera (its frame outlined, outside darkened) |
+| **0** | Through the selected camera, spot light or area light, else the scene camera (its frame outlined, outside darkened); again to come back out. Also **View ▸ Look through selected** |
 | **2** / **4** / **6** / **8** | Orbit 15° down / left / right / up |
 | **.** or **F** | Frame the selection |
 | **Home** | Frame everything |
@@ -176,7 +176,9 @@ orthographic.
 
 The number row works as well as the numpad. Axis views switch to
 orthographic until you orbit away. Orbiting leaves a camera view for the
-free view from where the camera was.
+free view from where the camera was. Looking through a spot or area light
+shows where it shines (a spot's cone just fills the frame's height): move
+or rotate it with G / R or the gizmo to aim it.
 
 ### Selecting in 3D
 
@@ -209,6 +211,12 @@ axes), **All**, or **Select** for none; **Global / Local** sets the axes. Gizmo
 drags and G / R / S key animated parameters at the current frame and are
 one undo step each. A parameter linked to another node can't be moved
 until it's unlinked.
+
+A selected **Spot Light** shows four square handles on the edge of its
+cone: drag one out or in to widen or narrow the **Cone angle**. A selected
+**Area Light** shows a handle in the middle of each edge: drag one to
+resize it (about its middle; the opposite edge moves too). These are one
+undo step too, and key animated parameters at the current frame.
 
 With several objects selected, the gizmo sits at their median point (the
 middle of their origins), and moving, rotating or scaling works on all of

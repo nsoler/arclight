@@ -11,6 +11,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.37 — 2026-10-29
+
+- 3D view: a selected Spot Light shows four handles on its cone's edge
+  (drag to change the Cone angle) and a selected Area Light a handle on
+  each edge (drag to resize it about its middle); they key animated
+  params, are one undo step, and refuse linked params with a message.
+  **0** (and **View ▸ Look through selected**) looks through the
+  selected camera, spot light or area light, else the scene's camera;
+  G / R / the gizmo then aim the light from its own view (M12 step b).
+
 ## 0.9.36 — 2026-10-29
 
 - Particles engine (`src/particles.rs`): emitters (point, line, rect,
