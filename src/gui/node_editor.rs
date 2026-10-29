@@ -2,7 +2,10 @@
 //!
 //! Inputs sit on a node's left edge, its output on the right. Drag from an
 //! output to an input (or the reverse) to connect; drag a connected input away
-//! to reroute or disconnect. Right-click the canvas, or press Shift+E for a
+//! to reroute or disconnect. Drop a wire dragged from an output onto another
+//! wire to put the node into it (or, when it can't go in, to feed that
+//! wire's input instead). Inputs are yellow squares, outputs green circles.
+//! Right-click the canvas, or press Shift+E for a
 //! searchable node browser, to add nodes; over a wire, the new node goes into
 //! it. Drop an unconnected node on a wire to splice it in; shake a node while
 //! dragging it to pull it out of its wires. Optional ports draw hollow. The
@@ -17,6 +20,10 @@ use eframe::egui::{
 };
 
 const PORT_R: f32 = 5.5;
+const IN_PORT_COLOR: Color32 = Color32::from_rgb(235, 205, 60);
+const IN_PORT_HOT: Color32 = Color32::from_rgb(255, 240, 150);
+const OUT_PORT_COLOR: Color32 = Color32::from_rgb(140, 225, 140);
+const OUT_PORT_HOT: Color32 = Color32::from_rgb(210, 255, 210);
 /// How close (screen points) the pointer must be to a wire to pick it.
 const WIRE_GRAB: f32 = 7.0;
 /// A shake: this many reversals of drag direction within `SHAKE_SECS`.
@@ -417,7 +424,7 @@ impl NodeEditor {
                 }
                 let hot = resp.hovered() || resp.dragged();
                 let port = ops::info(op).and_then(|o| o.inputs.get(i));
-                port_dot(&painter, p, self.zoom, hot, port.is_some_and(|p| p.optional));
+                port_dot(&painter, p, self.zoom, PortKind::Input, hot, port.is_some_and(|p| p.optional));
                 if *n_in > 1 && self.zoom > 0.6 {
                     let label = port.map_or("", |p| p.label);
                     // Outside the node, just above the incoming wire, clear of the title.
@@ -430,11 +437,21 @@ impl NodeEditor {
                 if resp.drag_started() {
                     self.wire = Some(Wire::FromOutput(id.clone()));
                 }
-                port_dot(&painter, p, self.zoom, resp.hovered() || resp.dragged(), false);
+                port_dot(&painter, p, self.zoom, PortKind::Output, resp.hovered() || resp.dragged(), false);
             }
         }
 
         // An in-progress wire follows the pointer and connects on release.
+        // From an output, a wire under the pointer (away from any input) is
+        // lit as the drop target.
+        if let (Some(Wire::FromOutput(src)), Some(ptr)) = (&self.wire, pointer) {
+            let lit = self.input_at(&geo, ptr).is_none().then(|| self.wire_at(doc, ptr, Some(src))).flatten();
+            if let Some(w) = lit {
+                if let (Some(from), Some(to)) = (rect_of(&w.src), geo.iter().find(|g| g.0 == w.dst)) {
+                    painter.add(bezier(Self::out_port(from), Self::in_port(to.2, w.port, to.3), Stroke::new(3.0, Color32::from_rgb(250, 190, 70))));
+                }
+            }
+        }
         if let (Some(wire), Some(ptr)) = (&self.wire, pointer) {
             let anchor = match wire {
                 Wire::FromOutput(src) => rect_of(src).map(Self::out_port),
@@ -452,15 +469,13 @@ impl NodeEditor {
             if let (Some(wire), Some(ptr)) = (self.wire.take(), pointer) {
                 match wire {
                     Wire::FromOutput(src) => {
-                        // The nearest input in reach, not the first: a Merge's
-                        // ports sit closer together than the reach.
-                        let hit = geo
-                            .iter()
-                            .flat_map(|(id, _, r, n)| (0..*n).map(move |i| (id, i, Self::in_port(*r, i, *n).distance(ptr))))
-                            .filter(|&(.., d)| d < PORT_R * 2.5)
-                            .min_by(|a, b| a.2.total_cmp(&b.2));
-                        if let Some((dst, i, _)) = hit {
-                            doc.connect(&src, dst, i);
+                        if let Some((dst, i)) = self.input_at(&geo, ptr) {
+                            doc.connect(&src, &dst, i);
+                        } else if let Some(w) = self.wire_at(doc, ptr, Some(&src)) {
+                            // Onto a wire: into it, or failing that, feed its input.
+                            if !(is_spliceable(doc, &src) && doc.insert_on_wire(&src, &w.src, &w.dst, w.port)) {
+                                doc.connect(&src, &w.dst, w.port);
+                            }
                         }
                     }
                     Wire::FromInput(dst, i) => {
@@ -483,6 +498,16 @@ impl NodeEditor {
         if let Some(mm) = minimap {
             self.minimap(ui, &painter, doc, mm);
         }
+    }
+
+    /// The input port in reach of screen point `p`: the nearest, not the
+    /// first, since a Merge's ports sit closer together than the reach.
+    fn input_at(&self, geo: &[(String, String, Rect, usize)], p: Pos2) -> Option<(String, usize)> {
+        geo.iter()
+            .flat_map(|(id, _, r, n)| (0..*n).map(move |i| (id, i, Self::in_port(*r, i, *n).distance(p))))
+            .filter(|&(.., d)| d < PORT_R * 2.5)
+            .min_by(|a, b| a.2.total_cmp(&b.2))
+            .map(|(id, i, _)| (id.clone(), i))
     }
 
     /// The wire within reach of screen point `p` (nearest first), leaving
@@ -729,6 +754,12 @@ fn is_free(doc: &Doc, id: &str) -> bool {
     !n.inputs.is_empty() && has_output(&n.op) && n.inputs.iter().all(String::is_empty) && !doc.graph.nodes.iter().any(|m| m.inputs.iter().any(|i| i == id))
 }
 
+/// A node whose output can be dropped into a wire: one with an input, the
+/// first of which is free (splicing it in sets that input).
+fn is_spliceable(doc: &Doc, id: &str) -> bool {
+    doc.node(id).is_some_and(|n| n.inputs.first().is_some_and(String::is_empty) && has_output(&n.op))
+}
+
 /// Distance from `p` to the wire drawn from `a` to `b` (see [`bezier`]).
 fn bezier_distance(a: Pos2, b: Pos2, p: Pos2) -> f32 {
     let dx = ((b.x - a.x).abs() * 0.5).max(40.0);
@@ -747,15 +778,38 @@ fn bezier_distance(a: Pos2, b: Pos2, p: Pos2) -> f32 {
         .fold(f32::INFINITY, f32::min)
 }
 
-fn port_dot(painter: &egui::Painter, p: Pos2, zoom: f32, hot: bool, optional: bool) {
+#[derive(Clone, Copy)]
+enum PortKind {
+    /// A yellow square.
+    Input,
+    /// A green circle.
+    Output,
+}
+
+fn port_dot(painter: &egui::Painter, p: Pos2, zoom: f32, kind: PortKind, hot: bool, optional: bool) {
     let r = PORT_R * zoom.max(0.6);
-    let color = if hot { Color32::from_rgb(250, 190, 70) } else { Color32::from_gray(210) };
-    if optional && !hot {
-        painter.circle_filled(p, r, Color32::from_gray(45));
-        painter.circle_stroke(p, r - 0.75, Stroke::new(1.5, color));
+    let color = match (kind, hot) {
+        (PortKind::Input, false) => IN_PORT_COLOR,
+        (PortKind::Input, true) => IN_PORT_HOT,
+        (PortKind::Output, false) => OUT_PORT_COLOR,
+        (PortKind::Output, true) => OUT_PORT_HOT,
+    };
+    let (fill, stroke) = if optional && !hot {
+        (Color32::from_gray(45), Stroke::new(1.5, color))
     } else {
-        painter.circle_filled(p, r, color);
-        painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_black_alpha(160)));
+        (color, Stroke::new(1.0, Color32::from_black_alpha(160)))
+    };
+    match kind {
+        PortKind::Input => {
+            // Squares read larger than circles of the same radius.
+            let sq = Rect::from_center_size(p, Vec2::splat(r * 1.8));
+            painter.rect_filled(sq, 1.0, fill);
+            painter.rect_stroke(sq, 1.0, stroke, egui::StrokeKind::Inside);
+        }
+        PortKind::Output => {
+            painter.circle_filled(p, r, fill);
+            painter.circle_stroke(p, r - 0.75, stroke);
+        }
     }
 }
 
@@ -890,6 +944,33 @@ mod tests {
         let out = NodeEditor::out_port(h.rect(&doc, &other));
         h.drag(&mut doc, out, to);
         assert_eq!(doc.node(&merge).unwrap().inputs[1], other, "output → B");
+    }
+
+    #[test]
+    fn an_output_dropped_on_a_wire_goes_into_it() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let src = doc.add_node("constant", [0.0, 0.0]);
+        let blur = doc.add_node("blur", [500.0, 0.0]);
+        let grade = doc.add_node("grade", [250.0, 250.0]);
+        let other = doc.add_node("constant", [0.0, 400.0]);
+        doc.connect(&src, &blur, 0);
+        let mut h = Harness::new();
+        h.frame(&mut doc, vec![]);
+        let mid = |h: &Harness, doc: &Doc| {
+            let b = doc.node(&blur).unwrap();
+            NodeEditor::out_port(h.rect(doc, &b.inputs[0])).lerp(NodeEditor::in_port(h.rect(doc, &blur), 0, b.inputs.len()), 0.5)
+        };
+        // A free node's output spliced in between…
+        let out = NodeEditor::out_port(h.rect(&doc, &grade));
+        let to = mid(&h, &doc);
+        h.drag(&mut doc, out, to);
+        assert_eq!(doc.node(&grade).unwrap().inputs[0], src, "src → grade");
+        assert_eq!(doc.node(&blur).unwrap().inputs[0], grade, "grade → blur");
+        // …and a source, which can't go in, feeds the wire's input instead.
+        let out = NodeEditor::out_port(h.rect(&doc, &other));
+        let to = mid(&h, &doc);
+        h.drag(&mut doc, out, to);
+        assert_eq!(doc.node(&blur).unwrap().inputs[0], other, "other → blur");
     }
 
     #[test]
