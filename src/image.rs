@@ -1,7 +1,7 @@
 //! The core raster type and file I/O.
 
 use crate::color::{self, Rgba};
-use anyhow::{Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::path::Path;
@@ -365,8 +365,8 @@ impl Image {
         Ok(img)
     }
 
-    /// Channels other than R, G, B and A become planes (`Z` as `depth`),
-    /// read only when the header lists some.
+    /// Channels other than R, G, B and A become planes, named as
+    /// [`exr_plane_name`] says; read only when the header lists some.
     fn read_exr_planes(path: &Path, img: &mut Image) -> Result<()> {
         let meta = exr::meta::MetaData::read_from_file(path, false).with_context(|| format!("reading EXR {}", path.display()))?;
         let extra = |name: &str| !matches!(name, "R" | "G" | "B" | "A");
@@ -520,13 +520,163 @@ impl Image {
     }
 }
 
-/// A plane's name in an EXR file and back (`reading`): depth is the
-/// standard `Z` channel; other names are kept.
+/// A plane's channel name in an EXR file and back (`reading`), in the
+/// `layer.channel` form other compositing and 3D apps read as layers:
+/// `depth` is `depth.Z` (and a bare `Z` reads as depth too), a matte
+/// `matte.<node>` is `matte.<node>.A`; others (`P.x`, `N.y`, `motion.u`,
+/// `diffuse.R`, `id`) keep their names.
 fn exr_plane_name(name: &str, reading: bool) -> String {
-    match (name, reading) {
-        ("Z", true) => "depth".into(),
-        ("depth", false) => "Z".into(),
-        _ => name.into(),
+    if reading {
+        match name {
+            "Z" | "depth.Z" => "depth".into(),
+            _ => match name.strip_prefix("matte.").and_then(|m| m.strip_suffix(".A")) {
+                Some(node) if !node.is_empty() => format!("matte.{node}"),
+                _ => name.into(),
+            },
+        }
+    } else if name == "depth" {
+        "depth.Z".into()
+    } else if name.starts_with("matte.") && split_plane(name).1.is_none() {
+        format!("{name}.A")
+    } else {
+        name.into()
+    }
+}
+
+/// The component names a plane name may end in after a dot, making it one
+/// channel of a layer (`P.x` of `P`), in the order a layer lists them.
+const COMPONENTS: [&str; 10] = ["R", "G", "B", "A", "x", "y", "z", "w", "u", "v"];
+
+/// A plane name's layer and component: `P.x` → (`P`, Some(`x`)), `depth`
+/// → (`depth`, None), `matte.card1` → (`matte.card1`, None).
+pub fn split_plane(name: &str) -> (&str, Option<&str>) {
+    match name.rsplit_once('.') {
+        Some((layer, c)) if !layer.is_empty() && COMPONENTS.contains(&c) => (layer, Some(c)),
+        _ => (name, None),
+    }
+}
+
+/// The components a new layer of `count` channels gets: x, y, z for
+/// positions and normals (`P`, `N`, `Pref`), u, v for `uv` and `motion`,
+/// none for one channel, else R, G, B, A.
+fn default_components(layer: &str, count: usize) -> Vec<&'static str> {
+    let names: &[&'static str] = match layer {
+        _ if count <= 1 => &[],
+        "P" | "N" | "Pref" | "Nref" => &["x", "y", "z", "w"],
+        "uv" | "motion" => &["u", "v", "w"],
+        _ => &["R", "G", "B", "A"],
+    };
+    names.iter().take(count).copied().collect()
+}
+
+/// Shuffling channels: what the Shuffle node does. A channel is named `R`,
+/// `G`, `B` or `A` (the pixels), `0` or `1` (a constant), or a plane's
+/// name; a layer is a plane or the planes `layer.<component>` together
+/// (see [`split_plane`]).
+impl Image {
+    /// The image's planes as layers, in the order they first appear, each
+    /// with its plane names in component order.
+    pub fn layers(&self) -> Vec<(String, Vec<String>)> {
+        let mut out: Vec<(String, Vec<String>)> = Vec::new();
+        for p in &self.planes {
+            let layer = split_plane(&p.name).0;
+            match out.iter_mut().find(|l| l.0 == layer) {
+                Some(l) => l.1.push(p.name.clone()),
+                None => out.push((layer.to_string(), vec![p.name.clone()])),
+            }
+        }
+        let rank = |n: &str| split_plane(n).1.and_then(|c| COMPONENTS.iter().position(|k| *k == c)).unwrap_or(0);
+        for l in &mut out {
+            l.1.sort_by_key(|n| rank(n));
+        }
+        out
+    }
+
+    /// The names of the planes making up `layer`, in component order (empty
+    /// when there's no such layer).
+    pub fn layer(&self, layer: &str) -> Vec<String> {
+        self.layers().into_iter().find(|l| l.0 == layer).map(|l| l.1).unwrap_or_default()
+    }
+
+    /// Channel `name`'s values over the data window (None when there's no
+    /// such channel).
+    pub fn channel(&self, name: &str) -> Option<Vec<f32>> {
+        let n = self.width * self.height;
+        match name {
+            "R" | "G" | "B" | "A" => {
+                let c = ["R", "G", "B", "A"].iter().position(|k| *k == name).unwrap();
+                Some(self.pixels.iter().map(|p| p[c]).collect())
+            }
+            "0" => Some(vec![0.0; n]),
+            "1" => Some(vec![1.0; n]),
+            _ => self.plane(name).map(|p| p.data.clone()),
+        }
+    }
+
+    /// A copy with R, G, B and A taken from channels `rgba` (planes kept).
+    pub fn shuffle(&self, rgba: [&str; 4]) -> Result<Image> {
+        let chans: Vec<Vec<f32>> = rgba.iter().map(|c| self.channel(c).ok_or_else(|| anyhow!("no channel '{c}'"))).collect::<Result<_>>()?;
+        let mut out = self.clone();
+        for (i, px) in out.pixels.iter_mut().enumerate() {
+            *px = std::array::from_fn(|c| chans[c][i]);
+        }
+        Ok(out)
+    }
+
+    /// Copy channel `source` into plane `plane`, new or replacing one.
+    pub fn copy_to_plane(&mut self, source: &str, plane: &str) -> Result<()> {
+        let data = self.channel(source).ok_or_else(|| anyhow!("no channel '{source}'"))?;
+        *self.plane_mut(plane) = data;
+        Ok(())
+    }
+
+    /// A copy with `layer` in its color: one channel into R, G and B; two
+    /// into R and G (B 0); three into R, G, B; four into R, G, B, A. Alpha
+    /// stays unless the layer has four channels; planes are kept.
+    pub fn layer_to_rgba(&self, layer: &str) -> Result<Image> {
+        let names = self.layer(layer);
+        let r = |i: usize| names.get(i).map(String::as_str);
+        let rgba = match names.len() {
+            0 => bail!("no layer '{layer}'"),
+            1 => [r(0).unwrap(); 3].into_iter().chain(["A"]).collect::<Vec<_>>(),
+            2 => vec![r(0).unwrap(), r(1).unwrap(), "0", "A"],
+            3 => vec![r(0).unwrap(), r(1).unwrap(), r(2).unwrap(), "A"],
+            _ => vec![r(0).unwrap(), r(1).unwrap(), r(2).unwrap(), r(3).unwrap()],
+        };
+        self.shuffle([rgba[0], rgba[1], rgba[2], rgba[3]])
+    }
+
+    /// The first `count` (1 to 4) of R, G, B, A into `layer`'s planes: the
+    /// layer's own components when it exists with that many, else the usual
+    /// ones for its name (x, y, z for `P` and `N`; u, v for `uv` and
+    /// `motion`; R, G, B, A otherwise; a single plane named `layer` for
+    /// one).
+    pub fn rgba_to_layer(&mut self, layer: &str, count: usize) -> Result<()> {
+        if !(1..=4).contains(&count) {
+            bail!("a layer takes 1 to 4 channels, not {count}");
+        }
+        let existing = self.layer(layer);
+        let names: Vec<String> = if existing.len() == count {
+            existing
+        } else {
+            self.remove_layers(&[layer]);
+            let comps = default_components(layer, count);
+            if comps.is_empty() { vec![layer.to_string()] } else { comps.iter().map(|c| format!("{layer}.{c}")).collect() }
+        };
+        for (c, name) in names.iter().enumerate() {
+            self.copy_to_plane(["R", "G", "B", "A"][c], name)?;
+        }
+        Ok(())
+    }
+
+    /// Drop layers `layers` (each a plane, or all of a layer's planes);
+    /// `*` drops every plane.
+    pub fn remove_layers(&mut self, layers: &[&str]) {
+        if layers.contains(&"*") {
+            self.planes.clear();
+        } else {
+            self.planes.retain(|p| !layers.contains(&split_plane(&p.name).0) && !layers.contains(&p.name.as_str()));
+        }
     }
 }
 
@@ -610,13 +760,13 @@ mod tests {
         img.write(&path).unwrap();
         let back = Image::read(&path).unwrap();
         assert_eq!((back.format, back.window(), &back.pixels), (img.format, img.window(), &img.pixels));
-        assert_eq!(back.plane("depth"), img.plane("depth"), "Z in the file, depth here");
+        assert_eq!(back.plane("depth"), img.plane("depth"), "depth.Z in the file, depth here");
         assert_eq!(back.plane("id"), img.plane("id"));
         assert_eq!(back.plane_at("depth", 2, 1), 11.0);
         assert_eq!(back.plane_at("depth", 0, 0), 0.0, "outside the window");
         assert_eq!(back.plane_stats()[0], serde_json::json!({ "name": "depth", "min": 10.0, "max": 15.0, "mean": 12.5 }));
         let names: Vec<String> = exr::meta::MetaData::read_from_file(&path, false).unwrap().headers[0].channels.list.iter().map(|c| c.name.to_string()).collect();
-        assert!(names.contains(&"Z".to_string()), "{names:?}");
+        assert!(names.contains(&"depth.Z".to_string()), "{names:?}");
         // The frame copy keeps them, moved into place.
         let flat = back.flat();
         assert_eq!(flat.plane_at("depth", 3, 2), 15.0);
@@ -649,5 +799,101 @@ mod tests {
         assert!(a.intersect(&IRect::new(5, 5, 6, 6)).is_empty());
         assert_eq!(IRect::default().union(&b), b);
         assert_eq!(a.expand(1), IRect::new(-1, -1, 5, 5));
+    }
+
+    /// A 3 × 2 image carrying render passes: position, normal, motion,
+    /// depth, a matte, a lighting layer and an id.
+    fn passes() -> Image {
+        let mut img = Image::blank(Size { width: 4, height: 3 }, IRect::new(1, 0, 4, 2));
+        img.pixels.iter_mut().enumerate().for_each(|(i, p)| *p = [0.1 * i as f32, 0.2, 0.3, 1.0]);
+        let ramp = |k: f32| (0..6).map(|i| k + i as f32).collect::<Vec<f32>>();
+        for (c, k) in ["P.z", "P.x", "P.y", "N.x", "N.y", "N.z", "motion.u", "motion.v", "diffuse.R", "diffuse.G", "diffuse.B"].iter().zip(1..) {
+            *img.plane_mut(c) = ramp(10.0 * k as f32);
+        }
+        *img.plane_mut("depth") = ramp(-5.0);
+        *img.plane_mut("matte.card1") = vec![0.0, 0.5, 1.0, 1.0, 0.25, 0.0];
+        *img.plane_mut("id") = vec![3.0; 6];
+        img
+    }
+
+    #[test]
+    fn exr_writes_every_plane_with_standard_names_and_reads_them_back() {
+        let dir = std::env::temp_dir().join(format!("arclight_exrpasses_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = passes();
+        let path = dir.join("passes.exr");
+        img.write(&path).unwrap();
+        let names: Vec<String> = exr::meta::MetaData::read_from_file(&path, false).unwrap().headers[0].channels.list.iter().map(|c| c.name.to_string()).collect();
+        for want in ["R", "G", "B", "A", "P.x", "P.y", "P.z", "N.x", "motion.u", "motion.v", "depth.Z", "matte.card1.A", "diffuse.R", "id"] {
+            assert!(names.iter().any(|n| n == want), "{want} not in {names:?}");
+        }
+        let back = Image::read(&path).unwrap();
+        assert_eq!((back.window(), &back.pixels), (img.window(), &img.pixels));
+        let mut a: Vec<&Plane> = img.planes.iter().collect();
+        let mut b: Vec<&Plane> = back.planes.iter().collect();
+        a.sort_by(|x, y| x.name.cmp(&y.name));
+        b.sort_by(|x, y| x.name.cmp(&y.name));
+        assert_eq!(a, b, "every plane back under its own name");
+        // A bare Z, as other apps may write depth, reads as depth too.
+        assert_eq!((exr_plane_name("Z", true), exr_plane_name("matte.a.b.A", true)), ("depth".to_string(), "matte.a.b".to_string()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn layers_group_planes_by_component() {
+        let img = passes();
+        let layers: Vec<(String, Vec<String>)> = img.layers();
+        let names: Vec<&str> = layers.iter().map(|l| l.0.as_str()).collect();
+        assert_eq!(names, ["P", "N", "motion", "diffuse", "depth", "matte.card1", "id"]);
+        assert_eq!(img.layer("P"), ["P.x", "P.y", "P.z"], "in component order");
+        assert_eq!(img.layer("diffuse"), ["diffuse.R", "diffuse.G", "diffuse.B"]);
+        assert!(img.layer("nothing").is_empty());
+        assert_eq!((split_plane("matte.card1"), split_plane("N.x")), (("matte.card1", None), ("N", Some("x"))));
+    }
+
+    #[test]
+    fn shuffles_copy_channels_and_planes_round_trip() {
+        let img = passes();
+        // Any channel into any of R, G, B, A.
+        let s = img.shuffle(["A", "N.y", "0", "1"]).unwrap();
+        assert!(s.pixels.iter().zip(&img.plane("N.y").unwrap().data).all(|(p, n)| p == &[1.0, *n, 0.0, 1.0]));
+        assert_eq!(s.planes, img.planes, "planes kept");
+        assert!(img.shuffle(["R", "G", "B", "nope"]).err().is_some_and(|e| e.to_string().contains("nope")));
+        // A pass to RGBA and back is unchanged; its color shows the pass.
+        for layer in ["P", "N", "motion", "diffuse", "depth", "matte.card1"] {
+            let mut rgba = img.layer_to_rgba(layer).unwrap();
+            let names = img.layer(layer);
+            for (c, name) in names.iter().enumerate() {
+                assert_eq!(rgba.channel(["R", "G", "B", "A"][c]), rgba.channel(name), "{layer}: {name}");
+            }
+            rgba.rgba_to_layer(layer, names.len()).unwrap();
+            assert_eq!(rgba.planes, img.planes, "{layer} back unchanged");
+        }
+        // One channel shows as gray, alpha kept; two leave blue at 0.
+        let d = img.layer_to_rgba("depth").unwrap();
+        assert!(d.pixels.iter().zip(&img.plane("depth").unwrap().data).all(|(p, z)| p == &[*z, *z, *z, 1.0]));
+        assert!(img.layer_to_rgba("motion").unwrap().pixels.iter().all(|p| p[2] == 0.0));
+        assert!(img.layer_to_rgba("nothing").is_err());
+        // The color into new layers, named as such passes are.
+        let mut out = img.clone();
+        out.rgba_to_layer("Pref", 3).unwrap();
+        out.rgba_to_layer("uv", 2).unwrap();
+        out.rgba_to_layer("glow", 4).unwrap();
+        out.rgba_to_layer("mask", 1).unwrap();
+        assert_eq!(out.layer("Pref"), ["Pref.x", "Pref.y", "Pref.z"]);
+        assert_eq!(out.layer("uv"), ["uv.u", "uv.v"]);
+        assert_eq!(out.layer("glow"), ["glow.R", "glow.G", "glow.B", "glow.A"]);
+        assert_eq!(out.channel("mask"), img.channel("R"));
+        assert!(out.rgba_to_layer("x", 5).is_err());
+        // Replacing a layer with fewer channels drops the old ones.
+        out.rgba_to_layer("diffuse", 1).unwrap();
+        assert_eq!(out.layer("diffuse"), ["diffuse"]);
+        // One channel into a plane; layers removed.
+        out.copy_to_plane("G", "P.x").unwrap();
+        assert_eq!(out.channel("P.x"), img.channel("G"));
+        out.remove_layers(&["P", "matte.card1", "id"]);
+        assert!(out.layer("P").is_empty() && out.plane("matte.card1").is_none() && out.plane("id").is_none() && !out.layer("N").is_empty());
+        out.remove_layers(&["*"]);
+        assert!(out.planes.is_empty());
     }
 }

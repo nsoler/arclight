@@ -11,6 +11,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.15 — 2026-10-29
+
+- Render passes in EXR: every plane is written under the standard
+  `layer.channel` name (`depth.Z`, `P.x`, `N.x`, `motion.u`,
+  `matte.<node>.A`, …) and read back by name (a bare `Z` still reads as
+  depth). The engine side of Shuffle: copy any channel or pass into R,
+  G, B, A or a named plane, and remove planes (M10 step b).
+
 ## 0.9.14 — 2026-10-29
 
 - Wavefront OBJ import, engine side (`mesh::read_obj`): objects and
