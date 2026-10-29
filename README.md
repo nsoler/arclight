@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.0.15** (alpha); see `CHANGELOG.md`.
+Version **0.0.16** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -290,7 +290,7 @@ what loaded, and `arclight ops [OP]` to see the op catalog.
 
 ## I/O formats
 
-- **EXR**: full 32-bit float, assumed linear + premultiplied.
+- **EXR**: full 32-bit float, assumed linear + premultiplied. The display window is the frame and the data window where the pixels are (smaller, offset or past the frame); writing stores only the data window.
 - **DPX** (`.dpx`): read at 8, 10, 12 or 16 bits (RGB, RGBA, ABGR or
   luma; 10/12-bit filled or packed; either byte order; any orientation).
   Log (printing density) DPX is converted to linear with the Cineon curve

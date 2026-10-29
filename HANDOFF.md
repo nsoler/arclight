@@ -20,7 +20,7 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.15**.
+  in the same commit as the change. Current: **0.0.16**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -111,7 +111,14 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   mean of a grid of bilinear taps over it, up to `MAX_TAPS` = 16 a side;
   else plain bilinear (unchanged output). A 1-px checkerboard shrunk 4×
   went from values 0.03–0.97 to 0.5 ± 0.08. Also set the version to
-  0.0.15 (was 0.1.0), shown in the Help menu; `CHANGELOG.md` added. No Developer ID signing / notarization (needs a paid Apple
+  0.0.15 (was 0.1.0), shown in the Help menu; `CHANGELOG.md` added.
+- **Session 8, part 1** (user request: format gaps), **v0.0.16**: EXR data
+  windows. `read_exr` sets `format` from the display window and `x0/y0`
+  from the layer position minus the display origin; `write_exr` writes a
+  `Layer` of the window's size at `layer_position`, display window = the
+  frame (empty window: one transparent pixel at 0,0). Checked with
+  oiiotool-made offset / past-the-frame data windows and `exrheader` on
+  ours. No Developer ID signing / notarization (needs a paid Apple
   account); ffmpeg not bundled (GPL builds; Homebrew instead).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
@@ -175,8 +182,7 @@ fast-forward `main` after each, per the standing instruction above), and
 report back after a few milestones.
 
 1. **Small UX debts:** formats: RLE / float / 1-bit
-   DPX, DPX with alpha, EXR data windows (EXR reads ignore the file's data
-   window), video color tags (encodes carry no color metadata).
+   DPX, DPX with alpha, video color tags (encodes carry no color metadata).
 2. **Session-4 follow-ups** (small to medium):
    - Python plugins (custom ops written in Python): embed Python in the
      host via the `python/` crate, or run them out of process.

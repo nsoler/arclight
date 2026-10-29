@@ -226,6 +226,9 @@ impl Image {
         Ok(img)
     }
 
+    /// An EXR's display window is the frame; its data window (the first
+    /// RGBA layer's position and size) is where the pixels go, which may be
+    /// smaller than the frame, offset, or reach past it.
     fn read_exr(path: &Path) -> Result<Image> {
         use exr::prelude::{read_first_rgba_layer_from_file, RgbaChannels, Vec2};
         let loaded = read_first_rgba_layer_from_file(
@@ -238,7 +241,13 @@ impl Image {
             },
         )
         .with_context(|| format!("reading EXR {}", path.display()))?;
-        Ok(loaded.layer_data.channel_data.pixels)
+        let display = loaded.attributes.display_window;
+        let origin = loaded.layer_data.attributes.layer_position;
+        let mut img = loaded.layer_data.channel_data.pixels;
+        img.format = Size { width: display.size.width(), height: display.size.height() };
+        img.x0 = origin.x() - display.position.x();
+        img.y0 = origin.y() - display.position.y();
+        Ok(img)
     }
 
     /// Write to disk. `.exr` keeps full float; `.tif`/`.tiff` are 16-bit
@@ -325,14 +334,22 @@ impl Image {
         buf
     }
 
+    /// The frame as the display window and only the data window's pixels
+    /// (an empty window: one transparent pixel, as EXR needs some), 32-bit
+    /// float, losslessly compressed.
     fn write_exr(&self, path: &Path) -> Result<()> {
-        use exr::prelude::write_rgba_file;
-        let frame = self.flat();
-        write_rgba_file(path, frame.width, frame.height, |x, y| {
-            let p = frame.get(x, y);
-            (p[0], p[1], p[2], p[3])
-        })
-        .with_context(|| format!("writing EXR {}", path.display()))?;
+        use exr::meta::attribute::IntegerBounds;
+        use exr::prelude::{Encoding, Image as ExrImage, Layer, LayerAttributes, SpecificChannels, Vec2, WritableImage};
+        let w = self.window();
+        let (origin, size) = if w.is_empty() { ((0, 0), (1, 1)) } else { ((w.x0, w.y0), (self.width, self.height)) };
+        let attributes = LayerAttributes { layer_position: Vec2(origin.0, origin.1), ..Default::default() };
+        let channels = SpecificChannels::rgba(|p: Vec2<usize>| {
+            let px = if w.is_empty() { color::TRANSPARENT } else { self.get(p.x(), p.y()) };
+            (px[0], px[1], px[2], px[3])
+        });
+        let mut image = ExrImage::from_layer(Layer::new(size, attributes, Encoding::FAST_LOSSLESS, channels));
+        image.attributes.display_window = IntegerBounds::new((0, 0), (self.format.width, self.format.height));
+        image.write().to_file(path).with_context(|| format!("writing EXR {}", path.display()))?;
         Ok(())
     }
 }
@@ -378,6 +395,30 @@ mod tests {
         // The TIFF marks its fourth channel as alpha, and is 16-bit.
         let tif = image::open(dir.join("frame.tif")).unwrap();
         assert_eq!(tif.color(), image::ColorType::Rgba16);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn exr_keeps_the_data_window() {
+        let dir = std::env::temp_dir().join(format!("arclight_exrdw_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A 3×2 layer at (-1, 4) in a 6×5 frame (past its left and bottom
+        // edges), with distinct pixels.
+        let mut img = Image::blank(Size { width: 6, height: 5 }, IRect::new(-1, 4, 2, 6));
+        for (i, p) in img.pixels.iter_mut().enumerate() {
+            *p = [i as f32, 0.5, 2.5, 1.0];
+        }
+        let path = dir.join("layer.exr");
+        img.write(&path).unwrap();
+        let back = Image::read(&path).unwrap();
+        assert_eq!((back.format, back.window()), (img.format, img.window()));
+        assert_eq!(back.pixels, img.pixels);
+        // Nothing stored: a transparent frame of the right size.
+        let empty = Image::blank(Size { width: 6, height: 5 }, IRect::default());
+        empty.write(&path).unwrap();
+        let back = Image::read(&path).unwrap();
+        assert_eq!(back.format, empty.format);
+        assert!(back.flat().pixels.iter().all(|p| *p == color::TRANSPARENT));
         std::fs::remove_dir_all(&dir).ok();
     }
 

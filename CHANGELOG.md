@@ -7,6 +7,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.16 — 2026-10-29
+
+- EXR data windows: reading places an EXR's pixels where its data window
+  says, in a frame the size of its display window (they used to land at
+  0,0 in a frame the size of the data). Writing stores only the image's
+  data window, inside a display window of the frame, so a small layer
+  makes a small file. Checked against oiiotool and exrheader.
+
 ## 0.0.15 — 2026-10-28
 
 First numbered version (before this the crates said 0.1.0). Includes all
