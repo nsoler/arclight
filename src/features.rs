@@ -607,18 +607,4 @@ mod tests {
         let (median, p95) = median_and_p95(errs.into_iter().map(|e| e.1));
         assert!(median < 0.05 && p95 < 0.2, "median {median}, 95% {p95}");
     }
-
-    #[test]
-    fn dbg_timing() {
-        let fmt = Size { width: 1920, height: 1080 };
-        let tex = Blobs::new(20000, 2048.0, 2048.0, 5).image(2048, 2048, 0.0, 0.0);
-        let wall = Card { image: Arc::new(tex), world: geom::trs([0.0, 0.0, -5.0], [0.0; 3], [1.0; 3]), size: [16.0, 16.0] };
-        let scene = Scene { cards: vec![wall], ..Scene::default() };
-        let cam = |t: f64| Camera { focal: 18.0, world: geom::trs([0.02 * t, 0.01 * t, -0.02 * t], [0.0, 0.2 * t, 0.1 * t], [1.0; 3]), ..Camera::default() };
-        let frames: Vec<Image> = (0..20).map(|f| crate::render3d::render(&scene, &cam(f as f64), fmt, 1, None)).collect();
-        let mut tracker = FeatureTracker::new(Settings { max_features: 200, ..Settings::default() });
-        let t0 = std::time::Instant::now();
-        for (f, img) in frames.iter().enumerate() { tracker.push(f as i64, img); }
-        eprintln!("TIMING {:.1} ms/frame, live {}", t0.elapsed().as_secs_f64() * 1000.0 / 20.0, tracker.live().count());
-    }
 }
