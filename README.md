@@ -52,6 +52,21 @@ Space) and any freedesktop desktop's menu. The entry runs this checkout's
 `target/release/arclight-gui`, so later release builds need no reinstall.
 No root needed; nothing outside `~/.local/share` is touched.
 
+### Linux release tarball
+
+```sh
+packaging/linux/build-tarball.sh   # -> dist/arclight-<version>-linux-x86_64.tar.gz
+```
+
+The tarball holds `bin/arclight-gui`, `bin/arclight`, the example clip and
+icons. Unpack it and run `./install.sh` to put the binaries in
+`~/.local/bin` and Arclight in the app launcher (`PREFIX=… ./install.sh`
+for elsewhere; `./uninstall.sh` removes it), or run `bin/arclight-gui` in
+place. The binaries link only glibc, so they run on the distribution they
+were built on (Arch / Omarchy for the published releases) and newer ones.
+Releases are on GitHub (`gh release list`), with the macOS DMG beside the
+tarball.
+
 ### macOS (Apple Silicon)
 
 ```sh
@@ -62,7 +77,8 @@ packaging/macos/build-dmg.sh      # -> dist/Arclight.app, dist/Arclight-<version
 Run on a Mac: Apple's SDK, `iconutil` and `hdiutil` only run there. Without
 one, the **macOS build** GitHub Actions workflow (`.github/workflows/macos.yml`)
 does the same on a GitHub-hosted M-series Mac, started by hand from the
-Actions tab or by pushing a `v*` tag; the DMG is attached to the run. The
+Actions tab or by pushing a `v*` tag; the DMG is attached to the run and,
+for a tag, to that tag's GitHub release. The
 app is signed ad hoc, not with a Developer ID, so a downloaded copy opens
 the first time with right-click → **Open** (or `xattr -dr
 com.apple.quarantine /Applications/Arclight.app`). ffmpeg isn't bundled:

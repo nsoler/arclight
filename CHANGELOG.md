@@ -19,6 +19,11 @@ menu, `arclight --version`, the MCP server info and Python's
   error naming it. Scripts: `export_tracker` / `to_transform` /
   `to_corner_pin` take `linked` (default true), and `set_params` accepts
   `{"link": {...}}` values (see README).
+- Releases: `packaging/linux/build-tarball.sh` packages a Linux build
+  (`arclight-<ver>-linux-x86_64.tar.gz`: GUI, CLI, example clip, icons and
+  a per-user `install.sh` / `uninstall.sh` under `~/.local`), and the macOS
+  workflow attaches its DMG to the GitHub release of a `v*` tag. The GUI
+  finds the starter clip in a release's `share/arclight`.
 
 ## 0.0.18 — 2026-10-29
 
