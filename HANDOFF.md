@@ -36,11 +36,15 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   close-with-unsaved-changes dialog's Save / Don't Save buttons; Corner
   Pin From/To = image corners buttons; motion blur on real animation;
   10-bit footage and DPX/TIFF/EXR sequences from real productions.
-- **App icon:** the user replaced the placeholder `assets/arclight.svg` /
-  `.png` with their own design (teal, "ARCLIGHT", on a 612×792 page with
-  white background). As an icon it renders small and non-square; offer to
-  crop the SVG viewBox to the logo (square) if they want, but don't change
-  their art unasked. The PNG is built into the GUI (`app_icon()`).
+- **App icon:** the user's own design (teal, "ARCLIGHT") replaced the
+  placeholder. `assets/arclight.svg` is framed as a square around the
+  logo (viewBox `129.875 146.75 305 305`; the artwork itself unchanged)
+  with "ARCLIGHT" converted to outlines in Source Sans 3 Regular (not
+  installed here; outlined so it renders the same everywhere).
+  `assets/arclight.png` is rendered from it at 256 px on transparency
+  (`rsvg-convert -w 256 -h 256`) and built into the GUI (`app_icon()`);
+  re-render it after editing the SVG, then rebuild and `./install.sh`.
+  The lettering is dark teal (#033c3a), faint on dark backgrounds.
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
   (Rectangle, Ellipse, Polygon, Roto), Transform layer dragging in the viewer,
