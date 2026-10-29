@@ -75,8 +75,12 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
 - **Versioning (standing instruction, 2026-10-28; renumbered
   2026-10-29):** Arclight is alpha, `0.8.x` (the user renumbered 0.0.36
   to **0.8.1**: their earlier numbering was a mistake; releases before
-  that are v0.0.x). Every feature or change that ships bumps the last
-  number (0.8.1 → 0.8.2 → …) in `Cargo.toml`, `python/Cargo.toml` and
+  that are v0.0.x). Scheme: `0.<phase>.<increment>`: the middle number
+  is the phase the user says the project is in (8 now); the last counts
+  shipped changes within it. Every feature or change that ships bumps
+  the last number (0.8.1 → 0.8.2 → …); when the user declares a new
+  phase, the middle number goes up and the last restarts at 1 (0.9.1).
+  The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
   in the same commit as the change. Current: **0.8.1**.
 - ~23,200 lines of Rust + Python. Tests: 134 library + 10 CLI + 46 GUI
