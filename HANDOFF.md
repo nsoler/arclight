@@ -459,6 +459,16 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   ones (`.hdr`) are read as linear; 8-bit as before. Video stays 8-bit
   (ffmpeg `-pix_fmt rgba`): a 16-bit/float decode path would be the next
   step for 10-bit footage.
+- **Session 7, part 17** (user request: EXR/TIFF/Targa sequences, WebP):
+  reading already worked for all (image crate default formats + `####`
+  detection); verified with generated 5-frame sequences of EXR, 8/16-bit
+  LZW/ZIP TIFF, RLE Targa, lossy/lossless WebP. Added: a missing frame in
+  a sequence holds the nearest earlier one (`media::existing_frame_path`);
+  TIFF is written by the `tiff` crate directly as 16-bit RGB +
+  UnassociatedAlpha ExtraSamples, LZW (the image crate's RGBA TIFF had no
+  ExtraSamples tag, so ImageMagick and others didn't see the alpha); JPEG
+  writes RGB over black (RGBA failed); the file dialogs list
+  `READ_EXTS` / `WRITE_EXTS` (adds tga, webp, hdr, bmp, mxf, mpg).
 - **CorridorKey** (AI keyer, github.com/nikopueringer/CorridorKey; the
   OFX port gitcapoom/corridorkey_ofx is Windows/Resolve-only): the user
   deferred it. If revisited: run upstream's PyTorch engine (Linux OK; the

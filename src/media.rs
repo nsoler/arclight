@@ -74,6 +74,20 @@ pub fn frame_path(pattern: &str, frame: i64) -> PathBuf {
     }
 }
 
+/// The file for `frame` of a sequence, or, when it's missing, the nearest
+/// one before it within `first..=last` (else the nearest after): a gap in
+/// a sequence holds the last frame instead of failing. Stills and complete
+/// sequences get `frame_path`.
+pub fn existing_frame_path(pattern: &str, frame: i64, first: i64, last: i64) -> PathBuf {
+    let want = frame_path(pattern, frame);
+    if want.exists() || !is_sequence_pattern(pattern) {
+        return want;
+    }
+    let before = (first..frame).rev().map(|f| frame_path(pattern, f));
+    let after = (frame + 1..=last).map(|f| frame_path(pattern, f));
+    before.chain(after).find(|p| p.exists()).unwrap_or(want)
+}
+
 /// Scan the pattern's directory for matching files and return the frame range.
 pub fn detect_sequence_range(pattern: &str) -> Option<(i64, i64)> {
     let p = parse_pattern(pattern)?;
@@ -403,6 +417,9 @@ mod tests {
         let (pat, a, b) = sequence_from_file(&dir.join("plate.0004.png")).unwrap();
         assert!(pat.ends_with("plate.####.png"), "{pat}");
         assert_eq!((a, b), (3, 9));
+        // Frames 5–8 are missing: they hold 4; before the first, 3 is used.
+        let at = |f| existing_frame_path(&pat, f, 2, 9).file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!([at(4), at(5), at(8), at(9), at(2)], ["plate.0004.png", "plate.0004.png", "plate.0004.png", "plate.0009.png", "plate.0003.png"]);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

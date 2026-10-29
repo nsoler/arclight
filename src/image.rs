@@ -241,8 +241,9 @@ impl Image {
         Ok(loaded.layer_data.channel_data.pixels)
     }
 
-    /// Write to disk. `.exr` keeps full float; other extensions are encoded as
-    /// 8-bit sRGB after unpremultiplying.
+    /// Write to disk. `.exr` keeps full float; `.tif`/`.tiff` are 16-bit
+    /// sRGB with alpha; other extensions are 8-bit sRGB after
+    /// unpremultiplying (JPEG, which has no alpha, over black).
     pub fn write(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -262,10 +263,42 @@ impl Image {
     }
 
     fn write_ldr(&self, path: &Path) -> Result<()> {
-        self.flat()
-            .to_rgba8()
-            .save(path)
-            .with_context(|| format!("writing image {}", path.display()))?;
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        let flat = self.flat();
+        match ext.as_str() {
+            "tif" | "tiff" => flat.write_tiff(path),
+            // No alpha in JPEG: the color over black.
+            "jpg" | "jpeg" => {
+                let mut rgb = image::RgbImage::new(flat.width as u32, flat.height as u32);
+                for (out, px) in rgb.pixels_mut().zip(&flat.pixels) {
+                    out.0 = std::array::from_fn(|c| (color::linear_to_srgb(px[c].max(0.0)) * 255.0).round() as u8);
+                }
+                Ok(rgb.save(path)?)
+            }
+            _ => Ok(flat.to_rgba8().save(path)?),
+        }
+        .with_context(|| format!("writing image {}", path.display()))
+    }
+
+    /// 16-bit sRGB TIFF with straight alpha, marked as alpha (the
+    /// ExtraSamples tag, which other apps need to see it), LZW-compressed.
+    fn write_tiff(&self, path: &Path) -> Result<()> {
+        use tiff::encoder::{colortype::RGB16, Compression, TiffEncoder};
+        use tiff::tags::ExtraSamples;
+        let to16 = |v: f32| (v.clamp(0.0, 1.0) * 65535.0).round() as u16;
+        let data: Vec<u16> = self
+            .pixels
+            .iter()
+            .flat_map(|&px| {
+                let s = color::unpremultiply(px);
+                [to16(color::linear_to_srgb(s[0])), to16(color::linear_to_srgb(s[1])), to16(color::linear_to_srgb(s[2])), to16(s[3])]
+            })
+            .collect();
+        let file = std::io::BufWriter::new(std::fs::File::create(path)?);
+        let mut tiff = TiffEncoder::new(file)?.with_compression(Compression::Lzw);
+        let mut img = tiff.new_image::<RGB16>(self.width as u32, self.height as u32)?;
+        img.extra_samples(&[ExtraSamples::UnassociatedAlpha])?;
+        img.write_data(&data)?;
         Ok(())
     }
 
@@ -318,6 +351,26 @@ mod tests {
         image::DynamicImage::ImageRgb32F(hdr).save(&path).unwrap();
         let px = Image::read(&path).unwrap().at(0, 0);
         assert!((px[0] - 4.0).abs() < 0.05 && (px[1] - 0.5).abs() < 0.01 && px[3] == 1.0, "{px:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn tiff_tga_webp_and_jpeg_write_and_read_back() {
+        let dir = std::env::temp_dir().join(format!("arclight_formats_{}", std::process::id()));
+        let src = Image::filled(4, 3, [0.1, 0.25, 0.4, 0.5]);
+        for ext in ["tif", "tga", "webp", "png", "jpg"] {
+            let path = dir.join(format!("frame.{ext}"));
+            src.write(&path).unwrap();
+            let back = Image::read(&path).unwrap().at(1, 1);
+            // 16-bit TIFF is near exact; 8-bit within rounding; JPEG, with no
+            // alpha, comes back opaque (over black).
+            let tol = if ext == "tif" { 1e-4 } else { 0.01 };
+            let want = if ext == "jpg" { [0.1, 0.25, 0.4, 1.0] } else { [0.1, 0.25, 0.4, 0.5] };
+            assert!(back.iter().zip(want).all(|(a, b)| (a - b).abs() < tol), "{ext}: {back:?}");
+        }
+        // The TIFF marks its fourth channel as alpha, and is 16-bit.
+        let tif = image::open(dir.join("frame.tif")).unwrap();
+        assert_eq!(tif.color(), image::ColorType::Rgba16);
         std::fs::remove_dir_all(&dir).ok();
     }
 

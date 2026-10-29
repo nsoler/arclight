@@ -268,10 +268,19 @@ what loaded, and `arclight ops [OP]` to see the op catalog.
 ## I/O formats
 
 - **EXR**: full 32-bit float, assumed linear + premultiplied.
-- **PNG / JPEG / TIFF / …** (via the `image` crate): read from sRGB at the
-  file's own depth (8- or 16-bit), written as 8-bit sRGB; straight alpha on
-  disk, premultiplied internally. Float files such as Radiance `.hdr` are
-  read as linear.
+- **TIFF** (`.tif`/`.tiff`): read at 8, 16 or 32-bit (any common
+  compression); written as 16-bit sRGB with straight alpha (tagged as
+  alpha), LZW-compressed.
+- **Targa** (`.tga`), **WebP** (`.webp`), **PNG**, **JPEG**, **BMP**: read
+  from sRGB at the file's own depth (8- or 16-bit); written as 8-bit sRGB
+  with straight alpha (WebP lossless, Targa RLE). JPEG has no alpha, so it
+  is written over black. Float files such as Radiance `.hdr` are read as
+  linear.
+- **Sequences**: any of the above as numbered files. Pick (or drop) one
+  file of `shot.0001.exr`, `shot.0002.exr`, … and Media In finds the whole
+  sequence (`shot.####.exr`) and its frame range; a single numbered file is
+  a one-frame sequence. A frame missing from the middle holds the nearest
+  earlier frame. Media Out and Write take `####` / `%04d` patterns.
 - **Video** (via ffmpeg): `.mp4 .mov .m4v .mkv .avi .webm .mxf .mpg .mpeg`
   in; H.264 `.mp4` or ProRes 422 HQ `.mov` out. Decoded to 8-bit sRGB.
 - **Resolution**: no fixed limit on reads. Every image is held as 32-bit

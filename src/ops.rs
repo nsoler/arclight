@@ -1086,7 +1086,7 @@ fn media_in(params: &Value, ctx: &EvalContext) -> Result<Image> {
         let img = media::read_video_frame(path, (frame - p.first_frame) as usize)?;
         Ok(Arc::unwrap_or_clone(img))
     } else {
-        Image::read(&media::frame_path(&p.path, frame))
+        Image::read(&media::existing_frame_path(&p.path, frame, p.first_frame, last))
     }
 }
 

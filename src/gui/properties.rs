@@ -47,6 +47,15 @@ struct TrackJob {
     result: Option<(bool, String)>,
 }
 
+/// What the file browser offers to read: image formats (one file or a
+/// numbered sequence) and video.
+const READ_EXTS: &[&str] = &[
+    "exr", "tif", "tiff", "tga", "png", "jpg", "jpeg", "webp", "hdr", "bmp",
+    "mp4", "mov", "m4v", "mkv", "avi", "webm", "mxf", "mpg", "mpeg",
+];
+/// …and to write.
+const WRITE_EXTS: &[&str] = &["exr", "tif", "tiff", "tga", "png", "jpg", "webp", "mp4", "mov"];
+
 #[derive(Default)]
 pub struct Properties {
     open: Vec<String>,
@@ -326,16 +335,13 @@ impl Properties {
                         if save {
                             if let Some(p) = rfd::FileDialog::new()
                                 .set_file_name("render.####.png")
-                                .add_filter("Image sequence / video", &["png", "exr", "jpg", "tif", "mp4", "mov"])
+                                .add_filter("Image sequence / video", WRITE_EXTS)
                                 .save_file()
                             {
                                 out = Some(json!(p.to_string_lossy()));
                             }
                         } else if let Some(p) = rfd::FileDialog::new()
-                            .add_filter(
-                                "Images & video",
-                                &["exr", "png", "jpg", "jpeg", "tif", "tiff", "mp4", "mov", "m4v", "mkv", "avi", "webm"],
-                            )
+                            .add_filter("Images & video", READ_EXTS)
                             .pick_file()
                         {
                             if op == "media_in" {
