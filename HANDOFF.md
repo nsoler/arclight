@@ -37,7 +37,7 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.24**.
+  in the same commit as the change. Current: **0.0.25**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -913,6 +913,12 @@ Camera/Card/Scene nodes).
   the node on any link that fails, naming the param. The frame cache keys
   on resolved values, so formula or source edits re-render (tested).
   `noise` is splitmix-hashed 1-D gradient noise, pure in frame and seed.
+  `time`/`fps` (v0.0.25): `expr::Clock { fps, first_frame }` (default
+  24 / 1; fps <= 0 or non-finite counts as 24); `time = (frame -
+  first_frame) / fps` (fractional at motion blur samples; `at(x, f)`
+  moves time too). `Expr::eval`, `link::resolve` and `link::error` take a
+  Clock; `Project::clock()` in graph.rs; `Evaluator::run` takes
+  `&Project` instead of the format.
 - **ROI / tiled evaluation** once images get large or graphs get deep.
 
 ## Known issues and gaps

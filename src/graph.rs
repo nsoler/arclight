@@ -44,6 +44,13 @@ pub struct Project {
     pub format: Size,
 }
 
+impl Project {
+    /// Its timing, for formulas' `time` and `fps`.
+    pub fn clock(&self) -> crate::expr::Clock {
+        crate::expr::Clock { fps: self.fps, first_frame: self.first_frame as f64 }
+    }
+}
+
 fn default_format() -> Size {
     ops::DEFAULT_FORMAT
 }
@@ -190,7 +197,7 @@ impl Evaluator {
         let index = graph.index()?;
         self.cache.retain(|id, _| index.contains_key(id.as_str()));
         let order = Graph::order(&index, [target.to_string()])?;
-        self.run(&index, &order, ctx, graph.project.format)?;
+        self.run(&index, &order, ctx, &graph.project)?;
         Ok(self.cache[target].1.clone())
     }
 
@@ -203,7 +210,7 @@ impl Evaluator {
         let index = graph.index()?;
         self.cache.retain(|id, _| index.contains_key(id.as_str()));
         let order = Graph::order(&index, graph.nodes.iter().map(|n| n.id.clone()))?;
-        self.run(&index, &order, ctx, graph.project.format)?;
+        self.run(&index, &order, ctx, &graph.project)?;
         Ok(order
             .into_iter()
             .map(|id| {
@@ -221,7 +228,7 @@ impl Evaluator {
         let mut keys = HashMap::new();
         for id in &order {
             let node = index[id.as_str()];
-            let mut params = linked_params(&index, node, ctx.frame)?;
+            let mut params = linked_params(&index, node, ctx.frame, &graph.project)?;
             ops::apply_format(&node.op, &mut params, graph.project.format);
             let k = node_key(node, &params, &keys, ctx);
             keys.insert(id.as_str(), k);
@@ -234,8 +241,9 @@ impl Evaluator {
         index: &HashMap<&str, &NodeSpec>,
         order: &[String],
         ctx: &EvalContext,
-        graph_format: Size,
+        project: &Project,
     ) -> Result<(), NodeError> {
+        let graph_format = project.format;
         let mut keys: HashMap<&str, u64> = HashMap::with_capacity(order.len());
         // What an unconnected input sees: nothing, in the project's format.
         let empty = Image::blank(graph_format, IRect::default());
@@ -244,7 +252,7 @@ impl Evaluator {
             // Keyframes and links are resolved first and the resolved values
             // hashed, so a curve that holds between frames still hits the
             // cache, and a changed link source re-renders.
-            let mut params = linked_params(index, node, ctx.frame)?;
+            let mut params = linked_params(index, node, ctx.frame, project)?;
             ops::apply_format(&node.op, &mut params, graph_format);
             let key = node_key(node, &params, &keys, ctx);
             keys.insert(id.as_str(), key);
@@ -285,18 +293,19 @@ impl Evaluator {
 /// `node`'s params at `frame`: keyframes evaluated and live links
 /// (`crate::link`) followed through the graph's other nodes. A link to a
 /// node that's gone is an error naming it.
-fn linked_params(index: &HashMap<&str, &NodeSpec>, node: &NodeSpec, frame: i64) -> Result<Value, NodeError> {
+fn linked_params(index: &HashMap<&str, &NodeSpec>, node: &NodeSpec, frame: i64, project: &Project) -> Result<Value, NodeError> {
     let lookup = |id: &str| index.get(id).copied();
+    let clock = project.clock();
     if let Some((param, gone)) = crate::link::missing(&lookup, &node.params) {
         return Err(node_err(&node.id, format!("'{param}' is linked to '{gone}', which doesn't exist")));
     }
     let links = node.params.as_object().into_iter().flatten().filter(|(_, v)| crate::link::is_link(v));
     for (param, v) in links {
-        if let Some(e) = crate::link::error(&lookup, v, frame as f64) {
+        if let Some(e) = crate::link::error(&lookup, v, frame as f64, clock) {
             return Err(node_err(&node.id, format!("'{param}': {e}")));
         }
     }
-    let follow = |v: &Value, t: f64| crate::link::resolve(&lookup, v, t);
+    let follow = |v: &Value, t: f64| crate::link::resolve(&lookup, v, t, clock);
     Ok(ops::resolve_params_linked(&node.op, &node.params, frame, Some(&follow)))
 }
 

@@ -7,6 +7,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.25 — 2026-10-29
+
+- Formulas can use `time` (seconds from the project's first frame,
+  `(frame - first_frame) / fps`) and `fps`, e.g. `5 * noise(time * 2)`
+  wobbles twice a second, `at(x, frame - fps)` reads x a second earlier.
+
 ## 0.0.24 — 2026-10-29
 
 - Lens Distort node (Transform): removes or adds radial lens distortion

@@ -21,6 +21,7 @@
 //! The graph resolves links before each node renders, so the cache key
 //! sees the values: changing the source re-renders what follows it.
 
+pub use crate::expr::Clock;
 use crate::graph::NodeSpec;
 use crate::ops;
 use crate::track;
@@ -79,20 +80,21 @@ pub fn motion(node: &str, what: &str, stabilize: bool, pivot: track::Pt) -> Valu
     json!({ "link": { "node": node, "motion": what, "stabilize": stabilize, "pivot": pivot } })
 }
 
-/// A link's value at time `t`, reading nodes through `lookup`; any other
+/// A link's value at frame `t` (`clock`: the project's timing, for a
+/// formula's `time` and `fps`), reading nodes through `lookup`; any other
 /// value is returned with its keyframes evaluated. Null when the link's
 /// node is gone (see [`missing`]), the chain loops or a formula fails
 /// (see [`error`]).
-pub fn resolve<'a>(lookup: &dyn Fn(&str) -> Option<&'a NodeSpec>, v: &Value, t: f64) -> Value {
-    evaluate(lookup, v, t, 0).unwrap_or(Value::Null)
+pub fn resolve<'a>(lookup: &dyn Fn(&str) -> Option<&'a NodeSpec>, v: &Value, t: f64, clock: Clock) -> Value {
+    evaluate(lookup, v, t, clock, 0).unwrap_or(Value::Null)
 }
 
 /// Why `v` can't be worked out at time `t`, if it can't.
-pub fn error<'a>(lookup: &dyn Fn(&str) -> Option<&'a NodeSpec>, v: &Value, t: f64) -> Option<String> {
-    evaluate(lookup, v, t, 0).err()
+pub fn error<'a>(lookup: &dyn Fn(&str) -> Option<&'a NodeSpec>, v: &Value, t: f64, clock: Clock) -> Option<String> {
+    evaluate(lookup, v, t, clock, 0).err()
 }
 
-fn evaluate<'a>(lookup: &dyn Fn(&str) -> Option<&'a NodeSpec>, v: &Value, t: f64, depth: usize) -> Result<Value, String> {
+fn evaluate<'a>(lookup: &dyn Fn(&str) -> Option<&'a NodeSpec>, v: &Value, t: f64, clock: Clock, depth: usize) -> Result<Value, String> {
     if !is_link(v) {
         return Ok(crate::anim::evaluate(v, t));
     }
@@ -104,13 +106,13 @@ fn evaluate<'a>(lookup: &dyn Fn(&str) -> Option<&'a NodeSpec>, v: &Value, t: f64
     let read = |n: &NodeSpec, name: &str, t: f64| -> Result<Value, String> {
         let p = ops::params_with_defaults(&n.op, &n.params);
         let raw = p.get(name).ok_or_else(|| format!("'{}' has no param '{name}'", n.id))?;
-        evaluate(lookup, raw, t, depth + 1)
+        evaluate(lookup, raw, t, clock, depth + 1)
     };
     if let Some(src) = l.get("expr") {
         let src = src.as_str().ok_or("a formula must be text")?;
         let e = crate::expr::parse(src)?;
         let refs = |node: &str, name: &str, t: f64| read(lookup(node).ok_or_else(|| format!("no node '{node}'"))?, name, t);
-        let value = e.eval(&refs, t)?.to_json();
+        let value = e.eval(&refs, clock, t)?.to_json();
         return Ok(adjust(value, &l["multiply"], &l["add"]));
     }
     let node = l["node"].as_str().ok_or("a link needs a \"node\"")?;
@@ -244,10 +246,10 @@ mod tests {
             { "id": "loop", "op": "rectangle", "params": { "center": param("loop", "center") } },
         ]));
         let lookup = |id: &str| g.node(id);
-        let at = |node: &str, param: &str, t: f64| resolve(&lookup, &g.node(node).unwrap().params[param], t);
+        let at = |node: &str, param: &str, t: f64| resolve(&lookup, &g.node(node).unwrap().params[param], t, Clock::default());
         assert_eq!(at("b", "center", 6.0), json!([50.0, 25.0]));
         assert_eq!(at("c", "center", 6.0), json!([50.0, 25.0]), "a link to a link");
-        assert_eq!(resolve(&lookup, &at_reference("t", "track1"), 1.0), json!([15.0, 25.0]), "at the reference frame");
+        assert_eq!(resolve(&lookup, &at_reference("t", "track1"), 1.0, Clock::default()), json!([15.0, 25.0]), "at the reference frame");
         assert_eq!(at("loop", "center", 1.0), Value::Null, "a loop gives up");
         assert_eq!(missing(&lookup, &json!({ "center": param("gone", "center") })), Some(("center".into(), "gone".into())));
         let mut p = json!({ "center": param("a", "center"), "size": [1, 2] });
@@ -275,10 +277,10 @@ mod tests {
                 "rotate": with_adjust(&motion("t", "rotate", false, [10.5, 10.5]), json!(0.5), Value::Null) } },
         ]));
         let lookup = |id: &str| g.node(id);
-        let at = |node: &str, param: &str, t: f64| resolve(&lookup, &g.node(node).unwrap().params[param], t);
+        let at = |node: &str, param: &str, t: f64| resolve(&lookup, &g.node(node).unwrap().params[param], t, Clock::default());
         assert_eq!(at("b", "center", 6.0), json!([60.0, 25.0]));
         // The second track swings 90° about the first by frame 5: half is 45°.
-        let full = resolve(&lookup, &motion("t", "rotate", false, [10.5, 10.5]), 5.0).as_f64().unwrap();
+        let full = resolve(&lookup, &motion("t", "rotate", false, [10.5, 10.5]), 5.0, Clock::default()).as_f64().unwrap();
         let half = at("half", "rotate", 5.0).as_f64().unwrap();
         assert!((full - 90.0).abs() < 1e-3 && (half - 45.0).abs() < 1e-3, "{full} {half}");
         // Removing them, and how they read in the panel.
@@ -297,13 +299,13 @@ mod tests {
                 "softness": with_adjust(&expr("at(a.center.y, 1) + frame"), json!(2), Value::Null) } },
         ]));
         let lookup = |id: &str| g.node(id);
-        let at = |param: &str, t: f64| resolve(&lookup, &g.node("b").unwrap().params[param], t);
+        let at = |param: &str, t: f64| resolve(&lookup, &g.node("b").unwrap().params[param], t, Clock::default());
         assert_eq!(at("center", 6.0), json!([57.0, 25.0]));
         assert_eq!(at("softness", 6.0), json!(12.0), "(0 + 6) × 2");
         assert_eq!(sources(&g.node("b").unwrap().params["center"]), ["a", "plate-2"]);
         assert_eq!(missing(&lookup, &json!({ "x": expr("a.center + gone.center") })), Some(("x".into(), "gone".into())));
-        assert_eq!(error(&lookup, &expr("a.nope"), 1.0), Some("'a' has no param 'nope'".into()));
-        assert_eq!(error(&lookup, &expr("a.center +"), 1.0), Some("unexpected end".into()));
+        assert_eq!(error(&lookup, &expr("a.nope"), 1.0, Clock::default()), Some("'a' has no param 'nope'".into()));
+        assert_eq!(error(&lookup, &expr("a.center +"), 1.0, Clock::default()), Some("unexpected end".into()));
         let mut p = g.node("b").unwrap().params.clone();
         rename(&mut p, "plate-2", "p2");
         rename(&mut p, "a", "src");
@@ -350,6 +352,21 @@ mod tests {
         }
         let e = Evaluator::new().evaluate(&g, "b", &ctx).err().unwrap().to_string();
         assert!(e.contains("'color'") && e.contains("loops"), "{e}");
+    }
+
+    /// `time` and `fps` come from the graph's project.
+    #[test]
+    fn formulas_tell_time_from_the_project() {
+        let mut g: Graph = serde_json::from_value(json!({
+            "project": { "first_frame": 101, "last_frame": 200, "fps": 10 },
+            "nodes": [{ "id": "c", "op": "constant", "params": { "width": 2, "height": 2, "color": expr("[time, fps / 100, 0, 1]") } }],
+        }))
+        .unwrap();
+        let px = |g: &Graph, frame| Evaluator::new().evaluate(g, "c", &EvalContext { frame, write_outputs: false }).unwrap().pixels[0];
+        let p = px(&g, 106);
+        assert!((p[0] - 0.5).abs() < 1e-6 && (p[1] - 0.1).abs() < 1e-6, "{p:?}");
+        g.project.fps = 5.0;
+        assert!((px(&g, 106)[0] - 1.0).abs() < 1e-6, "a new rate re-renders");
     }
 
     /// A Corner Pin linked to four tracks renders like one keyed with a

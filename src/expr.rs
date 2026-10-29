@@ -2,7 +2,9 @@
 //! [`crate::link`]): a small arithmetic language over numbers and lists of
 //! numbers, read from other nodes' params at the frame being rendered.
 //!
-//! - Numbers, `frame`, `pi`, `tau`, `e`; lists `[a, b]`; `v[i]`.
+//! - Numbers, `frame`, `time` (seconds from the project's first frame:
+//!   `(frame - first_frame) / fps`), `fps`, `pi`, `tau`, `e`; lists
+//!   `[a, b]`; `v[i]`.
 //! - `+ - * / % ^`, comparisons (`< <= > >= == !=`, 1 or 0), `&& || !`.
 //!   Lists work per component, and a number goes with every component
 //!   (`[1, 2] * 2`).
@@ -30,6 +32,8 @@ pub struct Expr(Node);
 enum Node {
     Num(f64),
     Frame,
+    Time,
+    Fps,
     Ref { node: String, param: String },
     List(Vec<Node>),
     Index(Box<Node>, Box<Node>),
@@ -333,6 +337,8 @@ impl Parser {
                 }
                 match name.as_str() {
                     "frame" => Ok(Node::Frame),
+                    "time" => Ok(Node::Time),
+                    "fps" => Ok(Node::Fps),
                     "pi" => Ok(Node::Num(std::f64::consts::PI)),
                     "tau" => Ok(Node::Num(std::f64::consts::TAU)),
                     "e" => Ok(Node::Num(std::f64::consts::E)),
@@ -403,6 +409,35 @@ pub fn parse(src: &str) -> Result<Expr, String> {
     }
 }
 
+/// The project's timing, for `time` and `fps`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Clock {
+    pub fps: f64,
+    pub first_frame: f64,
+}
+
+impl Default for Clock {
+    fn default() -> Self {
+        Clock { fps: 24.0, first_frame: 1.0 }
+    }
+}
+
+impl Clock {
+    /// Its rate, 24 when it isn't a usable one.
+    pub fn rate(&self) -> f64 {
+        if self.fps.is_finite() && self.fps > 0.0 {
+            self.fps
+        } else {
+            24.0
+        }
+    }
+
+    /// Seconds from the first frame to frame `t`.
+    pub fn time(&self, t: f64) -> f64 {
+        (t - self.first_frame) / self.rate()
+    }
+}
+
 /// What a formula reads params through: node, param and time to the value
 /// there (keyframes evaluated, links followed), or why it can't (the node
 /// is gone, links loop).
@@ -420,7 +455,7 @@ impl Expr {
                     walk(b, out);
                 }
                 Node::Unary(_, a) => walk(a, out),
-                Node::Num(_) | Node::Frame => {}
+                Node::Num(_) | Node::Frame | Node::Time | Node::Fps => {}
             }
         }
         let mut out = Vec::new();
@@ -428,17 +463,19 @@ impl Expr {
         out
     }
 
-    /// Its value at time `t`.
-    pub fn eval(&self, lookup: Lookup, t: f64) -> Result<Val, String> {
-        eval(&self.0, lookup, t)
+    /// Its value at frame `t` (fractional between frames).
+    pub fn eval(&self, lookup: Lookup, clock: Clock, t: f64) -> Result<Val, String> {
+        eval(&self.0, lookup, clock, t)
     }
 }
 
-fn eval(n: &Node, lookup: Lookup, t: f64) -> Result<Val, String> {
-    let ev = |n: &Node| eval(n, lookup, t);
+fn eval(n: &Node, lookup: Lookup, clock: Clock, t: f64) -> Result<Val, String> {
+    let ev = |n: &Node| eval(n, lookup, clock, t);
     Ok(match n {
         Node::Num(x) => Val::Num(*x),
         Node::Frame => Val::Num(t),
+        Node::Time => Val::Num(clock.time(t)),
+        Node::Fps => Val::Num(clock.rate()),
         Node::Ref { node, param } => {
             let v = lookup(node, param, t)?;
             Val::from_json(&v).ok_or_else(|| format!("{node}.{param} isn't a number or a list of numbers"))?
@@ -484,7 +521,7 @@ fn eval(n: &Node, lookup: Lookup, t: f64) -> Result<Val, String> {
         }
         Node::Call(Func::At, args) => {
             let f = ev(&args[1])?.num()?;
-            eval(&args[0], lookup, f)?
+            eval(&args[0], lookup, clock, f)?
         }
         Node::Call(f, args) => {
             let a = args.iter().map(ev).collect::<Result<Vec<_>, _>>()?;
@@ -625,7 +662,7 @@ mod tests {
             _ => None,
         }
         .ok_or_else(|| format!("no node '{node}'"));
-        parse(src)?.eval(&lookup, t)
+        parse(src)?.eval(&lookup, Clock { fps: 25.0, first_frame: 1001.0 }, t)
     }
 
     fn num(src: &str) -> f64 {
@@ -661,6 +698,11 @@ mod tests {
         assert_eq!(num("\"plate-2\".on"), 1.0);
         assert_eq!(run("at(a.center.x, frame - 2)", 5.0), Ok(Val::Num(30.0)));
         assert_eq!(run("frame * 2", 2.5), Ok(Val::Num(5.0)));
+        // 25 fps from frame 1001: frame 1051 is two seconds in.
+        assert_eq!(run("time", 1051.0), Ok(Val::Num(2.0)));
+        assert_eq!(run("[time, fps]", 1001.0), Ok(Val::List(vec![0.0, 25.0])));
+        assert_eq!(run("at(time, frame - fps)", 1051.0), Ok(Val::Num(1.0)), "a second earlier");
+        assert_eq!(Clock { fps: 0.0, first_frame: 1.0 }.time(25.0), 1.0, "no rate: 24");
         assert_eq!(parse("a.center.x + \"b c\".size * at(a.size, 1)").unwrap().refs(), [("a", "center"), ("b c", "size"), ("a", "size")]);
         // Errors when run.
         assert_eq!(run("gone.center", 1.0), Err("no node 'gone'".into()));

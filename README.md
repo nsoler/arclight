@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.0.23** (alpha); see `CHANGELOG.md`.
+Version **0.0.25** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -199,6 +199,7 @@ result is blended back toward the main input (B for merge/keymix) by
 | `switch` | 5 (optional) | `which` | passes input `which` through; keyframe it to cut |
 | `transform` | 1 + mask | `translate` [2], `scale` [2], `rotate` (deg), `center` [2] or null | affine, bilinear resample (averaged over each pixel's footprint where it shrinks, as Corner Pin and the Tracker output also do), about `center`; null (the default) pivots on the middle of the input's data window, so a Transform after a shape turns it in place; `motion_blur`, `shutter`, `shutter_offset` as for shapes (the animated warp, averaged over the shutter) |
 | `corner_pin` | 1 + mask | `to1`–`to4` [2], `from1`–`from4` [2] | perspective warp taking the From quad onto the To quad; `motion_blur`, `shutter`, `shutter_offset` as for shapes (the animated warp, averaged over the shutter); the panel's **From = image corners** / **To = image corners** put a quad on the input's frame corners |
+| `lens_distort` | 1 + mask | `mode` (`undistort`/`distort`), `k1`, `k2`, `center` [2] or null (the frame's center), `mix` | removes or adds a lens's radial distortion (Brown model, r in half frame widths); negative K1 is barrel, positive pincushion; undistort straightens a plate's lines, distort with the same values bends CG to match; keeps overscan, carries extra planes |
 | `crop` | 1 | `left`, `top`, `right`, `bottom`, `mode` | `clear outside` or `shrink canvas` |
 | `resize` | 1 | `width`, `height`, `fit` (`stretch`/`fit`/`fill`) | box-filtered down, bilinear up |
 | `blur` | 1 + mask | `radius`, `passes` | separable box blur; 3 passes ≈ gaussian |
@@ -259,7 +260,9 @@ nodes' params at the frame being rendered:
 - `node.param` is that param now (keyframes evaluated, links followed);
   `.x .y .z .w` or `.r .g .b .a` (or `[i]`) pick a component. Quote a
   node name that isn't a plain identifier: `"plate-2".center`.
-- `frame`, `pi`, `tau`, `e`; lists `[a, b]`; `+ - * / % ^`; comparisons
+- `frame`; `time`, seconds from the project's first frame
+  (`(frame - first_frame) / fps`, so 0 on the first frame); `fps`, the
+  project's rate; `pi`, `tau`, `e`; lists `[a, b]`; `+ - * / % ^`; comparisons
   and `&& || !` (1 or 0). Lists work per component, and a number goes
   with every component (`a.center * 0.5`). Give a list param a list: a
   formula for a position or color must make one.
@@ -268,10 +271,11 @@ nodes' params at the frame being rendered:
   rad deg min max clamp mix smoothstep length dist`, `if(c, a, b)`.
 - `noise(x[, seed])`: smooth noise in -1..1; `random(seed)`: a number in
   0..1 that stays the same; `wiggle(freq, amp[, seed])` = `amp ×
-  noise(frame × freq, seed)`, `freq` wobbles per frame. All repeatable:
-  the same frame always gives the same value.
+  noise(frame × freq, seed)`, `freq` wobbles per frame (per second:
+  `amp * noise(time * freq, seed)`). All repeatable: the same frame
+  always gives the same value.
 - `at(x, f)`: `x` at frame `f`, e.g. `at(t.track1, frame - 3)` lags a
-  track by three frames.
+  track by three frames; `at(x, frame - fps)` is `x` a second earlier.
 
 `multiply` / `add` apply after the formula. In the panel, right-click a
 param's name for **Use a formula** (it starts as the current value); the

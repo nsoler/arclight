@@ -397,14 +397,14 @@ impl Doc {
     /// link followed.
     pub fn param_at(&self, id: &str, name: &str, frame: i64) -> Value {
         let lookup = |n: &str| self.node(n);
-        arclight::link::resolve(&lookup, &self.param(id, name), frame as f64)
+        arclight::link::resolve(&lookup, &self.param(id, name), frame as f64, self.graph.project.clock())
     }
 
     /// Why a linked param can't be worked out at `frame` (a formula that
     /// doesn't parse, reads a missing node, loops…), if it can't.
     pub fn param_error(&self, id: &str, name: &str, frame: i64) -> Option<String> {
         let lookup = |n: &str| self.node(n);
-        arclight::link::error(&lookup, &self.param(id, name), frame as f64)
+        arclight::link::error(&lookup, &self.param(id, name), frame as f64, self.graph.project.clock())
     }
 
     /// Edit a param from the UI: animated params get a key at `frame`
