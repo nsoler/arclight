@@ -246,6 +246,11 @@ const LIGHT_INTENSITY: ParamSpec = p!("intensity", "Intensity", ParamKind::Float
 const LIGHT_DECAY: ParamSpec = p!("decay", "Decay", ParamKind::Float { min: 0.0, max: 3.0 }, 0.0);
 const LIGHT_EXPOSURE: ParamSpec = p!("exposure", "Exposure (stops)", ParamKind::Float { min: -10.0, max: 10.0 }, 0.0);
 const LIGHT_ENABLED: ParamSpec = fixed!("enabled", "Enabled", ParamKind::Bool, true);
+const LIGHT_SHADOWS: ParamSpec = fixed!("shadows", "Cast shadows", ParamKind::Bool, false);
+const LIGHT_SHADOW_SOFTNESS: ParamSpec = p!("shadow_softness", "Shadow softness", ParamKind::Float { min: 0.0, max: 20.0 }, 1.0);
+/// Whether a 3D object blocks shadow-casting lights, and takes their shadows.
+const CASTS_SHADOWS: ParamSpec = fixed!("casts_shadows", "Casts shadows", ParamKind::Bool, true);
+const RECEIVES_SHADOWS: ParamSpec = fixed!("receives_shadows", "Receives shadows", ParamKind::Bool, true);
 const LIGHT_RADIUS: ParamSpec = p!("radius", "Radius (soft size)", ParamKind::Float { min: 0.0, max: 100.0 }, 0.0);
 /// A light's optional target: it aims at whatever this scene holds first.
 const LOOK_AT: Port = scene_in("look at");
@@ -739,6 +744,7 @@ pub static OPS: &[OpInfo] = &[
             p!("scale", "Scale", ParamKind::Vec3, [1.0, 1.0, 1.0]),
             // Null: 1 wide, as high as the image's aspect makes it.
             p!("size", "Size", ParamKind::Vec2, Value::Null),
+            CASTS_SHADOWS,
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -763,6 +769,8 @@ pub static OPS: &[OpInfo] = &[
             ROUGHNESS,
             EMISSION,
             HOLDOUT,
+            CASTS_SHADOWS,
+            RECEIVES_SHADOWS,
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -786,6 +794,8 @@ pub static OPS: &[OpInfo] = &[
             ROUGHNESS,
             EMISSION,
             HOLDOUT,
+            CASTS_SHADOWS,
+            RECEIVES_SHADOWS,
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -811,6 +821,8 @@ pub static OPS: &[OpInfo] = &[
             ROUGHNESS,
             EMISSION,
             HOLDOUT,
+            CASTS_SHADOWS,
+            RECEIVES_SHADOWS,
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -834,6 +846,8 @@ pub static OPS: &[OpInfo] = &[
             ROUGHNESS,
             EMISSION,
             HOLDOUT,
+            CASTS_SHADOWS,
+            RECEIVES_SHADOWS,
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -857,6 +871,8 @@ pub static OPS: &[OpInfo] = &[
             ROUGHNESS,
             EMISSION,
             HOLDOUT,
+            CASTS_SHADOWS,
+            RECEIVES_SHADOWS,
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -881,7 +897,7 @@ pub static OPS: &[OpInfo] = &[
         label: "Directional Light",
         category: Category::Scene,
         inputs: &[LOOK_AT],
-        params: &[LIGHT_ENABLED, PLACE_T, PLACE_R, LIGHT_COLOR, LIGHT_INTENSITY, LIGHT_EXPOSURE],
+        params: &[LIGHT_ENABLED, PLACE_T, PLACE_R, LIGHT_COLOR, LIGHT_INTENSITY, LIGHT_EXPOSURE, LIGHT_SHADOWS, LIGHT_SHADOW_SOFTNESS],
         overlay: Overlay::None,
         mask_base: None,
         help: "Parallel light, as from the sun, shining down its −Z axis as Rotate turns it (Translate only places it \
@@ -893,7 +909,7 @@ pub static OPS: &[OpInfo] = &[
         label: "Point Light",
         category: Category::Scene,
         inputs: &[LOOK_AT],
-        params: &[LIGHT_ENABLED, PLACE_T, LIGHT_COLOR, LIGHT_INTENSITY, LIGHT_EXPOSURE, LIGHT_DECAY, LIGHT_RADIUS],
+        params: &[LIGHT_ENABLED, PLACE_T, LIGHT_COLOR, LIGHT_INTENSITY, LIGHT_EXPOSURE, LIGHT_DECAY, LIGHT_RADIUS, LIGHT_SHADOWS, LIGHT_SHADOW_SOFTNESS],
         overlay: Overlay::None,
         mask_base: None,
         help: "Light from a point, every way. Decay is how it fades with distance d: Intensity / d^Decay \
@@ -917,6 +933,8 @@ pub static OPS: &[OpInfo] = &[
             p!("penumbra", "Penumbra", ParamKind::Float { min: 0.0, max: 90.0 }, 5.0),
             p!("falloff", "Falloff exponent", ParamKind::Float { min: 0.0, max: 100.0 }, 0.0),
             LIGHT_RADIUS,
+            LIGHT_SHADOWS,
+            LIGHT_SHADOW_SOFTNESS,
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -942,6 +960,8 @@ pub static OPS: &[OpInfo] = &[
             p!("size", "Size", ParamKind::Vec2, [1.0, 1.0]),
             fixed!("two_sided", "Two-sided", ParamKind::Bool, false),
             fixed!("quality", "Quality", ParamKind::Int { min: 1, max: 16 }, 4),
+            LIGHT_SHADOWS,
+            LIGHT_SHADOW_SOFTNESS,
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -1026,8 +1046,10 @@ pub static OPS: &[OpInfo] = &[
                nothing is), P (scene position), N (normal), uv (texture coordinates), motion (pixels each pixel moves by \
                the next frame), id (an object number per \
                pixel), mattes (matte.<node>: each object's coverage), the light in parts adding up to the picture \
-               (diffuse, specular, emission, ambient) and lights (light.<node>: each light's share). The scene's \
-               lights light Lambert and Blinn objects; with none, everything renders unlit. Holdout objects draw \
+               (diffuse, specular, emission, ambient), lights (light.<node>: each light's share) and shadow (the light \
+               shadows took away: the picture plus it has no shadows). The scene's lights light Lambert and Blinn objects; \
+               with none, everything renders unlit. Lights with Cast shadows on are blocked by objects that cast shadows, \
+               on objects that receive them. Holdout objects draw \
                nothing but cut out what is behind them.",
     },
     OpInfo {
@@ -2800,14 +2822,10 @@ fn read_geo(params: &Value) -> Result<Image> {
     let world = scene::placement(params);
     let meshes = parts
         .iter()
-        .map(|(part, tex)| scene::Model {
-            mesh: std::sync::Arc::new(part.mesh.clone()),
-            world,
-            material: if params["override_material"].as_bool().unwrap_or(false) { scene::lighting(params, &part.material) } else { part.material.clone() },
-            texture: tex.clone(),
-            holdout: params["holdout"].as_bool().unwrap_or(false),
-            name: part.name.clone(),
-            node: String::new(),
+        .map(|(part, tex)| {
+            let material = if params["override_material"].as_bool().unwrap_or(false) { scene::lighting(params, &part.material) } else { part.material.clone() };
+            let m = scene::Model::new(std::sync::Arc::new(part.mesh.clone()), world, material).flags(params);
+            scene::Model { texture: tex.clone(), name: part.name.clone(), ..m }
         })
         .collect();
     Ok(scene_output(DEFAULT_FORMAT, Scene { meshes, ..Scene::default() }))

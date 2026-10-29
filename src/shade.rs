@@ -58,6 +58,10 @@ pub struct Light {
     pub radius: f64,
     /// Off, it lights nothing (but is still drawn and picked in 3D).
     pub enabled: bool,
+    /// Whether objects block it (a render draws shadow maps for it), and
+    /// how soft their edges are: the filter's radius in shadow-map texels.
+    pub shadows: bool,
+    pub shadow_softness: f64,
     /// Placement: position its translation, pointing down its −Z.
     pub world: Mat4,
     /// The node it came from (for per-light passes; "" if none).
@@ -69,9 +73,9 @@ const SOFT_SAMPLES: usize = 4;
 
 impl Light {
     /// A light of `kind` placed by `world`, white, intensity 1, physical
-    /// (quadratic) falloff, no radius, on.
+    /// (quadratic) falloff, no radius, on, casting no shadows.
     pub fn new(kind: LightKind, world: Mat4) -> Light {
-        Light { kind, color: [1.0; 3], intensity: 1.0, decay: 2.0, radius: 0.0, enabled: true, world, node: String::new() }
+        Light { kind, color: [1.0; 3], intensity: 1.0, decay: 2.0, radius: 0.0, enabled: true, shadows: false, shadow_softness: 1.0, world, node: String::new() }
     }
 
     pub fn position(&self) -> Vec3 {
@@ -98,11 +102,12 @@ impl Light {
     }
 
     /// The light from its position at `p`, or with a radius, from a grid
-    /// of points over a disk that wide facing `p`, each a share of it.
-    fn sampled(&self, p: &Vec3) -> Vec<(Vec3, f64)> {
+    /// of points over a disk that wide facing `p`, each a share of it (all
+    /// shadow sample 0: shadowed as from its middle).
+    fn sampled(&self, p: &Vec3) -> Vec<(Vec3, f64, usize)> {
         let at = self.position();
         if self.radius <= 0.0 {
-            return self.reaching(at, p).into_iter().collect();
+            return self.reaching(at, p).map(|(l, e)| (l, e, 0)).into_iter().collect();
         }
         let Some(w) = (p - at).try_normalize(1e-12) else { return Vec::new() };
         let u = w.cross(&if w.x.abs() < 0.9 { Vec3::x() } else { Vec3::y() }).normalize();
@@ -111,20 +116,22 @@ impl Light {
         grid(SOFT_SAMPLES)
             .filter_map(|(x, y)| {
                 let [dx, dy] = disk(x, y);
-                self.reaching(at + (u * dx + v * dy) * self.radius, p).map(|(l, e)| (l, e * share))
+                self.reaching(at + (u * dx + v * dy) * self.radius, p).map(|(l, e)| (l, e * share, 0))
             })
             .collect()
     }
 
-    /// Where the light comes from at `p`: (unit direction to it, strength)
-    /// pairs, color aside; empty for ambient light or when it's off.
-    fn arriving(&self, p: &Vec3) -> Vec<(Vec3, f64)> {
+    /// Where the light comes from at `p`: (unit direction to it, strength,
+    /// shadow sample) triples, color aside; empty for ambient light or when
+    /// it's off. The shadow sample is which of [`Light::shadow_points`]
+    /// the light comes through.
+    fn arriving(&self, p: &Vec3) -> Vec<(Vec3, f64, usize)> {
         if !self.enabled {
             return Vec::new();
         }
         match self.kind {
             LightKind::Ambient => Vec::new(),
-            LightKind::Directional => vec![(-self.direction(), self.intensity as f64)],
+            LightKind::Directional => vec![(-self.direction(), self.intensity as f64, 0)],
             LightKind::Point => self.sampled(p),
             LightKind::Spot { cone, penumbra, falloff } => {
                 let Some(to) = (p - self.position()).try_normalize(1e-12) else { return Vec::new() };
@@ -156,19 +163,40 @@ impl Light {
                 let facing = self.direction();
                 let share = 1.0 / (n * n) as f64;
                 let mut out = Vec::with_capacity(n * n);
-                for (x, y) in grid(n) {
-                    let [x, y] = if round { disk(x, y) } else { [x, y] };
-                    let at = crate::geom::transform_point(&self.world, &Vec3::new(x * size[0] / 2.0, y * size[1] / 2.0, 0.0));
+                for (k, at) in self.area_points(size, round, n).into_iter().enumerate() {
                     if let Some((l, e)) = self.reaching(at, p) {
                         let cos = facing.dot(&-l);
                         let cos = if two_sided { cos.abs() } else { cos };
                         if cos > 0.0 {
-                            out.push((l, e * cos * share));
+                            out.push((l, e * cos * share, k));
                         }
                     }
                 }
                 out
             }
+        }
+    }
+
+    /// An area light's sample points in the scene: an `n` × `n` grid over
+    /// its rectangle, or mapped onto its disk.
+    fn area_points(&self, size: [f64; 2], round: bool, n: usize) -> Vec<Vec3> {
+        grid(n)
+            .map(|(x, y)| {
+                let [x, y] = if round { disk(x, y) } else { [x, y] };
+                crate::geom::transform_point(&self.world, &Vec3::new(x * size[0] / 2.0, y * size[1] / 2.0, 0.0))
+            })
+            .collect()
+    }
+
+    /// Where its shadows are cast from, by shadow sample: its position (a
+    /// point or spot light; one for a directional light, which casts along
+    /// its direction), or an area light's sample points; none for ambient
+    /// light.
+    pub fn shadow_points(&self) -> Vec<Vec3> {
+        match self.kind {
+            LightKind::Ambient => Vec::new(),
+            LightKind::Directional | LightKind::Point | LightKind::Spot { .. } => vec![self.position()],
+            LightKind::Area { size, disk, samples, .. } => self.area_points(size, disk, samples.max(1)),
         }
     }
 }
@@ -241,36 +269,66 @@ pub fn shininess(roughness: f32) -> f64 {
 /// `albedo` (its color times its texture): diffuse and specular, or
 /// ambient for an ambient light. Unlit materials take no light.
 pub fn light(hit: &Hit, material: &Material, albedo: [f32; 3], light: &Light) -> Shaded {
+    light_shadowed(hit, material, albedo, light, &|_, _| 1.0).0
+}
+
+/// [`light`] with shadows: `visible(sample, l)` is how much of the light
+/// through shadow sample `sample` (see [`Light::shadow_points`]), coming
+/// from direction `l` (unit, toward the light), reaches the hit, 0 to 1. Also the light the shadows took away (diffuse and
+/// specular), for the shadow pass.
+pub fn light_shadowed(hit: &Hit, material: &Material, albedo: [f32; 3], light: &Light, visible: &dyn Fn(usize, &Vec3) -> f32) -> (Shaded, [f32; 3]) {
     let mut out = Shaded::default();
+    let mut lost = [0.0f32; 3];
     if material.shading == Shading::Unlit {
-        return out;
+        return (out, lost);
     }
     let tint = |k: f64| -> [f32; 3] { std::array::from_fn(|c| light.color[c] * k as f32) };
     if light.kind == LightKind::Ambient {
         let e = tint(if light.enabled { light.intensity as f64 } else { 0.0 });
         out.ambient = std::array::from_fn(|c| albedo[c] * e[c]);
-        return out;
+        return (out, lost);
     }
     // Two-sided: the side facing the eye is lit.
     let n = if hit.normal.dot(&hit.view) < 0.0 { -hit.normal } else { hit.normal };
     let blinn = material.shading == Shading::Blinn;
     let exponent = shininess(material.roughness);
-    for (l, e) in light.arriving(&hit.position) {
+    let mut looked: Vec<(usize, f32)> = Vec::new();
+    for (l, e, sample) in light.arriving(&hit.position) {
         let cos = n.dot(&l);
         if cos <= 0.0 {
             continue;
         }
         let e = tint(e);
+        // (A light with a radius sends every disk sample through one
+        // shadow sample: look it up once.)
+        let seen = if !light.shadows {
+            1.0
+        } else if let Some(&(_, v)) = looked.iter().find(|(k, _)| *k == sample) {
+            v
+        } else {
+            let v = visible(sample, &l).clamp(0.0, 1.0);
+            looked.push((sample, v));
+            v
+        };
+        let mut add = [0.0f32; 3];
         for c in 0..3 {
-            out.diffuse[c] += albedo[c] * e[c] * cos as f32;
+            add[c] = albedo[c] * e[c] * cos as f32;
+            out.diffuse[c] += add[c] * seen;
         }
         if blinn {
             let h = (l + hit.view).try_normalize(1e-300).unwrap_or(n);
             let k = n.dot(&h).max(0.0).powf(exponent) as f32;
-            out.specular = std::array::from_fn(|c| out.specular[c] + material.specular[c] * e[c] * k);
+            for c in 0..3 {
+                let sp = material.specular[c] * e[c] * k;
+                out.specular[c] += sp * seen;
+                add[c] += sp;
+            }
+        }
+        for c in 0..3 {
+            lost[c] += add[c] * (1.0 - seen);
         }
     }
-    out
+    (out, lost)
 }
 
 /// `hit` on `material` (color `albedo` there) lit by `lights`, in parts.
@@ -278,15 +336,26 @@ pub fn light(hit: &Hit, material: &Material, albedo: [f32; 3], light: &Light) ->
 /// as it is (in `emission`, with the material's own emission), as cards
 /// render without lights.
 pub fn shade(hit: &Hit, material: &Material, albedo: [f32; 3], lights: &[Light]) -> Shaded {
+    shade_shadowed(hit, material, albedo, lights, &|_, _, _| 1.0).0
+}
+
+/// [`shade`] with shadows: `visible(light, sample, l)` is how much of
+/// light `light` (its index in `lights`) through its shadow sample
+/// `sample`, from direction `l`, reaches the hit (see [`light_shadowed`]). Also the light the shadows
+/// took away.
+pub fn shade_shadowed(hit: &Hit, material: &Material, albedo: [f32; 3], lights: &[Light], visible: &dyn Fn(usize, usize, &Vec3) -> f32) -> (Shaded, [f32; 3]) {
     let mut out = Shaded { emission: material.emission, ..Shaded::default() };
+    let mut lost = [0.0f32; 3];
     if lights.is_empty() || material.shading == Shading::Unlit {
         out.emission = std::array::from_fn(|c| out.emission[c] + albedo[c]);
-        return out;
+        return (out, lost);
     }
-    for l in lights {
-        out.add(&light(hit, material, albedo, l));
+    for (i, l) in lights.iter().enumerate() {
+        let (lit, gone) = light_shadowed(hit, material, albedo, l, &|k, d| visible(i, k, d));
+        out.add(&lit);
+        (0..3).for_each(|c| lost[c] += gone[c]);
     }
-    out
+    (out, lost)
 }
 
 #[cfg(test)]

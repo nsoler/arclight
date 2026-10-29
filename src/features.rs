@@ -557,7 +557,7 @@ pub(crate) mod tests {
     fn rendered_camera_move() -> (FeatureTracker, Vec<(i64, f64)>) {
         let fmt = Size { width: 320, height: 180 };
         let tex = Blobs::new(1500, 512.0, 512.0, 11).image(512, 512, 0.0, 0.0);
-        let wall = Card { image: Arc::new(tex), world: geom::trs([0.0, 0.0, -5.0], [0.0; 3], [1.0; 3]), size: [16.0, 16.0], node: String::new() };
+        let wall = Card { image: Arc::new(tex), world: geom::trs([0.0, 0.0, -5.0], [0.0; 3], [1.0; 3]), size: [16.0, 16.0], casts_shadows: true, node: String::new() };
         let scene = Scene { cards: vec![wall], ..Scene::default() };
         let cam = |t: f64| Camera { focal: 18.0, world: geom::trs([0.06 * t, 0.03 * t, -0.08 * t], [0.0, 0.4 * t, 0.2 * t], [1.0; 3]), ..Camera::default() };
         let mut tracker = FeatureTracker::new(Settings { max_features: 150, min_distance: 10.0, ..Settings::default() });

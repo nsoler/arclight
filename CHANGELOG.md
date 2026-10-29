@@ -11,6 +11,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.40 — 2026-10-29
+
+- **Shadows:** lights gain **Cast shadows** (off by default, so old
+  projects render unchanged) and **Shadow softness**. Spot lights use a
+  perspective shadow map, directional lights a map fitted to the scene,
+  point lights a cube map; an area light casts from each of its sample
+  points, so its shadows are naturally soft. A point or spot light's
+  Radius adds a penumbra that grows with distance from the blocker.
+  Objects gain **Casts shadows** / **Receives shadows**. Scanline Render
+  gains a **shadow** pass (beauty + shadow = no shadows) (M12 step d).
+
 ## 0.9.39 — 2026-10-29
 
 - Particle rendering engine (`src/particles_render.rs`): round or square

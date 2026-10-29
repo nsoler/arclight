@@ -1870,7 +1870,7 @@ mod tests {
     fn picking_scene() -> (Scene, Projector, Doc) {
         use arclight::graph::{Graph, NodeSpec};
         let tex = Arc::new(Image::new(4, 4));
-        let card = |node: &str, z: f64, w: f64| arclight::scene::Card { image: tex.clone(), world: geom::trs([0.0, 0.0, z], [0.0; 3], [1.0; 3]), size: [w, w], node: node.into() };
+        let card = |node: &str, z: f64, w: f64| arclight::scene::Card { node: node.into(), ..arclight::scene::Card::new(tex.clone(), geom::trs([0.0, 0.0, z], [0.0; 3], [1.0; 3]), [w, w]) };
         let mut s = Scene {
             cards: vec![card("far", -10.0, 6.0), card("near", -6.0, 2.0)],
             points: vec![Vec3::new(2.0, 1.0, -8.0), Vec3::new(-2.0, 1.0, -8.0), Vec3::new(0.0, -1.5, -8.0), Vec3::new(3.0, -1.0, -7.0)],

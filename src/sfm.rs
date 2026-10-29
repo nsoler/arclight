@@ -647,6 +647,7 @@ mod tests {
             image: Arc::new(blob_texture(2500, 768, 768, seed)),
             world: geom::trs(t, r, [1.0; 3]),
             size,
+            casts_shadows: true,
             node: String::new(),
         };
         let scene = Scene {

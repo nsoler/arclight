@@ -40,6 +40,9 @@ pub struct Card {
     pub image: Arc<Image>,
     pub world: Mat4,
     pub size: [f64; 2],
+    /// Whether it blocks lights that cast shadows (where its image is
+    /// mostly opaque).
+    pub casts_shadows: bool,
     /// The Card node it came from ("" until tagged).
     pub node: String,
 }
@@ -55,6 +58,10 @@ pub struct Model {
     pub texture: Option<Arc<Image>>,
     /// Renders nothing, but cuts out what is behind it.
     pub holdout: bool,
+    /// Whether it blocks lights that cast shadows, and whether shadows
+    /// fall on it.
+    pub casts_shadows: bool,
+    pub receives_shadows: bool,
     /// Its name within the node (a file's object), and the node it came
     /// from ("" until tagged).
     pub name: String,
@@ -62,6 +69,19 @@ pub struct Model {
 }
 
 impl Model {
+    /// `mesh` placed by `world` with `material`: untextured, not a
+    /// holdout, casting and receiving shadows, unnamed.
+    pub fn new(mesh: Arc<Mesh>, world: Mat4, material: Material) -> Model {
+        Model { mesh, world, material, texture: None, holdout: false, casts_shadows: true, receives_shadows: true, name: String::new(), node: String::new() }
+    }
+
+    /// Its holdout and shadow flags from a node's params (Holdout, Casts
+    /// shadows, Receives shadows; missing: off, on, on).
+    pub fn flags(self, p: &Value) -> Model {
+        let on = |n: &str, d: bool| p[n].as_bool().unwrap_or(d);
+        Model { holdout: on("holdout", false), casts_shadows: on("casts_shadows", true), receives_shadows: on("receives_shadows", true), ..self }
+    }
+
     /// A box around it in scene space (its mesh's box, placed), or None for
     /// an empty mesh.
     pub fn bounds(&self) -> Option<(Vec3, Vec3)> {
@@ -74,6 +94,11 @@ impl Model {
 }
 
 impl Card {
+    /// `image` on a card `size` across placed by `world`, casting shadows.
+    pub fn new(image: Arc<Image>, world: Mat4, size: [f64; 2]) -> Card {
+        Card { image, world, size, casts_shadows: true, node: String::new() }
+    }
+
     /// The four corners in scene space: top left, top right, bottom right,
     /// bottom left (as the image's own corners).
     pub fn corners(&self) -> [Vec3; 4] {
@@ -174,7 +199,7 @@ pub fn card(p: &Value, image: &Image) -> Card {
         Some(_) => numbers::<2>(&p["size"], 1.0),
         None => [1.0, image.format.height as f64 / image.format.width.max(1) as f64],
     };
-    Card { image: Arc::new(image.clone()), world: placement(p), size, node: String::new() }
+    Card { casts_shadows: p["casts_shadows"].as_bool().unwrap_or(true), ..Card::new(Arc::new(image.clone()), placement(p), size) }
 }
 
 /// The surface look a primitive's params give: Color (straight RGBA), and
@@ -227,15 +252,8 @@ pub fn primitive(op: &str, p: &Value) -> Option<Mesh> {
 /// A primitive node's scene object: its mesh placed by its transform, with
 /// its color, textured by `texture` when connected.
 pub fn primitive_model(op: &str, p: &Value, texture: Option<&Image>) -> Option<Model> {
-    Some(Model {
-        mesh: Arc::new(primitive(op, p)?),
-        world: placement(p),
-        material: material(p),
-        texture: texture.map(|t| Arc::new(t.clone())),
-        holdout: p["holdout"].as_bool().unwrap_or(false),
-        name: String::new(),
-        node: String::new(),
-    })
+    let m = Model::new(Arc::new(primitive(op, p)?), placement(p), material(p)).flags(p);
+    Some(Model { texture: texture.map(|t| Arc::new(t.clone())), ..m })
 }
 
 /// A light node's light (`op` one of light_ambient, light_directional,
@@ -272,6 +290,8 @@ pub fn light(op: &str, p: &Value, target: Option<&Scene>) -> Option<Light> {
         decay: num("decay", 0.0).max(0.0),
         radius: num("radius", 0.0).max(0.0),
         enabled: p["enabled"].as_bool().unwrap_or(true),
+        shadows: p["shadows"].as_bool().unwrap_or(false),
+        shadow_softness: num("shadow_softness", 1.0).clamp(0.0, 20.0),
         world,
         node: String::new(),
     })

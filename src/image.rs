@@ -982,6 +982,8 @@ mod tests {
             material: crate::mesh::Material::default(),
             texture,
             holdout: false,
+            casts_shadows: true,
+            receives_shadows: true,
             name: String::new(),
             node: String::new(),
         };

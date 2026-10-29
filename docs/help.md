@@ -264,6 +264,15 @@ selected object.
   **look at** input and the light aims at it (its first camera, card,
   mesh, locator or light), whatever its Rotate; move the target and the
   light follows. The target isn't added to the light's scene.
+- **Shadows:** turn on a light's **Cast shadows** and objects between it
+  and others shadow them. **Shadow softness** blurs the shadow's edge (0:
+  sharp); a point or spot light's **Radius** softens it more the further
+  the shadow falls from what casts it, and an area light's shadows are
+  soft by themselves (each of its Quality × Quality points casts its own).
+  Each object has **Casts shadows** and **Receives shadows** (a Card only
+  casts, where its image is mostly opaque); turn one off to keep, say, a
+  background plate from shadowing the scene. Shadows are off until you
+  turn them on, so older projects render as before.
 - Wire lights into a Scene like objects. Without any lights, everything
   renders unlit (as cards always do); with lights, Lambert and Blinn objects
   are lit and unlit ones and cards keep their color.
@@ -274,8 +283,10 @@ Scanline Render can add render passes to its image: depth, position
 (**P**), normal (**N**), texture coordinates (**uv**), **motion**, object
 **id** and a matte per object (**matte.<node>**), and the light in parts:
 **diffuse**, **specular**, **emission** (with unlit surfaces' color) and
-**ambient**, which add up to the picture, and **lights** (a
-**light.<node>** for each light's share). The viewer's plane buttons show
+**ambient**, which add up to the picture, **lights** (a
+**light.<node>** for each light's share) and **shadow** (the light that
+shadows took away: add it to the picture to take the shadows out, or
+grade it to make them lighter or darker). The viewer's plane buttons show
 any pass (one button a layer; **P**, **N**, **uv** and **motion** as
 color).
 
