@@ -3,14 +3,16 @@
 Last updated 2026-10-29, end of session 10 (herdr multi-agent sessions:
 one master + workers; see "Several agent sessions" below). Read this,
 then `README.md` (user-facing features, file format, shortcuts,
-scripting, the "3D view" section), `docs/phase-4-plan.md` (3D plan: M1–M9
-M10 and M11 done, M12–M13 specified), `docs/help.md` (the in-app help) and
+scripting, the "3D view" section), `docs/phase-4-plan.md` (3D plan: M1–M11
+done, M12 lights and M13 particles specified), `docs/help.md` (the in-app help) and
 `docs/spec-coverage.md` (planning docs vs. what exists).
 
 ## Start here (next session)
 
-- **State:** version **0.9.32** on branch **`wip-ns-3dwork`**, merged to `main`. The local build (`target/release`) is
-  0.9.32, so the Omarchy launcher entry runs 0.9.32. (The Python `.so`
+- **State:** version **0.9.32** on branch **`wip-ns-3dwork`** (commit
+  `d779adf` plus handoff notes), merged to `main`; the tree is clean and
+  both workers (mathwiz, worker3d) are idle. The local build
+  (`target/release`) is 0.9.32, so the Omarchy launcher entry runs 0.9.32. (The Python `.so`
   in `python/` is older; rebuild with `python/build.sh` if needed.)
 - **Latest release: v0.9.32** (marked **Latest**;
   github.com/nsoler/arclight/releases/latest): Linux x86_64 tarball,
@@ -25,12 +27,16 @@ M10 and M11 done, M12–M13 specified), `docs/help.md` (the in-app help) and
   (2) how 0.9.30 / 0.9.31 behave: Fit to project, Project Settings, the
   3D camera setup on wires, the 3D ● badge, the bigger node browser;
   (3) the Mac DMG on the M4 Pro.
+- **Then:** M12 lights, then M13 particles (both specified in
+  `docs/phase-4-plan.md`); see "Next work, in order" below.
+- **Release tips learned in session 10:** create releases with
+  `--latest` (user wants /releases/latest to work); GitHub's macOS arm64
+  runners sometimes aren't acquired ("capacity constraints", the job
+  fails after 15 min) — just `gh run rerun <id>`; verify in
+  `../.verify/` (on /home), not `/tmp` (tmpfs fills up).
 - **Done (session 10): M10, 3D objects and render passes**
-  ("Milestone 10 in detail" in `docs/phase-4-plan.md`), at **0.9.22**
-  (`d422ffb`); steps (a) objects, (b) passes and (c) OBJ are done; (d)
-  lights / materials and (e) motion remain (glTF and zmerge of (e) are
-  done). **The user asked for a release (Linux tarball +
-  universal DMG + wheels) when all of M10 lands**, steps (a)–(e).
+  ("Milestone 10 in detail" in `docs/phase-4-plan.md`), 0.9.12–0.9.27,
+  released as v0.9.27. Per-version notes below.
   - **Committed (engine side mostly by MathWiz):**
     - 0.9.12 `src/mesh.rs`: `Mesh { name, positions: Vec<Vec3>, normals,
       uvs: Vec<[f64;2]>, triangles: Vec<[u32;3]> }` (f64, per-vertex,
