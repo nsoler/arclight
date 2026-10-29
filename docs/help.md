@@ -19,6 +19,11 @@ selected node in **Properties** on the right. On macOS, ⌘ stands for Ctrl.
 | Pan | Middle-drag or **⌥**-drag (Alt) |
 | Zoom | Scroll or pinch |
 
+**Fit** (top-right corner of the Node Graph) or **F** with the pointer over it frames every node and backdrop.
+
+A node's inputs are yellow squares (hollow when optional); a **mask**
+input is violet and labelled **mask**.
+
 ### 3D camera setup
 
 To put a picture into 3D, add a **3D Camera Setup**: right-click the wire
@@ -35,6 +40,31 @@ The first setup in a project switches the viewer to its **3D** view,
 framed on the new scene, and says how to switch back (**Tab**). The
 viewer's **3D** button shows a dot whenever the viewed node has a 3D
 scene, and is dimmed when it hasn't.
+
+### Merge
+
+**Merge** puts **A** (the foreground) onto **B** (the background), in B's
+frame, by its **Operation** (over, under, add, multiply, screen, min, max,
+zmerge).
+
+- **⇄ A / B** beside Operation swaps them, for any operation: B over A, in
+  A's frame (the button lights while swapped).
+- The **mask** input (violet) limits where A is combined: outside it you
+  see B.
+- **Mix** fades the whole result toward B.
+
+### Masks
+
+Merge, Keymix, Grade, Exposure, Saturation, Invert, Clamp, Blur, Keyer,
+Transform, Corner Pin and Lens Distort (the nodes with a **mask** input)
+apply only where the mask lets them; elsewhere their input shows through. Connect any image to it, then
+choose in Properties:
+
+- **Mask channel**: what masks: its **alpha** (the default), **red**,
+  **green**, **blue** or **luminance**.
+- **Invert mask**: the opposite (everywhere but the mask). With nothing
+  connected the node applies everywhere and Invert does nothing.
+- **Mix**: how much of the result shows, on top of the mask.
 
 ## Selecting nodes
 

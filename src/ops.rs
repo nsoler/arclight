@@ -203,8 +203,9 @@ pub struct OpInfo {
     pub inputs: &'static [Port],
     pub params: &'static [ParamSpec],
     /// When set, the op ends its ports with an optional [`MASK`] and its
-    /// params with [`MIX`], and [`eval`] blends the result back toward this
-    /// input by `mix × mask alpha`. Ops don't handle masking themselves.
+    /// params with [`MIX`], [`MASK_CHANNEL`] and [`MASK_INVERT`], and
+    /// [`eval`] blends the result back toward this input by `mix × mask`
+    /// (the mask's chosen channel). Ops don't handle masking themselves.
     pub mask_base: Option<usize>,
     /// Handles the viewer shows while this op's node is selected.
     pub overlay: Overlay,
@@ -230,6 +231,10 @@ macro_rules! fixed {
 const MASK: Port = opt("mask");
 /// The generic mix param of ops with [`OpInfo::mask_base`].
 const MIX: ParamSpec = p!("mix", "Mix", ParamKind::Float { min: 0.0, max: 1.0 }, 1.0);
+/// Which of the mask's channels masks (see [`mask_value`]).
+pub const MASK_CHANNELS: &[&str] = &["alpha", "red", "green", "blue", "luminance"];
+const MASK_CHANNEL: ParamSpec = fixed!("mask_channel", "Mask channel", ParamKind::Choice(MASK_CHANNELS), "alpha");
+const MASK_INVERT: ParamSpec = fixed!("mask_invert", "Invert mask", ParamKind::Bool, false);
 /// A 3D object's placement (as Card's) and a primitive's color.
 const PLACE_T: ParamSpec = p!("translate", "Translate", ParamKind::Vec3, [0.0, 0.0, 0.0]);
 const PLACE_R: ParamSpec = p!("rotate", "Rotate", ParamKind::Vec3, [0.0, 0.0, 0.0]);
@@ -434,7 +439,7 @@ pub static OPS: &[OpInfo] = &[
             p!("multiply", "Multiply", ParamKind::Vec3, [1.0, 1.0, 1.0]),
             p!("offset", "Offset", ParamKind::Vec3, [0.0, 0.0, 0.0]),
             p!("gamma", "Gamma", ParamKind::Vec3, [1.0, 1.0, 1.0]),
-            MIX,
+            MIX, MASK_CHANNEL, MASK_INVERT,
         ],
         overlay: Overlay::None,
         mask_base: Some(0),
@@ -445,13 +450,20 @@ pub static OPS: &[OpInfo] = &[
         label: "Merge",
         category: Category::Merge,
         inputs: &[req("A"), req("B"), MASK],
-        params: &[p!("operation", "Operation", ParamKind::Choice(MERGE_OPS), "over"), MIX],
+        params: &[
+            p!("operation", "Operation", ParamKind::Choice(MERGE_OPS), "over"),
+            fixed!("swap", "Swap A / B", ParamKind::Bool, false),
+            MIX,
+            MASK_CHANNEL,
+            MASK_INVERT,
+        ],
         overlay: Overlay::None,
         mask_base: Some(1),
-        help: "Combines A (foreground) with B (background). The mask limits \
-               where A is combined; outside it the output is B. zmerge combines by the \
-               inputs' depth passes: at each pixel the nearer goes over the farther \
-               (A in front where they tie), soft edges blended, the other passes carried.",
+        help: "Combines A (foreground) with B (background), in B's frame. Swap A / B trades them for any \
+               operation (B over A, and the frame is A's). The optional mask input limits where A is combined: \
+               outside it the output is B; Mask channel picks which of its channels masks, Invert mask flips it, \
+               and Mix fades the whole result. zmerge combines by the inputs' depth passes: at each pixel the \
+               nearer goes over the farther (A in front where they tie), soft edges blended, the other passes carried.",
     },
     OpInfo {
         name: "transform",
@@ -468,7 +480,7 @@ pub static OPS: &[OpInfo] = &[
             fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
             fixed!("shutter", "Shutter", SHUTTER, 0.5),
             fixed!("shutter_offset", "Shutter offset", ParamKind::Choice(SHUTTER_OFFSETS), "centered"),
-            MIX,
+            MIX, MASK_CHANNEL, MASK_INVERT,
         ],
         overlay: Overlay::Transform { translate: "translate", rotate: "rotate", scale: "scale", center: "center" },
         mask_base: Some(0),
@@ -484,7 +496,7 @@ pub static OPS: &[OpInfo] = &[
         params: &[
             p!("radius", "Radius", ParamKind::Float { min: 0.0, max: 200.0 }, 8.0),
             p!("passes", "Passes", ParamKind::Int { min: 1, max: 6 }, 3),
-            MIX,
+            MIX, MASK_CHANNEL, MASK_INVERT,
         ],
         overlay: Overlay::None,
         mask_base: Some(0),
@@ -495,7 +507,7 @@ pub static OPS: &[OpInfo] = &[
         label: "Exposure",
         category: Category::Color,
         inputs: &[IN, MASK],
-        params: &[p!("stops", "Stops", ParamKind::Float { min: -10.0, max: 10.0 }, 0.0), MIX],
+        params: &[p!("stops", "Stops", ParamKind::Float { min: -10.0, max: 10.0 }, 0.0), MIX, MASK_CHANNEL, MASK_INVERT],
         overlay: Overlay::None,
         mask_base: Some(0),
         help: "Brightens or darkens color by photographic stops (×2 per stop).",
@@ -505,7 +517,7 @@ pub static OPS: &[OpInfo] = &[
         label: "Saturation",
         category: Category::Color,
         inputs: &[IN, MASK],
-        params: &[p!("saturation", "Saturation", ParamKind::Float { min: 0.0, max: 4.0 }, 1.0), MIX],
+        params: &[p!("saturation", "Saturation", ParamKind::Float { min: 0.0, max: 4.0 }, 1.0), MIX, MASK_CHANNEL, MASK_INVERT],
         overlay: Overlay::None,
         mask_base: Some(0),
         help: "Scales color away from (or toward) its Rec. 709 luminance. 0 is grayscale.",
@@ -515,7 +527,7 @@ pub static OPS: &[OpInfo] = &[
         label: "Invert",
         category: Category::Color,
         inputs: &[IN, MASK],
-        params: &[p!("channels", "Channels", ParamKind::Choice(&["rgb", "alpha", "rgba"]), "rgb"), MIX],
+        params: &[p!("channels", "Channels", ParamKind::Choice(&["rgb", "alpha", "rgba"]), "rgb"), MIX, MASK_CHANNEL, MASK_INVERT],
         overlay: Overlay::None,
         mask_base: Some(0),
         help: "1 − value on unpremultiplied color and/or alpha. Inverting alpha \
@@ -530,7 +542,7 @@ pub static OPS: &[OpInfo] = &[
             p!("min", "Min", ParamKind::Float { min: -10.0, max: 10.0 }, 0.0),
             p!("max", "Max", ParamKind::Float { min: -10.0, max: 10.0 }, 1.0),
             p!("channels", "Channels", ParamKind::Choice(&["rgb", "rgba"]), "rgba"),
-            MIX,
+            MIX, MASK_CHANNEL, MASK_INVERT,
         ],
         overlay: Overlay::None,
         mask_base: Some(0),
@@ -573,7 +585,7 @@ pub static OPS: &[OpInfo] = &[
             p!("shrink_grow", "Shrink / grow", ParamKind::Float { min: -50.0, max: 50.0 }, 0.0),
             p!("softness", "Softness", ParamKind::Float { min: 0.0, max: 50.0 }, 0.0),
             fixed!("output", "Output", ParamKind::Choice(KEYER_OUTPUTS), "keyed"),
-            MIX,
+            MIX, MASK_CHANNEL, MASK_INVERT,
         ],
         overlay: Overlay::Pick("screen"),
         mask_base: Some(0),
@@ -653,7 +665,7 @@ pub static OPS: &[OpInfo] = &[
         label: "Keymix",
         category: Category::Merge,
         inputs: &[req("A"), req("B"), MASK],
-        params: &[MIX],
+        params: &[MIX, MASK_CHANNEL, MASK_INVERT],
         overlay: Overlay::None,
         mask_base: Some(1),
         help: "A where the mask's alpha is 1, B where it is 0. Unlike Merge \
@@ -991,7 +1003,7 @@ pub static OPS: &[OpInfo] = &[
             p!("k2", "K2", ParamKind::Float { min: -1.0, max: 1.0 }, 0.0),
             // Null: the frame's center.
             p!("center", "Center", ParamKind::Vec2, Value::Null),
-            MIX,
+            MIX, MASK_CHANNEL, MASK_INVERT,
         ],
         overlay: Overlay::None,
         mask_base: Some(0),
@@ -1164,7 +1176,7 @@ pub static OPS: &[OpInfo] = &[
             fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
             fixed!("shutter", "Shutter", SHUTTER, 0.5),
             fixed!("shutter_offset", "Shutter offset", ParamKind::Choice(SHUTTER_OFFSETS), "centered"),
-            MIX,
+            MIX, MASK_CHANNEL, MASK_INVERT,
         ],
         overlay: Overlay::CornerPin { to: ["to1", "to2", "to3", "to4"], from: ["from1", "from2", "from3", "from4"] },
         mask_base: Some(0),
@@ -1458,6 +1470,15 @@ fn generate(format: Size, window: IRect, f: impl Fn(i32, i32) -> Rgba + Sync + S
 /// Evaluate one operator. `inputs` are the already-rendered upstream images,
 /// one per port; an unconnected optional port is `None`.
 pub fn eval(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContext) -> Result<Image> {
+    // A Merge with Swap A / B on: its A and B trade places for everything
+    // below, the mask's base and the frame included.
+    let swapped: Vec<Option<&Image>>;
+    let inputs = if op == "merge" && params.get("swap").and_then(Value::as_bool) == Some(true) && inputs.len() >= 2 {
+        swapped = [inputs[1], inputs[0]].into_iter().chain(inputs[2..].iter().copied()).collect();
+        &swapped[..]
+    } else {
+        inputs
+    };
     let out = match params.get("_motion").and_then(Value::as_array) {
         // A warp with motion blur: its output at each sample, averaged.
         Some(samples) if matches!(op, "transform" | "corner_pin" | "tracker") => {
@@ -1478,7 +1499,10 @@ pub fn eval(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalConte
     match info(op).and_then(|i| i.mask_base.map(|b| (b, i.inputs.len() - 1))) {
         Some((base, mask)) => {
             let mix = params.get("mix").and_then(Value::as_f64).unwrap_or(1.0) as f32;
-            Ok(mask_mix(input(inputs, base, op)?, out, inputs.get(mask).copied().flatten(), mix))
+            let channel = params.get("mask_channel").and_then(Value::as_str).unwrap_or("alpha");
+            let invert = params.get("mask_invert").and_then(Value::as_bool).unwrap_or(false);
+            let mask = inputs.get(mask).copied().flatten().map(|m| Mask { image: m, channel, invert });
+            Ok(mask_mix(input(inputs, base, op)?, out, mask, mix))
         }
         None => Ok(out),
     }
@@ -1496,9 +1520,33 @@ fn planes_source(op: &str) -> Option<usize> {
     }
 }
 
-/// `result` blended back toward `base` by `mix × mask alpha`. Outside the
-/// mask's extent the mask counts as empty; with no mask it counts as full.
-fn mask_mix(base: &Image, result: Image, mask: Option<&Image>, mix: f32) -> Image {
+/// A mask image and how to read it.
+struct Mask<'a> {
+    image: &'a Image,
+    /// One of [`MASK_CHANNELS`].
+    channel: &'a str,
+    invert: bool,
+}
+
+/// How much `mask` lets through at (x, y), 0–1: its channel's value
+/// (luminance with Rec. 709 weights), flipped when inverted. Outside the
+/// mask's extent it counts as empty (so inverted, full).
+fn mask_value(mask: &Mask, x: i32, y: i32) -> f32 {
+    let px = mask.image.at(x, y);
+    let v = match mask.channel {
+        "red" => px[0],
+        "green" => px[1],
+        "blue" => px[2],
+        "luminance" => px[0] * LUMA[0] + px[1] * LUMA[1] + px[2] * LUMA[2],
+        _ => px[3],
+    }
+    .clamp(0.0, 1.0);
+    if mask.invert { 1.0 - v } else { v }
+}
+
+/// `result` blended back toward `base` by `mix × mask` ([`mask_value`]).
+/// With no mask connected it counts as full (Invert mask then does nothing).
+fn mask_mix(base: &Image, result: Image, mask: Option<Mask>, mix: f32) -> Image {
     let mix = mix.clamp(0.0, 1.0);
     if mask.is_none() && mix >= 1.0 {
         return result;
@@ -1506,7 +1554,7 @@ fn mask_mix(base: &Image, result: Image, mask: Option<&Image>, mix: f32) -> Imag
     // Where the mask holds back the result, the base shows: both windows.
     let window = result.window().union(&base.window());
     let mut out = generate(result.format, window, |x, y| {
-        let t = mix * mask.map_or(1.0, |m| m.at(x, y)[3].clamp(0.0, 1.0));
+        let t = mix * mask.as_ref().map_or(1.0, |m| mask_value(m, x, y));
         let (b, r) = (base.at(x, y), result.at(x, y));
         std::array::from_fn(|c| b[c] + (r[c] - b[c]) * t)
     });
@@ -3687,6 +3735,108 @@ mod tests {
         assert_eq!(m.get(2, 0), [1.0, 0.0, 0.0, 1.0]);
         let half = eval("merge", &json!({ "operation": "zmerge", "mix": 0.5 }), &[Some(&a), Some(&b), None], &CTX).unwrap();
         assert_eq!(half.get(2, 0), [0.5, 0.0, 0.5, 1.0]);
+    }
+
+    /// Swap A / B is the same Merge with its inputs exchanged, for every
+    /// operation, the mask's base and the frame included.
+    #[test]
+    fn merge_swap_exchanges_a_and_b() {
+        // Different sizes, colors, alphas and depths, so any mix-up shows.
+        let mut a = solid(6, 2, [0.6, 0.2, 0.1, 0.8]);
+        a.pixels[1] = [0.0; 4];
+        *a.plane_mut("depth") = (0..12).map(|i| 2.0 + i as f32).collect();
+        let mut b = solid(4, 2, [0.1, 0.3, 0.5, 0.5]);
+        *b.plane_mut("depth") = (0..8).map(|i| 9.0 - i as f32).collect();
+        let mut mask = solid(6, 2, [0.0, 0.0, 0.0, 0.5]);
+        mask.pixels[0] = [0.0, 0.0, 0.0, 1.0];
+        for op in ["over", "under", "add", "multiply", "screen", "min", "max", "zmerge"] {
+            for m in [None, Some(&mask)] {
+                let swapped = eval("merge", &json!({ "operation": op, "swap": true, "mix": 0.75 }), &[Some(&a), Some(&b), m], &CTX).unwrap();
+                let exchanged = eval("merge", &json!({ "operation": op, "mix": 0.75 }), &[Some(&b), Some(&a), m], &CTX).unwrap();
+                assert!(swapped.format == exchanged.format && swapped.pixels == exchanged.pixels && swapped.planes == exchanged.planes, "{op}, mask {}", m.is_some());
+                assert_eq!(swapped.format, a.format, "{op}: in A's frame");
+            }
+            let plain = eval("merge", &json!({ "operation": op }), &[Some(&a), Some(&b), None], &CTX).unwrap();
+            let off = eval("merge", &json!({ "operation": op, "swap": false }), &[Some(&a), Some(&b), None], &CTX).unwrap();
+            assert!(plain.pixels == off.pixels && plain.format == b.format, "{op}: off is as before");
+        }
+        // B over A, spelled out: B's half alpha over A.
+        let o = eval("merge", &json!({ "operation": "over", "swap": true }), &[Some(&a), Some(&b), None], &CTX).unwrap();
+        let want: [f32; 4] = std::array::from_fn(|c| b.get(0, 0)[c] + a.get(0, 0)[c] * 0.5);
+        assert!(o.get(0, 0).iter().zip(want).all(|(x, y)| approx(*x, y)), "{:?} vs {want:?}", o.get(0, 0));
+    }
+
+    /// Mask channel and Invert mask choose what masks, for any masked op.
+    #[test]
+    fn mask_channel_and_invert() {
+        let img = solid(5, 1, [0.2, 0.2, 0.2, 1.0]);
+        // One mask pixel per channel: red 1 / green 0.5 / blue 0.25 /
+        // alpha 0.8, then a gray 0.5 for luminance; past its 5 pixels the
+        // mask counts as empty.
+        let mut mask = solid(5, 1, [0.0; 4]);
+        mask.pixels = vec![[1.0, 0.0, 0.0, 0.0], [0.0, 0.5, 0.0, 0.0], [0.0, 0.0, 0.25, 0.0], [0.0, 0.0, 0.0, 0.8], [0.5, 0.5, 0.5, 0.0]];
+        // Exposure +1 doubles; masked, the pixel goes from 0.2 toward 0.4 by
+        // the mask's value.
+        let amount = |channel: &str, invert: bool| -> Vec<f32> {
+            let p = json!({ "stops": 1.0, "mask_channel": channel, "mask_invert": invert });
+            let out = eval("exposure", &p, &[Some(&img), Some(&mask)], &CTX).unwrap();
+            (0..5).map(|x| (out.get(x, 0)[0] - 0.2) / 0.2).collect()
+        };
+        let close = |got: Vec<f32>, want: [f32; 5]| got.iter().zip(want).all(|(g, w)| approx(*g, w)) || panic!("{got:?} vs {want:?}");
+        close(amount("alpha", false), [0.0, 0.0, 0.0, 0.8, 0.0]);
+        close(amount("red", false), [1.0, 0.0, 0.0, 0.0, 0.5]);
+        close(amount("green", false), [0.0, 0.5, 0.0, 0.0, 0.5]);
+        close(amount("blue", false), [0.0, 0.0, 0.25, 0.0, 0.5]);
+        close(amount("luminance", false), [0.2126, 0.7152 * 0.5, 0.0722 * 0.25, 0.0, 0.5]);
+        close(amount("alpha", true), [1.0, 1.0, 1.0, 0.2, 1.0]);
+        close(amount("red", true), [0.0, 1.0, 1.0, 1.0, 0.5]);
+        // Without a mask connected, invert does nothing: the effect is whole.
+        let whole = eval("exposure", &json!({ "stops": 1.0, "mask_invert": true }), &[Some(&img), None], &CTX).unwrap();
+        assert!(approx(whole.get(0, 0)[0], 0.4));
+        // Inverted, the mask's outside (empty) lets everything through.
+        let small = solid(2, 1, [0.0, 0.0, 0.0, 1.0]);
+        let out = eval("exposure", &json!({ "stops": 1.0, "mask_invert": true }), &[Some(&img), Some(&small)], &CTX).unwrap();
+        assert!(approx(out.get(0, 0)[0], 0.2) && approx(out.get(4, 0)[0], 0.4));
+        // Every masked op offers both params; Merge also swaps.
+        for info in OPS.iter().filter(|o| o.mask_base.is_some()) {
+            let names: Vec<&str> = info.params.iter().map(|p| p.name).collect();
+            assert!(names.contains(&"mask_channel") && names.contains(&"mask_invert"), "{}", info.name);
+            assert_eq!(info.inputs.last().map(|p| (p.label, p.optional)), Some(("mask", true)), "{}", info.name);
+        }
+        assert!(info("merge").unwrap().params.iter().any(|p| p.name == "swap"));
+    }
+
+    /// A comp saved before Swap and the mask choices loads and renders as
+    /// it did, and saves without them.
+    #[test]
+    fn old_merges_and_masks_load_unchanged() {
+        use crate::graph::{Evaluator, Graph};
+        let old = json!({ "project": { "first_frame": 1, "last_frame": 1, "fps": 24, "format": { "width": 8, "height": 4 } },
+            "nodes": [
+                { "id": "a", "op": "constant", "params": { "color": [1.0, 0.0, 0.0, 0.5] } },
+                { "id": "b", "op": "checkerboard", "params": { "size": 2 } },
+                { "id": "m", "op": "rectangle", "params": { "center": [2.0, 2.0], "size": [4.0, 4.0] } },
+                { "id": "merge", "op": "merge", "inputs": ["a", "b", "m"], "params": { "operation": "over", "mix": 0.8 } },
+                { "id": "grade", "op": "grade", "inputs": ["merge", "m"], "params": { "multiply": [2.0, 2.0, 2.0] } } ] });
+        let g: Graph = serde_json::from_value(old.clone()).unwrap();
+        let saved = serde_json::to_value(&g).unwrap();
+        for (n, before) in saved["nodes"].as_array().unwrap().iter().zip(old["nodes"].as_array().unwrap()) {
+            assert_eq!(n["params"], before["params"], "saved as it was");
+        }
+        let mut explicit = old.clone();
+        explicit["nodes"][3]["params"]["swap"] = json!(false);
+        for k in [3, 4] {
+            explicit["nodes"][k]["params"]["mask_channel"] = json!("alpha");
+            explicit["nodes"][k]["params"]["mask_invert"] = json!(false);
+        }
+        let e: Graph = serde_json::from_value(explicit).unwrap();
+        let render = |g: &Graph| Evaluator::new().evaluate(g, "grade", &CTX).unwrap();
+        let (old, new) = (render(&g), render(&e));
+        assert!(old.pixels == new.pixels, "as with the defaults spelled out");
+        // Masked by the rectangle's alpha: graded inside it, not outside.
+        let b = Evaluator::new().evaluate(&g, "b", &CTX).unwrap();
+        assert_eq!(old.get(7, 3), b.get(7, 3), "outside the mask: B, ungraded");
+        assert_ne!(old.get(2, 2), b.get(2, 2));
     }
 
     #[test]

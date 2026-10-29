@@ -10,7 +10,7 @@
 //! it. Drop an unconnected node on a wire to splice it in; shake a node while
 //! dragging it to pull it out of its wires. Optional ports draw hollow. The
 //! minimap (lower right) pans on click/drag, zooms on scroll, fits on
-//! double-click.
+//! double-click. The Fit button (top right) or F frames every node.
 //!
 //! Click selects a node, Shift- or Cmd/Ctrl-click adds or removes one, and
 //! a drag on empty space draws a selection box (Shift adds); dragging any
@@ -29,8 +29,12 @@ use eframe::egui::{
 };
 
 const PORT_R: f32 = 5.5;
-/// The closest a fit (on opening, F, the minimap's double-click) zooms.
+/// The closest a fit (on opening, F, the Fit button, the minimap's
+/// double-click) zooms.
 const FIT_MAX_ZOOM: f32 = 0.7;
+/// The editor's zoom limits.
+const ZOOM_MIN: f32 = 0.25;
+const ZOOM_MAX: f32 = 3.0;
 const IN_PORT_COLOR: Color32 = Color32::from_rgb(235, 205, 60);
 const IN_PORT_HOT: Color32 = Color32::from_rgb(255, 240, 150);
 const OUT_PORT_COLOR: Color32 = Color32::from_rgb(140, 225, 140);
@@ -112,6 +116,16 @@ pub struct NodeEditor {
     /// A wire's right-click menu: the wire, and where it opened (screen).
     wire_menu: Option<(WireRef, Pos2)>,
     pub rect: Rect,
+}
+
+/// The zoom and pan framing `bounds` (graph coordinates) centered in a
+/// view `size` big, with a margin. Small graphs stop at `FIT_MAX_ZOOM`:
+/// fitted any closer, a few nodes fill the editor (scroll or pinch to zoom
+/// in further); huge ones at the editor's farthest zoom.
+fn fit_view(bounds: Rect, size: Vec2) -> (f32, Vec2) {
+    let b = bounds.expand(30.0);
+    let zoom = (size.x / b.width()).min(size.y / b.height()).clamp(ZOOM_MIN, FIT_MAX_ZOOM);
+    (zoom, size / 2.0 - b.center().to_vec2() * zoom)
 }
 
 /// Every node and backdrop, in graph coordinates.
@@ -223,6 +237,8 @@ fn has_output(op: &str) -> bool {
 
 /// Wires carrying a 3D scene (and the ports taking one) are drawn in this.
 const SCENE_COLOR: Color32 = Color32::from_rgb(90, 175, 225);
+/// A mask input (the generic one of masked ops) and its label.
+const MASK_PORT_COLOR: Color32 = Color32::from_rgb(200, 150, 235);
 
 /// Whether `src`'s output may go into input `port` of `dst`: a scene only
 /// into a scene port, an image only into an image port.
@@ -596,11 +612,16 @@ impl NodeEditor {
                 }
                 let hot = resp.hovered() || resp.dragged();
                 let port = ops::info(op).and_then(|o| o.inputs.get(i));
-                port_dot(&painter, p, self.zoom, PortKind::Input, hot, port.is_some_and(|p| p.optional), port.is_some_and(|p| p.kind == ops::Kind::Scene));
-                if *n_in > 1 && self.zoom > 0.6 {
+                let mask = is_mask_port(op, i);
+                if mask {
+                    resp.on_hover_text("mask: where this node's effect applies (its alpha by default; Mask channel and Invert mask in Properties)");
+                }
+                port_dot(&painter, p, self.zoom, PortKind::Input, hot, port.is_some_and(|p| p.optional), port.is_some_and(|p| p.kind == ops::Kind::Scene), mask);
+                if (*n_in > 1 || mask) && self.zoom > 0.6 {
                     let label = port.map_or("", |p| p.label);
+                    let color = if mask { MASK_PORT_COLOR } else { Color32::from_gray(210) };
                     // Outside the node, just above the incoming wire, clear of the title.
-                    painter.text(p + Vec2::new(-PORT_R * 1.4, -PORT_R * 0.6), Align2::RIGHT_BOTTOM, label, FontId::proportional((10.0 * self.zoom).max(8.0)), Color32::from_gray(210));
+                    painter.text(p + Vec2::new(-PORT_R * 1.4, -PORT_R * 0.6), Align2::RIGHT_BOTTOM, label, FontId::proportional((10.0 * self.zoom).max(8.0)), color);
                 }
             }
             if has_output(op) {
@@ -609,7 +630,7 @@ impl NodeEditor {
                 if resp.drag_started() {
                     self.wire = Some(Wire::FromOutput(id.clone()));
                 }
-                port_dot(&painter, p, self.zoom, PortKind::Output, resp.hovered() || resp.dragged(), false, ops::output_kind(op) == ops::Kind::Scene);
+                port_dot(&painter, p, self.zoom, PortKind::Output, resp.hovered() || resp.dragged(), false, ops::output_kind(op) == ops::Kind::Scene, false);
             }
         }
 
@@ -673,6 +694,7 @@ impl NodeEditor {
         if let Some(mm) = minimap {
             self.minimap(ui, &painter, doc, mm);
         }
+        self.fit_button(ui, doc);
     }
 
     /// A drag on empty space draws a box; on release the nodes it touches
@@ -949,7 +971,7 @@ impl NodeEditor {
         if let Some(h) = resp.hover_pos() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y + (i.zoom_delta() - 1.0) * 200.0);
             if scroll != 0.0 {
-                self.zoom = (self.zoom * (scroll * 0.004).exp()).clamp(0.25, 3.0);
+                self.zoom = (self.zoom * (scroll * 0.004).exp()).clamp(ZOOM_MIN, ZOOM_MAX);
                 center_on(self, to_graph(h));
             }
         }
@@ -988,7 +1010,7 @@ impl NodeEditor {
         if zoom != 1.0 {
             if let Some(h) = hover {
                 let before = self.to_graph(h);
-                self.zoom = (self.zoom * zoom).clamp(0.25, 3.0);
+                self.zoom = (self.zoom * zoom).clamp(ZOOM_MIN, ZOOM_MAX);
                 self.pan = h - self.rect.min - before.to_vec2() * self.zoom;
             }
         } else if scroll != Vec2::ZERO {
@@ -1001,11 +1023,18 @@ impl NodeEditor {
         if doc.graph.nodes.is_empty() || !self.rect.is_positive() {
             return;
         }
-        let b = content_bounds(doc).expand(30.0);
-        // Small graphs stop at 70%: fitted any closer, a few nodes fill the
-        // editor (scroll or pinch to zoom in further).
-        self.zoom = (self.rect.width() / b.width()).min(self.rect.height() / b.height()).clamp(0.3, FIT_MAX_ZOOM);
-        self.pan = self.rect.size() / 2.0 - b.center().to_vec2() * self.zoom;
+        (self.zoom, self.pan) = fit_view(content_bounds(doc), self.rect.size());
+    }
+
+    /// The Fit button in the top-right corner: frames every node, as F does.
+    fn fit_button(&mut self, ui: &mut egui::Ui, doc: &Doc) {
+        if doc.graph.nodes.is_empty() {
+            return;
+        }
+        let r = Rect::from_min_size(self.rect.right_top() + Vec2::new(-44.0, 8.0), Vec2::new(36.0, 20.0));
+        if ui.put(r, egui::Button::new("Fit").small()).on_hover_text("Frame all nodes (F)").clicked() {
+            self.fit();
+        }
     }
 
     fn draw_grid(&self, painter: &egui::Painter) {
@@ -1161,12 +1190,14 @@ enum PortKind {
     Output,
 }
 
-/// `scene`: the port takes or makes a 3D scene (drawn blue).
+/// `scene`: the port takes or makes a 3D scene (drawn blue). `mask`: a
+/// masked op's mask input (drawn violet).
 #[allow(clippy::too_many_arguments)]
-fn port_dot(painter: &egui::Painter, p: Pos2, zoom: f32, kind: PortKind, hot: bool, optional: bool, scene: bool) {
+fn port_dot(painter: &egui::Painter, p: Pos2, zoom: f32, kind: PortKind, hot: bool, optional: bool, scene: bool, mask: bool) {
     let r = PORT_R * zoom.max(0.6);
     let color = match (kind, hot) {
         _ if scene && !hot => SCENE_COLOR,
+        _ if mask && !hot => MASK_PORT_COLOR,
         (PortKind::Input, false) => IN_PORT_COLOR,
         (PortKind::Input, true) => IN_PORT_HOT,
         (PortKind::Output, false) => OUT_PORT_COLOR,
@@ -1189,6 +1220,12 @@ fn port_dot(painter: &egui::Painter, p: Pos2, zoom: f32, kind: PortKind, hot: bo
             painter.circle_stroke(p, r - 0.75, stroke);
         }
     }
+}
+
+/// Whether input `i` of `op` is its generic mask (the last port of an op
+/// with a mask base).
+fn is_mask_port(op: &str, i: usize) -> bool {
+    ops::info(op).is_some_and(|o| o.mask_base.is_some() && i + 1 == o.inputs.len())
 }
 
 #[cfg(test)]
@@ -1662,5 +1699,54 @@ mod tests {
         assert!(doc.graph.backdrops.is_empty() && doc.node(&a).is_some() && doc.node(&b).is_some());
         doc.undo();
         assert!(doc.graph.backdrop(&bid).is_some());
+    }
+
+    #[test]
+    fn fitting_centers_the_graph_in_any_panel() {
+        // Graph bounds → zoom and pan, for several panel sizes.
+        let bounds = Rect::from_min_max(Pos2::new(-100.0, 50.0), Pos2::new(1900.0, 650.0));
+        let framed = bounds.expand(30.0);
+        for size in [Vec2::new(1200.0, 700.0), Vec2::new(500.0, 900.0), Vec2::new(2000.0, 200.0), Vec2::new(300.0, 120.0)] {
+            let (zoom, pan) = fit_view(bounds, size);
+            let on_screen = |g: Pos2| pan + g.to_vec2() * zoom;
+            let r = Rect::from_min_max(on_screen(framed.min).to_pos2(), on_screen(framed.max).to_pos2());
+            assert!((r.center() - (size / 2.0).to_pos2()).length() < 1e-3, "{size:?}: centered");
+            if zoom > ZOOM_MIN {
+                assert!(r.width() <= size.x + 1e-3 && r.height() <= size.y + 1e-3, "{size:?}: all in view with the margin");
+                assert!((r.width() - size.x).abs() < 1e-3 || (r.height() - size.y).abs() < 1e-3, "{size:?}: proportional, touching one side");
+            }
+            assert!((ZOOM_MIN..=FIT_MAX_ZOOM).contains(&zoom));
+        }
+        assert_eq!(fit_view(bounds, Vec2::new(300.0, 120.0)).0, ZOOM_MIN, "a huge graph stops at the farthest zoom");
+        let small = Rect::from_min_size(Pos2::ZERO, Vec2::new(NODE_W, NODE_H));
+        assert_eq!(fit_view(small, Vec2::new(1200.0, 700.0)).0, FIT_MAX_ZOOM, "a node or two isn't blown up");
+    }
+
+    #[test]
+    fn the_fit_button_frames_every_node_and_backdrop() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let mut h = Harness::new();
+        // An empty graph: no button, and fitting does nothing.
+        h.ed.pan = Vec2::new(12.0, 34.0);
+        h.ed.fit();
+        h.frame(&mut doc, vec![]);
+        assert_eq!((h.ed.zoom, h.ed.pan), (1.0, Vec2::new(12.0, 34.0)));
+
+        let a = doc.add_node("constant", [0.0, 0.0]);
+        doc.add_node("blur", [2400.0, 900.0]);
+        doc.select_nodes(&[a], false);
+        doc.group_selection().unwrap();
+        h.frame(&mut doc, vec![]);
+        assert_eq!(h.ed.zoom, 1.0, "nothing moves until asked");
+        let button = h.ed.rect.right_top() + Vec2::new(-26.0, 18.0);
+        h.frame(&mut doc, vec![egui::Event::PointerMoved(button)]);
+        h.frame(&mut doc, vec![Harness::button(button, true)]);
+        h.frame(&mut doc, vec![Harness::button(button, false)]);
+        h.frame(&mut doc, vec![]);
+        let (zoom, pan) = fit_view(content_bounds(&doc), h.ed.rect.size());
+        assert!(zoom < 1.0 && (h.ed.zoom, h.ed.pan) == (zoom, pan), "the button fits");
+        assert!(doc.graph.nodes.iter().all(|n| h.ed.rect.contains_rect(h.ed.node_rect(n.pos.unwrap()))));
+        let bd = &doc.graph.backdrops[0];
+        assert!(h.ed.rect.contains(h.ed.to_screen(Pos2::new(bd.pos[0], bd.pos[1]))), "and the backdrops");
     }
 }

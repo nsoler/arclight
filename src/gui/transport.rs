@@ -21,6 +21,11 @@ pub struct Transport {
     /// Smoothed frames actually displayed per second while playing.
     pub shown_fps: f32,
     last_shown: Option<Instant>,
+    /// The control row's width last frame (None: not measured yet, or too
+    /// wide for the panel), to center it by.
+    row_width: Option<f32>,
+    /// Where the control row was drawn last frame (screen).
+    row: Rect,
 }
 
 impl Default for Transport {
@@ -32,6 +37,8 @@ impl Default for Transport {
             anchor: None,
             shown_fps: 0.0,
             last_shown: None,
+            row_width: None,
+            row: Rect::NOTHING,
         }
     }
 }
@@ -119,7 +126,15 @@ impl Transport {
     pub fn ui(&mut self, ui: &mut egui::Ui, project: &mut Project, cached: &[i64], keys: &[i64], weak: &[i64]) -> bool {
         let mut project_changed = false;
         self.timeline(ui, project, cached, keys, weak);
-        ui.horizontal(|ui| {
+        let avail = ui.available_width();
+        // Centered by last frame's width; a row too wide for the panel
+        // starts at the left and wraps.
+        let indent = self.row_width.map_or(0.0, |w| indent(avail, w));
+        ui.horizontal_wrapped(|ui| {
+            if indent > 0.0 {
+                ui.add_space(indent);
+            }
+            let start = ui.cursor().min;
             let (first, last) = (project.first_frame, project.last_frame);
             if icon_button(ui, Icon::ToStart, false, "Go to start (Home)") {
                 self.set_play(Play::Stopped);
@@ -166,6 +181,16 @@ impl Transport {
             project_changed |= ui.add(egui::DragValue::new(&mut project.format.width).range(1..=16384)).changed();
             ui.label("×");
             project_changed |= ui.add(egui::DragValue::new(&mut project.format.height).range(1..=16384)).changed();
+            // Measured before the fps readout, which hangs off the right so
+            // the row doesn't shift when playback starts.
+            let end = ui.min_rect().max;
+            let one_line = ui.cursor().min.y < start.y + 1.0;
+            self.row = Rect::from_min_max(start, end);
+            let width = one_line.then_some(end.x - start.x);
+            if width.is_some_and(|w| self.row_width.is_none_or(|old| (w - old).abs() > 0.5)) || (width.is_none() && self.row_width.is_some()) {
+                ui.ctx().request_discard("transport row width changed");
+            }
+            self.row_width = width;
             if self.play != Play::Stopped && self.shown_fps > 0.0 {
                 ui.separator();
                 let color = if self.shown_fps + 0.5 < project.fps as f32 {
@@ -260,6 +285,12 @@ impl Transport {
     }
 }
 
+/// The space before a row `width` wide to center it in `avail` (none if
+/// it doesn't fit).
+fn indent(avail: f32, width: f32) -> f32 {
+    ((avail - width) / 2.0).max(0.0)
+}
+
 /// A button with a vector-drawn transport glyph (no reliance on font glyphs).
 fn icon_button(ui: &mut egui::Ui, icon: Icon, active: bool, tip: &str) -> bool {
     let size = Vec2::new(30.0, 24.0);
@@ -311,4 +342,54 @@ fn icon_button(ui: &mut egui::Ui, icon: Icon, active: bool, tip: &str) -> bool {
         }
     }
     resp.on_hover_text(tip).clicked()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn indent_centers_or_gives_up() {
+        assert_eq!(indent(1000.0, 600.0), 200.0);
+        assert_eq!(indent(600.0, 600.0), 0.0);
+        assert_eq!(indent(400.0, 600.0), 0.0, "too wide: from the left");
+    }
+
+    /// The control row, drawn in a window `width` wide for a few frames,
+    /// and the panel it's in.
+    fn row_in(width: f32, t: &mut Transport, project: &mut Project) -> (Rect, Rect) {
+        let ctx = egui::Context::default();
+        let mut panel = Rect::NOTHING;
+        for _ in 0..3 {
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 300.0))),
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(raw, |ui| {
+                panel = ui.max_rect();
+                t.ui(ui, project, &[], &[], &[]);
+            });
+        }
+        (t.row, panel)
+    }
+
+    #[test]
+    fn the_control_row_is_centered_and_wraps_when_too_wide() {
+        let (mut t, mut project) = (Transport::default(), Project::default());
+        let mut widths = vec![];
+        for panel in [1400.0, 1000.0, 2200.0] {
+            let (row, area) = row_in(panel, &mut t, &mut project);
+            let (left, right) = (row.left() - area.left(), area.right() - row.right());
+            assert!((left - right).abs() < 2.0 && left > 50.0, "panel {panel}: {row:?} in {area:?}");
+            assert!(row.height() < 40.0, "one line");
+            widths.push(row.width());
+        }
+        assert!(widths.iter().all(|w| (w - widths[0]).abs() < 0.5));
+        // Narrower than the row: starts at the left and wraps.
+        let (row, area) = row_in(widths[0] - 200.0, &mut t, &mut project);
+        assert!(row.height() > 40.0 && row.left() == area.left() && row.right() <= area.right(), "{row:?} in {area:?}");
+        // And wide again: centered.
+        let (row, area) = row_in(1400.0, &mut t, &mut project);
+        assert!(row.height() < 40.0 && ((row.left() - area.left()) - (area.right() - row.right())).abs() < 2.0, "{row:?}");
+    }
 }

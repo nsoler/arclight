@@ -276,6 +276,10 @@ impl Properties {
                 ui.end_row();
 
                 for spec in info.params {
+                    // Drawn beside the Operation dropdown.
+                    if op == "merge" && spec.name == "swap" {
+                        continue;
+                    }
                     let linked = arclight::link::is_link(&doc.param(id, spec.name));
                     ui.horizontal(|ui| {
                         if spec.animatable && !linked {
@@ -621,13 +625,18 @@ impl Properties {
             ParamKind::Choice(options) => {
                 let current = value.as_str().unwrap_or("").to_string();
                 let mut chosen = current.clone();
-                egui::ComboBox::from_id_salt(("choice", id, spec.name))
-                    .selected_text(&chosen)
-                    .show_ui(ui, |ui| {
-                        for o in options {
-                            ui.selectable_value(&mut chosen, o.to_string(), *o);
-                        }
-                    });
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt(("choice", id, spec.name))
+                        .selected_text(&chosen)
+                        .show_ui(ui, |ui| {
+                            for o in options {
+                                ui.selectable_value(&mut chosen, o.to_string(), *o);
+                            }
+                        });
+                    if op == "merge" && spec.name == "operation" {
+                        swap_button(ui, doc, id);
+                    }
+                });
                 (chosen != current).then(|| json!(chosen))
             }
             ParamKind::Flags(names) => {
@@ -1192,6 +1201,20 @@ pub struct Browse {
     /// The param animates: the file goes in as a key at `frame`.
     pub animatable: bool,
     pub frame: i64,
+}
+
+/// A Merge's Swap A / B toggle: lit while A and B are swapped.
+fn swap_button(ui: &mut egui::Ui, doc: &mut Doc, id: &str) {
+    let on = doc.param(id, "swap").as_bool().unwrap_or(false);
+    let label = if on { "⇄ B / A" } else { "⇄ A / B" };
+    let tip = if on {
+        "Swapped: B is combined onto A (B over A), in A's frame. Click to put them back"
+    } else {
+        "Swap A / B: combine B onto A instead (B over A), in A's frame"
+    };
+    if ui.selectable_label(on, label).on_hover_text(tip).clicked() {
+        doc.set_param(id, "swap", json!(!on));
+    }
 }
 
 /// Put file `path`, chosen for `b`, in its param: a Media In's file brings

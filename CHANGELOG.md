@@ -11,6 +11,19 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.33 — 2026-10-29
+
+- Merge has a **Swap A / B** toggle (⇄ beside Operation) that trades its
+  inputs for every operation: B over A, in A's frame (3DWorker).
+- Every node with a mask input (Merge, Grade, Blur, Transform, Keyer, …)
+  gains **Mask channel** (alpha, red, green, blue or luminance) and
+  **Invert mask**; mask inputs are drawn violet and labelled in the node
+  graph. Old comps are unchanged (3DWorker).
+- The playback controls sit centered under the timeline (wrapping from
+  the left when the panel is too narrow), and the Node Graph has a
+  **Fit** button in its top-right corner that frames every node and
+  backdrop, like F (MathWiz).
+
 ## 0.9.32 — 2026-10-29
 
 - **Read plays video files** as well as stills (it's now labelled
