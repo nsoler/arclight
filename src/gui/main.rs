@@ -32,6 +32,9 @@ use transport::{Play, Transport};
 use viewer::{Display, Viewer};
 use worker::{Request, Worker};
 
+/// What a render request depends on: (revision, target, frame, probe).
+type RequestKey = (u64, String, i64, Option<(String, String)>);
+
 const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
 const SAVE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
 const SAVE_AS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::S);
@@ -82,9 +85,11 @@ struct App {
     transport: Transport,
     props: Properties,
     worker: Worker,
-    /// (revision, target, frame) of the last request sent to the worker.
-    requested: Option<(u64, String, i64)>,
+    /// The last request sent to the worker.
+    requested: Option<RequestKey>,
     image: Option<Arc<Image>>,
+    /// The selected Transform and its input's data window, for its overlay.
+    probe: Option<(String, arclight::image::IRect)>,
     error: Option<NodeError>,
     shown_frame: i64,
     millis: f32,
@@ -120,6 +125,7 @@ impl App {
             worker: Worker::spawn(ctx),
             requested: None,
             image: None,
+            probe: None,
             error: None,
             shown_frame: 0,
             millis: 0.0,
@@ -474,12 +480,18 @@ impl App {
         let target = self.doc.view_target();
         match &target {
             Some(t) => {
-                let key = (self.doc.revision, t.clone(), self.transport.frame);
+                // A selected node with a Transform overlay wants its input's data window.
+                let probe = self.doc.selected.as_ref().and_then(|id| self.doc.node(id)).filter(|n| {
+                    arclight::ops::info(&n.op).is_some_and(|i| matches!(i.overlay, arclight::ops::Overlay::Transform { .. }))
+                });
+                let probe = probe.and_then(|n| n.inputs.first().filter(|i| !i.is_empty()).map(|i| (n.id.clone(), i.clone())));
+                let key = (self.doc.revision, t.clone(), self.transport.frame, probe.clone());
                 if self.requested.as_ref() != Some(&key) {
                     self.worker.request(Request {
                         graph: Arc::new(self.doc.graph.clone()),
                         target: t.clone(),
                         frame: self.transport.frame,
+                        probe,
                     });
                     self.requested = Some(key);
                 }
@@ -510,6 +522,7 @@ impl App {
                 self.shown_frame = resp.frame;
                 self.millis = resp.millis;
                 self.cached = resp.cached_frames;
+                self.probe = resp.probe;
             }
         }
     }
@@ -717,6 +730,7 @@ impl eframe::App for App {
                         target: target.as_deref(),
                         frame: self.shown_frame,
                         millis: self.millis,
+                        input_window: self.probe.clone(),
                     },
                     &mut self.doc,
                     self.transport.frame,

@@ -1,10 +1,12 @@
 //! The image viewer: shows the rendered frame with pan/zoom, channel isolation,
-//! exposure, and a float pixel readout under the cursor.
+//! exposure, and a float pixel readout under the cursor. Pixels stored past
+//! the frame (overscan) show dimmed, and a data window smaller or larger than
+//! the frame is outlined.
 
 use crate::doc::Doc;
 use crate::overlay::{Overlays, Xf};
 use arclight::color;
-use arclight::image::Image;
+use arclight::image::{IRect, Image};
 use eframe::egui::{
     self, Align2, Color32, ColorImage, FontId, Pos2, Rect, Sense, TextureHandle, TextureOptions,
     Vec2,
@@ -35,6 +37,8 @@ pub struct Viewer {
     texture: Option<TextureHandle>,
     /// The image currently uploaded, and the display settings it used.
     shown: Option<(Arc<Image>, Channel, f32)>,
+    /// What the texture covers, in frame pixels: the frame and the data window.
+    region: IRect,
     nearest: bool,
     pub channel: Channel,
     /// Exposure in stops.
@@ -53,6 +57,7 @@ impl Default for Viewer {
         Viewer {
             texture: None,
             shown: None,
+            region: IRect::default(),
             nearest: false,
             channel: Channel::Rgb,
             exposure: 0.0,
@@ -72,6 +77,8 @@ pub struct Display<'a> {
     pub target: Option<&'a str>,
     pub frame: i64,
     pub millis: f32,
+    /// A node and its input's data window, for that node's overlay.
+    pub input_window: Option<(String, IRect)>,
 }
 
 impl Viewer {
@@ -113,6 +120,7 @@ impl Viewer {
             self.fit_pending = false;
         }
 
+        self.overlays.set_input_window(d.input_window.clone());
         // Overlay handles take a drag before panning does.
         let xf = |v: &Viewer| Xf::new(Rect::from_center_size(rect.center() + v.pan, size * v.zoom), v.zoom);
         self.overlays.interact(ui, &resp, &xf(self), size, doc, frame);
@@ -143,21 +151,34 @@ impl Viewer {
             self.shown = None;
             self.upload(ui.ctx(), img);
         }
+        // Frame pixels → screen.
+        let on_screen = |r: IRect| {
+            Rect::from_min_max(
+                img_rect.min + Vec2::new(r.x0 as f32, r.y0 as f32) * self.zoom,
+                img_rect.min + Vec2::new(r.x1 as f32, r.y1 as f32) * self.zoom,
+            )
+        };
         if let Some(tex) = &self.texture {
-            painter.image(tex.id(), img_rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+            painter.image(tex.id(), on_screen(self.region), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
         }
         painter.rect_stroke(img_rect, 0.0, (1.0, Color32::from_gray(70)), egui::StrokeKind::Outside);
+        let window = img.window();
+        if window != img.frame() && !window.is_empty() {
+            let r = on_screen(window);
+            let ring = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+            painter.add(egui::Shape::dashed_line(&ring, egui::Stroke::new(1.0, Color32::from_rgb(120, 170, 220)), 6.0, 4.0));
+        }
         self.overlays.draw(ui, &painter, &xf(self), size, doc, frame);
 
-        // Pixel readout.
+        // Pixel readout, anywhere pixels are shown (overscan included).
         if let Some(hover) = resp.hover_pos() {
             let p = (hover - img_rect.min) / self.zoom;
-            let (x, y) = (p.x.floor(), p.y.floor());
-            if x >= 0.0 && y >= 0.0 && (x as usize) < img.format.width && (y as usize) < img.format.height {
-                let px = img.at(x as i32, y as i32);
+            let (x, y) = (p.x.floor() as i32, p.y.floor() as i32);
+            if self.region.contains(x, y) {
+                let px = img.at(x, y);
                 let text = format!(
                     "x {:<5} y {:<5}   R {:.4}  G {:.4}  B {:.4}  A {:.4}",
-                    x as usize, y as usize, px[0], px[1], px[2], px[3]
+                    x, y, px[0], px[1], px[2], px[3]
                 );
                 let pos = rect.left_bottom() + Vec2::new(8.0, -8.0);
                 let galley = painter.layout_no_wrap(text, FontId::monospace(12.0), Color32::from_gray(220));
@@ -195,6 +216,12 @@ impl Viewer {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(img) = d.image {
                     ui.label(format!("{}x{}  ·  frame {}  ·  {:.1} ms", img.format.width, img.format.height, d.frame, d.millis));
+                    let w = img.window();
+                    if w != img.frame() {
+                        let text = if w.is_empty() { "no data".to_string() } else { format!("data {},{} {}×{}", w.x0, w.y0, w.width(), w.height()) };
+                        ui.label(egui::RichText::new(text).color(Color32::from_rgb(120, 170, 220)))
+                            .on_hover_text("The data window: where this image stores pixels (outlined, dashed). Outside it everything is transparent; past the frame it shows dimmed.");
+                    }
                 }
                 if let Some(t) = d.target {
                     ui.strong(t);
@@ -215,7 +242,8 @@ impl Viewer {
         if self.shown.as_ref().is_none_or(|(s, ..)| s.format != img.format) {
             self.fit_pending = true;
         }
-        let ci = to_color_image(&img.flat(), self.channel, self.exposure);
+        self.region = img.frame().union(&img.window());
+        let ci = to_color_image(img, self.region, self.channel, self.exposure);
         let filter = if self.nearest { TextureOptions::NEAREST } else { TextureOptions::LINEAR };
         match &mut self.texture {
             Some(t) => t.set(ci, filter),
@@ -226,14 +254,19 @@ impl Viewer {
 }
 
 /// Linear premultiplied float -> 8-bit sRGB for display, with exposure and
-/// channel isolation applied. Color is shown premultiplied, i.e. over black.
-fn to_color_image(img: &Image, channel: Channel, exposure: f32) -> ColorImage {
+/// channel isolation applied, over `region` (frame pixels). Color is shown
+/// premultiplied, i.e. over black; overscan (past the frame) is dimmed.
+fn to_color_image(img: &Image, region: IRect, channel: Channel, exposure: f32) -> ColorImage {
     let gain = 2f32.powf(exposure);
-    let mut bytes = vec![0u8; img.pixels.len() * 4];
+    let (w, frame) = (region.width().max(1), img.frame());
+    let mut bytes = vec![0u8; region.width() * region.height() * 4];
     bytes
         .par_chunks_exact_mut(4)
-        .zip(img.pixels.par_iter())
-        .for_each(|(out, px)| {
+        .enumerate()
+        .for_each(|(i, out)| {
+            let (x, y) = (region.x0 + (i % w) as i32, region.y0 + (i / w) as i32);
+            let px = img.at(x, y);
+            let gain = if frame.contains(x, y) { gain } else { gain * 0.35 };
             let enc = |v: f32| (color::linear_to_srgb(v * gain) * 255.0 + 0.5) as u8;
             let rgb = match channel {
                 Channel::Rgb => [enc(px[0]), enc(px[1]), enc(px[2])],
@@ -245,5 +278,5 @@ fn to_color_image(img: &Image, channel: Channel, exposure: f32) -> ColorImage {
             };
             out.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
         });
-    ColorImage::from_rgba_unmultiplied([img.width, img.height], &bytes)
+    ColorImage::from_rgba_unmultiplied([region.width(), region.height()], &bytes)
 }

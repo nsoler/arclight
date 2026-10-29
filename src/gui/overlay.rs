@@ -9,6 +9,7 @@
 
 use crate::doc::Doc;
 use arclight::ops::{self, Overlay};
+use arclight::image::IRect;
 use arclight::{anim, shape, track};
 use eframe::egui::{self, Color32, CursorIcon, Pos2, Rect, Response, Shape, Stroke, Vec2};
 use serde_json::{json, Value};
@@ -163,6 +164,9 @@ enum Geo {
         translate: Vec2,
         rotate: f32,
         scale: Vec2,
+        /// The input's data (the layer being moved), before the transform:
+        /// its data window when known, else the whole frame.
+        layer: Rect,
     },
     Insets { names: [&'static str; 4], values: [f32; 4], size: Vec2 },
     Box { names: [&'static str; 3], center: Vec2, size: Vec2, rotate: f32, ellipse: bool },
@@ -217,6 +221,8 @@ pub struct Overlays {
     points_node: Option<String>,
     /// The selection a box selection adds to (empty unless Shift was held).
     marquee_base: Vec<usize>,
+    /// A node and its input's data window (frame pixels), when known.
+    input_window: Option<(String, IRect)>,
 }
 
 fn vec2(v: &Value) -> Vec2 {
@@ -246,6 +252,7 @@ fn geo(doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
             translate: vec2(&at(translate)),
             rotate: num(&at(rotate)),
             scale: vec2(&at(scale)),
+            layer: Rect::from_min_size(Pos2::ZERO, size),
         },
         Overlay::Insets { left, top, right, bottom } => Geo::Insets {
             names: [left, top, right, bottom],
@@ -370,8 +377,12 @@ fn gizmo(xf: &Xf, center: Vec2, translate: Vec2, rotate: f32) -> (Pos2, Pos2, Po
 /// Screen positions of the transformed layer's frame: its corners
 /// (clockwise from top left), then the midpoints of its top, right, bottom
 /// and left edges. The layer is taken to be the viewed image's size.
-fn layer_frame(xf: &Xf, center: Vec2, translate: Vec2, rotate: f32, scale: Vec2) -> [Pos2; 8] {
-    let at = |x: f32, y: f32| xf.screen(center + translate + rot(Vec2::new(x, y) * center * scale, rotate));
+fn layer_frame(xf: &Xf, center: Vec2, layer: Rect, translate: Vec2, rotate: f32, scale: Vec2) -> [Pos2; 8] {
+    // A point of the layer (x, y from −1 to 1 across it), transformed.
+    let at = |x: f32, y: f32| {
+        let q = layer.center().to_vec2() + Vec2::new(x, y) * layer.size() / 2.0;
+        xf.screen(center + translate + rot((q - center) * scale, rotate))
+    };
     [at(-1.0, -1.0), at(1.0, -1.0), at(1.0, 1.0), at(-1.0, 1.0), at(0.0, -1.0), at(1.0, 0.0), at(0.0, 1.0), at(-1.0, 0.0)]
 }
 
@@ -416,9 +427,9 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
             let near = |q: &[Vec2; 4]| (0..4).find(|&i| xf.screen(q[i]).distance(p) < GRAB * 1.5);
             near(&to).map(|i| Part::Corner { i, from: false }).or_else(|| near(&from).map(|i| Part::Corner { i, from: true }))
         }
-        Geo::Transform { center, translate, rotate, scale, .. } => {
+        Geo::Transform { center, translate, rotate, scale, layer, .. } => {
             let (c, x, y) = gizmo(xf, center, translate, rotate);
-            let frame = layer_frame(xf, center, translate, rotate, scale);
+            let frame = layer_frame(xf, center, layer, translate, rotate, scale);
             if x.distance(p) < GRAB {
                 Some(Part::ScaleX)
             } else if y.distance(p) < GRAB {
@@ -547,6 +558,23 @@ impl Overlays {
         self.drag.is_some()
     }
 
+    /// Tell the overlays a node's input data window (or that none is known).
+    pub fn set_input_window(&mut self, w: Option<(String, IRect)>) {
+        self.input_window = w;
+    }
+
+    /// The node's overlay at `frame`; a Transform's layer is its input's
+    /// data window when known.
+    fn node_geo(&self, doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
+        let mut g = geo(doc, id, frame, size)?;
+        if let (Geo::Transform { layer, .. }, Some((node, w))) = (&mut g, &self.input_window) {
+            if node == id && !w.is_empty() {
+                *layer = Rect::from_min_max(Pos2::new(w.x0 as f32, w.y0 as f32), Pos2::new(w.x1 as f32, w.y1 as f32));
+            }
+        }
+        Some(g)
+    }
+
     /// Forget the vertex selection when another node is selected.
     fn sync_selection(&mut self, doc: &Doc) {
         if self.points_node != doc.selected {
@@ -585,7 +613,7 @@ impl Overlays {
     fn press(&mut self, doc: &mut Doc, frame: i64, size: Vec2, xf: &Xf, o: Pos2, mods: Mods) {
         self.drag = None;
         let Some(id) = doc.selected.clone() else { return };
-        let Some(g) = geo(doc, &id, frame, size) else { return };
+        let Some(g) = self.node_geo(doc, &id, frame, size) else { return };
         let xf = &xf.for_node(doc, &id, frame);
         self.points.retain(|&i| matches!(&g, Geo::Points { pts, .. } if i < pts.len()));
         let mut part = hit(&g, xf, o, &self.points);
@@ -654,7 +682,7 @@ impl Overlays {
         }
         let Some(part) = part else { return };
         // Inserting changed the geometry: start from the new one.
-        let Some(g) = geo(doc, &id, frame, size) else { return };
+        let Some(g) = self.node_geo(doc, &id, frame, size) else { return };
         let start = xf.image(o);
         let pivot = match (&g, part) {
             (Geo::Points { pts, .. }, Part::SelBox(_)) => sel_box(xf, pts, &self.points).map_or(Vec2::ZERO, |r| r.center().to_vec2()),
@@ -716,7 +744,7 @@ impl Overlays {
 
     pub fn draw(&self, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, size: Vec2, doc: &Doc, frame: i64) {
         let Some(id) = doc.selected.as_deref() else { return };
-        let Some(g) = geo(doc, id, frame, size) else { return };
+        let Some(g) = self.node_geo(doc, id, frame, size) else { return };
         let xf = &self.drag.as_ref().map_or_else(|| xf.for_node(doc, id, frame), |d| d.xf);
         let hover = ui.input(|i| i.pointer.hover_pos()).filter(|p| painter.clip_rect().contains(*p));
         let hot = match &self.drag {
@@ -739,9 +767,9 @@ impl Overlays {
                 painter.circle(c, 5.0, color(Part::Point, HANDLE), outline);
                 crosshair(painter, c, 10.0, Stroke::new(1.0, color(Part::Point, HANDLE)));
             }
-            Geo::Transform { center, translate, rotate, scale, .. } => {
+            Geo::Transform { center, translate, rotate, scale, layer, .. } => {
                 // The layer's frame, and its scale handles.
-                let layer = layer_frame(xf, center, translate, rotate, scale);
+                let layer = layer_frame(xf, center, layer, translate, rotate, scale);
                 let hot_move = hot == Some(Part::Move);
                 outline_path(painter, layer[..4].to_vec(), if hot_move { HOT } else { Color32::from_white_alpha(170) });
                 if let Some(Some(i)) = hover.filter(|_| self.drag.is_none()).map(|p| (0..8).find(|&i| layer[i].distance(p) < GRAB)) {
@@ -987,7 +1015,7 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
             let v = if is_from { from[i] } else { to[i] } + if shift { constrain(delta) } else { delta };
             doc.edit_param(&id, names[is_from as usize][i], frame, json!([v.x, v.y]));
         }
-        Geo::Transform { names, center, translate, rotate, scale } => {
+        Geo::Transform { names, center, translate, rotate, scale, .. } => {
             let pivot = center + translate;
             match drag.part {
                 Part::Move => {
@@ -1375,6 +1403,21 @@ mod tests {
         // Viewing something else (or the plain input) leaves the boxes in place.
         d.graph.nodes[1].inputs = vec![String::new()];
         assert!(XF.for_node(&d, "n", 2).warp.is_none());
+    }
+
+    #[test]
+    fn the_transform_frame_outlines_its_input_s_data() {
+        // The frame is 200×100 (center 100, 50); the input's data only
+        // (50, 25)–(100, 50). Its top-left corner is then a scale handle…
+        let mut d = doc("transform", json!({}));
+        let mut ov = Overlays::default();
+        ov.set_input_window(Some(("n".into(), IRect::new(50, 25, 100, 50))));
+        let part = gesture(&mut ov, &mut d, Pos2::new(50.0, 25.0), Pos2::new(25.0, 12.5), 1, Mods::default());
+        assert_eq!(part, Some(Part::Size { x: true, y: true }));
+        assert_eq!(vec2(&d.param("n", "scale")), Vec2::new(1.5, 1.5));
+        // …while without it the same spot is just inside the frame: a move.
+        let mut d = doc("transform", json!({}));
+        assert_eq!(drag(&mut d, Pos2::new(50.0, 25.0), Pos2::new(55.0, 25.0), 1), Part::Move);
     }
 
     #[test]

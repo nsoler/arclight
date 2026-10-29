@@ -16,7 +16,7 @@ Last updated 2026-10-28 (end of session 5). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~13,300 lines of Rust + Python. Tests: 70 library + 10 CLI + 30 GUI
+- ~13,300 lines of Rust + Python. Tests: 70 library + 10 CLI + 31 GUI
   (`cargo test --release`) and 8 Python (see "Working tips"), all passing.
   Clippy is clean apart from two old style lints (`Graph::from_str` name,
   `chunks_exact_mut(4)` in media.rs).
@@ -307,6 +307,15 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   radius × passes on sides inside the frame and clamps where data meets
   the frame edge (old behavior for plates). No op flattens any more. The
   12-node comparison graph still matches pre-0.6 output exactly.
+- **Session 6, part 7**: Phase 0.6 milestone 4, viewer and overlays.
+  Viewer: texture over `frame ∪ window` (`Viewer::region`), overscan
+  dimmed in `to_color_image`, dashed data-window outline, "data x,y w×h"
+  in the status line, readout anywhere in the region. Transform's layer
+  frame: `Request::probe` (selected node with a Transform overlay, and its
+  input) → worker evaluates the input (cached by key in a window map) →
+  `Response::probe` → `Display::input_window` →
+  `Overlays::set_input_window` → `node_geo` sets `Geo::Transform::layer`;
+  `layer_frame` maps that rect.
 
 ## Architecture in one page
 

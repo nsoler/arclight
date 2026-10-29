@@ -5,7 +5,8 @@
 //! keyed by the graph's cache key, so scrubbing back over a frame is instant.
 
 use arclight::graph::{Evaluator, Graph, NodeError};
-use arclight::image::Image;
+use arclight::image::{IRect, Image};
+use std::collections::HashMap;
 use arclight::ops::EvalContext;
 use std::collections::VecDeque;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -20,6 +21,9 @@ pub struct Request {
     pub graph: Arc<Graph>,
     pub target: String,
     pub frame: i64,
+    /// A node and its input whose data window to report alongside (the
+    /// selected Transform's layer, for its overlay).
+    pub probe: Option<(String, String)>,
 }
 
 pub struct Response {
@@ -29,6 +33,8 @@ pub struct Response {
     pub millis: f32,
     /// Frames of the project range already in the frame cache for this target.
     pub cached_frames: Vec<i64>,
+    /// The probed node and its input's data window, when asked and known.
+    pub probe: Option<(String, IRect)>,
 }
 
 pub struct Worker {
@@ -93,6 +99,9 @@ fn size_of_image(img: &Image) -> usize {
 fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Context) {
     let mut eval = Evaluator::new();
     let mut frames = FrameCache { entries: VecDeque::new(), bytes: 0 };
+    // Probed inputs' data windows by cache key, so frames served from the
+    // frame cache needn't render the input again.
+    let mut windows: HashMap<u64, IRect> = HashMap::new();
 
     while let Ok(mut req) = rx.recv() {
         while let Ok(newer) = rx.try_recv() {
@@ -114,6 +123,17 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
             },
         };
         let millis = start.elapsed().as_secs_f32() * 1000.0;
+        let probe = req.probe.and_then(|(node, input)| {
+            let key = Evaluator::key(&req.graph, &input, &ctx).ok()?;
+            if !windows.contains_key(&key) {
+                let img = eval.evaluate(&req.graph, &input, &ctx).ok()?;
+                if windows.len() > 4096 {
+                    windows.clear();
+                }
+                windows.insert(key, img.window());
+            }
+            Some((node, windows[&key]))
+        });
 
         let p = &req.graph.project;
         let cached_frames = (p.first_frame..=p.last_frame.max(p.first_frame))
@@ -129,6 +149,7 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
             result,
             millis,
             cached_frames,
+            probe,
         };
         if tx.send(resp).is_err() {
             break;
