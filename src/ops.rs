@@ -239,6 +239,11 @@ const SURFACE_COLOR: ParamSpec = p!("color", "Color", ParamKind::Color, [1.0, 1.
 const LIGHT_COLOR: ParamSpec = p!("color", "Color", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]);
 const LIGHT_INTENSITY: ParamSpec = p!("intensity", "Intensity", ParamKind::Float { min: 0.0, max: 100.0 }, 1.0);
 const LIGHT_DECAY: ParamSpec = p!("decay", "Decay", ParamKind::Float { min: 0.0, max: 3.0 }, 0.0);
+/// How a 3D object takes light (see [`crate::shade`]).
+const SHADING: ParamSpec = fixed!("shading", "Shading", ParamKind::Choice(&["unlit", "lambert", "blinn"]), "lambert");
+const SPECULAR: ParamSpec = p!("specular", "Specular", ParamKind::Float { min: 0.0, max: 1.0 }, 0.0);
+const ROUGHNESS: ParamSpec = p!("roughness", "Roughness", ParamKind::Float { min: 0.0, max: 1.0 }, 0.5);
+const EMISSION: ParamSpec = p!("emission", "Emission", ParamKind::Color, [0.0, 0.0, 0.0, 1.0]);
 /// A 3D object that renders nothing but hides what's behind it.
 const HOLDOUT: ParamSpec = fixed!("holdout", "Holdout", ParamKind::Bool, false);
 
@@ -714,6 +719,10 @@ pub static OPS: &[OpInfo] = &[
             p!("size", "Size", ParamKind::Vec3, [1.0, 1.0, 1.0]),
             fixed!("segments", "Segments", ParamKind::Vec3, [1.0, 1.0, 1.0]),
             SURFACE_COLOR,
+            SHADING,
+            SPECULAR,
+            ROUGHNESS,
+            EMISSION,
             HOLDOUT,
         ],
         overlay: Overlay::None,
@@ -733,6 +742,10 @@ pub static OPS: &[OpInfo] = &[
             p!("radius", "Radius", ParamKind::Float { min: 0.001, max: 10000.0 }, 0.5),
             fixed!("segments", "Segments (around, up)", ParamKind::Vec2, [32.0, 16.0]),
             SURFACE_COLOR,
+            SHADING,
+            SPECULAR,
+            ROUGHNESS,
+            EMISSION,
             HOLDOUT,
         ],
         overlay: Overlay::None,
@@ -754,6 +767,10 @@ pub static OPS: &[OpInfo] = &[
             fixed!("segments", "Segments (around, up)", ParamKind::Vec2, [32.0, 1.0]),
             fixed!("caps", "Caps", ParamKind::Bool, true),
             SURFACE_COLOR,
+            SHADING,
+            SPECULAR,
+            ROUGHNESS,
+            EMISSION,
             HOLDOUT,
         ],
         overlay: Overlay::None,
@@ -773,6 +790,10 @@ pub static OPS: &[OpInfo] = &[
             p!("size", "Size", ParamKind::Vec2, [1.0, 1.0]),
             fixed!("segments", "Segments", ParamKind::Vec2, [1.0, 1.0]),
             SURFACE_COLOR,
+            SHADING,
+            SPECULAR,
+            ROUGHNESS,
+            EMISSION,
             HOLDOUT,
         ],
         overlay: Overlay::None,
@@ -791,6 +812,11 @@ pub static OPS: &[OpInfo] = &[
             PLACE_T,
             PLACE_R,
             PLACE_S,
+            fixed!("override_material", "Override material", ParamKind::Bool, false),
+            SHADING,
+            SPECULAR,
+            ROUGHNESS,
+            EMISSION,
             HOLDOUT,
         ],
         overlay: Overlay::None,
@@ -926,8 +952,10 @@ pub static OPS: &[OpInfo] = &[
                Anti-aliasing takes that many samples across each pixel and down (3: nine). \
                Passes adds planes next to the picture: depth (each pixel's distance in front of the camera, 0 where \
                nothing is), P (scene position), N (normal), uv (texture coordinates), id (an object number per \
-               pixel) and mattes (matte.<node>: each object's coverage). Holdout objects draw nothing but cut out \
-               what is behind them.",
+               pixel), mattes (matte.<node>: each object's coverage), the light in parts adding up to the picture \
+               (diffuse, specular, emission, ambient) and lights (light.<node>: each light's share). The scene's \
+               lights light Lambert and Blinn objects; with none, everything renders unlit. Holdout objects draw \
+               nothing but cut out what is behind them.",
     },
     OpInfo {
         name: "lens_distort",
@@ -2564,7 +2592,7 @@ fn read_geo(params: &Value) -> Result<Image> {
         .map(|(part, tex)| scene::Model {
             mesh: std::sync::Arc::new(part.mesh.clone()),
             world,
-            material: part.material.clone(),
+            material: if params["override_material"].as_bool().unwrap_or(false) { scene::lighting(params, &part.material) } else { part.material.clone() },
             texture: tex.clone(),
             holdout: params["holdout"].as_bool().unwrap_or(false),
             name: part.name.clone(),

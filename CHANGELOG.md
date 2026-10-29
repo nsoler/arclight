@@ -11,6 +11,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.25 — 2026-10-29
+
+- Lit rendering: Lambert and Blinn shading (with specular, roughness
+  and emission) on Cube, Sphere, Cylinder, Plane and Read Geo (which
+  keeps its file's materials unless **Override material** is on), lit by
+  the scene's lights; new passes `diffuse`, `specular`, `emission`,
+  `ambient` (adding up to the picture) and `light.<node>` per light.
+  Scenes without lights render exactly as before (M10 step d).
+
 ## 0.9.24 — 2026-10-29
 
 - 3D view: lights show as icons (a star for point lights, a cone with

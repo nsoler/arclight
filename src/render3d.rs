@@ -19,7 +19,9 @@
 use crate::color::{self, Rgba};
 use crate::geom::{self, Camera, Mat4, Vec3};
 use crate::image::{IRect, Image, Size};
+use crate::mesh::{Material, Shading};
 use crate::scene::Scene;
+use crate::shade::{self, Light, Shaded};
 use rayon::prelude::*;
 use std::borrow::Cow;
 
@@ -47,6 +49,8 @@ pub(crate) struct Surface<'a> {
     pub holdout: bool,
     /// The node it came from: its object id and matte.
     pub node: &'a str,
+    /// How it takes light (None: unlit, as a card).
+    pub material: Option<&'a Material>,
 }
 
 /// Card `card` as two triangles (top left, top right, bottom right; top
@@ -66,6 +70,7 @@ fn card_surface(card: &crate::scene::Card) -> Surface<'_> {
         headlight: false,
         holdout: false,
         node: &card.node,
+        material: None,
     }
 }
 
@@ -87,6 +92,7 @@ fn model_surface(m: &crate::scene::Model) -> Surface<'_> {
         headlight: false,
         holdout: m.holdout,
         node: &m.node,
+        material: Some(&m.material),
     }
 }
 
@@ -305,13 +311,23 @@ pub struct Passes {
     pub id: bool,
     /// `matte.<node>`: each object node's coverage.
     pub mattes: bool,
+    /// The light in parts, adding up to the beauty's color: `diffuse`,
+    /// `specular`, `emission` (with unlit surfaces' color) and `ambient`
+    /// (each `.R` `.G` `.B`).
+    pub diffuse: bool,
+    pub specular: bool,
+    pub emission: bool,
+    pub ambient: bool,
+    /// `light.<node>` (`.R` `.G` `.B`): what each light node adds.
+    pub lights: bool,
 }
 
 impl Passes {
     /// What a plain render writes.
-    pub const DEPTH: Passes = Passes { depth: true, position: false, normal: false, uv: false, id: false, mattes: false };
+    pub const DEPTH: Passes = Passes { depth: true, ..Passes::NONE };
+    const NONE: Passes = Passes { depth: false, position: false, normal: false, uv: false, id: false, mattes: false, diffuse: false, specular: false, emission: false, ambient: false, lights: false };
     /// The pass names, as a Scanline Render's Passes list holds them.
-    pub const NAMES: [&'static str; 6] = ["depth", "P", "N", "uv", "id", "mattes"];
+    pub const NAMES: [&'static str; 11] = ["depth", "P", "N", "uv", "id", "mattes", "diffuse", "specular", "emission", "ambient", "lights"];
 
     /// The passes named in `names` (others are ignored).
     pub fn from_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Passes {
@@ -324,6 +340,11 @@ impl Passes {
                 "uv" => p.uv = true,
                 "id" => p.id = true,
                 "mattes" => p.mattes = true,
+                "diffuse" => p.diffuse = true,
+                "specular" => p.specular = true,
+                "emission" => p.emission = true,
+                "ambient" => p.ambient = true,
+                "lights" => p.lights = true,
                 _ => {}
             }
         }
@@ -338,7 +359,7 @@ impl Passes {
 /// where the render shows nothing each pass is the background's plane of
 /// that name, if it has one; its other planes are kept.
 pub fn render_passes(scene: &Scene, cam: &Camera, format: Size, samples: usize, background: Option<&Image>, passes: Passes) -> Image {
-    let out = draw_passes(&surfaces(scene), &scene.points, cam, format, samples, passes);
+    let out = draw_passes(&surfaces(scene), &scene.lights, &scene.points, cam, format, samples, passes);
     match background {
         Some(bg) => over_background(out, bg),
         None => out,
@@ -356,10 +377,61 @@ pub fn render_preview(scene: &Scene, cam: &Camera, format: Size) -> Image {
     draw(&surfs, &[], cam, format, 1)
 }
 
+/// The light at a hit, in parts (premultiplied, as `color` is): `color`
+/// unchanged, all in emission, for a surface without a material, or one
+/// that's unlit (or no lights) and gives off no light of its own; else
+/// [`shade::shade`] of its unpremultiplied color, times its alpha. With
+/// `per_light`, also each light's share alone (diffuse, specular and
+/// ambient added up).
+fn light_hit(s: &Surface, lights: &[Light], color: Rgba, at: impl Fn() -> shade::Hit, per_light: Option<&mut Vec<[f32; 3]>>) -> (Rgba, Shaded) {
+    let rgb = [color[0], color[1], color[2]];
+    let unlit = Shaded { emission: rgb, ..Shaded::default() };
+    let Some(m) = s.material else { return (color, unlit) };
+    let lit = !lights.is_empty() && m.shading != Shading::Unlit;
+    if (!lit && m.emission == [0.0; 3]) || color[3] <= 0.0 {
+        return (color, unlit);
+    }
+    let a = color[3];
+    let albedo = rgb.map(|v| v / a);
+    let hit = at();
+    let premult = |v: [f32; 3]| v.map(|x| x * a);
+    let sh = shade::shade(&hit, m, albedo, lights);
+    let parts = Shaded { diffuse: premult(sh.diffuse), specular: premult(sh.specular), emission: premult(sh.emission), ambient: premult(sh.ambient) };
+    if let Some(out) = per_light {
+        out.clear();
+        out.extend(lights.iter().map(|l| premult(shade::light(&hit, m, albedo, l).total())));
+    }
+    let t = parts.total();
+    ([t[0], t[1], t[2], a], parts)
+}
+
+/// The light nodes of `lights` in order (each once; unnamed lights left
+/// out), and for each light its index among them.
+fn light_nodes(lights: &[Light]) -> (Vec<&str>, Vec<Option<usize>>) {
+    let mut nodes: Vec<&str> = Vec::new();
+    for l in lights {
+        if !l.node.is_empty() && !nodes.contains(&l.node.as_str()) {
+            nodes.push(&l.node);
+        }
+    }
+    let which = lights.iter().map(|l| nodes.iter().position(|n| *n == l.node)).collect();
+    (nodes, which)
+}
+
+/// The next `n` channels of a pixel's extra ones when `on`: where they
+/// start (`k` counts those taken).
+fn slot(k: &mut usize, on: bool, n: usize) -> usize {
+    let at = *k;
+    if on {
+        *k += n;
+    }
+    at
+}
+
 /// Surfaces `surfs` and dots at `points` through `cam` into a frame of
 /// `format`, with depth (see [`render`]).
 fn draw(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, samples: usize) -> Image {
-    draw_passes(surfs, points, cam, format, samples, Passes::DEPTH)
+    draw_passes(surfs, &[], points, cam, format, samples, Passes::DEPTH)
 }
 
 /// The object nodes of `surfs` in order (each once, unnamed ones left out):
@@ -375,7 +447,7 @@ fn object_nodes<'a>(surfs: &[Surface<'a>]) -> Vec<&'a str> {
 }
 
 /// [`draw`] writing `passes` (see [`render_passes`]).
-fn draw_passes(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes) -> Image {
+fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes) -> Image {
     let n = samples.clamp(1, 16);
     let tris = triangles(surfs, cam, format);
     let rows = bin_rows(&tris, format.height);
@@ -384,13 +456,20 @@ fn draw_passes(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, s
     let (w, h) = (format.width, format.height);
     let nodes = object_nodes(surfs);
     let object: Vec<Option<usize>> = surfs.iter().map(|s| nodes.iter().position(|n| *n == s.node)).collect();
-    // Per pixel, the extra channels: P (3), N (3), uv (2), id, then a matte
-    // per node, as asked for.
-    let (p_at, n_at, uv_at, id_at) = (0, 3 * passes.position as usize, 3 * (passes.position as usize + passes.normal as usize), 0);
-    let uv_end = uv_at + 2 * passes.uv as usize;
-    let id_at = if passes.id { uv_end } else { id_at };
-    let matte_at = uv_end + passes.id as usize;
-    let k = matte_at + if passes.mattes { nodes.len() } else { 0 };
+    let (light_names, light_of) = light_nodes(lights);
+    // Per pixel, the extra channels, as asked for: P (3), N (3), uv (2), id,
+    // a matte per node, the four lighting parts (3 each), each light node
+    // (3 each).
+    let mut k = 0;
+    let p_at = slot(&mut k, passes.position, 3);
+    let n_at = slot(&mut k, passes.normal, 3);
+    let uv_at = slot(&mut k, passes.uv, 2);
+    let id_at = slot(&mut k, passes.id, 1);
+    let matte_at = slot(&mut k, passes.mattes, nodes.len());
+    let part_on = [passes.diffuse, passes.specular, passes.emission, passes.ambient];
+    let part_at = part_on.map(|on| slot(&mut k, on, 3));
+    let light_at = slot(&mut k, passes.lights, 3 * light_names.len());
+    let any_part = part_on.iter().any(|b| *b) || passes.lights;
     let mut color = vec![color::TRANSPARENT; w * h];
     let mut depth = vec![0.0f32; w * h];
     // (At least one channel, so every row has its chunk.)
@@ -409,6 +488,10 @@ fn draw_passes(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, s
             let y = y as i32;
             let mut hits: Vec<Hit> = Vec::new();
             let mut mattes = vec![0.0f32; nodes.len()];
+            // Each hit's light in parts (and per light), when those passes
+            // are asked for, and their sums over the pixel.
+            let (mut parts, mut per_light, mut scratch): (Vec<Shaded>, Vec<[f32; 3]>, Vec<[f32; 3]>) = (Vec::new(), Vec::new(), Vec::new());
+            let mut light_sum = vec![[0.0f32; 3]; light_names.len()];
             // The triangles under the current pixel: those whose columns
             // reach it, added as the sweep passes their left edge.
             let (mut next, mut here): (usize, Vec<u32>) = (0, Vec::new());
@@ -427,10 +510,14 @@ fn draw_passes(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, s
                 // nearest-sample passes.
                 let mut nearest: Option<Hit> = None;
                 mattes.iter_mut().for_each(|m| *m = 0.0);
+                let mut part_sum = [[0.0f32; 3]; 4];
+                light_sum.iter_mut().for_each(|v| *v = [0.0; 3]);
                 for j in 0..n {
                     for i in 0..n {
                         let q = [xi as f64 + (i as f64 + 0.5) / n as f64, y as f64 + (j as f64 + 0.5) / n as f64];
                         hits.clear();
+                        parts.clear();
+                        per_light.clear();
                         for &ti in &here {
                             let t = &tris[ti as usize];
                             let Some((d, bary)) = t.cover(q, cam.near, cam.far) else { continue };
@@ -440,24 +527,48 @@ fn draw_passes(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, s
                             }
                             let s = &surfs[t.surf];
                             let mut color = shade(s, t.uv(&bary));
+                            let at = |f: fn(&Vert) -> Vec3| t.v.iter().zip(&bary).map(|(v, b)| f(v) * *b).sum::<Vec3>();
                             if s.headlight {
-                                let at = |f: fn(&Vert) -> Vec3| t.v.iter().zip(&bary).map(|(v, b)| f(v) * *b).sum::<Vec3>();
                                 let (n, p) = (at(|v| v.n), at(|v| v.world));
                                 let facing = n.try_normalize(1e-300).zip((eye - p).try_normalize(1e-300)).map_or(1.0, |(n, v)| n.dot(&v).abs());
                                 let k = (0.25 + 0.75 * facing) as f32;
                                 (0..3).for_each(|c| color[c] *= k);
+                            }
+                            let hit_at = || {
+                                let p = at(|v| v.world);
+                                shade::Hit { position: p, normal: at(|v| v.n).try_normalize(1e-300).unwrap_or_else(Vec3::z), view: (eye - p).try_normalize(1e-300).unwrap_or_else(Vec3::z) }
+                            };
+                            let (color, lit) = light_hit(s, lights, color, hit_at, passes.lights.then_some(&mut scratch));
+                            if any_part {
+                                parts.push(lit);
+                                if passes.lights {
+                                    // Lights' shares, by light node (none
+                                    // for a surface that takes no light).
+                                    let mut by_node = vec![[0.0f32; 3]; light_names.len()];
+                                    if scratch.len() == lights.len() {
+                                        for (l, v) in scratch.iter().enumerate() {
+                                            if let Some(o) = light_of[l] {
+                                                (0..3).for_each(|c| by_node[o][c] += v[c]);
+                                            }
+                                        }
+                                    }
+                                    scratch.clear();
+                                    per_light.extend(by_node);
+                                }
                             }
                             hits.push(Hit { depth: d, tri: ti as usize, bary, color });
                         }
                         if hits.is_empty() {
                             continue;
                         }
-                        hits.sort_by(|a, b| a.depth.total_cmp(&b.depth).then(a.tri.cmp(&b.tri)));
+                        let mut order: Vec<usize> = (0..hits.len()).collect();
+                        order.sort_by(|&a, &b| hits[a].depth.total_cmp(&hits[b].depth).then(hits[a].tri.cmp(&hits[b].tri)));
                         // Front to back, premultiplied; a holdout takes its
                         // share of what's left without adding to it.
                         let mut acc = [0.0f32; 4];
                         let mut held = 0.0f32;
-                        for hit in &hits {
+                        for &hi in &order {
+                            let hit = &hits[hi];
                             let surf = tris[hit.tri].surf;
                             if hit.color[3] > 0.0 && nearest.is_none_or(|h| hit.depth < h.depth) {
                                 nearest = Some(*hit);
@@ -470,6 +581,18 @@ fn draw_passes(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, s
                                 held += hit.color[3] * k;
                             } else {
                                 (0..4).for_each(|c| acc[c] += hit.color[c] * k);
+                                if any_part {
+                                    let p = &parts[hi];
+                                    for (sum, part) in part_sum.iter_mut().zip([p.diffuse, p.specular, p.emission, p.ambient]) {
+                                        (0..3).for_each(|c| sum[c] += part[c] * k);
+                                    }
+                                    if passes.lights {
+                                        let nl = light_names.len();
+                                        for (o, sum) in light_sum.iter_mut().enumerate() {
+                                            (0..3).for_each(|c| sum[c] += per_light[hi * nl + o][c] * k);
+                                        }
+                                    }
+                                }
                             }
                             if acc[3] + held >= 1.0 {
                                 break;
@@ -480,6 +603,17 @@ fn draw_passes(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, s
                 }
                 let norm = 1.0 / (n * n) as f32;
                 *out = sum.map(|v| v * norm);
+                {
+                    let px = &mut xrow[x * stride..x * stride + k];
+                    for (p, sum) in part_sum.iter().enumerate().filter(|(p, _)| part_on[*p]) {
+                        (0..3).for_each(|c| px[part_at[p] + c] = sum[c] * norm);
+                    }
+                    if passes.lights {
+                        for (o, sum) in light_sum.iter().enumerate() {
+                            (0..3).for_each(|c| px[light_at + 3 * o + c] = sum[c] * norm);
+                        }
+                    }
+                }
                 let Some(hit) = nearest else { continue };
                 *dout = hit.depth as f32;
                 let px = &mut xrow[x * stride..x * stride + k];
@@ -542,6 +676,14 @@ fn draw_passes(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, s
     }
     if passes.mattes {
         nodes.iter().enumerate().for_each(|(o, node)| plane(format!("matte.{node}"), matte_at + o));
+    }
+    for (p, name) in ["diffuse", "specular", "emission", "ambient"].iter().enumerate().filter(|(p, _)| part_on[*p]) {
+        ["R", "G", "B"].iter().enumerate().for_each(|(c, ch)| plane(format!("{name}.{ch}"), part_at[p] + c));
+    }
+    if passes.lights {
+        for (o, node) in light_names.iter().enumerate() {
+            ["R", "G", "B"].iter().enumerate().for_each(|(c, ch)| plane(format!("light.{node}.{ch}"), light_at + 3 * o + c));
+        }
     }
     out
 }
@@ -668,7 +810,7 @@ mod tests {
 
     /// A mesh from its corners and triangles, flat-shaded, in one color.
     fn mesh(positions: Vec<Vec3>, triangles: Vec<[u32; 3]>, world: Mat4, color: Rgba) -> Surface<'static> {
-        Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: Cow::Owned(Vec::new()), triangles: triangles.into(), color, texture: None, wrap: false, v_up: false, headlight: false, holdout: false, node: "" }
+        Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: Cow::Owned(Vec::new()), triangles: triangles.into(), color, texture: None, wrap: false, v_up: false, headlight: false, holdout: false, node: "", material: None }
     }
 
     /// A cube `s` across, centered on the origin, its faces wound
@@ -725,7 +867,7 @@ mod tests {
         let at = |i: usize, j: usize| (j * (n + 1) + i) as u32;
         let triangles: Vec<[u32; 3]> = (0..n).flat_map(|j| (0..n).flat_map(move |i| [[at(i, j), at(i, j + 1), at(i + 1, j + 1)], [at(i, j), at(i + 1, j + 1), at(i + 1, j)]])).collect();
         let world = geom::trs([0.0, 0.0, -5.0], [0.0; 3], [1.0; 3]);
-        let plane = Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: uvs.clone().into(), triangles: triangles.clone().into(), color: [1.0; 4], texture: Some(&img), wrap: false, v_up: false, headlight: false, holdout: false, node: "" };
+        let plane = Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: uvs.clone().into(), triangles: triangles.clone().into(), color: [1.0; 4], texture: Some(&img), wrap: false, v_up: false, headlight: false, holdout: false, node: "", material: None };
         let card = card_surface_of(&img, world);
         for samples in [1, 3] {
             let (a, b) = (draw(&[plane_ref(&plane)], &[], &camera(), FMT, samples), draw(&[card_surface(&card)], &[], &camera(), FMT, samples));
@@ -734,7 +876,7 @@ mod tests {
         }
         // Twice the coordinates, repeating: the checker twice over.
         let doubled: Vec<[f64; 2]> = uvs.iter().map(|uv| [uv[0] * 2.0, uv[1] * 2.0]).collect();
-        let tiled = Surface { world, positions: plane.positions.clone(), normals: Cow::Owned(Vec::new()), uvs: doubled.into(), triangles: triangles.into(), color: [1.0; 4], texture: Some(&img), wrap: true, v_up: false, headlight: false, holdout: false, node: "" };
+        let tiled = Surface { world, positions: plane.positions.clone(), normals: Cow::Owned(Vec::new()), uvs: doubled.into(), triangles: triangles.into(), color: [1.0; 4], texture: Some(&img), wrap: true, v_up: false, headlight: false, holdout: false, node: "", material: None };
         let out = draw(&[tiled], &[], &camera(), FMT, 1);
         assert!((0..32).all(|y| (0..32).all(|x| out.at(x, y) == out.at(x + 32, y))), "repeats across");
     }
@@ -746,7 +888,7 @@ mod tests {
 
     /// A borrowed copy of `s`.
     fn plane_ref<'a>(s: &'a Surface) -> Surface<'a> {
-        Surface { world: s.world, positions: Cow::Borrowed(&s.positions), normals: Cow::Borrowed(&s.normals), uvs: Cow::Borrowed(&s.uvs), triangles: Cow::Borrowed(&s.triangles), color: s.color, texture: s.texture, wrap: s.wrap, v_up: s.v_up, headlight: s.headlight, holdout: s.holdout, node: s.node }
+        Surface { world: s.world, positions: Cow::Borrowed(&s.positions), normals: Cow::Borrowed(&s.normals), uvs: Cow::Borrowed(&s.uvs), triangles: Cow::Borrowed(&s.triangles), color: s.color, texture: s.texture, wrap: s.wrap, v_up: s.v_up, headlight: s.headlight, holdout: s.holdout, node: s.node, material: s.material }
     }
 
     /// Primitives and Read Geo through the graph, each at 5 in front of the
@@ -845,7 +987,8 @@ mod tests {
         crate::scene::Model { node: node.into(), ..crate::scene::primitive_model(op, &params, None).unwrap() }
     }
 
-    const ALL: Passes = Passes { depth: true, position: true, normal: true, uv: true, id: true, mattes: true };
+    /// The geometry passes.
+    const ALL: Passes = Passes { depth: true, position: true, normal: true, uv: true, id: true, mattes: true, ..Passes::NONE };
 
     #[test]
     fn position_normal_uv_and_id_passes() {
@@ -1012,12 +1155,124 @@ mod tests {
         assert!(set(&mut s, json!("N")).is_err());
         let schema = crate::session::op_schema(crate::ops::info("scanline_render").unwrap());
         let p = schema["params"].as_array().unwrap().iter().find(|p| p["name"] == "passes").unwrap().clone();
-        assert_eq!((p["kind"].as_str(), p["default"].clone(), p["choices"].as_array().map(Vec::len)), (Some("flags"), json!(["depth"]), Some(6)));
+        assert_eq!((p["kind"].as_str(), p["default"].clone(), p["choices"].as_array().map(Vec::len)), (Some("flags"), json!(["depth"]), Some(Passes::NAMES.len())));
+    }
+
+    /// A light of `op` from `params`, named `node`.
+    fn light(op: &str, params: serde_json::Value, node: &str) -> Light {
+        Light { node: node.into(), ..crate::scene::light(op, &params).unwrap() }
+    }
+
+    const LIGHTING: Passes = Passes { diffuse: true, specular: true, emission: true, ambient: true, lights: true, ..Passes::NONE };
+
+    #[test]
+    fn lights_shade_meshes_in_parts_that_add_up() {
+        use serde_json::json;
+        // A shiny ball on a dull floor, a glowing box, an unlit card; an
+        // ambient fill, a sun, a point light and a spot.
+        let ball = model("sphere", json!({ "radius": 1, "translate": [-1, 1, -6], "shading": "blinn", "specular": 0.6, "roughness": 0.2, "color": [0.8, 0.3, 0.2, 1] }), "ball");
+        let floor = model("plane", json!({ "size": [20, 20], "rotate": [-90, 0, 0], "color": [0.5, 0.5, 0.5, 1] }), "floor");
+        let glow = model("cube", json!({ "translate": [1.5, 0.5, -6], "emission": [0.2, 0.4, 0.1], "color": [0.3, 0.3, 0.3, 0.8] }), "glow");
+        let mut sign = card(checker(), [0.0, 3.0, -9.0], [0.0; 3], [4.0, 2.0]);
+        sign.node = "sign".into();
+        let lights = vec![
+            light("light_ambient", json!({ "intensity": 0.1 }), "fill"),
+            light("light_directional", json!({ "rotate": [-50, 30, 0], "intensity": 0.8 }), "sun"),
+            light("light_point", json!({ "translate": [2, 3, -3], "color": [1, 0.8, 0.6, 1], "intensity": 4, "decay": 1 }), "bulb"),
+            light("light_spot", json!({ "translate": [-1, 5, -6], "rotate": [-90, 0, 0], "cone": 40, "penumbra": 10, "intensity": 2 }), "spot"),
+        ];
+        let cam = Camera { focal: 18.0, world: geom::trs([0.0, 2.0, 0.0], [-12.0, 0.0, 0.0], [1.0; 3]), ..Camera::default() };
+        let scene = Scene { cards: vec![sign], meshes: vec![ball, floor, glow], lights, ..Scene::default() };
+        let out = render_passes(&scene, &cam, FMT, 3, None, Passes { id: true, ..LIGHTING });
+        let ch = |n: &str, x: i32, y: i32| out.plane_at(n, x, y);
+        let rgb = |layer: &str, x: i32, y: i32| [ch(&format!("{layer}.R"), x, y), ch(&format!("{layer}.G"), x, y), ch(&format!("{layer}.B"), x, y)];
+        let (mut worst_parts, mut worst_lights) = (0.0f32, 0.0f32);
+        for y in 0..32 {
+            for x in 0..64 {
+                let beauty = out.at(x, y);
+                let parts: Vec<[f32; 3]> = ["diffuse", "specular", "emission", "ambient"].iter().map(|l| rgb(l, x, y)).collect();
+                let lit: Vec<[f32; 3]> = ["fill", "sun", "bulb", "spot"].iter().map(|n| rgb(&format!("light.{n}"), x, y)).collect();
+                for c in 0..3 {
+                    worst_parts = worst_parts.max((parts.iter().map(|p| p[c]).sum::<f32>() - beauty[c]).abs());
+                    worst_lights = worst_lights.max((lit.iter().map(|p| p[c]).sum::<f32>() + parts[2][c] - beauty[c]).abs());
+                }
+            }
+        }
+        assert!(worst_parts < 1e-5, "diffuse + specular + emission + ambient = beauty: {worst_parts}");
+        assert!(worst_lights < 1e-5, "the lights' shares + emission = beauty: {worst_lights}");
+        // Each part shows up somewhere: the highlight on the ball, the
+        // box's glow, the card's colors (unlit: all emission), the fill.
+        let any = |layer: &str, id: f32| (0..32).flat_map(|y| (0..64).map(move |x| (x, y))).filter(|&(x, y)| ch("id", x, y) == id).map(|(x, y)| rgb(layer, x, y)[0]).fold(0.0f32, f32::max);
+        assert!(any("specular", 2.0) > 0.05, "a highlight on the ball");
+        assert!(any("specular", 3.0) == 0.0, "none on the dull floor");
+        assert!(any("emission", 4.0) > 0.1 && any("emission", 1.0) > 0.5 && any("diffuse", 1.0) == 0.0, "the glow; the card unlit");
+        assert!(any("ambient", 3.0) > 0.0 && any("light.spot", 3.0) > 0.05 && any("light.bulb", 3.0) > 0.05, "the fill, the spot and the bulb reach the floor");
+        // With no lights the same scene renders as it did unlit.
+        let dark = Scene { lights: Vec::new(), ..scene.clone() };
+        let unlit_meshes: Vec<crate::scene::Model> = dark.meshes.iter().map(|m| crate::scene::Model { material: Material { shading: Shading::Unlit, emission: [0.0; 3], ..m.material.clone() }, ..m.clone() }).collect();
+        let (a, b) = (render(&Scene { meshes: unlit_meshes, ..dark.clone() }, &cam, FMT, 3, None), render(&Scene { meshes: dark.meshes.iter().map(|m| crate::scene::Model { material: Material { emission: [0.0; 3], ..m.material.clone() }, ..m.clone() }).collect(), ..dark }, &cam, FMT, 3, None));
+        assert_eq!(a.pixels, b.pixels, "Lambert and Blinn with no lights: their color as it is");
+    }
+
+    #[test]
+    fn lambert_follows_the_cosine_law_and_blinn_adds_a_highlight() {
+        use serde_json::json;
+        // A gray plane facing the camera, lit by a sun 60° off its normal:
+        // half its color.
+        let plane = model("plane", json!({ "size": [20, 10], "translate": [0, 0, -5], "color": [0.8, 0.6, 0.4, 1] }), "p");
+        let sun = light("light_directional", json!({ "rotate": [0, 60, 0] }), "sun");
+        let scene = Scene { meshes: vec![plane.clone()], lights: vec![sun.clone()], ..Scene::default() };
+        let px = render(&scene, &camera(), FMT, 1, None).at(32, 16);
+        assert!((px[0] - 0.4).abs() < 1e-5 && (px[1] - 0.3).abs() < 1e-5 && (px[2] - 0.2).abs() < 1e-5 && px[3] == 1.0, "{px:?}");
+        // Lit from behind: black (the camera sees its unlit side).
+        let behind = light("light_directional", json!({ "rotate": [0, 180, 0] }), "back");
+        let px = render(&Scene { lights: vec![behind], ..scene.clone() }, &camera(), FMT, 1, None).at(32, 16);
+        assert_eq!(px, [0.0, 0.0, 0.0, 1.0]);
+        // Blinn, lit from the camera: a highlight in the middle, fading out.
+        let shiny = crate::scene::Model { material: Material { shading: Shading::Blinn, specular: [1.0; 3], roughness: 0.2, ..plane.material.clone() }, ..plane };
+        let head = light("light_directional", json!({}), "head");
+        let out = render_passes(&Scene { meshes: vec![shiny], lights: vec![head], ..Scene::default() }, &camera(), FMT, 1, None, LIGHTING);
+        let spec = |x: i32| out.plane_at("specular.R", x, 16);
+        assert!(spec(32) > 0.9 && spec(32) > spec(48) && spec(48) > spec(62), "{} {} {}", spec(32), spec(48), spec(62));
+        assert!((out.plane_at("diffuse.R", 32, 16) - 0.8).abs() < 1e-3);
+    }
+
+    /// Read Geo keeps its file's material (crate.mtl: Blinn) unless told
+    /// to override it.
+    #[test]
+    fn read_geo_materials_follow_the_file_unless_overridden() {
+        use crate::graph::{Evaluator, Graph};
+        use crate::ops::EvalContext;
+        use serde_json::json;
+        let obj = format!("{}/examples/geo/crate.obj", env!("CARGO_MANIFEST_DIR"));
+        let g: Graph = serde_json::from_value(json!({
+            "project": { "first_frame": 1, "last_frame": 1, "fps": 24, "format": { "width": 64, "height": 32 } },
+            "nodes": [
+                { "id": "cam", "op": "camera", "params": { "focal": 18 } },
+                { "id": "sun", "op": "light_directional", "params": { "rotate": [0, 60, 0] } },
+                { "id": "file", "op": "read_geo", "params": { "file": obj, "translate": [0, 0, -5] } },
+                { "id": "flat", "op": "read_geo", "params": { "file": obj, "translate": [0, 0, -5], "override_material": true, "shading": "unlit" } },
+                { "id": "s1", "op": "scene", "inputs": ["file", "sun", "", ""] },
+                { "id": "s2", "op": "scene", "inputs": ["flat", "sun", "", ""] },
+                { "id": "r1", "op": "scanline_render", "inputs": ["s1", "cam", ""], "params": { "samples": 1 } },
+                { "id": "r2", "op": "scanline_render", "inputs": ["s2", "cam", ""], "params": { "samples": 1 } },
+            ] })).unwrap();
+        let mut ev = Evaluator::new();
+        let ctx = EvalContext { frame: 1, write_outputs: false };
+        let s = ev.evaluate(&g, "file", &ctx).unwrap();
+        assert_eq!(s.scene.as_ref().unwrap().meshes[0].material.shading, Shading::Blinn, "illum 2");
+        let (lit, flat) = (ev.evaluate(&g, "r1", &ctx).unwrap().at(32, 16), ev.evaluate(&g, "r2", &ctx).unwrap().at(32, 16));
+        // The front face lit at 60°: half its color, plus the same gray
+        // highlight (Ks 0.1) on each channel.
+        let spec = lit[0] - 0.3;
+        assert!(spec > 0.0 && spec < 0.02 && (lit[1] - 0.2 - spec).abs() < 1e-5 && (lit[2] - 0.1 - spec).abs() < 1e-5, "{lit:?}");
+        assert!((flat[0] - 0.6).abs() < 1e-6 && (flat[1] - 0.4).abs() < 1e-6, "overridden to unlit: its color ({flat:?})");
     }
 
     #[test]
     fn pass_names_parse() {
-        assert_eq!(Passes::from_names(Passes::NAMES), ALL);
+        let every = Passes { diffuse: true, specular: true, emission: true, ambient: true, lights: true, ..ALL };
+        assert_eq!(Passes::from_names(Passes::NAMES), every);
         assert_eq!(Passes::from_names(["depth", "nonsense"]), Passes::DEPTH);
         assert_eq!(Passes::from_names([]), Passes::default());
     }

@@ -177,11 +177,26 @@ pub fn card(p: &Value, image: &Image) -> Card {
     Card { image: Arc::new(image.clone()), world: placement(p), size, node: String::new() }
 }
 
-/// The surface look a primitive's params give: Color (straight RGBA) as an
-/// unlit material.
+/// The surface look a primitive's params give: Color (straight RGBA), and
+/// how it takes light (see [`lighting`]).
 pub fn material(p: &Value) -> Material {
     let c = numbers::<4>(&p["color"], 1.0).map(|v| v as f32);
-    Material { color: [c[0], c[1], c[2]], opacity: c[3], ..Material::default() }
+    lighting(p, &Material { color: [c[0], c[1], c[2]], opacity: c[3], ..Material::default() })
+}
+
+/// `base` with the lighting params set: Shading (unlit, lambert, blinn;
+/// missing: Lambert, which shows its color as it is with no lights),
+/// Specular (a gray highlight strength), Roughness and Emission (RGB).
+pub fn lighting(p: &Value, base: &Material) -> Material {
+    use crate::mesh::Shading;
+    let shading = match p["shading"].as_str() {
+        Some("unlit") => Shading::Unlit,
+        Some("blinn") => Shading::Blinn,
+        _ => Shading::Lambert,
+    };
+    let specular = p["specular"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0) as f32;
+    let e = numbers::<3>(&p["emission"], 0.0).map(|v| v.max(0.0) as f32);
+    Material { shading, specular: [specular; 3], roughness: p["roughness"].as_f64().unwrap_or(0.5).clamp(0.0, 1.0) as f32, emission: e, ..base.clone() }
 }
 
 /// A primitive node's mesh (`op` one of cube, sphere, cylinder, plane),

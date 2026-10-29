@@ -76,6 +76,12 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
       / light_point / light_spot (decay default 0, cone 40, penumbra 5).
     - 0.9.24 (MathWiz): light icons in viewport3d, picking / box /
       A / framing / object_world include lights.
+    - 0.9.25 (3DWorker) (d2): material params on mesh nodes (shading
+      default lambert, specular, roughness, emission; read_geo
+      `override_material`), `render3d` shades each hit via `shade::shade`
+      (unlit / no lights bit-identical), passes diffuse / specular /
+      emission / ambient / lights (`light.<node>.R/G/B`); help "Lights".
+      Viewport solid view still headlit. **(d) done.**
   - **Working now (assigned at this update; nothing uncommitted yet):**
     - **3DWorker** (wD:p4, `worker3d`), owns ops.rs, scene.rs,
       render3d.rs, session.rs, gui/properties.rs, README.md,
@@ -99,7 +105,7 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
     and Shuffle work through `create_node` / params (they should);
     README rows for the light nodes; `docs/help.md` lights; then the
     **release** (tarball + universal DMG + wheels) per the user's request.
-  - Next version: **0.9.25**. (CHANGELOG has one entry per version.)
+  - Next version: **0.9.26**. (CHANGELOG has one entry per version.)
 - **Ask the user first** how the Mac builds (v0.9.11 universal DMG) went
   on their M4 Pro, and whether anyone tried an Intel Mac. Mac-only bugs
   come first.
@@ -310,7 +316,7 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.24**.
+  in the same commit as the change. Current: **0.9.25**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

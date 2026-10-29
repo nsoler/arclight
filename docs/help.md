@@ -64,7 +64,7 @@ hold **⇧** (Shift) when choosing it for the Camera alone.
 
 Switch the viewer to **3D** (or press **Tab** over it) to see the viewed
 node's scene: a Camera, Card, Cube, Sphere, Cylinder, Plane, Read Geo,
-Scene, Camera Tracker or Scanline Render. The controls follow Blender's
+light, Scene, Camera Tracker or Scanline Render. The controls follow Blender's
 defaults. Arclight's world is Y up, so the top view looks down −Y and the
 front view down −Z.
 
@@ -106,8 +106,8 @@ free view from where the camera was.
 
 ### Selecting in 3D
 
-- Left-click a card, mesh, camera, locator or tracker point; **⇧**-click
-  adds or removes. A selected mesh shows its edges.
+- Left-click a card, mesh, light, camera, locator or tracker point;
+  **⇧**-click adds or removes. A selected mesh shows its edges.
 - Left-drag on empty space box-selects (**⇧** adds).
 - **A** selects everything; **⌥A** or **Esc** deselects (**Esc** first
   cancels a box).
@@ -145,19 +145,38 @@ until it's unlinked.
   glTF file (.gltf, .glb).
 - Each has Translate / Rotate / Scale, like a Card; wire them into a Scene
   and a Scanline Render draws them with the cards.
+- **Shading** sets how they take light: **unlit** (their color as it is),
+  **lambert** (dull; the default) or **blinn** (with a highlight:
+  **Specular** is how strong, **Roughness** how broad). **Emission** is
+  light of their own. Read Geo uses the file's materials unless **Override
+  material** is on.
+
+### Lights
+
+- **Ambient Light** (everywhere, evenly), **Directional Light** (parallel,
+  like the sun, down its −Z as Rotate turns it), **Point Light** (from a
+  point) and **Spot Light** (a cone, **Cone angle** across, soft over
+  **Penumbra** degrees) each have **Color** and **Intensity**; point and
+  spot lights fade with distance by **Decay** (0 not at all, 2 as real
+  light does).
+- Wire them into a Scene like objects. Without any lights, everything
+  renders unlit (as cards always do); with lights, Lambert and Blinn objects
+  are lit and unlit ones and cards keep their color.
 
 ## Render passes
 
 Scanline Render can add render passes to its image: depth, position
 (**P**), normal (**N**), texture coordinates (**uv**), object **id** and a
-matte per object (**matte.<node>**); motion and the lighting parts
-(**diffuse**, **specular**, **emission**, **ambient**) are still to come.
+matte per object (**matte.<node>**), and the light in parts: **diffuse**,
+**specular**, **emission** (with unlit surfaces' color) and **ambient**,
+which add up to the picture, and **lights** (a **light.<node>** for each
+light's share); motion is still to come.
 The viewer's plane buttons show any pass (one button a layer; **P**, **N**
 and **uv** as color).
 
 - Choose them with **Passes** in Scanline Render's properties: **depth**,
-  **P**, **N**, **uv**, **id** and **mattes** (a **matte.<node>** for each
-  object, adding up to the picture's alpha). Depth, P, N, uv and id come
+  **P**, **N**, **uv**, **id**, **mattes** (a **matte.<node>** for each
+  object, adding up to the picture's alpha) and the lighting passes. Depth, P, N, uv and id come
   from the nearest surface in each pixel, so they aren't blurred across
   edges.
 - **Holdout** on a Cube, Sphere, Cylinder, Plane or Read Geo makes it draw
