@@ -168,6 +168,47 @@ impl Doc {
         id
     }
 
+    /// Add a camera rig with its Scanline Render at `pos`: a Camera into a
+    /// Scene (input 1) into the render's scene input, the Camera and Scene
+    /// stacked above and to the left. Over `wire` (source, destination,
+    /// port) carrying an image, the render goes into it: the source feeds
+    /// its background and it feeds the destination. Else, after node `up`:
+    /// an image `up` feeds the background and whatever `up` fed comes from
+    /// the render instead; a scene `up` (a Card, say) goes into the Scene's
+    /// second input. Returns (camera, scene, render).
+    pub fn add_camera_rig(&mut self, pos: [f32; 2], wire: Option<(&str, &str, usize)>, up: Option<&str>) -> (String, String, String) {
+        let (dx, dy) = (NODE_W + 40.0, NODE_H + 40.0);
+        let render = self.add_node("scanline_render", pos);
+        let scene = self.add_node("scene", [pos[0] - dx, pos[1] - dy]);
+        let camera = self.add_node("camera", [pos[0] - dx, pos[1] - 2.0 * dy]);
+        self.connect(&camera, &scene, 0);
+        self.connect(&scene, &render, 0);
+        let op = |d: &Doc, id: &str| d.node(id).map(|n| n.op.clone()).unwrap_or_default();
+        let image_wire = wire.filter(|(src, dst, port)| {
+            ops::output_kind(&op(self, src)) == ops::Kind::Image && ops::wire_error("scanline_render", &op(self, dst), *port).is_none()
+        });
+        if let Some((src, dst, port)) = image_wire {
+            if self.node(dst).is_some_and(|n| n.inputs.get(port).is_some_and(|s| s == src)) {
+                self.connect(src, &render, 2);
+                self.node_mut(dst).unwrap().inputs[port] = render.clone();
+                self.changed();
+            }
+        } else if let Some(up) = up.filter(|u| self.node(u).is_some_and(|n| n.op != "viewer")) {
+            if ops::output_kind(&op(self, up)) == ops::Kind::Scene {
+                self.connect(up, &scene, 1);
+            } else {
+                for n in &mut self.graph.nodes {
+                    if n.id != render {
+                        n.inputs.iter_mut().filter(|i| *i == up).for_each(|i| *i = render.clone());
+                    }
+                }
+                self.connect(up, &render, 2);
+                self.changed();
+            }
+        }
+        (camera, scene, render)
+    }
+
     /// Remove a node. Downstream ports it fed are reconnected to its first
     /// input, so deleting a node from the middle of a chain keeps the chain.
     pub fn delete_node(&mut self, id: &str) {
@@ -563,6 +604,52 @@ impl Doc {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn inputs(d: &Doc, id: &str) -> Vec<String> {
+        d.node(id).unwrap().inputs.clone()
+    }
+
+    /// A Camera rig goes into a wire, after a selected node, or on its own,
+    /// in one undo step.
+    #[test]
+    fn camera_rigs_wire_themselves_in() {
+        let mut d = Doc::new(Graph::default(), None);
+        let plate = d.add_node("checkerboard", [0.0, 0.0]);
+        let grade = d.add_node("grade", [0.0, 100.0]);
+        let viewer = d.add_node("viewer", [0.0, 200.0]);
+        d.connect(&plate, &grade, 0);
+        d.connect(&grade, &viewer, 0);
+        d.commit(false);
+        let before = d.graph.clone();
+        // Into the plate → grade wire.
+        let (cam, scene, render) = d.add_camera_rig([0.0, 50.0], Some((&plate, &grade, 0)), None);
+        d.commit(false);
+        assert_eq!((inputs(&d, &scene)[0].as_str(), inputs(&d, &render)[0].as_str()), (cam.as_str(), scene.as_str()));
+        assert_eq!((inputs(&d, &render)[2].as_str(), inputs(&d, &grade)[0].as_str()), (plate.as_str(), render.as_str()));
+        let (pc, pr) = (d.node(&cam).unwrap().pos.unwrap(), d.node(&render).unwrap().pos.unwrap());
+        assert!(pc[0] < pr[0] && pc[1] < pr[1], "the camera above and to the left");
+        d.undo();
+        assert_eq!(d.graph, before, "one undo step");
+        // After the selected grade: it feeds the background, the viewer
+        // now watches the render.
+        let (_, _, render) = d.add_camera_rig([0.0, 150.0], None, Some(&grade));
+        assert_eq!((inputs(&d, &render)[2].as_str(), inputs(&d, &viewer)[0].as_str()), (grade.as_str(), render.as_str()));
+        assert_eq!(inputs(&d, &grade)[0], plate, "upstream untouched");
+        d.commit(false);
+        d.undo();
+        assert_eq!(d.graph, before);
+        // A selected Card joins the Scene; alone, the rig is just itself.
+        let card = d.add_node("card", [300.0, 0.0]);
+        let (_, scene, render) = d.add_camera_rig([300.0, 200.0], None, Some(&card));
+        assert_eq!((inputs(&d, &scene)[1].as_str(), inputs(&d, &render)[2].as_str()), (card.as_str(), ""));
+        let n = d.graph.nodes.len();
+        let (_, _, render) = d.add_camera_rig([600.0, 200.0], None, None);
+        assert_eq!((d.graph.nodes.len(), inputs(&d, &render)[2].as_str()), (n + 3, ""));
+        // A scene wire isn't one to put a render in: the rig stands apart.
+        let (_, scene2, _) = d.add_camera_rig([900.0, 200.0], Some((&card, &scene, 1)), None);
+        assert_eq!(inputs(&d, &scene)[1], card);
+        assert_eq!(inputs(&d, &scene2)[1], "");
+    }
 
     #[test]
     fn linked_params_show_live_values_and_survive_renames() {

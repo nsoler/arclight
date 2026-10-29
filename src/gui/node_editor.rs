@@ -207,8 +207,18 @@ impl NodeEditor {
     /// Add `op` at graph position `at`. Into the target wire when there is
     /// one; else, with a node selected, the new node takes it as its first
     /// input.
-    fn place(&mut self, doc: &mut Doc, op: &OpInfo, at: Pos2) {
+    ///
+    /// A Camera comes with what it needs (`Doc::add_camera_rig`): a Scene
+    /// and a Scanline Render, which goes where the node would have; the
+    /// Camera is selected. `bare` (Shift held): just the Camera.
+    fn place(&mut self, doc: &mut Doc, op: &OpInfo, at: Pos2, bare: bool) {
         let upstream = doc.selected.clone();
+        if op.name == "camera" && !bare {
+            let w = self.target_wire.take();
+            let (camera, ..) = doc.add_camera_rig([at.x, at.y], w.as_ref().map(|w| (w.src.as_str(), w.dst.as_str(), w.port)), upstream.as_deref());
+            doc.selected = Some(camera);
+            return;
+        }
         let id = doc.add_node(op.name, [at.x, at.y]);
         if let Some(w) = self.target_wire.take() {
             if fits_between(doc, &id, &w.src, &w.dst, w.port) && doc.insert_on_wire(&id, &w.src, &w.dst, w.port) {
@@ -276,7 +286,12 @@ impl NodeEditor {
                                 last_cat = Some(op.category);
                                 ui.label(egui::RichText::new(category_name(op.category)).small().color(category_color(op.category).gamma_multiply(1.8)));
                             }
-                            let resp = ui.selectable_label(i == b.sel, op.label).on_hover_text(op.help);
+                            let help = if op.name == "camera" {
+                                format!("{}\n\nComes with a Scene and a Scanline Render, wired in. Shift: the Camera alone.", op.help)
+                            } else {
+                                op.help.to_string()
+                            };
+                            let resp = ui.selectable_label(i == b.sel, op.label).on_hover_text(help);
                             if i == b.sel && (down || up) {
                                 resp.scroll_to_me(None);
                             }
@@ -300,7 +315,8 @@ impl NodeEditor {
             }
         }
         if let Some(op) = chosen {
-            self.place(doc, op, self.to_graph(at));
+            let bare = ctx.input(|i| i.modifiers.shift);
+            self.place(doc, op, self.to_graph(at), bare);
         }
     }
 
@@ -968,7 +984,7 @@ mod tests {
         h.ed.target_wire = h.ed.wire_at(&doc, a.lerp(b, 0.5), None);
         assert!(h.ed.target_wire.is_some());
         let at = h.ed.to_graph(a.lerp(b, 0.5) + Vec2::new(0.0, 60.0));
-        h.ed.place(&mut doc, ops::info("merge").unwrap(), at);
+        h.ed.place(&mut doc, ops::info("merge").unwrap(), at, false);
         let merge = doc.selected.clone().unwrap();
         h.frame(&mut doc, vec![]);
         let to = NodeEditor::in_port(h.rect(&doc, &merge), 1, 3);
@@ -1037,9 +1053,27 @@ mod tests {
         click(&mut h, &mut doc, mid);
         assert!(h.ed.browser.is_some());
         assert_eq!(h.ed.target_wire, Some(WireRef { src: src.clone(), dst: blur.clone(), port: 0 }));
-        h.ed.place(&mut doc, ops::info("grade").unwrap(), h.ed.to_graph(mid));
+        h.ed.place(&mut doc, ops::info("grade").unwrap(), h.ed.to_graph(mid), false);
         let grade = doc.selected.clone().unwrap();
         assert_eq!((doc.node(&grade).unwrap().inputs[0].as_str(), doc.node(&blur).unwrap().inputs[0].as_str()), (src.as_str(), grade.as_str()));
+    }
+
+    /// Placing a Camera brings its Scene and Scanline Render, after the
+    /// selected node, and selects the Camera; with Shift, just the Camera.
+    #[test]
+    fn a_camera_comes_with_its_rig_unless_shift_is_held() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let plate = doc.add_node("checkerboard", [0.0, 0.0]);
+        doc.selected = Some(plate.clone());
+        let mut ed = NodeEditor::default();
+        ed.place(&mut doc, ops::info("camera").unwrap(), Pos2::new(0.0, 100.0), false);
+        let cam = doc.selected.clone().unwrap();
+        assert_eq!(doc.node(&cam).unwrap().op, "camera");
+        let render = doc.graph.nodes.iter().find(|n| n.op == "scanline_render").unwrap();
+        assert_eq!(render.inputs[2], plate);
+        let n = doc.graph.nodes.len();
+        ed.place(&mut doc, ops::info("camera").unwrap(), Pos2::new(400.0, 100.0), true);
+        assert_eq!(doc.graph.nodes.len(), n + 1, "Shift: the Camera alone");
     }
 
     #[test]

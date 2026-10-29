@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.8.1** (alpha); see `CHANGELOG.md`.
+Version **0.8.2** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -222,6 +222,15 @@ result is blended back toward the main input (B for merge/keymix) by
 scenes, not images, and only connect to scene inputs (the node editor,
 the session/MCP and the graph all refuse a mismatch). Viewing a 3D node directly
 lists what its scene holds; Scanline Render draws it.
+
+Adding a **Camera** in the node editor brings what it needs, wired: Camera →
+Scene → Scanline Render, the Camera and Scene stacked above and to the left,
+one undo step, the Camera selected. The Scanline Render goes where a single
+node would: into the highlighted wire (its source becomes the background),
+or after the selected node (which feeds the background; what it fed now
+comes from the render; a selected Card or other scene joins the Scene
+instead), or on its own. Hold **Shift** when choosing Camera to add the
+Camera alone. (Scripts' `create_node` always adds just the node.)
 
 Shape params, shared by `rectangle`, `ellipse`, `polygon` and `roto`: `width`,
 `height` (the frame when there's no background, 0 = the project format;

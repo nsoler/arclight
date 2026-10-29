@@ -11,6 +11,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.8.2 — 2026-10-29
+
+- Adding a Camera in the node editor now brings a Scene and a Scanline
+  Render, wired (Camera → Scene → Scanline Render) and placed like a
+  single node: into the highlighted wire (its source becomes the
+  background), or after the selected node (which feeds the background,
+  and what it fed now comes from the render), or on its own; one undo
+  step, the Camera selected. Hold Shift to add the Camera alone.
+
 ## 0.8.1 — 2026-10-29
 
 - Version numbering moves to 0.8.x: this is 0.0.36 renumbered, with no

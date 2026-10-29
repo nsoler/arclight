@@ -82,7 +82,7 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
   phase, the middle number goes up and the last restarts at 1 (0.9.1).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.8.1**.
+  in the same commit as the change. Current: **0.8.2**.
 - ~23,200 lines of Rust + Python. Tests: 134 library + 10 CLI + 46 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.
@@ -1088,6 +1088,12 @@ locator / origin / ground / scale from the GUI. Follow-ups: a live link
 from a Camera to the solve (export bakes keys), picking over a Scanline
 Render of the scene, solving frames between solved ones when tracks
 allow (unsolved frames are listed), motion blur in Scanline Render.
+Camera rig (v0.8.2, wD:p4): `Doc::add_camera_rig(pos, wire, up)` →
+(camera, scene, render) in doc.rs; `NodeEditor::place(.., bare)` makes a
+rig for Camera unless Shift is held (bare). Over an image wire the render
+goes into the wire; after a selected image node it takes that node's
+outputs; a selected scene node joins the Scene's 2nd input; else
+free-standing. MCP `create_node` still adds just the node.
 Tests: camtrack (orient, cards on points, locked card end to end),
 `mcp::camera_tracker_tools`, the GUI picker, Python wrapper errors.
 M8 now also includes **point placement** (select solved points → Place
