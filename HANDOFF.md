@@ -1,9 +1,48 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-29 (session 7; several herdr sessions since, see
-"Several agent sessions" below). Read this, then `README.md`
-(user-facing features, file format, shortcuts, scripting) and
-`docs/spec-coverage.md` (what the planning docs ask for vs. what exists).
+Last updated 2026-10-29, end of session 8 (a herdr multi-agent session:
+one master + workers; see "Several agent sessions" below). Read this,
+then `README.md` (user-facing features, file format, shortcuts,
+scripting), `docs/phase-4-plan.md` (3D plan: M1–M8 done, M9 and M10
+specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
+
+## Start here (next session)
+
+- **State:** version **0.0.36**, commit `075023e` (plus the handoff
+  commit after it). `main`, `wip-ns-effects` and both remote branches
+  match; the tree is clean. Latest release: **v0.0.36**
+  (github.com/nsoler/arclight/releases/tag/v0.0.36): Apple arm64 DMG,
+  Linux x86_64 tarball, `arclt` wheels (macOS arm64, Linux manylinux2014)
+  and sdist. Earlier releases: v0.0.19, v0.0.23, v0.0.29, v0.0.31.
+- **Session 8 shipped (0.0.19 → 0.0.36):** release packaging (Linux
+  tarball, DMG + wheels attached to `v*` tags); live links, maths on
+  links, formula links (`time`, `fps`, completions, one number filling a
+  list); Help → About dialog; Phase 4 M1–M8: extra image planes (depth),
+  camera maths + Lens Distort, typed scene wires + Camera / Card / Scene,
+  Scanline Render, features + KLT (with an affine refinement that fixed
+  drift), two-view init, incremental solve + bundle adjustment, and the
+  **Camera Tracker node** with point placement (Place Card / locator,
+  set origin / ground / scale), Point Cloud and Locator nodes, MCP and
+  Python APIs. Details per version in `CHANGELOG.md`; per milestone
+  under "Phase 4: 3D" below.
+- **The user is testing v0.0.36 on an M4 Pro Mac** (first real-Mac run of
+  the GUI). Ask how it went before starting new work; Mac-only bugs come
+  first.
+- **Next work, in order:** (1) anything from the Mac test; (2) the
+  hand checks listed below for session 8's GUI work; (3) **M9, the 3D
+  viewport** (fully specified in `docs/phase-4-plan.md`, "Milestone 9 in
+  detail": 2D/3D toggle, Tab only while the pointer is over the Viewer,
+  orbit / pan / dolly, look-through, ortho views, picking with shared
+  selection, move / rotate / scale gizmos, point cloud and camera path);
+  (4) **M10, 3D objects and render passes (AOVs)** ("Milestone 10 in
+  detail": primitives, OBJ / glTF import, materials and lights, passes as
+  image planes, Shuffle node, multi-layer EXR); (5) M8 follow-ups and
+  the older items under "Next steps".
+- **Multi-agent setup:** if the user runs several sessions again, the
+  master/worker rules below apply. Confirm with the user which session
+  is master (herdr pane IDs and names change between sessions; last
+  time the master was `wD:p1`, workers `wD:p3` (renamed `mathwiz`) and
+  `wD:p4`).
 
 ## Where things stand
 
@@ -38,17 +77,18 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
   in the same commit as the change. Current: **0.0.36**.
-- ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
-  (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
-  Some tests need ffmpeg (with libx265) and skip without it.
-- **Release build (end of session 7):** `cargo build --release --workspace`
-  and `python/build.sh` were run at the final commit, so
+- ~23,200 lines of Rust + Python. Tests: 134 library + 10 CLI + 46 GUI
+  (`cargo test --release`) and 10 Python (see "Working tips"), all
+  passing. Some tests need ffmpeg (with libx265) and skip without it.
+- **Release build (end of session 8):** `cargo build --release
+  --workspace` and `python/build.sh` were run at 0.0.36, so
   `target/release/arclight-gui` (GUI), `target/release/arclight` (CLI /
   MCP server), `target/release/libarclight_plugin_example.so` and
   `python/arclt/_arclt.abi3.so` are current. Run the GUI with
   `./target/release/arclight-gui [project.json]`, or from the Omarchy
-  launcher (Super+Space, "Arclight"): `install.sh` was run, and its entry
-  runs this checkout's release binary, so rebuilding is enough.
+  launcher (Super+Space, "Arclight"): the repo's `install.sh` entry runs
+  this checkout's release binary, so rebuilding is enough (a release
+  tarball's `install.sh` writes the same launcher entry and replaces it).
   Clippy is clean apart from one old style lint (`Graph::from_str` name).
 - **To check by hand** (session 7 work exercised only by tests,
   screenshots and headless renders): Keyer Ctrl+click/Ctrl+drag screen
@@ -58,6 +98,13 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   close-with-unsaved-changes dialog's Save / Don't Save buttons; Corner
   Pin From/To = image corners buttons; motion blur on real animation;
   10-bit footage and DPX/TIFF/EXR sequences from real productions.
+  **Session 8 GUI work not yet tried by hand:** Camera Tracker point
+  selection with the mouse (click / ⇧-click / box) and its Place Card,
+  Place locator, Set origin, Ground plane and Set scale buttons; Track &
+  Solve and Export on real footage; dragging wires between 3D nodes and
+  the blue scene wires; the viewer's plane buttons (open an EXR with a Z
+  channel); Lens Distort on a real plate; formula completions popup;
+  everything on macOS (first run of v0.0.36 on the user's M4 Pro).
 - **App icon:** the user's own design (teal, "ARCLIGHT") replaced the
   placeholder. `assets/arclight.svg` is framed as a square around the
   logo (viewBox `129.875 146.75 305 305`; the artwork itself unchanged)
@@ -287,22 +334,34 @@ roto, shapes, channel tools, switches, now also scriptable and extensible
 as the planning docs describe. The user has been saying "continue with next
 steps": take them in this order, one milestone at a time (commit, push and
 fast-forward `main` after each, per the standing instruction above), and
-report back after a few milestones.
+report back after a few milestones. Make a release (see "Releases") when
+the user asks, usually after a visible feature lands.
 
-1. **Small UX debts:** formats: RLE / 1-bit DPX (rare;
-   no test files: ask the user for a sample before writing a reader).
-2. **Session-4 follow-ups** (small to medium):
+1. **Mac feedback** on v0.0.36 (ask the user), then the session 8 hand
+   checks above.
+2. **Phase 4 M9: 3D viewport**, as specified in `docs/phase-4-plan.md`
+   (order inside M9: (a) viewport camera, navigation, grid, frusta,
+   points, look-through; (b) picking and shared selection; (c) textured
+   cards via the CPU renderer with a resolution fallback; (d) gizmos with
+   keys and undo; (e) camera path, error coloring, view cube, ortho).
+3. **Phase 4 M10: 3D objects and render passes (AOVs)**, as specified
+   there (order: meshes + primitives; P / N / uv / id / mattes + Shuffle;
+   OBJ import; materials, lights, lighting passes; motion, zmerge, glTF).
+4. **M8 follow-ups:** a live link from a Camera to the solve (Export
+   bakes keys today); point picking over a Scanline Render of the solved
+   scene; solving frames between solved ones when tracks allow (unsolved
+   frames are listed); nodal (tripod) and lens-distortion solves; a mask
+   input to ignore moving objects; motion blur in Scanline Render;
+   mipmaps for minified cards.
+5. **Older follow-ups** (small to medium):
    - Python plugins (custom ops written in Python): embed Python in the
      host via the `python/` crate, or run them out of process.
    - Plugin process isolation: a crashing native plugin kills the app.
-   - Package the Python module as a wheel (`maturin build` from `python/`,
-     `pyproject.toml` is ready). maturin isn't installed on this machine.
-   - Links could grow into full expressions (formulas, several inputs).
+   - Formats: RLE / 1-bit DPX (rare; no test files: ask the user for a
+     sample before writing a reader).
    - Not planned: OpenFX hosting (large; its own project), licensing (the
      docs wanted another product's scheme copied; declined), `import_nuke`
      (originality rule).
-3. **Phase 4: 3D** — planned in `docs/phase-4-plan.md` (see below). A 3D camera tracker
-   would build on the 2D tracker.
 
 ## Session 4: automation, plugins, Python
 
@@ -733,7 +792,7 @@ Engine (`src/`, library crate `arclight`):
 | `ops.rs` | **Op registry** `OPS: &[OpInfo]` (name, label, `Category`, input `Port`s, `ParamSpec`s with defaults, `mask_base`, viewer `Overlay` kind, help) + every op's implementation. `eval(op, params, inputs, ctx)` dispatches and applies the generic mask/mix. `resolve_params` evaluates keyframes before an op runs (and, for `tracker`, adds the reference-frame positions); `is_time_varying` marks ops whose output depends on the frame by itself. `warp` resamples by an affine. |
 | `graph.rs` | `Graph { nodes: Vec<NodeSpec>, project }`. `Evaluator` caches each node's result under a hash of (op, *resolved* params, input keys, frame if time-varying). `Evaluator::key` predicts a cache key without rendering. Errors are `NodeError { node, message }`. |
 | `anim.rs` | Keyframe curves stored inline in params: `{"keys": [[f, v], [f, v, {in,out,broken}]], "interp": ...}`. Cubic Hermite with auto/user tangents. `set_key`, `edit_all` (structural edit of every key), `sample`, `key_frames`, ... Any numeric array param can be animated. |
-| `image.rs`, `color.rs` | `Image { width, height, pixels: Vec<[f32;4]> }`: **RGBA only, linear, premultiplied, no bounding box / offset**. `sample_bilinear` puts pixel centers on integers (shapes, overlays and tracking use i + 0.5). |
+| `image.rs`, `color.rs` | `Image { width, height, pixels: Vec<[f32;4]>, planes, scene, … }`: RGBA linear premultiplied, with a data window (bounding box / offset, Phase 0.6), extra named f32 `planes` (depth, …; `plane`, `carry_planes`, `plane_stats`) and an optional `scene: Option<Arc<Scene>>` (a scene image has no pixels). `Image::bytes()` sizes the frame cache. `sample_bilinear` puts pixel centers on integers (shapes, overlays and tracking use i + 0.5). |
 | `shape.rs` | Coverage of polygons (anti-aliasing, feather, fill rules), rectangle/ellipse outlines, bezier splines (`spline_segments`, `spline`, `cubic_at`, `split_cubic`). |
 | `track.rs` | 2D tracking: `Luma`, `Pattern`, `Warp`, `find`, `track` (a run), `input_frames`, `positions`, and the similarity `solve` / `Affine` helpers. |
 | `media.rs` | Sequence patterns (`####`, `%04d`), range detection, ffmpeg decode (persistent per-file decoder, frame-accurate seek) and encode. |
@@ -743,6 +802,11 @@ Engine (`src/`, library crate `arclight`):
 | `bridge.rs` | Running-GUI registry (`$XDG_RUNTIME_DIR/arclight/instances/<pid>.json`, stale entries pruned by a connect test) and Unix-socket server/client. Protocol: one JSON line `{"tool", "arguments"}` → `{"ok"}` / `{"error"}`. The GUI polls `Server::poll()` each frame; a request wakes it with `request_repaint`. |
 | `plugin.rs` | Native plugin host for the C ABI in `include/arclight_plugin.h`. `init()` (once; called by CLI, GUI, Python) scans `config::plugin_dirs()` for `libarclight_plugin_*.so` / `*.arclight.so`, parses each library's JSON op descriptors into leaked `&'static OpInfo`s, and registers them. `ops::info`/`ops::all`/`eval_op`/`is_time_varying` fall back to it. |
 | `config.rs` | XDG dirs (`config_dir`, `data_dir`, `cache_dir`, `runtime_dir`), `plugin_dirs()`, `Settings` (`settings.json`: `plugin_paths`, `frame_cache_mb`, `mcp_http_addr`). |
+| `expr.rs`, `link.rs` | Live links and formulas: `{"link": {"node", "param"}}` or `{"link": {"expr": "…"}}` with multiply/add; `expr` is the lexer / Pratt parser / evaluator (`Clock` gives `time`, `fps`); `link::evaluate` resolves with a depth limit (loops are errors) and renames rewrite refs. |
+| `geom.rs` | 3D maths (nalgebra): TRS placement (X-Y-Z degrees), pinhole `Camera` (project / unproject in frame pixels; right-handed, Y up, looking down −Z), Brown `Distortion` and its inverse. |
+| `scene.rs`, `render3d.rs` | `Scene {cameras, cards, points}` carried on `Image.scene` along typed (blue) wires; `render3d::render` is Scanline Render (perspective-correct, depth-sorted, anti-aliased, depth plane). |
+| `features.rs`, `solve.rs`, `bundle.rs`, `sfm.rs`, `camtrack.rs` | Camera tracker: Shi–Tomasi + pyramidal KLT with affine refinement; two-view essential matrix / triangulation; Levenberg–Marquardt bundle adjustment (Schur, Huber); incremental solve; the Camera Tracker node's run / `Solution` / orient / export / place-on-points. |
+| `dpx.rs` | DPX read/write (8/10/12/16-bit, float, alpha). |
 
 GUI (`src/gui/`, binary `arclight-gui`, eframe/egui 0.37):
 
@@ -755,6 +819,8 @@ GUI (`src/gui/`, binary `arclight-gui`, eframe/egui 0.37):
 | `viewer.rs` | Shows the image; pan/zoom; channels; exposure; pixel readout. Hosts the overlays. |
 | `overlay.rs` | Handles for the selected node's `Overlay` kind: `Xf` (image↔screen), `geo` (resolve at the frame), `hit`, `press`, `apply` (drag → `edit_param`), `draw`. Add new handle kinds here. Positions use the viewed image's size (no bbox yet). |
 | `transport.rs`, `curve_editor.rs`, `worker.rs` | Player + timeline; keyframe curves with tangent handles; background eval thread + frame LRU (`frame_cache_mb`, default 1536). |
+| `camera_tracker.rs` | Camera Tracker panel: `CamJob` (Track & Solve on a thread, progress, Stop), Export, and the `PointPicker` used by `overlay.rs` for point selection and placement. |
+| `script_jobs.rs` | Background renders requested over the bridge. |
 
 The GUI starts a `bridge::Server` in `App::new`. `App::bridge_call` runs a
 tool on a `Session` over a *copy* of `doc.graph`, then, if the graph
@@ -1103,9 +1169,24 @@ multi-layer out); later session, after M9.
   rebuilt plugin.
 - MCP HTTP has no auth and no SSE stream. Bind it to localhost only.
 - No Python plugin support, no OpenFX, no GPU path (CPU/rayon only).
+- Camera Tracker v1: free camera through a static scene only; a pure
+  rotation (tripod) shot is refused; no lens-distortion solve; no mask
+  for moving objects; Export bakes keys (no live link to the solve); the
+  solve's scale and placement are arbitrary until Set origin / Ground /
+  Scale are used.
+- Scanline Render: cards only (no meshes yet), no mipmaps (minified
+  cards alias unless samples are raised), no motion blur, no zmerge.
 
 ## Working tips
 
+- **Master in a multi-agent session:** test a worker's milestone on its
+  own when other workers have uncommitted files in the tree: `git
+  worktree add --detach <scratch> HEAD`, copy in only the reported paths,
+  and build with a separate `CARGO_TARGET_DIR`. Commit only reported
+  paths (never `git add -A`); if a shared file holds another worker's
+  hunk, stage a filtered copy with `git hash-object -w` + `git
+  update-index --cacheinfo`. Check reported files for leftover debug
+  tests before committing (one slipped into 0.0.32).
 - **Screenshots without screen-capture permission:**
   `ARCLIGHT_SCREENSHOT=/path/out.png ARCLIGHT_SCREENSHOT_DELAY=3 ./target/release/arclight-gui [graph.json]`
   saves the window and quits. For a specific UI state, add temporary
