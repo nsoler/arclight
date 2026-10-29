@@ -1,33 +1,67 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-29, end of session 8 (a herdr multi-agent session:
+Last updated 2026-10-29, end of session 9 (herdr multi-agent sessions:
 one master + workers; see "Several agent sessions" below). Read this,
 then `README.md` (user-facing features, file format, shortcuts,
-scripting), `docs/phase-4-plan.md` (3D plan: M1–M8 done, M9 and M10
-specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
+scripting, the "3D view" section), `docs/phase-4-plan.md` (3D plan: M1–M9
+done, M10 specified), `docs/help.md` (the in-app help) and
+`docs/spec-coverage.md` (planning docs vs. what exists).
 
 ## Start here (next session)
 
-- **State:** version **0.8.1** (0.0.36 renumbered at the user's
-  request), at the end of session 8. `main`, `wip-ns-effects` and both remote branches
-  match; the tree is clean. Latest release: **v0.0.36**
-  (github.com/nsoler/arclight/releases/tag/v0.0.36): Apple arm64 DMG,
-  Linux x86_64 tarball, `arclt` wheels (macOS arm64, Linux manylinux2014)
-  and sdist. Earlier releases: v0.0.19, v0.0.23, v0.0.29, v0.0.31.
-- **Session 8 shipped (0.0.19 → 0.0.36):** release packaging (Linux
-  tarball, DMG + wheels attached to `v*` tags); live links, maths on
-  links, formula links (`time`, `fps`, completions, one number filling a
-  list); Help → About dialog; Phase 4 M1–M8: extra image planes (depth),
-  camera maths + Lens Distort, typed scene wires + Camera / Card / Scene,
-  Scanline Render, features + KLT (with an affine refinement that fixed
-  drift), two-view init, incremental solve + bundle adjustment, and the
-  **Camera Tracker node** with point placement (Place Card / locator,
-  set origin / ground / scale), Point Cloud and Locator nodes, MCP and
-  Python APIs. Details per version in `CHANGELOG.md`; per milestone
-  under "Phase 4: 3D" below.
-- **The user is testing v0.0.36 on an M4 Pro Mac** (first real-Mac run of
-  the GUI). Ask how it went before starting new work; Mac-only bugs come
-  first.
+- **State:** version **0.9.7** on branch **`wip-ns-3dwork`**, commit
+  `5d9caa1`; `main` and both remote branches match, the tree is clean.
+  `wip-ns-effects` is frozen at v0.8.4. Local release build
+  (`target/release`, Python `.so`) is 0.9.7, so the Omarchy launcher
+  entry (repo `install.sh`) runs 0.9.7.
+- **Latest release: v0.9.7**
+  (github.com/nsoler/arclight/releases/tag/v0.9.7): Linux x86_64 tarball
+  (checked: installs with its `install.sh` and runs on this Omarchy
+  machine), **macOS universal DMG** (Apple Silicon + Intel), `arclt`
+  wheels (macOS universal2, Linux manylinux2014) and sdist. Earlier:
+  v0.9.5, v0.8.4 (first universal DMG), v0.8.3, and v0.0.19–v0.0.36
+  (old numbering).
+- **Versions:** `0.<phase>.<increment>`; phase 9 (3D viewport) started
+  at 0.9.0 by the user's choice, so the next change is **0.9.8**. Don't
+  change the phase number unless the user says so.
+- **Sessions 8–9 shipped:** (8) release packaging; links and formulas;
+  Phase 4 M1–M8 up to the Camera Tracker; then 0.8.x: renumbering, the
+  Camera rig (adding a Camera brings Scene + Scanline Render, wired),
+  node graph multi-selection + backdrops (group boxes; pan moved to
+  middle / Alt-drag), the universal macOS build. (9) **M9, the 3D
+  viewport, Blender-style** (0.9.1–0.9.6): 2D | 3D toggle (Tab over the
+  viewer), navigation (mouse, trackpad, emulate-3-button), numpad views,
+  pie, navigation gizmo, look-through, textured cards, frusta / paths /
+  points (colored by error) / locators, picking and shared selection,
+  G / R / S and move / rotate / scale gizmos, viewport camera saved with
+  the project; and (0.9.7) **Help → Arclight Help… / F1**, a markdown
+  help window from `docs/help.md`. Help → About (logo, creator, version,
+  build time) is unchanged.
+- **Ask the user first** how the Mac builds (v0.9.7 universal DMG) went
+  on their M4 Pro, and whether anyone tried an Intel Mac. Mac-only bugs
+  come first.
+- **Next work, in order:** (1) Mac feedback; (2) hand checks of the 3D
+  view (below); (3) M9 leftovers: a true orthographic texture path in
+  render3d (ortho views now use a 1000×-away long lens), the pivot at
+  the median of a multi-selection, transforming several objects at once;
+  (4) **M10, 3D objects and render passes (AOVs)** ("Milestone 10 in
+  detail" in `docs/phase-4-plan.md`); (5) M8 follow-ups and older items
+  under "Next steps". Keep `docs/help.md` in step with new features.
+- **Not yet tried by hand** (session 9): all of the 3D view with a real
+  mouse and trackpad (orbit / pan / zoom feel, numpad and pie, the
+  navigation gizmo's buttons, box select, G / R / S typing, gizmo drags,
+  Esc / right-click cancel), the Help window's scrolling and resizing,
+  the Camera rig placement and backdrops (rename on the box, palette,
+  corner resize).
+- **Multi-agent setup:** the master commits; workers report (rules
+  below). Last workers: **mathwiz** (wD:p3) and **3DWorker** (wD:p4,
+  herdr name `worker3d`). Pane IDs change between sessions: confirm with
+  the user who is master. **Master's commit procedure:** snapshot the
+  reported files first, test the snapshot on HEAD in a clean worktree,
+  stage exactly those blobs (`git hash-object -w` + `git update-index
+  --add --cacheinfo`), commit, then build and test the committed HEAD
+  alone before tagging (see "Working tips").
+
 - **Phase 9 (started 2026-10-29): M9, the 3D viewport, with
   Blender-style controls,** on branch `wip-ns-3dwork`, from 0.9.0. Spec:
   `docs/phase-4-plan.md`, "Milestone 9 in detail". Workers: wD:p4
@@ -177,11 +211,11 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
   in the same commit as the change. Current: **0.9.7**.
-- ~23,200 lines of Rust + Python. Tests: 134 library + 10 CLI + 46 GUI
+- ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.
-- **Release build (end of session 8):** `cargo build --release
-  --workspace` and `python/build.sh` were run at 0.0.36, so
+- **Release build (end of session 9):** `cargo build --release
+  --workspace` and `python/build.sh` were run at 0.9.7, so
   `target/release/arclight-gui` (GUI), `target/release/arclight` (CLI /
   MCP server), `target/release/libarclight_plugin_example.so` and
   `python/arclt/_arclt.abi3.so` are current. Run the GUI with
@@ -447,7 +481,8 @@ the user asks, usually after a visible feature lands.
 
 1. **Mac feedback** on v0.0.36 (ask the user), then the session 8 hand
    checks above.
-2. **Phase 4 M9: 3D viewport**, as specified in `docs/phase-4-plan.md`
+2. **Phase 4 M9: 3D viewport — done in 0.9.1–0.9.6** (leftovers: true
+   ortho textures, multi-object transforms; see "Start here"). As specified in `docs/phase-4-plan.md`
    (order inside M9: (a) viewport camera, navigation, grid, frusta,
    points, look-through; (b) picking and shared selection; (c) textured
    cards via the CPU renderer with a resolution fallback; (d) gizmos with

@@ -311,8 +311,10 @@ then poses of in-between frames by PnP and a final pass).
 
 ## Milestone 9 in detail: the 3D viewport
 
-Specified 2026-10-29 at the user's request. **In progress** on branch
-`wip-ns-3dwork` (versions 0.9.x), with Blender-style controls.
+Specified 2026-10-29 at the user's request. **Done (0.9.1–0.9.6)** on
+branch `wip-ns-3dwork`, with Blender-style controls. Leftovers: a true
+orthographic texture path (ortho views use a 1000×-away long lens), the
+pivot at a multi-selection's median, transforming several objects at once.
 
 **What it is.** A mode of the existing Viewer panel (a **2D / 3D**
 toggle in the viewer toolbar, and **Tab** to switch, only while the
