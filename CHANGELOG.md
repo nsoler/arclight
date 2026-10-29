@@ -11,6 +11,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.9 — 2026-10-29
+
+- Camera solving: perspective-n-point (`solve::pnp`): a camera from the
+  3D points it sees, by P3P (Grunert) in adaptive RANSAC, EPnP (flat
+  scenes too) and a least-squares refinement on the inliers; the
+  groundwork for bridging jumps and gaps in the camera solve (M11 step a).
+
 ## 0.9.8 — 2026-10-29
 
 - Tripod (nodal) solve, engine side (`src/nodal.rs`): detects a camera

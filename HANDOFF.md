@@ -140,6 +140,10 @@ done, M10 specified), `docs/help.md` (the in-app help) and
     `camtrack::Solution.point_rms` (`#[serde(default)]`),
     `Scene.point_errors` (negative = unknown). Also mathwiz's small
     `with_constraint` cleanup and the README "3D view" section.
+  - **0.9.9 (3DWorker): M11 (a), `solve::pnp`.** `pnp(points, pixels, k,
+    max_error)` = P3P (Grunert quartic) in RANSAC + EPnP candidate/refit +
+    cameras-only LM; also pub `p3p`, `epnp`, `rigid` (Kabsch). None under
+    4 points/inliers.
   - **0.9.8 (MathWiz): M11 (c)+(d), tripod solve engine.** `src/nodal.rs`:
     `nodal::detect` (homographies over up to 8 frame pairs, nodal when
     median transfer error <= 2*max_error and `K⁻¹HK` within 0.02 of a
@@ -219,7 +223,7 @@ done, M10 specified), `docs/help.md` (the in-app help) and
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.8**.
+  in the same commit as the change. Current: **0.9.9**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

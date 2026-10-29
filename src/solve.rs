@@ -322,6 +322,326 @@ pub fn initial_pair(tracks: &[FeatureTrack], k: &Intrinsics, first: i64, last: i
     best
 }
 
+/// The rigid motion taking points `a` closest to `b` (`b ≈ R a + t`, least
+/// squares; Kabsch's method), as a pose when `b` are camera-frame points.
+pub fn rigid(a: &[V3], b: &[V3]) -> Option<Pose> {
+    let n = a.len().min(b.len());
+    if n < 3 {
+        return None;
+    }
+    let (ma, mb) = (a[..n].iter().sum::<V3>() / n as f64, b[..n].iter().sum::<V3>() / n as f64);
+    let mut cov = Matrix3::<f64>::zeros();
+    for (p, q) in a.iter().zip(b) {
+        cov += (q - mb) * (p - ma).transpose();
+    }
+    let svd = cov.svd(true, true);
+    let (u, vt) = (svd.u?, svd.v_t?);
+    let mut d = Matrix3::identity();
+    if (u * vt).determinant() < 0.0 {
+        d[(2, 2)] = -1.0;
+    }
+    let r = Rotation3::from_matrix_unchecked(u * d * vt);
+    Some(Pose { r, t: mb - r * ma })
+}
+
+/// Polynomial product (coefficients from the constant term up).
+fn poly_mul(a: &[f64], b: &[f64]) -> Vec<f64> {
+    let mut out = vec![0.0; a.len() + b.len() - 1];
+    for (i, x) in a.iter().enumerate() {
+        for (j, y) in b.iter().enumerate() {
+            out[i + j] += x * y;
+        }
+    }
+    out
+}
+
+fn poly_eval(p: &[f64], x: f64) -> f64 {
+    p.iter().rev().fold(0.0, |acc, c| acc * x + c)
+}
+
+/// The real roots of polynomial `p` (constant term first): the eigenvalues
+/// of its companion matrix that are (nearly) real, polished by Newton's
+/// method.
+fn real_roots(p: &[f64]) -> Vec<f64> {
+    let scale = p.iter().fold(0.0f64, |m, c| m.max(c.abs()));
+    let mut deg = p.len() - 1;
+    while deg > 0 && p[deg].abs() <= 1e-12 * scale {
+        deg -= 1;
+    }
+    if deg == 0 {
+        return Vec::new();
+    }
+    let mut c = nalgebra::DMatrix::<f64>::zeros(deg, deg);
+    for i in 0..deg {
+        c[(0, i)] = -p[deg - 1 - i] / p[deg];
+        if i + 1 < deg {
+            c[(i + 1, i)] = 1.0;
+        }
+    }
+    let dp: Vec<f64> = (1..=deg).map(|i| p[i] * i as f64).collect();
+    c.complex_eigenvalues()
+        .iter()
+        .filter(|z| z.im.abs() <= 1e-3 * (1.0 + z.re.abs()))
+        .map(|z| {
+            let mut x = z.re;
+            for _ in 0..4 {
+                let d = poly_eval(&dp, x);
+                if d.abs() > 1e-300 {
+                    x -= poly_eval(&p[..=deg], x) / d;
+                }
+            }
+            x
+        })
+        .collect()
+}
+
+/// The poses (up to four) that see scene points `x` along unit rays
+/// `rays` (the minimal three-point problem, Grunert's solution): with
+/// s₂ = u s₁ and s₃ = v s₁ for the distances along the rays, the law of
+/// cosines on the three triangles at the camera leaves a quartic in v.
+pub fn p3p(x: &[V3; 3], rays: &[V3; 3]) -> Vec<Pose> {
+    let a2 = (x[1] - x[2]).norm_squared();
+    let b2 = (x[0] - x[2]).norm_squared();
+    let c2 = (x[0] - x[1]).norm_squared();
+    if a2 < 1e-24 || b2 < 1e-24 || c2 < 1e-24 {
+        return Vec::new();
+    }
+    let (ca, cb, cg) = (rays[1].dot(&rays[2]), rays[0].dot(&rays[2]), rays[0].dot(&rays[1]));
+    // u = N(v) / D(v) from the first two triangles; the third gives
+    // D² + N² − 2 cos γ N D − (c²/b²) Q D² = 0, Q = 1 + v² − 2 v cos β.
+    let k = (a2 - c2) / b2;
+    let n = [1.0 + k, -2.0 * k * cb, k - 1.0];
+    let d = [2.0 * cg, -2.0 * ca];
+    let q = [1.0, -2.0 * cb, 1.0];
+    let dd = poly_mul(&d, &d);
+    let nn = poly_mul(&n, &n);
+    let nd = poly_mul(&n, &d);
+    let qdd = poly_mul(&q, &dd);
+    let mut quartic = [0.0; 5];
+    for (i, c) in quartic.iter_mut().enumerate() {
+        let at = |p: &[f64]| p.get(i).copied().unwrap_or(0.0);
+        *c = at(&dd) + at(&nn) - 2.0 * cg * at(&nd) - c2 / b2 * at(&qdd);
+    }
+    let mut out = Vec::new();
+    for v in real_roots(&quartic) {
+        let (qv, dv) = (poly_eval(&q, v), poly_eval(&d, v));
+        if qv <= 1e-12 || dv.abs() < 1e-12 {
+            continue;
+        }
+        let s1 = (b2 / qv).sqrt();
+        let u = poly_eval(&n, v) / dv;
+        let s = [s1, u * s1, v * s1];
+        if s.iter().any(|&s| s <= 0.0) {
+            continue;
+        }
+        let cam = [rays[0] * s[0], rays[1] * s[1], rays[2] * s[2]];
+        out.extend(rigid(x, &cam));
+    }
+    out
+}
+
+/// The pose that sees scene points `x` along normalized rays `rays` (four
+/// or more, any number), by EPnP (Lepetit, Moreno-Noguer and Fua): each
+/// point is a weighted sum of four control points (three for a flat
+/// scene), whose camera-frame positions are a combination of the null
+/// vectors of the projection constraints, the weights found from the
+/// control points' known distances (for one to three null vectors, the
+/// one that reprojects best).
+pub fn epnp(x: &[V3], rays: &[V3]) -> Option<Pose> {
+    let n = x.len().min(rays.len());
+    if n < 4 {
+        return None;
+    }
+    let c0 = x[..n].iter().sum::<V3>() / n as f64;
+    let mut cov = Matrix3::<f64>::zeros();
+    for p in &x[..n] {
+        cov += (p - c0) * (p - c0).transpose();
+    }
+    let e = SymmetricEigen::new(cov);
+    let mut axes: Vec<usize> = (0..3).collect();
+    axes.sort_by(|&a, &b| e.eigenvalues[b].total_cmp(&e.eigenvalues[a]));
+    if e.eigenvalues[axes[1]] <= 1e-12 * e.eigenvalues[axes[0]].max(1e-300) {
+        return None; // on a line
+    }
+    // A flat scene: the third axis carries next to nothing.
+    let flat = e.eigenvalues[axes[2]] < 1e-3 * e.eigenvalues[axes[0]];
+    axes.truncate(if flat { 2 } else { 3 });
+    let dirs: Vec<V3> = axes.iter().map(|&a| e.eigenvectors.column(a) * (e.eigenvalues[a] / n as f64).sqrt()).collect();
+    let mut ctrl = vec![c0];
+    ctrl.extend(dirs.iter().map(|d| c0 + d));
+    let nc = ctrl.len();
+    // The points' weights on the control points (the axes are orthogonal).
+    let alphas: Vec<Vec<f64>> = x[..n]
+        .iter()
+        .map(|p| {
+            let mut w: Vec<f64> = dirs.iter().map(|d| (p - c0).dot(d) / d.norm_squared()).collect();
+            w.insert(0, 1.0 - w.iter().sum::<f64>());
+            w
+        })
+        .collect();
+    let mut mtm = nalgebra::DMatrix::<f64>::zeros(3 * nc, 3 * nc);
+    for (al, r) in alphas.iter().zip(rays) {
+        let (u, v) = (r.x / r.z, r.y / r.z);
+        for row in [[1.0, 0.0, -u], [0.0, 1.0, -v]] {
+            let mut m = nalgebra::DVector::<f64>::zeros(3 * nc);
+            for (j, a) in al.iter().enumerate() {
+                for k in 0..3 {
+                    m[3 * j + k] = a * row[k];
+                }
+            }
+            mtm += &m * m.transpose();
+        }
+    }
+    let eig = SymmetricEigen::new(mtm);
+    let mut order: Vec<usize> = (0..3 * nc).collect();
+    order.sort_by(|&a, &b| eig.eigenvalues[a].total_cmp(&eig.eigenvalues[b]));
+    let null: Vec<Vec<V3>> = order
+        .iter()
+        .take(3)
+        .map(|&i| (0..nc).map(|j| V3::new(eig.eigenvectors[(3 * j, i)], eig.eigenvectors[(3 * j + 1, i)], eig.eigenvectors[(3 * j + 2, i)])).collect())
+        .collect();
+    let pairs: Vec<(usize, usize)> = (0..nc).flat_map(|i| (i + 1..nc).map(move |j| (i, j))).collect();
+    let dist: Vec<f64> = pairs.iter().map(|&(i, j)| (ctrl[i] - ctrl[j]).norm_squared()).collect();
+    let reproj = |pose: &Pose| -> f64 {
+        x[..n].iter().zip(rays).map(|(p, r)| {
+            let c = pose.apply(p);
+            if c.z <= 1e-12 { 1e3 } else { (c.x / c.z - r.x / r.z).hypot(c.y / c.z - r.y / r.z) }
+        }).sum()
+    };
+    let mut best: Option<(f64, Pose)> = None;
+    for nn in 1..=(if flat { 2 } else { 3 }).min(pairs.len()) {
+        // Differences of the null vectors between control points.
+        let diff = |a: usize, (i, j): (usize, usize)| null[a][i] - null[a][j];
+        // Linearized: unknowns βₐ β_b (a ≤ b), least squares.
+        let prods: Vec<(usize, usize)> = (0..nn).flat_map(|a| (a..nn).map(move |b| (a, b))).collect();
+        let mut l = nalgebra::DMatrix::<f64>::zeros(pairs.len(), prods.len());
+        for (r, &pr) in pairs.iter().enumerate() {
+            for (c, &(a, b)) in prods.iter().enumerate() {
+                l[(r, c)] = if a == b { 1.0 } else { 2.0 } * diff(a, pr).dot(&diff(b, pr));
+            }
+        }
+        let rho = nalgebra::DVector::from_vec(dist.clone());
+        let Ok(bb) = l.svd(true, true).solve(&rho, 1e-12) else { continue };
+        let b0 = bb[0].abs().sqrt();
+        if b0 < 1e-12 {
+            continue;
+        }
+        let mut beta: Vec<f64> = (0..nn).map(|a| if a == 0 { b0 } else { bb[a] / b0 }).collect();
+        // Gauss–Newton on the distances themselves.
+        for _ in 0..10 {
+            let mut jtj = nalgebra::DMatrix::<f64>::zeros(nn, nn);
+            let mut jtr = nalgebra::DVector::<f64>::zeros(nn);
+            for (&pr, &d2) in pairs.iter().zip(&dist) {
+                let v: V3 = (0..nn).map(|a| diff(a, pr) * beta[a]).sum();
+                let res = v.norm_squared() - d2;
+                let jac: Vec<f64> = (0..nn).map(|a| 2.0 * v.dot(&diff(a, pr))).collect();
+                for a in 0..nn {
+                    jtr[a] += jac[a] * res;
+                    for b in 0..nn {
+                        jtj[(a, b)] += jac[a] * jac[b];
+                    }
+                }
+            }
+            let Some(step) = jtj.cholesky().map(|c| c.solve(&jtr)) else { break };
+            for a in 0..nn {
+                beta[a] -= step[a];
+            }
+        }
+        let cc: Vec<V3> = (0..nc).map(|j| (0..nn).map(|a| null[a][j] * beta[a]).sum()).collect();
+        let mut cam: Vec<V3> = alphas.iter().map(|al| al.iter().zip(&cc).map(|(a, c)| c * *a).sum()).collect();
+        if cam.iter().map(|c| c.z).sum::<f64>() < 0.0 {
+            cam.iter_mut().for_each(|c| *c = -*c);
+        }
+        let Some(pose) = rigid(&x[..n], &cam) else { continue };
+        let err = reproj(&pose);
+        if best.as_ref().is_none_or(|b| err < b.0) {
+            best = Some((err, pose));
+        }
+    }
+    best.map(|b| b.1)
+}
+
+/// Pose `start` refined against the scene points `x` it sees at `px` (only
+/// those listed in `use_`), by a cameras-only bundle adjustment.
+fn refine_pose(x: &[V3], px: &[[f64; 2]], k: &Intrinsics, use_: &[usize], start: Pose, max_error: f64) -> Pose {
+    let mut p = crate::bundle::Problem {
+        poses: vec![start],
+        points: use_.iter().map(|&i| x[i]).collect(),
+        obs: use_.iter().enumerate().map(|(j, &i)| crate::bundle::Obs { cam: 0, point: j, px: px[i] }).collect(),
+        intr: *k,
+        fixed: vec![false],
+        points_fixed: true,
+        solve_focal: false,
+        huber: max_error,
+    };
+    p.adjust(30);
+    p.poses[0]
+}
+
+/// The camera that sees scene points `x` at frame positions `px` (pose
+/// from perspective-n-point), and which points agree with it (within
+/// `max_error` pixels): P3P samples, each checked against a fourth point,
+/// in RANSAC with an adaptive number of tries; EPnP on all points as a
+/// further candidate (it copes where P3P samples get unstable, as on a
+/// flat scene); then EPnP on the agreeing points, and a Levenberg–Marquardt
+/// refinement on them. None with fewer than four points, or fewer than
+/// four agreeing.
+pub fn pnp(x: &[V3], px: &[[f64; 2]], k: &Intrinsics, max_error: f64) -> Option<(Pose, Vec<usize>)> {
+    let n = x.len().min(px.len());
+    if n < 4 {
+        return None;
+    }
+    let rays: Vec<V3> = px[..n].iter().map(|p| k.ray(*p)).collect();
+    let units: Vec<V3> = rays.iter().map(|r| r.normalize()).collect();
+    let err = |pose: &Pose, i: usize| k.project(&pose.apply(&x[i])).map_or(f64::INFINITY, |q| (q[0] - px[i][0]).hypot(q[1] - px[i][1]));
+    let inliers_of = |pose: &Pose| -> Vec<usize> { (0..n).filter(|&i| err(pose, i) < max_error).collect() };
+    let mut best: Option<(Pose, Vec<usize>)> = None;
+    let consider = |pose: Pose, best: &mut Option<(Pose, Vec<usize>)>| -> bool {
+        let inl = inliers_of(&pose);
+        let better = best.as_ref().is_none_or(|b| inl.len() > b.1.len());
+        if better {
+            *best = Some((pose, inl));
+        }
+        better
+    };
+    let mut rng = Rng(0x9e37_79b9);
+    let (mut tries, mut i) = (1000usize, 0);
+    while i < tries {
+        i += 1;
+        let s = rng.sample(n, 4);
+        for pose in p3p(&[x[s[0]], x[s[1]], x[s[2]]], &[units[s[0]], units[s[1]], units[s[2]]]) {
+            if err(&pose, s[3]) < max_error && consider(pose, &mut best) {
+                // Enough tries to draw an all-inlier sample with 99.9 % odds.
+                let w = best.as_ref().unwrap().1.len() as f64 / n as f64;
+                let need = ((1.0 - 0.999f64).ln() / (1.0 - w.powi(3)).max(1e-12).ln()).ceil();
+                tries = tries.min((need as usize).max(30));
+            }
+        }
+    }
+    if let Some(pose) = epnp(&x[..n], &rays) {
+        consider(pose, &mut best);
+    }
+    let (mut pose, mut inl) = best?;
+    if inl.len() >= 6 {
+        let (xs, rs): (Vec<V3>, Vec<V3>) = inl.iter().map(|&i| (x[i], rays[i])).unzip();
+        if let Some(p) = epnp(&xs, &rs) {
+            let more = inliers_of(&p);
+            if more.len() >= inl.len() {
+                (pose, inl) = (p, more);
+            }
+        }
+    }
+    // Refine, gather the points that now agree, and refine on those.
+    for _ in 0..2 {
+        if inl.len() < 4 {
+            return None;
+        }
+        pose = refine_pose(x, px, k, &inl, pose, max_error);
+        inl = inliers_of(&pose);
+    }
+    (inl.len() >= 4).then_some((pose, inl))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -341,8 +661,10 @@ pub(crate) mod tests {
         (0..6).map(|_| r.below(1_000_000) as f64 / 1e6 - 0.5).sum::<f64>() * s * (2.0f64).sqrt()
     }
 
+    /// Degrees between two rotations (clamped: nalgebra's `angle` is NaN
+    /// for a product a rounding error past the identity).
     fn rot_angle(a: &Rotation3<f64>, b: &Rotation3<f64>) -> f64 {
-        (a.inverse() * b).angle().to_degrees()
+        (((a.inverse() * b).matrix().trace() - 1.0) / 2.0).clamp(-1.0, 1.0).acos().to_degrees()
     }
 
     #[test]
@@ -440,5 +762,83 @@ pub(crate) mod tests {
         let tracks = synthetic_tracks(&k, &pan, &pts, 0.2);
         let best = initial_pair(&tracks, &k, 0, 29, 50, 3f64.to_radians(), 1.0);
         assert!(best.is_none_or(|(_, tv)| tv.parallax < 0.5f64.to_radians()));
+    }
+
+    /// Points `x` seen by `pose`, projected.
+    fn seen(k: &Intrinsics, pose: &Pose, x: &[V3]) -> Vec<[f64; 2]> {
+        x.iter().map(|p| k.project(&pose.apply(p)).unwrap()).collect()
+    }
+
+    #[test]
+    fn pnp_is_exact_without_noise() {
+        let k = Intrinsics::new(30.0, 36.0, FMT);
+        let truth = Pose::from_center(Rotation3::from_euler_angles(0.1, -0.2, 0.05), V3::new(0.7, -0.3, 0.4));
+        // The cloud as the camera at the origin sees it, moved into the scene.
+        let pts: Vec<V3> = cloud(60, 31).iter().map(|c| truth.r.inverse() * (c - truth.t)).collect();
+        let px = seen(&k, &truth, &pts);
+        let units: Vec<V3> = px.iter().map(|p| k.ray(*p).normalize()).collect();
+        // P3P: the true pose is among the up to four.
+        let cands = p3p(&[pts[0], pts[1], pts[2]], &[units[0], units[1], units[2]]);
+        assert!(cands.iter().any(|p| rot_angle(&p.r, &truth.r) < 1e-6 && (p.t - truth.t).norm() < 1e-6), "{} candidates", cands.len());
+        // EPnP on them all.
+        let rays: Vec<V3> = px.iter().map(|p| k.ray(*p)).collect();
+        let e = epnp(&pts, &rays).unwrap();
+        assert!(rot_angle(&e.r, &truth.r) < 1e-6 && (e.t - truth.t).norm() < 1e-6, "{e:?}");
+        let (pose, inliers) = pnp(&pts, &px, &k, 1.0).unwrap();
+        assert!(rot_angle(&pose.r, &truth.r) < 1e-6 && (pose.t - truth.t).norm() < 1e-6);
+        assert_eq!(inliers.len(), 60);
+    }
+
+    #[test]
+    fn pnp_shrugs_off_noise_and_outliers() {
+        let k = Intrinsics::new(30.0, 36.0, FMT);
+        let truth = Pose::from_center(Rotation3::from_euler_angles(-0.05, 0.3, 0.02), V3::new(-1.0, 0.2, 0.5));
+        let pts: Vec<V3> = cloud(200, 32).iter().map(|c| truth.r.inverse() * (c - truth.t)).collect();
+        let mut r = Rng(4);
+        let mut px = seen(&k, &truth, &pts);
+        for p in px.iter_mut() {
+            p[0] += noise(&mut r, 0.5);
+            p[1] += noise(&mut r, 0.5);
+        }
+        // Three in ten are mismatches.
+        for i in (0..200).filter(|i| i % 10 < 3) {
+            px[i] = [r.below(960) as f64, r.below(540) as f64];
+        }
+        let (pose, inliers) = pnp(&pts, &px, &k, 1.0).unwrap();
+        let dist = pts.iter().map(|p| (p - truth.center()).norm()).sum::<f64>() / pts.len() as f64;
+        assert!(rot_angle(&pose.r, &truth.r) < 0.1, "rotation off by {}°", rot_angle(&pose.r, &truth.r));
+        assert!((pose.center() - truth.center()).norm() < 0.01 * dist, "center off by {}", (pose.center() - truth.center()).norm());
+        assert!(inliers.iter().all(|i| i % 10 >= 3) && inliers.len() > 110, "{} inliers", inliers.len());
+    }
+
+    #[test]
+    fn pnp_solves_a_flat_scene() {
+        let k = Intrinsics::new(30.0, 36.0, FMT);
+        // A floor 2 below, seen from above at an angle.
+        let mut r = Rng(8);
+        let mut u = || r.below(1_000_000) as f64 / 1e6;
+        let pts: Vec<V3> = (0..80).map(|_| V3::new(u() * 8.0 - 4.0, 2.0, 5.0 + u() * 8.0)).collect();
+        let truth = Pose::from_center(Rotation3::from_euler_angles(0.25, 0.1, 0.0), V3::new(0.3, -0.5, 0.0));
+        let mut r = Rng(9);
+        let mut px = seen(&k, &truth, &pts);
+        let rays: Vec<V3> = px.iter().map(|p| k.ray(*p)).collect();
+        let e = epnp(&pts, &rays).unwrap();
+        assert!(rot_angle(&e.r, &truth.r) < 1e-6 && (e.t - truth.t).norm() < 1e-6, "flat EPnP {e:?}");
+        for p in px.iter_mut() {
+            p[0] += noise(&mut r, 0.3);
+            p[1] += noise(&mut r, 0.3);
+        }
+        let (pose, inliers) = pnp(&pts, &px, &k, 1.0).unwrap();
+        assert!(rot_angle(&pose.r, &truth.r) < 0.1 && (pose.center() - truth.center()).norm() < 0.05, "{pose:?}");
+        assert!(inliers.len() > 70);
+    }
+
+    #[test]
+    fn pnp_needs_four_points() {
+        let k = Intrinsics::new(30.0, 36.0, FMT);
+        let pts = cloud(3, 5);
+        let px = seen(&k, &Pose::identity(), &pts);
+        assert!(pnp(&pts, &px, &k, 1.0).is_none());
+        assert!(pnp(&[], &[], &k, 1.0).is_none());
     }
 }
