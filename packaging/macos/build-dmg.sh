@@ -23,13 +23,13 @@ app="$dist/Arclight.app"
 [[ "$(uname -s)" == Darwin ]] || { echo "build-dmg.sh runs on macOS (it needs Apple's SDK, iconutil and hdiutil)." >&2; exit 1; }
 command -v rsvg-convert >/dev/null || { echo "rsvg-convert not found: brew install librsvg" >&2; exit 1; }
 
-echo "Building Arclight $version for $target…"
+echo "Building Arclight ${version} for ${target}..."
 rustup target add "$target" >/dev/null 2>&1 || true
 # Big Sur (11) is the first macOS on Apple Silicon.
 export MACOSX_DEPLOYMENT_TARGET=11.0
 cargo build --release --manifest-path "$repo/Cargo.toml" --target "$target" --bin arclight-gui --bin arclight
 
-echo "Assembling Arclight.app…"
+echo "Assembling Arclight.app..."
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/examples/media"
 install -m755 "$repo/target/$target/release/arclight-gui" "$app/Contents/MacOS/arclight-gui"
@@ -75,12 +75,12 @@ cat > "$app/Contents/Info.plist" <<PLIST
 PLIST
 plutil -lint "$app/Contents/Info.plist" >/dev/null
 
-echo "Signing (ad hoc)…"
+echo "Signing (ad hoc)..."
 codesign --force --sign - "$app/Contents/MacOS/arclight"
 codesign --force --sign - "$app"
 codesign --verify --strict "$app"
 
-echo "Making the DMG…"
+echo "Making the DMG..."
 dmg="$dist/Arclight-$version-arm64.dmg"
 stage="$dist/dmg"
 rm -rf "$stage" "$dmg" && mkdir -p "$stage"
