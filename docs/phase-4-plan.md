@@ -315,6 +315,15 @@ then poses of in-between frames by PnP and a final pass).
     only turns, which the solver refuses today ("the camera may only be
     turning, not moving"). Suggested before M10, since it makes the
     tracker work on more real shots.
+12. **Lights: area lights, lights in the 3D view, and 2D lights**,
+    specified below (added 2026-10-29, user request): builds on M10's
+    lights (Ambient, Directional, Point, Spot) with Area lights, lights as
+    objects the 3D view can select and move with G / R / S and gizmos, and
+    a 2D Light node for lighting flat images.
+13. **Particles**, specified below (added 2026-10-29, user request):
+    emitters, particle simulation, and particles drawn as sprites, cards,
+    primitives or meshes from a file, in 3D scenes and in 2D. After M12,
+    so particles can be lit.
 
 ## Milestone 9 in detail: the 3D viewport
 
@@ -649,3 +658,148 @@ arguments.
 nodal detection; (d) rotation-only adjustment, sphere points, output;
 (e) the Camera Tracker's Auto / Free move / Tripod setting, MCP /
 Python, help text (`docs/help.md`).
+
+## Milestone 12 in detail: lights
+
+Specified 2026-10-29 at the user's request ("spots or area or just a
+light that shines in a preferred direction", in 2D and in 3D, "be able
+to move lights ... in x, y, z"). M10 brings the first lights (Ambient,
+Directional, Point, Spot) and shading; M12 completes them.
+
+**3D lights.**
+- **Area light** (new): a rectangle or disk with width / height, color,
+  intensity, and a two-sided flag; shaded by sampling the area (a fixed
+  grid of samples per pixel, e.g. 4×4, with a Quality param), giving
+  soft falloff and soft highlights. Spot gains **cone angle** and
+  **penumbra** (soft edge) and a falloff exponent; Point and Spot gain
+  **decay** (none / linear / quadratic) and an optional radius (soft
+  size). Every light has **color, intensity, exposure** (stops), and an
+  **enabled** flag; all params animatable and linkable like the rest.
+- **Placement:** a light is a scene object with a `geom::Transform`
+  (translate / rotate / scale), like the camera and cards, so it can be
+  parented and linked. **Look at:** an optional target (a locator, a
+  card, the camera) the light aims at, as for cameras.
+- **In the 3D view (M9's tools):** lights draw as icons (Point: a small
+  star; Spot: a cone showing angle and penumbra; Directional: parallel
+  arrows; Area: its outline and normal; Ambient: not drawn). They are
+  selectable (click, box, Shift), and move, rotate and scale with
+  **G / R / S** (with X/Y/Z axis locks, typed values, Ctrl snap) and the
+  translate / rotate / scale **gizmos**, one undo step per drag. Extra
+  handles: drag the spot's cone edge to change the angle; drag an area
+  light's edges to resize it. **Numpad 0 / View → Look through
+  selected** looks through a spot or area light (for aiming).
+- **Shading:** Lambert and Blinn–Phong from M10, summed over lights;
+  Area by sampling. Shadows: shadow maps for Spot, Directional and Point
+  (cube), soft by percentage-closer filtering; Area shadows by its
+  samples. The per-object casts / receives flags from M10 apply.
+  (Shadows may land as the last step if time is short.)
+- **Passes:** M10's `diffuse`, `specular` and per-light `light.<node>`
+  passes include Area lights; plus a `shadow` pass.
+
+**2D lights (new node, Light 2D).** Lights a flat image in the viewer's
+2D space, for adding a lamp, a spot on a wall, or a sun direction to a
+plate.
+- Types: **Spot** (position, direction, cone angle, softness),
+  **Area** (a rectangle or ellipse with softness), **Point**
+  (position, radius, falloff), **Directional** (an angle across the
+  frame, with a gradient falloff).
+- Inputs: the image; optional **normals** (an N pass from M10, or a
+  normal map) and **depth** (a Z pass) for real relighting: with normals
+  it shades with Lambert / Blinn–Phong as in 3D (the light given a
+  height above the image); without them it is a shaped glow / gradient.
+- Blend: add (screen) or multiply, with color, intensity, exposure, and
+  a mask input. Several Light 2D nodes stack (or one node with a list
+  of lights).
+- **Viewer handles:** drag the light's position, its aim (the spot's
+  direction), cone width and softness, and an area's corners, as for
+  shapes and transforms today; all animatable.
+
+**MCP / Python.** Create lights with `create_node` (types `light_area`,
+`light_2d`, etc.), set params as usual; `scene_objects` lists lights
+with type and world position. Python the same through `Node`.
+
+**Tests.**
+- Area light: a Lambert card lit by an area light matches a dense-sample
+  reference within 1 %; a spot's cone edge falls where its angle says;
+  decay laws give the right ratios at 1 and 2 units.
+- Shadows: a card over a floor casts a shadow where projection says.
+- Light 2D: a spot at a pixel lights that pixel brightest and falls to
+  half at its softness edge; with a flat-normals input it matches the
+  3D Lambert result.
+- 3D view: selecting a light and pressing G X 2 Enter moves it 2 units
+  in x (undo restores it); a cone-edge drag changes the angle.
+
+**Order inside M12:** (a) light params as scene objects, Area light,
+spot cone / penumbra, decay; (b) lights in the 3D view (icons, picking,
+G / R / S, gizmos, handles); (c) Light 2D node and viewer handles;
+(d) shadows; (e) passes, MCP / Python, help text.
+
+## Milestone 13 in detail: particles
+
+Specified 2026-10-29 at the user's request: "a particle system, emitter,
+particle nodes that can be objects from a file or just a" sprite/point.
+
+**Nodes** (scenes like the rest; particle streams flow between them):
+- **Particle Emitter:** where particles come from: a point, a line, a
+  rectangle / disk / sphere / box, the surface or vertices of an input
+  geometry (a card, a primitive, an imported mesh), or, in 2D, an
+  image's alpha (emit where the mask is). Params: rate (per frame) or a
+  one-shot burst, start frame / end frame, initial velocity (direction,
+  speed, spread cone, randomness), lifetime (with variation), start
+  size, color (and color over life), rotation and spin, and a **seed**
+  (results are repeatable per seed).
+- **Particle forces / modifiers:** Gravity (a direction), Wind / Drag,
+  Turbulence (curl noise: strength, scale, speed), Attractor (a point or
+  locator pulling or pushing), Vortex, Bounce (off a plane or card,
+  with friction), Kill (by age, by a region), and Speed limit. Each is a
+  node in the chain, with a mask/strength and start / end frames.
+- **Particle Render / instancing:** how particles look:
+  - **Sprites / points:** camera-facing quads (or round points), with a
+    texture input (an image or a sequence, cycling or by age), size and
+    opacity over life, additive or over blending.
+  - **Objects:** each particle instances geometry: a card, a primitive
+    (sphere, cube, ...), or a **mesh loaded from a file** (OBJ, then
+    glTF, as in M10), oriented by velocity or randomly spun, scaled by
+    size. Several objects can be chosen at random per particle.
+  - The output is a scene, rendered by Scanline Render (lit by M12's
+    lights, with motion blur from velocity once motion blur exists, and
+    passes); in 2D, a **Particles 2D** path renders sprites straight
+    into the image (no camera needed).
+
+**Simulation.** Particles step frame by frame (with substeps for fast
+motion), from the start frame; results are cached per frame, so
+scrubbing back is instant and scrubbing forward simulates only what is
+missing. Changing a param clears the cache from its first frame. The
+same seed and params always give the same particles (tests rely on it).
+A **pre-roll** param starts the sim before the comp's first frame.
+
+**In the 3D view.** Emitters draw as their shape; particles draw as
+points (colored) for speed, with an option to draw instanced objects.
+Emitters, attractors and bounce planes move with G / R / S and gizmos
+like other objects. In 2D, the viewer shows the emitter's shape with
+handles.
+
+**MCP / Python.** Particle nodes through `create_node` / params; a
+`particles(node, frame)` query returns positions, velocities, ages and
+ids (for scripting and tests).
+
+**Tests.**
+- Determinism: the same seed gives identical particles; a different
+  seed differs.
+- Emission: rate × frames particles exist (minus deaths by lifetime);
+  a burst emits once.
+- Physics: under gravity alone, a particle's height follows
+  `y0 + v0 t − ½ g t²` within 1e-6 (substeps); bounce reflects velocity
+  with the given friction; kill by age removes particles at the right
+  frame.
+- Cache: scrubbing back returns the cached frame; changing gravity at
+  frame 10 re-simulates from there.
+- Rendering: sprites appear where the camera projects their positions;
+  an instanced OBJ mesh renders at each particle with its size and
+  rotation.
+
+**Order inside M13:** (a) particle data and the simulation core (emit,
+age, forces, cache, seed); (b) emitter shapes (incl. geometry surfaces
+and 2D masks) and modifier nodes; (c) sprite rendering in Scanline
+Render and Particles 2D; (d) object instancing (primitives, meshes from
+files); (e) 3D-view drawing and handles, MCP / Python, help text.

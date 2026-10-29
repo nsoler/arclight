@@ -47,9 +47,13 @@ done, M10 specified), `docs/help.md` (the in-app help) and
   (4) **M11, PnP and the tripod solve** ("Milestone 11 in detail" in
   `docs/phase-4-plan.md`; added 2026-10-29 at the user's request: M7
   left out PnP, and a camera that only turns is refused today) —
-  suggested before M10, after trying the tracker on real footage;
+  **in progress** (session 10: MathWiz (c)+(d) 0.9.8, 3DWorker (a)
+  0.9.9, (b) and (e) under way);
   (5) **M10, 3D objects and render passes (AOVs)** ("Milestone 10 in
-  detail"); (6) other M8 follow-ups and older items under "Next steps". Keep `docs/help.md` in step with new features.
+  detail"); (6) **M12, lights** (Area lights, lights movable in the 3D
+  view with G / R / S and gizmos, a Light 2D node) and (7) **M13,
+  particles** (emitters, forces, sprites or objects from files), both
+  specified in the plan 2026-10-29; (8) other M8 follow-ups and older items under "Next steps". Keep `docs/help.md` in step with new features.
 - **Not yet tried by hand** (session 9): all of the 3D view with a real
   mouse and trackpad (orbit / pan / zoom feel, numpad and pie, the
   navigation gizmo's buttons, box select, G / R / S typing, gizmo drags,
