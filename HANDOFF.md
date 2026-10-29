@@ -1,25 +1,30 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-29, during session 10 (herdr multi-agent sessions:
+Last updated 2026-10-29, end of session 10 (herdr multi-agent sessions:
 one master + workers; see "Several agent sessions" below). Read this,
 then `README.md` (user-facing features, file format, shortcuts,
 scripting, the "3D view" section), `docs/phase-4-plan.md` (3D plan: M1–M9
-and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app help) and
+M10 and M11 done, M12–M13 specified), `docs/help.md` (the in-app help) and
 `docs/spec-coverage.md` (planning docs vs. what exists).
 
 ## Start here (next session)
 
-- **State:** version **0.9.27** on branch **`wip-ns-3dwork`**, commit
-  `7c178ff` (M10 complete), merged to `main`. The local build
-  (`target/release`) is 0.9.27, so the Omarchy launcher entry runs
-  0.9.27. (The Python `.so` in `python/` is older; rebuild with
-  `python/build.sh` if needed.)
-- **Latest release: v0.9.27**
-  (github.com/nsoler/arclight/releases/tag/v0.9.27): Linux x86_64 tarball,
-  macOS universal DMG `Arclight-0.9.27-universal.dmg` (Apple Silicon +
-  Intel), `arclt` wheels (Linux manylinux2014, macOS universal2) + sdist.
-  Both workflows passed. Earlier: v0.9.11, v0.9.7, v0.9.5, v0.8.4,
-  v0.8.3 and the 0.0.x pre-releases.
+- **State:** version **0.9.31** on branch **`wip-ns-3dwork`**, commit
+  `504d443`, merged to `main`. The local build (`target/release`) is
+  0.9.31, so the Omarchy launcher entry runs 0.9.31. (The Python `.so`
+  in `python/` is older; rebuild with `python/build.sh` if needed.)
+- **Latest release: v0.9.31** (marked **Latest**;
+  github.com/nsoler/arclight/releases/latest): Linux x86_64 tarball,
+  macOS universal DMG `Arclight-0.9.31-universal.dmg`, `arclt` wheels +
+  sdist. Earlier this session: v0.9.30 (Latest before it), v0.9.27,
+  v0.9.11. A stray **draft** release on tag v0.9.7 ("Arclight Compositor
+  - ALPHA") was left alone (not ours); ask the user before deleting.
+- **Ask the user first:** (1) whether the file-dialog fix (0.9.31) holds
+  when navigating folders in the portal picker (the worker could only
+  check that the picker stays up without a Not Responding dialog);
+  (2) how 0.9.30 / 0.9.31 behave: Fit to project, Project Settings, the
+  3D camera setup on wires, the 3D ● badge, the bigger node browser;
+  (3) the Mac DMG on the M4 Pro.
 - **Done (session 10): M10, 3D objects and render passes**
   ("Milestone 10 in detail" in `docs/phase-4-plan.md`), at **0.9.22**
   (`d422ffb`); steps (a) objects, (b) passes and (c) OBJ are done; (d)
@@ -103,16 +108,17 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
   one at a time, parented to the window); unsaved-changes prompts are an
   `egui::Modal`. No rfd calls outside dialogs.rs. Navigating folders in
   the portal picker by hand still to be confirmed by the user.
-  - Next version: **0.9.32**. (CHANGELOG has one entry per version.)
-- **Ask the user first** how the Mac builds (v0.9.27 universal DMG) went
-  on their M4 Pro, and whether anyone tried an Intel Mac. Mac-only bugs
-  come first.
-- **Next work, in order:** (1) the user's local test of 0.9.27 (objects, lights, passes, multi-object G / R / S); (2) Mac feedback
+  - Next version: **0.9.32**. Both workers (mathwiz, worker3d) were
+    idle at the end of session 10; nothing uncommitted. (CHANGELOG has one entry per version.)
+- Mac: also ask whether anyone tried an Intel Mac. Mac-only bugs come
+  first.
+- **Next work, in order:** (1) the user's feedback on 0.9.27–0.9.31 (objects, lights, passes, multi-object G / R / S, fit, Project Settings, 3D setup, dialogs); (2) Mac feedback
   and hand checks of the 3D view (below) and the Camera Tracker's tripod
-  / PnP on real footage; (3) M9 leftovers: a true orthographic texture
-  path in render3d (ortho views now use a 1000×-away long lens), the
-  pivot at the median of a multi-selection, transforming several objects
-  at once; (4) **M12, lights** (Area lights, lights movable in the 3D
+  / PnP on real footage; (3) M9 leftover: a true orthographic texture
+  path in render3d (ortho views now use a 1000×-away long lens; the
+  median pivot and multi-object transforms were done in 0.9.26); also
+  from M10: the viewport's solid view is headlit, not lit by the scene's
+  lights; (4) **M12, lights** (Area lights, lights movable in the 3D
   view with G / R / S and gizmos, a Light 2D node) and (5) **M13,
   particles** (emitters, forces, sprites or objects from files; emitters
   plug into Scanline Render as extra, growable inputs), both specified
