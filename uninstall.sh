@@ -10,7 +10,7 @@ icons="$data/icons/hicolor"
 
 removed=0
 for f in "$apps/arclight.desktop" "$icons/scalable/apps/arclight.svg" \
-         "$icons"/{48x48,64x64,128x128,256x256}/apps/arclight.png; do
+         "$icons"/{16x16,24x24,32x32,48x48,64x64,128x128,256x256}/apps/arclight.png; do
   if [[ -e "$f" ]]; then
     rm -f "$f"
     removed=$((removed + 1))

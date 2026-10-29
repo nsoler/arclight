@@ -19,15 +19,20 @@ if [[ "${1:-}" == "--build" || ! -x "$bin" ]]; then
   cargo build --release --manifest-path "$repo/Cargo.toml" --bin arclight-gui
 fi
 
-# Icons: the SVG for any size, plus PNGs for launchers that want bitmaps.
-install -Dm644 "$repo/assets/arclight.svg" "$icons/scalable/apps/arclight.svg"
-for size in 48 64 128 256; do
+# Icons. Launchers draw app icons small (Omarchy's at ~20-32 px, from the
+# scalable SVG), where the ARCLIGHT lettering can't be read, so the
+# scalable icon and the small PNGs are the logo without it
+# (arclight-icon.svg); 128 px and up show the full logo (arclight.svg).
+install -Dm644 "$repo/assets/arclight-icon.svg" "$icons/scalable/apps/arclight.svg"
+for size in 16 24 32 48 64 128 256; do
+  src="$repo/assets/arclight-icon.svg"
+  (( size >= 128 )) && src="$repo/assets/arclight.svg"
   dest="$icons/${size}x${size}/apps/arclight.png"
   mkdir -p "$(dirname "$dest")"
   if command -v rsvg-convert >/dev/null; then
-    rsvg-convert -w "$size" -h "$size" "$repo/assets/arclight.svg" -o "$dest"
+    rsvg-convert -w "$size" -h "$size" "$src" -o "$dest"
   elif command -v magick >/dev/null; then
-    magick -background none "$repo/assets/arclight.svg" -resize "${size}x${size}" "$dest"
+    magick -background none "$src" -resize "${size}x${size}" "$dest"
   elif [[ "$size" == 256 ]]; then
     install -m644 "$repo/assets/arclight.png" "$dest"
   fi

@@ -46,8 +46,12 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   re-render it after editing the SVG, then rebuild and `./install.sh`.
   The lettering is #4e9290 (the logo's mid teal; was #033c3a, invisible on
   dark themes): contrast ≥ 3.6:1 on white and on dark backgrounds. At
-  48 px the word is too small to read; a text-free small variant is an
-  option if the user wants one.
+  48 px the word is too small to read, so `assets/arclight-icon.svg` is
+  the same logo without the lettering, same frame. `install.sh` installs
+  it as the scalable icon (Omarchy's launcher always takes the SVG, at
+  ~20–32 px: `AppLibrary.qml` indexes SVGs before PNGs) and at 16–64 px;
+  128/256 px PNGs use the full logo. The GUI's window icon is still the
+  full logo (`assets/arclight.png`).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
   (Rectangle, Ellipse, Polygon, Roto), Transform layer dragging in the viewer,

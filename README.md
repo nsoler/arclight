@@ -42,8 +42,10 @@ Image sequences and stills need nothing extra.
 ```
 
 `install.sh` puts `arclight.desktop` in `~/.local/share/applications` and the
-icon (`assets/arclight.svg`, a placeholder while in development) in
-`~/.local/share/icons/hicolor`, so it shows in Omarchy's launcher (Super +
+icons in `~/.local/share/icons/hicolor`: the logo without its lettering
+(`assets/arclight-icon.svg`) as the scalable icon and at 16–64 px, where
+launchers draw it and the word would be unreadable, and the full logo
+(`assets/arclight.svg`) at 128 and 256 px, so it shows in Omarchy's launcher (Super +
 Space) and any freedesktop desktop's menu. The entry runs this checkout's
 `target/release/arclight-gui`, so later release builds need no reinstall.
 No root needed; nothing outside `~/.local/share` is touched.
