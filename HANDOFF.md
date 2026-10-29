@@ -129,7 +129,11 @@ done, M12 lights and M13 particles specified), `docs/help.md` (the in-app help) 
   `is_mask_port`); transport row centered via measured width
   (`transport::indent`); `node_editor::fit_view` + corner `fit_button`
   (F; Home is Go to start); ZOOM_MIN 0.25.
-  - Next version: **0.9.34**. Both workers (mathwiz, worker3d) were
+- **Session 11 (started, same day): M12 (3DWorker) and M13 engine
+  (MathWiz); the user wants the release only after both.** 0.9.34
+  (MathWiz): node graph hotkeys (`NodeEditor::hotkeys`: Tab browser,
+  ⇧R Media In, ⇧T Transform, ⇧M Merge, only over the graph).
+  - Next version: **0.9.35**. Both workers (mathwiz, worker3d) were
     idle at the end of session 10; nothing uncommitted. (CHANGELOG has one entry per version.)
 - Mac: also ask whether anyone tried an Intel Mac. Mac-only bugs come
   first.
@@ -341,7 +345,7 @@ done, M12 lights and M13 particles specified), `docs/help.md` (the in-app help) 
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.33**.
+  in the same commit as the change. Current: **0.9.34**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

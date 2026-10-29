@@ -5,10 +5,12 @@
 //! to reroute or disconnect. Drop a wire dragged from an output onto another
 //! wire to join the two with a new Merge (the dragged node into A, over
 //! the wire's source in B). Inputs are yellow squares, outputs green circles.
-//! Right-click the canvas, or press Shift+E for a
+//! Right-click the canvas, or press Shift+E (or Tab over the graph) for a
 //! searchable node browser, to add nodes; over a wire, the new node goes into
-//! it. Drop an unconnected node on a wire to splice it in; shake a node while
-//! dragging it to pull it out of its wires. Optional ports draw hollow. The
+//! it. Over the graph Shift+R, Shift+T and Shift+M add a Media In, a
+//! Transform and a Merge at the pointer, wired the same way. Drop an
+//! unconnected node on a wire to splice it in; shake a node while dragging
+//! it to pull it out of its wires. Optional ports draw hollow. The
 //! minimap (lower right) pans on click/drag, zooms on scroll, fits on
 //! double-click. The Fit button (top right) or F frames every node.
 //!
@@ -345,6 +347,32 @@ impl NodeEditor {
         doc.selected = Some(id);
     }
 
+    /// Keys over the graph (not while typing): Tab opens the node browser
+    /// at the pointer, as a right-click does; Shift+R, Shift+T and Shift+M
+    /// add a Media In, a Transform and a Merge there, placed as the browser
+    /// would (into the wire under the pointer or the selected one, else
+    /// after the selected node).
+    fn hotkeys(&mut self, ui: &egui::Ui, doc: &mut Doc) {
+        let ctx = ui.ctx();
+        if !ui.rect_contains_pointer(self.rect) || ctx.text_edit_focused() || self.browser.is_some() {
+            return;
+        }
+        let Some(p) = ctx.input(|i| i.pointer.hover_pos()) else { return };
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab)) {
+            self.open_browser(Some(p));
+            // egui read the Tab already, to move keyboard focus this frame.
+            ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+            return;
+        }
+        let keys = [(Key::R, "media_in"), (Key::T, "transform"), (Key::M, "merge")];
+        let Some(op) = ctx.input_mut(|i| keys.into_iter().find(|(k, _)| i.consume_key(Modifiers::SHIFT, *k))).and_then(|(_, op)| ops::info(op)) else {
+            return;
+        };
+        let selected = doc.selected_wire.clone().map(|(src, dst, port)| WireRef { src, dst, port });
+        self.target_wire = self.wire_at(doc, p, None).or(selected);
+        self.place(doc, op, self.to_graph(p), false);
+    }
+
     fn browser_ui(&mut self, ctx: &egui::Context, doc: &mut Doc) {
         let into = self.target_wire.as_ref().map(|w| format!("Insert between {} and {}", w.src, w.dst));
         let Some(b) = &mut self.browser else { return };
@@ -499,6 +527,7 @@ impl NodeEditor {
                 None => self.open_browser(bg.interact_pointer_pos()),
             }
         }
+        self.hotkeys(ui, doc);
         if let Some(at) = self.browser.as_ref().filter(|b| b.just_opened).map(|b| b.at) {
             self.target_wire = self.wire_at(doc, at, None);
         }
@@ -1748,5 +1777,101 @@ mod tests {
         assert!(doc.graph.nodes.iter().all(|n| h.ed.rect.contains_rect(h.ed.node_rect(n.pos.unwrap()))));
         let bd = &doc.graph.backdrops[0];
         assert!(h.ed.rect.contains(h.ed.to_screen(Pos2::new(bd.pos[0], bd.pos[1]))), "and the backdrops");
+    }
+
+    fn key(key: Key, modifiers: Modifiers) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+    }
+
+    #[test]
+    fn keys_over_the_graph_open_the_browser_and_add_nodes() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let plate = doc.add_node("checkerboard", [100.0, 100.0]);
+        let grade = doc.add_node("grade", [100.0, 300.0]);
+        doc.connect(&plate, &grade, 0);
+        let mut h = Harness::new();
+        h.frame(&mut doc, vec![]);
+        let shift = |h: &mut Harness, doc: &mut Doc, at: Pos2, k: Key| {
+            h.mods = Modifiers::SHIFT;
+            h.frame(doc, vec![egui::Event::PointerMoved(at), key(k, Modifiers::SHIFT)]);
+            h.mods = Modifiers::NONE;
+            h.frame(doc, vec![]);
+        };
+        let op = |doc: &Doc, id: &Option<String>| doc.node(id.as_ref().unwrap()).unwrap().op.clone();
+
+        // Tab: the browser at the pointer, aimed at the wire under it.
+        let (a, b) = (h.rect(&doc, &plate), h.rect(&doc, &grade));
+        let mid = NodeEditor::out_port(a).lerp(NodeEditor::in_port(b, 0, 2), 0.5);
+        h.frame(&mut doc, vec![egui::Event::PointerMoved(mid), key(Key::Tab, Modifiers::NONE)]);
+        assert!(h.ed.browser.as_ref().is_some_and(|b| b.at == mid), "Tab opens the browser there");
+        assert_eq!(h.ed.target_wire.as_ref().map(|w| (w.src.as_str(), w.dst.as_str())), Some((plate.as_str(), grade.as_str())));
+        h.frame(&mut doc, vec![]);
+        h.frame(&mut doc, vec![key(Key::Escape, Modifiers::NONE)]);
+        h.frame(&mut doc, vec![]);
+        assert!(!h.ed.browser_open() && !h.ctx.text_edit_focused());
+
+        // Shift+T over the wire: a Transform spliced into it, at the pointer.
+        shift(&mut h, &mut doc, mid, Key::T);
+        let t = doc.selected.clone();
+        assert_eq!(op(&doc, &t), "transform");
+        assert_eq!(doc.node(&grade).unwrap().inputs[0], *t.as_ref().unwrap());
+        assert_eq!(doc.node(t.as_ref().unwrap()).unwrap().inputs[0], plate);
+        let pos = doc.node(t.as_ref().unwrap()).unwrap().pos.unwrap();
+        assert!((h.ed.to_screen(Pos2::new(pos[0], pos[1])) - mid).length() < 0.01);
+        // Shift+M in empty space: a Merge after the selected Transform.
+        let empty = h.ed.rect.center() + Vec2::new(300.0, 0.0);
+        shift(&mut h, &mut doc, empty, Key::M);
+        let m = doc.selected.clone();
+        assert_eq!(op(&doc, &m), "merge");
+        assert_eq!(doc.node(m.as_ref().unwrap()).unwrap().inputs[0], *t.as_ref().unwrap());
+        // Shift+R: a Media In (no inputs to wire).
+        shift(&mut h, &mut doc, empty + Vec2::new(0.0, 120.0), Key::R);
+        assert_eq!(op(&doc, &doc.selected), "media_in");
+        assert_eq!(doc.graph.nodes.len(), 5);
+        // A selected wire takes the new node when the pointer is off wires.
+        doc.select_wire(&plate, t.as_ref().unwrap(), 0);
+        shift(&mut h, &mut doc, empty + Vec2::new(0.0, -150.0), Key::T);
+        let t2 = doc.selected.clone().unwrap();
+        assert_eq!(doc.node(t.as_ref().unwrap()).unwrap().inputs[0], t2);
+        // Plain R/T/M add nothing; nor does Shift+M typed in the browser's
+        // search field.
+        h.frame(&mut doc, vec![egui::Event::PointerMoved(empty), key(Key::R, Modifiers::NONE), key(Key::M, Modifiers::NONE)]);
+        assert_eq!(doc.graph.nodes.len(), 6);
+        h.frame(&mut doc, vec![key(Key::Tab, Modifiers::NONE)]);
+        h.frame(&mut doc, vec![]);
+        assert!(h.ctx.text_edit_focused(), "the browser's search field has focus");
+        shift(&mut h, &mut doc, empty, Key::M);
+        assert_eq!(doc.graph.nodes.len(), 6);
+    }
+
+    #[test]
+    fn keys_elsewhere_leave_the_graph_alone() {
+        // The editor in the lower half; the upper half stands in for the
+        // viewer, whose own R (rotate) needs the pointer over it.
+        let mut doc = Doc::new(Graph::default(), None);
+        doc.add_node("checkerboard", [100.0, 100.0]);
+        let ctx = egui::Context::default();
+        let mut ed = NodeEditor { zoom: 1.0, fit_pending: false, ..NodeEditor::default() };
+        let run = |ed: &mut NodeEditor, doc: &mut Doc, events: Vec<egui::Event>, mods: Modifiers| {
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 700.0))),
+                events: std::iter::once(egui::Event::ModifiersChanged(mods)).chain(events).collect(),
+                ..Default::default()
+            };
+            let mut viewer_got_r = false;
+            let _ = ctx.run_ui(raw, |ui| {
+                let (top, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 300.0), Sense::hover());
+                ed.ui(ui, doc, None);
+                viewer_got_r = ui.rect_contains_pointer(top) && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::R));
+            });
+            viewer_got_r
+        };
+        let over_viewer = Pos2::new(600.0, 150.0);
+        assert!(run(&mut ed, &mut doc, vec![egui::Event::PointerMoved(over_viewer), key(Key::R, Modifiers::SHIFT)], Modifiers::SHIFT), "the viewer still gets its key");
+        run(&mut ed, &mut doc, vec![egui::Event::PointerMoved(over_viewer), key(Key::Tab, Modifiers::NONE), key(Key::M, Modifiers::SHIFT)], Modifiers::SHIFT);
+        run(&mut ed, &mut doc, vec![], Modifiers::NONE);
+        assert!(ed.browser.is_none() && doc.graph.nodes.len() == 1, "nothing added from over the viewer");
+        run(&mut ed, &mut doc, vec![egui::Event::PointerMoved(Pos2::new(600.0, 500.0)), key(Key::M, Modifiers::SHIFT)], Modifiers::SHIFT);
+        assert_eq!(doc.graph.nodes.len(), 2, "over the graph it adds");
     }
 }

@@ -11,6 +11,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.34 — 2026-10-29
+
+- Node graph keys with the pointer over the graph: **Tab** opens the node
+  browser there (into the wire under the pointer), **Shift+R / Shift+T /
+  Shift+M** add a Media In / Transform / Merge at the pointer, wired like
+  a browser placement.
+
 ## 0.9.33 — 2026-10-29
 
 - Merge has a **Swap A / B** toggle (⇄ beside Operation) that trades its
