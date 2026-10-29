@@ -30,8 +30,12 @@ Last updated 2026-10-28 (end of session 5). Read this, then `README.md`
   drawn through the tracker's output, match scores (weak frames on the
   path, timeline and panel), clear keys before/after, per-track box sizes,
   offset points. See "Progress log".
-- **Not done:** Phase 0.6 (bounding boxes / format; next), small UX debts, session-4 follow-ups,
-  Phase 4 (3D). See "Next steps".
+  Session 6: Roto/Polygon box select, select all and transform box; node
+  graph insert-into-wire, shake-to-disconnect and minimap; Phase 0.6
+  (formats, data windows, overscan, project format; plan and measurements
+  in `docs/phase-0.6-plan.md`).
+- **Not done:** small UX debts, session-4 follow-ups, Phase 4 (3D). See
+  "Next steps".
 - Development is on Linux (Omarchy/Hyprland): use `sed -i` (not
   `sed -i ''`); ffmpeg/ffprobe are in `/usr/bin`. Hyprland tiles the window
   narrower than its 1600 px default, so screenshots come out ~920–1030 px
@@ -64,23 +68,13 @@ steps": take them in this order, one milestone at a time (commit, push and
 fast-forward `main` after each, per the standing instruction above), and
 report back after a few milestones.
 
-1. **Phase 0.6 bounding boxes / format** (large, foundational; in
-   progress). **Plan: `docs/phase-0.6-plan.md`** (decisions D1–D4 agreed:
-   capped overscan, a project format, plugin ABI v1 via flattening,
-   milestones in order). Images are
-   always full frame from origin 0,0. Overlays assume a node's input is
-   the viewed image's size (Transform's pivot and layer frame, Tracker
-   boxes, the Transform export's pivot), which is wrong for a smaller layer
-   over a bigger background. Also matters for performance and Crop/Reformat
-   semantics. Plan it before starting (data model in `image.rs`, every op,
-   overlays, media I/O).
-2. **Small UX debts:** viewer toolbar overlap at narrow widths; no warning
+1. **Small UX debts:** viewer toolbar overlap at narrow widths; no warning
    when closing the window with unsaved changes; Corner Pin's default
    From/To is a 512 square (add "From = image corners"); per-track tracker
    box sizes and offsets are only editable in the viewer; no filtering when
    Transform / Tracker output / Corner Pin shrink the image (aliasing);
    shape motion blur.
-3. **Session-4 follow-ups** (small to medium):
+2. **Session-4 follow-ups** (small to medium):
    - Python plugins (custom ops written in Python): embed Python in the
      host via the `python/` crate, or run them out of process.
    - Plugin process isolation: a crashing native plugin kills the app.
@@ -89,7 +83,7 @@ report back after a few milestones.
    - Not planned: OpenFX hosting (large; its own project), licensing (the
      docs wanted another product's scheme copied; declined), `import_nuke`
      (originality rule).
-4. **Phase 4: 3D** — plan separately (see below). A 3D camera tracker
+3. **Phase 4: 3D** — plan separately (see below). A 3D camera tracker
    would build on the 2D tracker.
 
 ## Session 4: automation, plugins, Python
@@ -327,6 +321,12 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   `Session::create_node`). `set_project` takes width/height (MCP, Python
   `project(width=, height=)`); transport bar has a Format field;
   `image_stats` adds `window`. Old files keep their stored sizes.
+- **Session 6, part 9**: Phase 0.6 milestone 6, measured (table in
+  `docs/phase-0.6-plan.md`): a 4K comp of ten small shapes renders 33×
+  faster with a tenth of the memory; over a 4K plate 7.5× faster. Output
+  identical. **Phase 0.6 is done.** Follow-ups: ROI (render only what a
+  downstream crop/viewer needs) and tiling are now possible on top of
+  windows; Merge could intersect for `in`/`mask`-type operations.
 
 ## Architecture in one page
 
@@ -470,11 +470,11 @@ plain `cargo build` builds only the root crate):
 
 ## Later phases
 
-### Phase 0.6: bounding boxes / format
+### Phase 0.6: bounding boxes / format — done in session 6
 
-Give `Image` a data window (offset + size) and a format, so layers can be
-smaller than the frame. Then fix overlays to use each node's input size
-rather than the viewed image's (Transform pivot/frame, Tracker boxes).
+See `docs/phase-0.6-plan.md`. Possible follow-ups: ROI evaluation (render
+only the part a downstream crop or the viewer needs) and tiling, now that
+windows exist.
 
 ### Phase 4: 3D (large; plan it separately)
 
@@ -505,7 +505,9 @@ rather than the viewed image's (Transform pivot/frame, Tracker boxes).
   screenshots, not by hand: wire dragging, file dialogs, the Render button,
   curve-key and tangent dragging, box select, roto tangent editing, the
   Transform layer frame, tracker box dragging. Worth a manual pass.
-- Overlays assume the node's input is the viewed image's size (no bbox).
+- Overlays use the *viewed* image's format: handles of a node whose own
+  input has another format (e.g. viewing downstream of a Resize or a
+  shrinking Crop) don't line up. View the node itself to edit it.
 - Session 5's tracker features were checked with unit tests and
   screenshots of synthetic scenes, not on real footage or by hand: weak
   frames have only been seen with hand-keyed scores; Ctrl-drag offsets,

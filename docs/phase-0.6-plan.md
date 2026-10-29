@@ -1,6 +1,6 @@
 # Phase 0.6 plan: formats and data windows
 
-Status: agreed (session 6). The user chose the proposed option for each
+Status: **done** (session 6). Was agreed The user chose the proposed option for each
 decision **D1–D4** (2026-10-28); work milestone by milestone below.
 
 ## Problem
@@ -124,5 +124,12 @@ export don't change.
    viewer; overlays use the format; the worker reports the selected
    node's input window for Transform's layer frame. Screenshot checks.
 5. **Done (session 6).** **Project format (D2)** and stats in MCP/Python (`format`, `window`).
-6. **Measure**: time a 4K comp of small shapes before/after; note results
-   in HANDOFF.
+6. **Done (session 6).** **Measure.** 4K, 10 frames, ten feathered
+   animated ellipses (some blurred, some transformed) merged in a chain,
+   cropped small and written as PNG; release build, this machine. Output
+   identical (MAE 0) before and after.
+
+   | Comp | Before (full frames) | After (data windows) |
+   |---|---|---|
+   | shapes only | 14.0 s, 3.5 GB peak | 0.43 s, 0.37 GB peak (33×) |
+   | over a 4K checkerboard plate | 14.4 s, 3.7 GB peak | 1.9 s, 1.5 GB peak (7.5×) |
