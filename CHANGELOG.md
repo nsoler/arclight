@@ -11,6 +11,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.38 — 2026-10-29
+
+- Light 2D engine (`src/light2d.rs`): spot, area (rect / ellipse),
+  point and directional lights on a flat image, as a shaped glow or,
+  with a normal pass / normal map (and depth), shaded like 3D lights
+  (Lambert, Blinn highlight); add, screen or multiply, with color,
+  intensity, exposure and a mask. No node yet (M12 step c, engine).
+
 ## 0.9.37 — 2026-10-29
 
 - 3D view: a selected Spot Light shows four handles on its cone's edge

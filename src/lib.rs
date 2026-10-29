@@ -17,6 +17,7 @@ pub mod geom;
 pub mod gltf;
 pub mod graph;
 pub mod image;
+pub mod light2d;
 pub mod link;
 pub mod media;
 pub mod mesh;
