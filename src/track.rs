@@ -549,6 +549,26 @@ pub fn solve_tracks(from: &[Option<Pt>], to: &[Option<Pt>], from_warps: &[Option
     (!a.is_empty()).then(|| solve(&a, &b, kind))
 }
 
+/// A Tracker's solved motion from its reference frame to `frame`, from its
+/// raw (possibly keyed) params; `None` when no track is on.
+pub fn solved(params: &Value, frame: i64) -> Option<Affine> {
+    let p = ops::params_with_defaults("tracker", params);
+    let kind = Solve::from_choice(p["solve"].as_str(), Solve::Scale);
+    let reference = p["reference_frame"].as_i64().unwrap_or(1);
+    solve_tracks(&positions(&p, reference), &positions(&p, frame), &warps(&p, reference), &warps(&p, frame), kind)
+}
+
+/// Where a Tracker's output shows each point of its input at `frame`:
+/// the solved motion for a match-move, its inverse to stabilize, `None`
+/// when the output is the input.
+pub fn output_map(params: &Value, frame: i64) -> Option<Affine> {
+    match params.get("output").and_then(Value::as_str) {
+        Some("match-move") => solved(params, frame),
+        Some("stabilize") => solved(params, frame).map(|m| invert(&m)),
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Exporting the solved motion
 // ---------------------------------------------------------------------------
@@ -561,8 +581,6 @@ pub fn solve_tracks(from: &[Option<Pt>], to: &[Option<Pt>], from_warps: &[Option
 pub fn transform_params(params: &Value, size: [usize; 2], stabilize: bool) -> Result<Map<String, Value>> {
     let p = ops::params_with_defaults("tracker", params);
     let kind = Solve::from_choice(p["solve"].as_str(), Solve::Scale);
-    let reference = p["reference_frame"].as_i64().unwrap_or(1);
-    let (refs, ref_warps) = (positions(&p, reference), warps(&p, reference));
     let mut frames: Vec<i64> = (1..=TRACKS)
         .filter(|i| p[format!("track{i}_on")].as_bool() == Some(true))
         .flat_map(|i| [format!("track{i}"), format!("track{i}_warp")])
@@ -580,7 +598,7 @@ pub fn transform_params(params: &Value, size: [usize; 2], stabilize: bool) -> Re
     let (mut translate, mut rotate, mut scale) = (Vec::new(), Vec::new(), Vec::new());
     let mut last_angle = 0.0;
     for f in frames {
-        let m = solve_tracks(&refs, &positions(&p, f), &ref_warps, &warps(&p, f), kind).context("no tracks enabled")?;
+        let m = solved(&p, f).context("no tracks enabled")?;
         let m = if stabilize { invert(&m) } else { m };
         let o = apply(&m, c);
         translate.push(json!([f, [round((o[0] - c[0]) as f64), round((o[1] - c[1]) as f64)]]));

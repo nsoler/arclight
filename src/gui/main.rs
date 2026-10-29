@@ -171,10 +171,7 @@ impl App {
     /// What the user is looking at.
     fn view_state(&self) -> Value {
         let viewer = self.doc.graph.nodes.iter().find(|n| n.op == "viewer");
-        let viewing = match viewer {
-            Some(v) => v.inputs.first().filter(|i| !i.is_empty()).cloned(),
-            None => self.doc.selected.clone(),
-        };
+        let viewing = self.doc.viewed();
         json!({
             "selected": self.doc.selected,
             "viewer": viewer.map(|v| &v.id),

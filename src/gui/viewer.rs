@@ -109,7 +109,7 @@ impl Viewer {
         }
 
         // Overlay handles take a drag before panning does.
-        let xf = |v: &Viewer| Xf { img_rect: Rect::from_center_size(rect.center() + v.pan, size * v.zoom), zoom: v.zoom };
+        let xf = |v: &Viewer| Xf::new(Rect::from_center_size(rect.center() + v.pan, size * v.zoom), v.zoom);
         self.overlays.interact(ui, &resp, &xf(self), size, doc, frame);
 
         // Interaction: drag to pan, scroll / pinch to zoom about the cursor.

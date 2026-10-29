@@ -37,20 +37,43 @@ const HOT: Color32 = Color32::WHITE;
 const X_AXIS: Color32 = Color32::from_rgb(235, 90, 80);
 const Y_AXIS: Color32 = Color32::from_rgb(110, 210, 100);
 
-/// Image ↔ screen mapping: the image's screen rect and points per pixel.
+/// Image ↔ screen mapping: the image's screen rect and points per pixel,
+/// and where the shown image puts the overlay's points (`warp`: e.g. a
+/// Tracker's input points in its match-moved output).
 #[derive(Clone, Copy)]
 pub struct Xf {
     pub img_rect: Rect,
     pub zoom: f32,
+    pub warp: Option<track::Affine>,
 }
 
 impl Xf {
+    pub fn new(img_rect: Rect, zoom: f32) -> Xf {
+        Xf { img_rect, zoom, warp: None }
+    }
+
     fn screen(&self, p: Vec2) -> Pos2 {
+        let p = match &self.warp {
+            Some(m) => Vec2::from(track::apply(m, p.into())),
+            None => p,
+        };
         self.img_rect.min + p * self.zoom
     }
 
     fn image(&self, s: Pos2) -> Vec2 {
-        (s - self.img_rect.min) / self.zoom
+        let p = (s - self.img_rect.min) / self.zoom;
+        match &self.warp {
+            Some(m) => Vec2::from(track::apply(&track::invert(m), p.into())),
+            None => p,
+        }
+    }
+
+    /// This mapping for the selected node's overlay: a Tracker shown
+    /// through its own match-move or stabilize draws its tracks where its
+    /// output shows them.
+    fn for_node(&self, doc: &Doc, id: &str, frame: i64) -> Xf {
+        let n = doc.node(id).filter(|n| n.op == "tracker" && doc.viewed().as_deref() == Some(id));
+        Xf { warp: n.and_then(|n| track::output_map(&n.params, frame)), ..*self }
     }
 }
 
@@ -131,6 +154,9 @@ struct Drag {
     angle: f32,
     /// Rotation accumulated over the drag, in degrees.
     turned: f32,
+    /// The mapping when the drag started: a Tracker's shown output moves as
+    /// its tracks are dragged, so the pointer is read through this one.
+    xf: Xf,
 }
 
 #[derive(Default)]
@@ -396,9 +422,8 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
                 if let Some((_, is_search)) = corner {
                     return Some(Part::TrackBox { i, search: is_search });
                 }
-                let half = (pattern / 2.0 * xf.zoom).max(GRAB);
-                let d = p - xf.screen(c);
-                if d.x.abs() < half && d.y.abs() < half {
+                // The box may be turned when shown through the tracker's output.
+                if in_quad(p, &square(xf, c, pattern)) || xf.screen(c).distance(p) < GRAB {
                     return Some(Part::Track(i));
                 }
             }
@@ -481,6 +506,7 @@ impl Overlays {
             }
         }
         if let (Some(ptr), true) = (resp.interact_pointer_pos(), resp.dragged()) {
+            let xf = self.drag.as_ref().map_or(*xf, |d| d.xf);
             self.drag_to(doc, frame, xf.image(ptr), mods);
         }
         if released || resp.drag_stopped() {
@@ -494,6 +520,7 @@ impl Overlays {
         self.drag = None;
         let Some(id) = doc.selected.clone() else { return };
         let Some(g) = geo(doc, &id, frame, size) else { return };
+        let xf = &xf.for_node(doc, &id, frame);
         self.points.retain(|&i| matches!(&g, Geo::Points { pts, .. } if i < pts.len()));
         let mut part = hit(&g, xf, o, &self.points);
         if let Geo::Points { param, stride, ref pts, .. } = g {
@@ -554,7 +581,7 @@ impl Overlays {
         let Some(g) = geo(doc, &id, frame, size) else { return };
         let start = xf.image(o);
         let d = start - g.pivot();
-        self.drag = Some(Drag { node: id, part, start, geo: g, angle: d.y.atan2(d.x), turned: 0.0 });
+        self.drag = Some(Drag { node: id, part, start, geo: g, angle: d.y.atan2(d.x), turned: 0.0, xf: *xf });
     }
 
     fn drag_to(&mut self, doc: &mut Doc, frame: i64, p: Vec2, mods: Mods) {
@@ -595,6 +622,7 @@ impl Overlays {
     pub fn draw(&self, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, size: Vec2, doc: &Doc, frame: i64) {
         let Some(id) = doc.selected.as_deref() else { return };
         let Some(g) = geo(doc, id, frame, size) else { return };
+        let xf = &self.drag.as_ref().map_or_else(|| xf.for_node(doc, id, frame), |d| d.xf);
         let hover = ui.input(|i| i.pointer.hover_pos()).filter(|p| painter.clip_rect().contains(*p));
         let hot = match &self.drag {
             Some(d) => Some(d.part),
@@ -1031,7 +1059,7 @@ mod tests {
 
     const SIZE: Vec2 = Vec2::new(200.0, 100.0);
     /// 1:1 zoom with the image at the screen origin, so screen = image.
-    const XF: Xf = Xf { img_rect: Rect { min: Pos2::ZERO, max: Pos2::new(200.0, 100.0) }, zoom: 1.0 };
+    const XF: Xf = Xf { img_rect: Rect { min: Pos2::ZERO, max: Pos2::new(200.0, 100.0) }, zoom: 1.0, warp: None };
 
     fn doc(op: &str, params: Value) -> Doc {
         let g = Graph { nodes: vec![arclight::graph::NodeSpec {
@@ -1138,6 +1166,29 @@ mod tests {
         assert_eq!(vec2(&d.param("n", "to3")), Vec2::new(162.0, 90.0));
         assert_eq!(drag(&mut d, Pos2::new(140.0, 80.0), Pos2::new(130.0, 70.0), 1), Part::Corner { i: 2, from: true });
         assert_eq!(vec2(&d.param("n", "from3")), Vec2::new(130.0, 70.0));
+    }
+
+    #[test]
+    fn tracker_boxes_follow_its_shown_output() {
+        // One track moved 20 px right since the reference frame, shown
+        // through the tracker's match-move: the box shows 20 px further on.
+        let mut d = doc("tracker", json!({
+            "track1": { "keys": [[1, [50, 50]], [2, [70, 50]]], "interp": "linear" },
+            "output": "match-move", "pattern": 20, "search": 40,
+        }));
+        d.graph.nodes.push(arclight::graph::NodeSpec { id: "v".into(), op: "viewer".into(), inputs: vec!["n".into()], params: json!({}), pos: None });
+        let xf = XF.for_node(&d, "n", 2);
+        assert_eq!(xf.screen(Vec2::new(70.0, 50.0)), Pos2::new(90.0, 50.0));
+        // Dragging it there moves the track by the pointer's motion in input pixels.
+        let mut ov = Overlays::default();
+        ov.press(&mut d, 2, SIZE, &XF, Pos2::new(92.0, 52.0), Mods::default());
+        assert_eq!(ov.drag.as_ref().map(|dr| dr.part), Some(Part::Track(0)));
+        let frozen = ov.drag.as_ref().unwrap().xf;
+        ov.drag_to(&mut d, 2, frozen.image(Pos2::new(97.0, 52.0)), Mods::default());
+        assert_eq!(vec2(&d.param_at("n", "track1", 2)), Vec2::new(75.0, 50.0));
+        // Viewing something else (or the plain input) leaves the boxes in place.
+        d.graph.nodes[1].inputs = vec![String::new()];
+        assert!(XF.for_node(&d, "n", 2).warp.is_none());
     }
 
     #[test]

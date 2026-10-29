@@ -16,7 +16,7 @@ Last updated 2026-10-28 (session 5). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~12,300 lines of Rust + Python. Tests: 60 library + 10 CLI + 23 GUI
+- ~12,300 lines of Rust + Python. Tests: 60 library + 10 CLI + 24 GUI
   (`cargo test --release`) and 8 Python (see "Working tips"), all passing.
   Clippy is clean apart from two old style lints (`Graph::from_str` name,
   `chunks_exact_mut(4)` in media.rs).
@@ -73,9 +73,6 @@ order of value:
    - Per-track box sizes; per-frame match score (show weak frames on the
      timeline or curve); "clear keys after/before this frame"; an offset
      point (track one spot, place the result at another).
-   - The overlay draws tracks in input coordinates, also when the output is
-     match-moved/stabilized, so the boxes look offset over that output.
-     Either draw through the solved transform or show input while tracking.
 2. **Phase 2 extras for Roto/Polygon:** box-select of vertices, select all
    (Ctrl+A in the viewer), move/scale/rotate a whole shape (a transform box
    around the selection), motion blur later.
@@ -214,6 +211,14 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   warp shrinks the image (aliasing, same as Transform); the default
   From/To is a 512 square, so a hand-made Corner Pin on another size needs
   its From corners set (a "From = image corners" button would help).
+- **Session 5, part 4**: Tracker boxes follow its shown output. `Xf` has
+  an optional `warp` (overlay points → shown image), set by
+  `Xf::for_node` when the selected Tracker is what the viewer shows
+  (`Doc::viewed`) and its output is match-move/stabilize
+  (`track::output_map`, built on `track::solved`). Drags read the pointer
+  through the mapping frozen at press (`Drag::xf`), since moving a track
+  changes the solve. Boxes show turned/scaled through it; the hit test
+  uses `in_quad`.
 
 ## Architecture in one page
 

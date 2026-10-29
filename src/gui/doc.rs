@@ -259,6 +259,15 @@ impl Doc {
             .or_else(|| self.selected.clone())
     }
 
+    /// The node whose image the viewer shows: the Viewer node's input, or
+    /// the selected node when there is no Viewer.
+    pub fn viewed(&self) -> Option<String> {
+        match self.graph.nodes.iter().find(|n| n.op == "viewer") {
+            Some(v) => v.inputs.first().filter(|i| !i.is_empty()).cloned(),
+            None => self.selected.clone(),
+        }
+    }
+
     /// Route `id` into the Viewer, creating a Viewer node if there is none.
     pub fn view_node(&mut self, id: &str) {
         if self.node(id).is_none_or(|n| n.op == "viewer") {
