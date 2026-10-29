@@ -244,7 +244,9 @@ const MOTION_SAMPLES: ParamKind = ParamKind::Int { min: 0, max: 64 };
 /// How long the shutter is open, in frames.
 const SHUTTER: ParamKind = ParamKind::Float { min: 0.0, max: 2.0 };
 const SHUTTER_OFFSETS: &[&str] = &["centered", "start", "end"];
-const SHAPE_OP_NAMES: [&str; 4] = ["rectangle", "ellipse", "polygon", "roto"];
+/// Ops with motion blur params: shapes average their coverage, the warps
+/// their output images (see [`eval`]).
+const MOTION_BLUR_OPS: [&str; 6] = ["rectangle", "ellipse", "polygon", "roto", "transform", "corner_pin"];
 const FILL_RULES: &[&str] = &["non-zero", "even-odd"];
 /// Help text for shape ops: their own sentence plus what they share.
 macro_rules! shape_help {
@@ -357,11 +359,16 @@ pub static OPS: &[OpInfo] = &[
             // Null: the center of the input's data window, so the pivot
             // follows a shape or moved layer.
             p!("center", "Center", ParamKind::Vec2, Value::Null),
+            fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
+            fixed!("shutter", "Shutter", SHUTTER, 0.5),
+            fixed!("shutter_offset", "Shutter offset", ParamKind::Choice(SHUTTER_OFFSETS), "centered"),
             MIX,
         ],
         overlay: Overlay::Transform { translate: "translate", rotate: "rotate", scale: "scale", center: "center" },
         mask_base: Some(0),
-        help: "Translate, scale and rotate about the center: by default the middle of the input layer (its data window).",
+        help: "Translate, scale and rotate about the center: by default the middle of the input layer (its data window). \
+               Motion blur (samples per frame, 0 for off) averages the animated move over the shutter, \
+               Shutter frames long, centered on the frame or starting or ending there.",
     },
     OpInfo {
         name: "blur",
@@ -709,6 +716,9 @@ pub static OPS: &[OpInfo] = &[
             p!("from2", "From 2", ParamKind::Vec2, [512.0, 0.0]),
             p!("from3", "From 3", ParamKind::Vec2, [512.0, 512.0]),
             p!("from4", "From 4", ParamKind::Vec2, [0.0, 512.0]),
+            fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
+            fixed!("shutter", "Shutter", SHUTTER, 0.5),
+            fixed!("shutter_offset", "Shutter offset", ParamKind::Choice(SHUTTER_OFFSETS), "centered"),
             MIX,
         ],
         overlay: Overlay::CornerPin { to: ["to1", "to2", "to3", "to4"], from: ["from1", "from2", "from3", "from4"] },
@@ -716,7 +726,8 @@ pub static OPS: &[OpInfo] = &[
         help: "Warps the image in perspective so the four From points land on the four To \
                points. In the viewer, drag the To corners (solid) or the From corners (dashed). \
                A Tracker with four tracks exports one (To Corner Pin) to pin a layer onto a \
-               moving plane, or to stabilize it.",
+               moving plane, or to stabilize it. \
+               Motion blur (samples per frame, 0 for off) averages the animated warp over the shutter.",
     },
     OpInfo {
         name: "media_out",
@@ -804,7 +815,7 @@ pub fn resolve_params(op: &str, params: &Value, frame: i64) -> Value {
     if op == "tracker" {
         add_reference_tracks(params, &mut resolved);
     }
-    if SHAPE_OP_NAMES.contains(&op) {
+    if MOTION_BLUR_OPS.contains(&op) {
         add_motion_samples(op, map, frame, &mut resolved);
     }
     resolved
@@ -828,7 +839,7 @@ fn resolve_at(op: &str, map: &Map<String, Value>, t: f64) -> Value {
     Value::Object(resolved)
 }
 
-/// For an animated shape with motion blur on, the shape's params at each
+/// For an animated shape or warp with motion blur on, its params at each
 /// sample time across the shutter, as `_motion` (also in the cache key).
 fn add_motion_samples(op: &str, map: &Map<String, Value>, frame: i64, out: &mut Value) {
     let n = out.get("motion_blur").and_then(Value::as_i64).unwrap_or(0);
@@ -880,6 +891,22 @@ pub fn parse<T: for<'de> Deserialize<'de>>(params: &Value, op: &str) -> Result<T
 /// Apply a per-pixel closure across an image in parallel.
 fn map_pixels(img: &mut Image, f: impl Fn(Rgba) -> Rgba + Sync + Send) {
     img.pixels.par_iter_mut().for_each(|p| *p = f(*p));
+}
+
+/// The mean of same-format images (premultiplied, so edges blend right),
+/// over the union of their windows.
+fn average(images: &[Image]) -> Image {
+    let window = images.iter().fold(IRect::default(), |u, img| u.union(&img.window()));
+    let w = 1.0 / images.len().max(1) as f32;
+    generate(images[0].format, window, |x, y| {
+        let mut sum = [0.0; 4];
+        for img in images {
+            for (s, v) in sum.iter_mut().zip(img.at(x, y)) {
+                *s += v * w;
+            }
+        }
+        sum
+    })
 }
 
 /// A copy of `src` with `f` applied to every pixel (see [`pointwise_window`]
@@ -942,7 +969,14 @@ fn generate(format: Size, window: IRect, f: impl Fn(i32, i32) -> Rgba + Sync + S
 /// Evaluate one operator. `inputs` are the already-rendered upstream images,
 /// one per port; an unconnected optional port is `None`.
 pub fn eval(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContext) -> Result<Image> {
-    let out = eval_op(op, params, inputs, ctx)?;
+    let out = match params.get("_motion").and_then(Value::as_array) {
+        // A warp with motion blur: its output at each sample, averaged.
+        Some(samples) if matches!(op, "transform" | "corner_pin") => {
+            let outs = samples.iter().map(|p| eval_op(op, p, inputs, ctx)).collect::<Result<Vec<_>>>()?;
+            average(&outs)
+        }
+        _ => eval_op(op, params, inputs, ctx)?,
+    };
     match info(op).and_then(|i| i.mask_base.map(|b| (b, i.inputs.len() - 1))) {
         Some((base, mask)) => {
             let mix = params.get("mix").and_then(Value::as_f64).unwrap_or(1.0) as f32;
@@ -2036,6 +2070,35 @@ mod tests {
         // Nothing animated: no samples, no blur.
         let still = json!({ "width": 100, "height": 40, "size": [10, 10], "center": [60, 20], "motion_blur": 32 });
         assert!(resolve_params("rectangle", &still, 2).get("_motion").is_none());
+    }
+
+    #[test]
+    fn transform_and_corner_pin_motion_blur_average_the_move() {
+        // A 10×10 square at x 15–25, moved 20 px a frame (40 px at frame 2).
+        let sq = patch(100, 40, 15, 15, 10, 10, [1.0; 4]);
+        let ctx = EvalContext { frame: 2, write_outputs: false };
+        let moving = |x: i64| json!({ "keys": [[0, [0, 0]], [10, [x, 0]]], "interp": "linear" });
+        let pin = |mb: i64| {
+            let corner = |x: f64, y: f64| json!({ "keys": [[0, [x, y]], [10, [x + 200.0, y]]], "interp": "linear" });
+            json!({ "from1": [0, 0], "from2": [100, 0], "from3": [100, 40], "from4": [0, 40],
+                    "to1": corner(0.0, 0.0), "to2": corner(100.0, 0.0), "to3": corner(100.0, 40.0), "to4": corner(0.0, 40.0),
+                    "motion_blur": mb, "shutter": 1.0 })
+        };
+        let run = |op: &str, p: Value| eval(op, &resolve_params(op, &p, 2), &[Some(&sq), None], &ctx).unwrap();
+        let total = |img: &Image| img.flat().pixels.iter().map(|p| p[3]).sum::<f32>();
+        for (op, sharp, blurred) in [
+            ("transform", run("transform", json!({ "translate": moving(200) })), run("transform", json!({ "translate": moving(200), "motion_blur": 32, "shutter": 1.0 }))),
+            ("corner_pin", run("corner_pin", pin(0)), run("corner_pin", pin(32))),
+        ] {
+            // Sharp: the square at x 55–65. Blurred over a frame (20 px):
+            // spread over 45–75, its middle covered half the time, the
+            // total coverage the same.
+            assert!(approx(sharp.at(60, 20)[3], 1.0) && approx(sharp.at(50, 20)[3], 0.0), "{op}");
+            assert!((blurred.at(60, 20)[3] - 0.5).abs() < 0.06, "{op}: {}", blurred.at(60, 20)[3]);
+            assert!(blurred.at(47, 20)[3] > 0.0 && blurred.at(72, 20)[3] > 0.0, "{op}");
+            assert!((total(&blurred) - total(&sharp)).abs() < 2.0, "{op}: {} {}", total(&blurred), total(&sharp));
+            assert!(blurred.window().x0 <= 45 && blurred.window().x1 >= 75, "{op}: {:?}", blurred.window());
+        }
     }
 
     #[test]
