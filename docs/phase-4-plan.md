@@ -183,7 +183,10 @@ then poses of in-between frames by PnP and a final pass).
   mode drawing the scene, the camera path and the point cloud through a
   free orbit camera with the same CPU renderer. *Alternative:* a GPU
   viewport (wgpu, which eframe already ships) early: faster, but a second
-  renderer to keep in step.
+  renderer to keep in step. (2026-10-29: the full M9 spec, with
+  navigation, selection and gizmos, is under "Milestone 9 in detail";
+  it keeps the CPU renderer for textures and draws overlays and gizmos
+  as vectors.)
 - **D6 Order of work** as below, one milestone each, tests green and
   clippy clean at every step.
 
@@ -261,5 +264,128 @@ then poses of in-between frames by PnP and a final pass).
    (`track_camera`, `export_camera`). Test: the synthetic shot through
    the node, then a card placed on a solved point renders locked to the
    plate.
-9. **3D viewport (D5)** and the remaining follow-ups (nodal solve,
-   distortion solve, mask input, motion blur in Scanline Render).
+   **Point placement (added 2026-10-29, user request).** In the viewer,
+   over the Camera Tracker's output or a Scanline Render of its scene,
+   solved points can be selected (click, ⇧-click to add, drag a box) and
+   used to place things at their depth: **Place Card here** (a Card at
+   the selection's centroid, lying on the plane fitted to three or more
+   points, else facing the camera; sized to the selection's spread) and
+   **Place locator** (a point the user can wire to other nodes or link
+   params to). The same through MCP / Python (`place_on_points`). Test: a
+   card placed on solved points renders locked to the plate.
+9. **3D viewport (D5)**, specified below, and the remaining follow-ups
+   (nodal solve, distortion solve, mask input, motion blur in Scanline
+   Render).
+
+## Milestone 9 in detail: the 3D viewport
+
+Specified 2026-10-29 at the user's request; to be built after M8, in a
+later session.
+
+**What it is.** A mode of the existing Viewer panel (a **2D / 3D**
+toggle in the viewer toolbar, and **Tab** to switch) that shows the
+scene of the node being viewed, if it outputs or renders one (Camera,
+Card, Scene, Camera Tracker, Scanline Render: its scene input), from a
+free *viewport camera* that belongs to the viewer, not to the graph.
+Switching back to 2D shows the image as now. The viewport camera is
+saved per project (like the viewer's zoom), not as a node.
+
+**Navigation** (the same buttons as the 2D viewer where they overlap):
+- **Orbit:** Alt + left-drag, or left-drag on empty space in 3D mode
+  (turntable: yaw about world Y, pitch clamped short of the poles).
+- **Pan:** middle-drag, or Alt + middle-drag / ⇧ + Alt + left-drag
+  (moves the orbit center in the view plane).
+- **Zoom (dolly):** scroll / pinch, toward the point under the pointer;
+  Alt + right-drag for a smooth dolly.
+- **F** frames the selection (or everything if nothing is selected);
+  **Home** resets to a default three-quarter view.
+- **Look through a camera:** a menu of the scene's cameras ("Viewport",
+  "camera1", …). Through a camera the view is exactly that camera's
+  (what Scanline Render would draw, with its film-back frame outlined);
+  orbiting leaves it and goes back to the free viewport camera.
+- Orthographic **Top / Front / Side** views from the same menu (numpad
+  7 / 1 / 3), handy for laying cards on a ground plane.
+- A **view cube** (or axis tripod) in a corner shows the orientation;
+  clicking a face snaps to that view.
+
+**What it draws.**
+- Cards textured with their image (the CPU renderer, D5), plus their
+  outlines; a ground grid on world XZ with the axes colored (X red, Y
+  green, Z blue).
+- Cameras as wireframe frusta (film-back aspect, focal length shown by
+  the frustum's depth), the animated camera's **path** as a polyline
+  with frame ticks, and the current frame's camera highlighted.
+- The tracker's **point cloud** as dots, colored by reprojection error
+  (green good → red poor) or by the color sampled from the plate.
+- Locators as small axes.
+- The current frame follows the timeline, so scrubbing moves animated
+  cameras and cards.
+
+**Selection.**
+- Click a card, camera, locator or point to select it; ⇧-click adds or
+  removes; drag a box on empty space to box-select (points and objects
+  whose centers fall inside). **Esc** deselects.
+- Picking is done in screen space: points and object centers projected
+  through the viewport camera, cards by ray-quad intersection with the
+  nearest hit winning, so it stays exact and cheap.
+- Selecting an object in the viewport selects its node in the node graph
+  and shows its params in the Properties panel, and the other way round
+  (one selection model, as the 2D viewer's handles already share).
+- Selected points feed M8's **Place Card here / Place locator**, also
+  offered in the viewport's right-click menu.
+
+**Gizmos** (on the selected object, drawn over the render as vectors so
+they stay crisp and fast):
+- **Move** (W): three axis arrows (drag along one axis), three plane
+  squares (drag in a plane), and the center (drag in the view plane).
+- **Rotate** (E): three axis rings plus an outer view-axis ring; drag a
+  ring to turn about it; ⇧ snaps to 15°.
+- **Scale** (R): axis handles with cubes, center for uniform scale; ⇧
+  keeps proportions.
+- **Local / world** axes toggle; the pivot is the object's origin.
+- Drags edit the node's translate / rotate / scale params, set keys when
+  the param is animated (as 2D handles do), and are one undo step per
+  drag. Linked params (e.g. a Card linked to tracker points) show the
+  gizmo grayed with a tooltip naming the link; Unlink makes them
+  editable.
+- Numeric entry: while dragging, typing a number sets the move, angle or
+  scale exactly (Enter applies), as in common 3D apps.
+
+**How it's built.**
+- A new `src/gui/viewport3d.rs`: the viewport camera (orbit center,
+  yaw, pitch, distance, ortho flag), navigation, picking and gizmo
+  hit-testing; drawing the grid, frusta, paths, points, locators and
+  gizmos with egui's painter, projected through `geom::Camera`.
+- Cards textured by `render3d::render` of the scene through the viewport
+  camera, on the worker thread like other frames, at reduced resolution
+  while the view moves (half, then quarter if a frame takes > 30 ms) and
+  at full resolution once it stops. **D5 stays as proposed (CPU
+  renderer)**; if orbiting large scenes is too slow, a GPU path (wgpu,
+  which eframe ships) for the textured cards is the fallback, with the
+  vector overlays unchanged.
+- Gizmo drags go through `Doc` / `Session` edits, so undo, keys, MCP and
+  the bridge see them like any other param change.
+- MCP / Python: `viewport_set` (camera, view, look-through) and
+  `select_in_viewport` are not needed for scripting (scripts set params
+  directly); the viewport is GUI only.
+
+**Tests.**
+- Picking: a click at a projected point selects that point; ray-card
+  hits pick the nearer of two overlapping cards; box selection.
+- Gizmo maths: a drag along the X arrow changes only translate.x by the
+  dragged distance at the object's depth; rotate rings and snapping;
+  scale about the origin; local vs world axes.
+- Navigation: orbit keeps the orbit center fixed on screen; dolly toward
+  the pointer keeps the point under it fixed; F frames a selection.
+- Look-through: the viewport through camera1 renders exactly like
+  Scanline Render through camera1 (pixel-identical at full resolution).
+- Round trip: a gizmo drag then undo restores the params; on an animated
+  param it sets a key at the current frame.
+- Screenshot checks of the GUI (orbit, gizmos, point cloud, look
+  through) with `ARCLIGHT_SCREENSHOT`.
+
+**Order inside M9:** (a) viewport camera, navigation, grid, frusta and
+points, look-through; (b) picking and shared selection; (c) textured
+cards via the CPU renderer with resolution fallback; (d) move / rotate /
+scale gizmos with keys and undo; (e) camera path, error coloring, view
+cube, ortho views.

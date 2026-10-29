@@ -971,6 +971,12 @@ triangulation/decomposition, 0.3 px noise + 20 % outliers (rotation
 < 0.1°, direction < 2°, points < 1 % after scaling), initial pair waits
 for parallax and refuses a pure pan.
 Next: M7, incremental solve + bundle adjustment.
+M8 now also includes **point placement** (select solved points → Place
+Card here / Place locator; MCP/Python `place_on_points`), user request.
+**M9, the 3D viewport, is specified** in `docs/phase-4-plan.md`
+("Milestone 9 in detail": orbit/pan/dolly, look-through, ortho views,
+picking and shared selection, move/rotate/scale gizmos, point cloud and
+camera path); it's for a later session.
 
 - 3D needs a scene system first: Camera (focal length, film back, transform,
   animatable), Card / geometry nodes, a Scene node, and a **scanline renderer**
