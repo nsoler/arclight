@@ -11,6 +11,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.41 — 2026-10-29
+
+- Particle node definitions and lazy particle streams
+  (`src/particle_nodes.rs`): Emitter, Gravity, Wind, Turbulence,
+  Attractor, Vortex, Bounce, Kill, Speed Limit, Particle Render and
+  Particles 2D, simulated only where drawn; not in the node menu yet
+  (M13).
+
 ## 0.9.40 — 2026-10-29
 
 - **Shadows:** lights gain **Cast shadows** (off by default, so old

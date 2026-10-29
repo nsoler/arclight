@@ -38,8 +38,7 @@ done, M12 lights and M13 particles specified), `docs/help.md` (the in-app help) 
   param sampling via an Evaluator snapshot (keys, links, expressions
   work at every frame), Scanline Render growable inputs (`ops::port`,
   doc.rs keeps one spare port), particles drawn as dots in the viewport
-  (capped). **Order:** (A) `particle_nodes.rs` alone (in progress at
-  this update, uncommitted in the tree with its lib.rs line); (B) hooks
+  (capped). **Order:** (A) `particle_nodes.rs` alone (done, 0.9.41); (B) hooks
   in graph.rs, scene.rs, render3d.rs, gui/doc.rs, gui/node_editor.rs,
   gui/viewport3d.rs (while 3DWorker is in ops.rs), then ops.rs hooks
   after the Light 2D node is committed; (C) MCP `particles(node, frame)`
@@ -187,7 +186,10 @@ done, M12 lights and M13 particles specified), `docs/help.md` (the in-app help) 
   `shade::light_shadowed` / `shade_shadowed`. **Use `scene::Model::new`
   (+ `.flags(params)`) and `scene::Card::new`** instead of struct
   literals. Cost: soft spot + 6×6 area shadowed 1.8 s vs 0.5 s (960×540).
-  - Next version: **0.9.41**. Both workers (mathwiz, worker3d) were
+  0.9.41 (MathWiz) M13 (A): `src/particle_nodes.rs` (`OPS`, `ParticleStream`,
+  `ParticleState`, `eval(op, Context {own: params at any frame, ...})`,
+  `world_mesh`); ports typed `STREAM = Kind::Scene` until the ops hook.
+  - Next version: **0.9.42**. Both workers (mathwiz, worker3d) were
     idle at the end of session 10; nothing uncommitted. (CHANGELOG has one entry per version.)
 - Mac: also ask whether anyone tried an Intel Mac. Mac-only bugs come
   first.
@@ -399,7 +401,7 @@ done, M12 lights and M13 particles specified), `docs/help.md` (the in-app help) 
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.40**.
+  in the same commit as the change. Current: **0.9.41**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.
