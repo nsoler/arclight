@@ -11,6 +11,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.28 — 2026-10-29
+
+- **File ▸ Project Settings…** (⇧⌘P / Ctrl+Shift+P): set the project's
+  frame size, frame rate and frame range from presets (HD, UHD, 2K / 4K
+  DCI, 720p, 2K Full Aperture, PAL, NTSC, square, vertical; 23.976 to
+  60 fps) or by hand, or **Match media** to the selected Media In or
+  Read; Apply is one undo step.
+
 ## 0.9.27 — 2026-10-29
 
 - Motion vectors: Scanline Render's **motion** pass (`motion.u` /

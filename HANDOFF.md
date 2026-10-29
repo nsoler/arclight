@@ -88,10 +88,17 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
     - 0.9.27 (3DWorker) (e): `motion` pass (`render_motion`, next-frame
       scene + camera via `Evaluator.next`, keys mixed in;
       `ops::needs_next_frame`, `scanline_render_next`). **M10 done.**
+- **Session 10, after M10 (user requests, release when all land):**
+  (1) Fit to project on Read / Media In (3DWorker); (2) Project Settings
+  window — 0.9.28 (MathWiz, `src/gui/project_settings.rs`, File menu,
+  ⇧⌘P); (3) 3D camera setup on wires (selectable wires, right-click
+  "Insert 3D Camera Setup", backdrop, first-time switch to 3D view and a
+  glowing 2D|3D toggle) (3DWorker, after (1)). Help lines for Project
+  Settings are with 3DWorker (holds help.md).
   - **Left over from M10:** the viewport's solid view is headlit (not
     lit by scene lights); Area light has engine support (`shade.rs`) but
     no node (M12); shadows (M12); true ortho texture path (M9).
-  - Next version: **0.9.28**. (CHANGELOG has one entry per version.)
+  - Next version: **0.9.29**. (CHANGELOG has one entry per version.)
 - **Ask the user first** how the Mac builds (v0.9.27 universal DMG) went
   on their M4 Pro, and whether anyone tried an Intel Mac. Mac-only bugs
   come first.
@@ -302,7 +309,7 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.27**.
+  in the same commit as the change. Current: **0.9.28**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

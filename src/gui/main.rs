@@ -11,6 +11,7 @@ mod gizmo3d;
 mod help;
 mod node_editor;
 mod overlay;
+mod project_settings;
 mod properties;
 mod script_jobs;
 mod transport;
@@ -50,6 +51,7 @@ const NODE_BROWSER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::SHIFT, K
 const SELECT_ALL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::A);
 const GROUP: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::G);
 const UNGROUP: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::G);
+const PROJECT_SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::P);
 
 fn main() -> eframe::Result {
     arclight::plugin::init();
@@ -128,6 +130,8 @@ struct App {
     about: bool,
     /// Help > Arclight Help (F1).
     help: help::Help,
+    /// File ▸ Project Settings…
+    project_settings: project_settings::ProjectSettings,
     /// The window icon as a texture, for the About dialog (made on first use).
     /// and the part of it with artwork (UV), its transparent border cut off.
     logo: Option<(egui::TextureHandle, egui::Rect)>,
@@ -168,6 +172,7 @@ impl App {
             closing: false,
             about: false,
             help: help::Help::default(),
+            project_settings: Default::default(),
             logo: None,
         }
     }
@@ -312,6 +317,7 @@ impl App {
         self.curves = CurveEditor::default();
         self.viewer.fit();
         self.props = Properties::default();
+        self.project_settings.cancel();
         self.requested = None;
     }
 
@@ -421,6 +427,9 @@ impl App {
         }
         if ctx.input_mut(|i| i.consume_shortcut(&NEW)) {
             self.new_doc();
+        }
+        if ctx.input_mut(|i| i.consume_shortcut(&PROJECT_SETTINGS)) {
+            self.project_settings.open(&self.doc);
         }
         if ctx.text_edit_focused() {
             // Let the focused text field use ⌘Z for its own text undo.
@@ -718,6 +727,10 @@ impl App {
                         self.doc.selected = Some(id);
                     }
                 }
+                if ui.add(egui::Button::new("Project Settings…").shortcut_text(ui.ctx().format_shortcut(&PROJECT_SETTINGS))).clicked() {
+                    ui.close();
+                    self.project_settings.open(&self.doc);
+                }
                 ui.separator();
                 if ui.add(egui::Button::new("Save").shortcut_text(ui.ctx().format_shortcut(&SAVE))).clicked() {
                     ui.close();
@@ -846,6 +859,7 @@ impl eframe::App for App {
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         self.about_dialog(&ctx);
         self.help.ui(&ctx);
+        self.project_settings.ui(&ctx, &mut self.doc);
         egui::Panel::right("properties")
             .default_size(380.0)
             .min_size(280.0)
