@@ -1,6 +1,6 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-28 (session 5). Read this, then `README.md`
+Last updated 2026-10-28 (end of session 5). Read this, then `README.md`
 (user-facing features, file format, shortcuts, scripting) and
 `docs/spec-coverage.md` (what the planning docs ask for vs. what exists).
 
@@ -16,19 +16,23 @@ Last updated 2026-10-28 (session 5). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~12,300 lines of Rust + Python. Tests: 64 library + 10 CLI + 25 GUI
+- ~13,300 lines of Rust + Python. Tests: 64 library + 10 CLI + 25 GUI
   (`cargo test --release`) and 8 Python (see "Working tips"), all passing.
   Clippy is clean apart from two old style lints (`Graph::from_str` name,
   `chunks_exact_mut(4)` in media.rs).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
   (Rectangle, Ellipse, Polygon, Roto), Transform layer dragging in the viewer,
-  and Phase 3's 2D Tracker (NCC with rotation/scale, match-move, stabilize,
-  export to a keyed Transform or Corner Pin).
-  Session 4: MCP server, Python `arclt` module, live GUI scripting bridge,
-  native plugin host, XDG config (from the planning docs).
-- **Not done:** Phase 0.6 (bounding boxes / format), tracker follow-ups,
-  Phase 2 extras, Phase 4 (3D), session-4 follow-ups. See "Next steps".
+  and Phase 3's 2D Tracker. Session 4: MCP server, Python `arclt` module,
+  live GUI scripting bridge, native plugin host, XDG config (from the
+  planning docs). Session 5 finished the tracker follow-ups: export to a
+  keyed Transform or a new Corner Pin node, one-track rotation/scale, boxes
+  drawn through the tracker's output, match scores (weak frames on the
+  path, timeline and panel), clear keys before/after, per-track box sizes,
+  offset points. See "Progress log".
+- **Not done:** Phase 2 extras for Roto/Polygon (next), Phase 0.6
+  (bounding boxes / format), small UX debts, session-4 follow-ups,
+  Phase 4 (3D). See "Next steps".
 - Development is on Linux (Omarchy/Hyprland): use `sed -i` (not
   `sed -i ''`); ffmpeg/ffprobe are in `/usr/bin`. Hyprland tiles the window
   narrower than its 1600 px default, so screenshots come out ~920–1030 px
@@ -56,10 +60,45 @@ node names and panel layouts. The goal is comparable *capability*, not a clone.
 
 The user's overall goal is a full compositing toolkit: 2D/3D trackers, masks,
 roto, shapes, channel tools, switches, now also scriptable and extensible
-as the planning docs describe. Ask which of these to take next; in rough
-order of value:
+as the planning docs describe. The user has been saying "continue with next
+steps": take them in this order, one milestone at a time (commit, push and
+fast-forward `main` after each, per the standing instruction above), and
+report back after a few milestones.
 
-0. **Session-4 follow-ups** (small to medium):
+1. **Phase 2 extras for Roto/Polygon** (next; medium). All in
+   `gui/overlay.rs` (`Geo::Points`, `Overlays::points` = the selected
+   vertex indices, `press` / `apply` / `draw`) plus shortcuts in
+   `gui/main.rs`:
+   - **Box-select vertices:** dragging on empty viewer space with a
+     Roto/Polygon selected currently pans (`viewer.rs`: pan unless
+     `overlays.dragging()`). Make a drag that starts off the shape (and
+     off any handle) draw a selection rectangle instead, Shift adding to
+     the selection; keep middle-drag panning. The curve editor already has
+     box select (`curve_editor.rs`) to borrow the feel from.
+   - **Select all:** Ctrl+A in the viewer selects every vertex of the
+     selected shape (check it doesn't clash with other Ctrl+A uses; skip
+     while a text field has focus).
+   - **Transform box:** with 2+ vertices selected, draw their bounding box
+     with corner/edge scale handles, a rotate handle and a center to move.
+     Apply through `anim::edit_all`-style edits at the current frame
+     (positions and, on splines, tangent offsets: rotate and scale those
+     too, but don't translate them). Shift = uniform scale / 15° snaps,
+     like the Transform gizmo.
+   - Tests in `overlay.rs` (`gesture` / `drag` helpers) for each.
+   - Motion blur for shapes: later.
+2. **Phase 0.6 bounding boxes / format** (large, foundational). Images are
+   always full frame from origin 0,0. Overlays assume a node's input is
+   the viewed image's size (Transform's pivot and layer frame, Tracker
+   boxes, the Transform export's pivot), which is wrong for a smaller layer
+   over a bigger background. Also matters for performance and Crop/Reformat
+   semantics. Plan it before starting (data model in `image.rs`, every op,
+   overlays, media I/O).
+3. **Small UX debts:** viewer toolbar overlap at narrow widths; no warning
+   when closing the window with unsaved changes; Corner Pin's default
+   From/To is a 512 square (add "From = image corners"); per-track tracker
+   box sizes and offsets are only editable in the viewer; no filtering when
+   Transform / Tracker output / Corner Pin shrink the image (aliasing).
+4. **Session-4 follow-ups** (small to medium):
    - Python plugins (custom ops written in Python): embed Python in the
      host via the `python/` crate, or run them out of process.
    - Plugin process isolation: a crashing native plugin kills the app.
@@ -68,22 +107,8 @@ order of value:
    - Not planned: OpenFX hosting (large; its own project), licensing (the
      docs wanted another product's scheme copied; declined), `import_nuke`
      (originality rule).
-
-1. **Tracker follow-ups:** the session-4 list is done. Possible later:
-   per-track box sizes and offsets in the panel (viewer-only now); a
-   "From = image corners" button on Corner Pin; filtering for warps that
-   shrink the image (Transform, Tracker output, Corner Pin).
-2. **Phase 2 extras for Roto/Polygon:** box-select of vertices, select all
-   (Ctrl+A in the viewer), move/scale/rotate a whole shape (a transform box
-   around the selection), motion blur later.
-3. **Phase 0.6 bounding boxes / format.** Images are always full frame from
-   origin 0,0. Overlays assume a node's input is the viewed image's size
-   (Transform's pivot and layer frame, Tracker boxes), which is wrong for a
-   smaller layer placed over a bigger background. Also matters for
-   performance and Crop/Reformat semantics.
-4. **Small UX debts:** viewer toolbar overlap at narrow widths; no warning
-   when closing the window with unsaved changes.
-5. **Phase 4: 3D** — plan separately (see below).
+5. **Phase 4: 3D** — plan separately (see below). A 3D camera tracker
+   would build on the 2D tracker.
 
 ## Session 4: automation, plugins, Python
 
@@ -196,7 +221,7 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   is usable and both warps are known; two or more tracks still solve from
   positions. Dragging a box keys only its position (the warp curve
   interpolates).
-- **Session 5, part 3**: Corner Pin. Op `corner_pin` (`to1..4`, `from1..4`,
+- **Session 5, part 3** (`86a33c0`): Corner Pin. Op `corner_pin` (`to1..4`, `from1..4`,
   mask/mix) warps by `track::homography(to, from)` (8×8 elimination; sign
   fixed so w > 0 near the source points; `None` for three collinear) and
   `track::project` (`None` past the horizon → transparent). Overlay kind
@@ -211,7 +236,7 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   warp shrinks the image (aliasing, same as Transform); the default
   From/To is a 512 square, so a hand-made Corner Pin on another size needs
   its From corners set (a "From = image corners" button would help).
-- **Session 5, part 4**: Tracker boxes follow its shown output. `Xf` has
+- **Session 5, part 4** (`d08e081`): Tracker boxes follow its shown output. `Xf` has
   an optional `warp` (overlay points → shown image), set by
   `Xf::for_node` when the selected Tracker is what the viewer shows
   (`Doc::viewed`) and its output is match-move/stabilize
@@ -219,7 +244,7 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   through the mapping frozen at press (`Drag::xf`), since moving a track
   changes the solve. Boxes show turned/scaled through it; the hit test
   uses `in_quad`.
-- **Session 5, part 5**: match scores and clearing keys. `track()` now
+- **Session 5, part 5** (`2025115`): match scores and clearing keys. `track()` now
   reports a `Step { pos, warps, scores }` per frame; the GUI keys
   `track<i>_score` (hidden, like `_warp`). `track::weakest` /
   `weak_below(min_score)` (halfway to 1) drive the panel's "Weakest match"
@@ -227,17 +252,17 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   removes enabled tracks' position/warp/score keys before/after the
   current frame (`anim::remove_keys`, which holds the value when no key
   is left).
-- **Session 5, part 6**: per-track box sizes. Hidden `track<i>_pattern` /
+- **Session 5, part 6** (`638d642`): per-track box sizes. Hidden `track<i>_pattern` /
   `track<i>_search` override the shared sizes (`track::box_sizes`;
   `Settings::sizes`, `radii(i)`). Dragging a box corner sizes that track;
   Shift+drag sets the shared size and drops every override
   (`Doc::remove_param`). The panel's Pattern/Search size fields only reach
   tracks without their own size (no per-track fields in the panel).
-- **Session 5, part 7**: weak frames on the timeline. `track::weak_frames`
+- **Session 5, part 7** (`9657b6a`): weak frames on the timeline. `track::weak_frames`
   (built on the private `scores`, shared with `weakest`) feeds a new `weak`
   argument of `Transport::ui`, drawn as an orange band behind the key
   diamonds while a Tracker is selected.
-- **Session 5, part 8**: offset points. Hidden `track<i>_offset` (static
+- **Session 5, part 8** (`23f6c48`): offset points. Hidden `track<i>_offset` (static
   Vec2, `track::offsets`; `Settings::offsets`) puts a track's boxes away
   from its point. `track()` follows the feature at point + offset and
   reports point = feature − W·offset, W being the run's warp so far (the
@@ -344,6 +369,19 @@ plain `cargo build` builds only the root crate):
   `translate, rotate, scale`), `output` (`input` / `match-move` /
   `stabilize`), `solve` (what the output transform contains), and
   `reference_frame` (where the output is identity).
+- **Hidden per-track params** (outside the op's spec, so not in the panel
+  or curve editor, and with no default): `track<i>_warp` ([degrees,
+  scale], keyed by runs that follow rotation), `track<i>_score` (match
+  correlation per tracked frame), `track<i>_pattern` / `track<i>_search`
+  (own box sizes), `track<i>_offset` (static; boxes away from the point).
+  Read them with `track::warps` / `weakest` / `weak_frames` / `box_sizes`
+  / `offsets`; `resolve_params` passes them through, and adds `ref<i>` /
+  `refwarp<i>` (values at the reference frame).
+- **Solving / output:** `track::solved(params, frame)` (reference → frame),
+  `output_map` (what the output shows: solved, inverse, or none),
+  `solve_tracks` (one track with warps → its own turn/scale; else the
+  least-squares similarity). Exports: `track::export(graph, node, op,
+  stabilize)` → `transform_params` or `corner_pin_params`.
 - **Matching** (`track::find`): the *target* window is sampled through the
   track's current `Warp` (`Luma::window(c, r, &Mat)`), so the first-frame
   pattern keeps matching a turning or growing feature. Steps: integer NCC
@@ -411,8 +449,15 @@ rather than the viewed image's (Transform pivot/frame, Tracker boxes).
   curve-key and tangent dragging, box select, roto tangent editing, the
   Transform layer frame, tracker box dragging. Worth a manual pass.
 - Overlays assume the node's input is the viewed image's size (no bbox).
-- Tracker boxes are drawn in input coordinates even over a
-  match-moved/stabilized output.
+- Session 5's tracker features were checked with unit tests and
+  screenshots of synthetic scenes, not on real footage or by hand: weak
+  frames have only been seen with hand-keyed scores; Ctrl-drag offsets,
+  per-track box sizing and drags over a match-moved output haven't been
+  tried with a mouse.
+- Hidden tracker params (sizes, offsets) can't be seen or typed in the
+  panel; only the viewer shows them.
+- Corner Pin and every other warp sample bilinearly with no filtering, so
+  strong shrinking aliases.
 - Viewer toolbar text overlaps when the window is narrow.
 - First frame after launch takes ~1.5 s (ffprobe + ffmpeg start); later
   frames are ~5 ms for the starter graph.
