@@ -104,6 +104,8 @@ struct App {
     bridge: Option<bridge::Server>,
     /// Bridged renders running on worker threads.
     scripts: ScriptJobs,
+    /// Unsaved changes were dealt with; let the next close request through.
+    closing: bool,
 }
 
 impl App {
@@ -138,6 +140,7 @@ impl App {
             }),
             bridge,
             scripts: ScriptJobs::default(),
+            closing: false,
         }
     }
 
@@ -293,6 +296,36 @@ impl App {
                 .set_buttons(MessageButtons::YesNo)
                 .show()
                 == MessageDialogResult::Yes
+    }
+
+    /// On a close request with unsaved changes, ask whether to save them
+    /// first; Cancel (or a cancelled save) keeps the window open.
+    fn handle_close(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|i| i.viewport().close_requested()) || self.closing || !self.doc.dirty {
+            return;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        let (save, discard) = ("Save".to_string(), "Don't Save".to_string());
+        let answer = MessageDialog::new()
+            .set_title("Unsaved changes")
+            .set_description("Save changes to this project before closing?")
+            .set_buttons(MessageButtons::YesNoCancelCustom(save.clone(), discard.clone(), "Cancel".into()))
+            .show();
+        let save_first = match answer {
+            MessageDialogResult::Yes => true,
+            MessageDialogResult::Custom(c) if c == save => true,
+            MessageDialogResult::No => false,
+            MessageDialogResult::Custom(c) if c == discard => false,
+            _ => return,
+        };
+        if save_first {
+            self.save(false);
+            if self.doc.dirty {
+                return;
+            }
+        }
+        self.closing = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
     fn new_doc(&mut self) {
@@ -659,6 +692,7 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.handle_close(&ctx);
         self.handle_bridge(&ctx);
         self.handle_drops(&ctx);
         self.shortcuts(&ctx);

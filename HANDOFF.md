@@ -79,8 +79,7 @@ steps": take them in this order, one milestone at a time (commit, push and
 fast-forward `main` after each, per the standing instruction above), and
 report back after a few milestones.
 
-1. **Small UX debts:** viewer toolbar overlap at narrow widths; no warning
-   when closing the window with unsaved changes; Corner Pin's default
+1. **Small UX debts:** viewer toolbar overlap at narrow widths; Corner Pin's default
    From/To is a 512 square (add "From = image corners"); per-track tracker
    box sizes and offsets are only editable in the viewer; no filtering when
    Transform / Tracker output / Corner Pin shrink the image (aliasing);
@@ -356,6 +355,11 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   wire's source into A, the dragged node into B, the Merge into the old
   port; refused on a cycle. Dragging a node *body* onto a wire still
   splices it (`insert_on_wire`).
+- **Session 7, part 2**: closing the window with unsaved changes asks
+  Save / Don't Save / Cancel (`App::handle_close`: `CancelClose`, rfd
+  dialog, then `Close` with `closing` set so the next request passes).
+  Checked on Hyprland by dirtying a window over the bridge and closing it
+  with `hyprctl dispatch "hl.dsp.window.close({ window = 'pid:<pid>' })"`.
 
 ## Architecture in one page
 
@@ -549,7 +553,6 @@ windows exist.
 - Viewer toolbar text overlaps when the window is narrow.
 - First frame after launch takes ~1.5 s (ffprobe + ffmpeg start); later
   frames are ~5 ms for the starter graph.
-- Closing the window with unsaved changes doesn't warn (New/Open do).
 - Viewer display conversion is on the CPU (rayon); fine to ~4K.
 - Video decode is sequential-friendly: playing backward re-seeks every frame
   (slow for long-GOP files; the frame cache hides it on second pass).
