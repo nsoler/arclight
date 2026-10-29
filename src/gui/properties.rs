@@ -56,6 +56,20 @@ const READ_EXTS: &[&str] = &[
 /// …and to write.
 const WRITE_EXTS: &[&str] = &["exr", "dpx", "tif", "tiff", "tga", "png", "jpg", "webp", "mp4", "mov"];
 
+/// Names offered for text param `name` of `op`: a Shuffle's layers (In,
+/// Out, Remove) or channels (Red … Alpha from), as render passes name them.
+fn text_suggestions(op: &str, name: &str) -> &'static [&'static str] {
+    const LAYERS: &[&str] = &["rgba", "P", "N", "uv", "motion", "depth", "id", "diffuse", "specular", "emission", "ambient"];
+    const REMOVE: &[&str] = &["*", "P", "N", "uv", "motion", "depth", "id", "diffuse", "specular", "emission", "ambient"];
+    const CHANNELS: &[&str] = &["R", "G", "B", "A", "0", "1", "P.x", "P.y", "P.z", "N.x", "N.y", "N.z", "uv.u", "uv.v", "motion.u", "motion.v", "depth", "id"];
+    match (op, name) {
+        ("shuffle", "in" | "out") => LAYERS,
+        ("shuffle", "remove") => REMOVE,
+        ("shuffle", _) => CHANNELS,
+        _ => &[],
+    }
+}
+
 #[derive(Default)]
 pub struct Properties {
     open: Vec<String>,
@@ -80,6 +94,10 @@ pub struct Properties {
     /// Formulas being typed, by node and param (applied on Enter or when
     /// the field loses focus, if they parse).
     formula_edit: HashMap<(String, String), String>,
+    /// Text params being typed (a Shuffle's plane names), by node and param:
+    /// applied on Enter or when the field loses focus, so a half-typed name
+    /// isn't evaluated.
+    text_edit: HashMap<(String, String), String>,
     /// The highlighted completion under the formula being typed.
     formula_pick: usize,
     /// Where the completion list was drawn last frame: a click there
@@ -101,6 +119,7 @@ impl Properties {
     pub fn invalidate(&mut self) {
         self.name_edit.clear();
         self.formula_edit.clear();
+        self.text_edit.clear();
         self.media_info.clear();
         self.name_error = None;
     }
@@ -577,6 +596,28 @@ impl Properties {
                         }
                     });
                 (chosen != current).then(|| json!(chosen))
+            }
+            ParamKind::Text => {
+                let key = (id.to_string(), spec.name.to_string());
+                let current = value.as_str().unwrap_or("").to_string();
+                let mut buf = self.text_edit.remove(&key).unwrap_or_else(|| current.clone());
+                let mut out = None;
+                ui.horizontal(|ui| {
+                    let resp = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(150.0));
+                    if resp.has_focus() {
+                        self.text_edit.insert(key.clone(), buf.clone());
+                    } else if resp.lost_focus() && buf != current {
+                        out = Some(json!(buf.trim()));
+                    }
+                    egui::ComboBox::from_id_salt(("text", id, spec.name)).selected_text("").width(20.0).show_ui(ui, |ui| {
+                        for o in text_suggestions(op, spec.name) {
+                            if ui.selectable_label(*o == current, *o).clicked() {
+                                out = Some(json!(o));
+                            }
+                        }
+                    });
+                });
+                out
             }
             ParamKind::Path { save } => {
                 let mut s = value.as_str().unwrap_or("").to_string();

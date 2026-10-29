@@ -578,6 +578,7 @@ pub fn validate_param(info: &OpInfo, name: &str, value: &Value) -> Result<Value>
             value.clone()
         }
         ParamKind::Path { .. } => json!(value.as_str().ok_or_else(|| anyhow!("'{name}' needs a file path"))?),
+        ParamKind::Text => json!(value.as_str().ok_or_else(|| anyhow!("'{name}' needs text"))?),
         ParamKind::Bool => json!(value.as_bool().ok_or_else(|| anyhow!("'{name}' needs true or false"))?),
         ParamKind::Points { stride } => {
             let arr = value.as_array().ok_or_else(|| anyhow!("'{name}' needs an array of numbers"))?;
@@ -604,6 +605,7 @@ pub fn op_schema(info: &OpInfo) -> Value {
                 ParamKind::Color => ("color", json!({"note": "straight linear RGBA"})),
                 ParamKind::Choice(c) => ("choice", json!({"choices": c})),
                 ParamKind::Path { save } => ("path", json!({"save": save})),
+                ParamKind::Text => ("text", json!({})),
                 ParamKind::Bool => ("bool", json!({})),
                 ParamKind::Points { stride } => ("points", json!({"stride": stride})),
             };
@@ -671,6 +673,8 @@ pub fn image_stats(img: &Image) -> Value {
         "min_rgba": if img.pixels.is_empty() { [0.0; 4] } else { lo.map(|x| round(x as f64)) },
         "max_rgba": if img.pixels.is_empty() { [0.0; 4] } else { hi.map(|x| round(x as f64)) },
         "planes": img.plane_stats(),
+        // The passes, grouped: [{name: "P", planes: ["P.x", "P.y", "P.z"]}, ...].
+        "layers": orig.layers().into_iter().map(|(name, planes)| json!({"name": name, "planes": planes})).collect::<Vec<_>>(),
         "scene": orig.scene.as_ref().map(|s| s.describe()),
     })
 }
@@ -700,6 +704,22 @@ mod tests {
         assert!((s.render(&m, 1).unwrap().get(0, 0)[0] - 1.0).abs() < 1e-6);
         assert!(s.redo());
         assert!((s.render(&m, 1).unwrap().get(0, 0)[1] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn text_params_and_layers_in_stats() {
+        let mut s = Session::default();
+        let c = s.create_node("constant", None, &Map::new(), &[]).unwrap();
+        let sh = s.create_node("shuffle", None, &Map::new(), std::slice::from_ref(&c)).unwrap();
+        assert!(s.set_params(&sh, &map(json!({"in": "N", "green": "N.y"}))).is_ok());
+        assert!(s.set_params(&sh, &map(json!({"in": 3}))).unwrap_err().to_string().contains("needs text"));
+        let schema = op_schema(ops::info("shuffle").unwrap());
+        assert_eq!(schema["params"][0]["kind"], "text");
+        let mut img = Image::new(2, 1);
+        for p in ["N.y", "depth", "N.x"] {
+            *img.plane_mut(p) = vec![0.0; 2];
+        }
+        assert_eq!(image_stats(&img)["layers"], json!([{"name": "N", "planes": ["N.x", "N.y"]}, {"name": "depth", "planes": ["depth"]}]));
     }
 
     #[test]

@@ -11,6 +11,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.20 — 2026-10-29
+
+- **Shuffle** node: brings a render pass into the color (to grade, blur
+  or key it), takes channels from any pass, writes the color back into a
+  pass, and removes passes. Pass names are typed (a new text param kind,
+  applied on Enter) or picked from a ▾ list.
+- Merge: **zmerge** combines two renders by depth, the nearer in front.
+- Image stats (MCP / Python) list the passes as layers.
+- Memory use counts 3D meshes (M10 steps b, e).
+
 ## 0.9.19 — 2026-10-29
 
 - 3D objects: **Cube, Sphere, Cylinder** and **Plane** nodes (with a

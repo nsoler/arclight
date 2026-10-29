@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.9.19** (alpha); see `CHANGELOG.md`.
+Version **0.9.20** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -259,7 +259,8 @@ result is blended back toward the main input (B for merge/keymix) by
 | `clamp` | 1 + mask | `min`, `max`, `channels` | alpha always kept in 0–1 |
 | `premult` / `unpremult` | 1 | — | color × alpha / color ÷ alpha |
 | `channel_select` | A, B (optional) | `red`, `green`, `blue`, `alpha` | each from `A red` … `B alpha`, `zero`, `one` |
-| `merge` | A, B + mask | `operation` | `over`, `under`, `add`, `multiply`, `screen`, `min`, `max`; outside the mask = B |
+| `shuffle` | 1 | `in`, `red`, `green`, `blue`, `alpha`, `out`, `remove` | moves render passes: `in` brings a pass (`P`, `N`, `depth`, `matte.<node>`, `diffuse`, …) into RGBA; each channel then from `R`/`G`/`B`/`A`, any plane (`N.y`) or `0`/`1`; `out` writes the result into a named pass instead (the color kept); `remove` drops passes (comma- or space-separated, `*` for all) |
+| `merge` | A, B + mask | `operation` | `over`, `under`, `add`, `multiply`, `screen`, `min`, `max`, `zmerge` (by the inputs' `depth` passes: the nearer over the farther at each pixel, soft edges blended, A in front on a tie, other passes carried); outside the mask = B |
 | `keymix` | A, B + mask | — | A where mask alpha is 1, B where 0 |
 | `keyer` | input, clean plate (opt) + mask | `screen` (color, or null = estimated from the image), `balance`, `clip_black`, `clip_white`, `despill`, `shrink_grow` (px, negative shrinks), `softness` (px the matte's edge blurs over), `output` (`keyed`/`matte`/`despill only`) | green/blue screen color-difference key with despill; a clean plate gives a per-pixel screen color |
 | `dissolve` | A, B | `amount` | cross-fade A → B |
@@ -274,7 +275,7 @@ result is blended back toward the main input (B for merge/keymix) by
 | `polygon` | background (optional) | `points` [x0,y0, x1,y1, …], `fill_rule` (`non-zero`/`even-odd`), + shape params | the whole point list animates as one value |
 | `roto` | background (optional) | `points` [x, y, in dx, in dy, out dx, out dy, …], `fill_rule`, + shape params | one closed bezier; handles are offsets from their vertex, so moving a vertex carries them; the whole list animates as one value |
 | `tracker` | 1 | `track1`–`track4` [2] + `track<i>_on`, `pattern`, `search` (box sizes, px), `min_score`, `update` (`first frame`/`every frame`), `motion` (`translate`/`translate, rotate`/`translate, rotate, scale`: what the matcher follows besides position), `output` (`input`/`match-move`/`stabilize`), `solve` (`translate`/`translate, rotate`/`translate, rotate, scale`), `reference_frame` | the panel's Track buttons key each track's position per frame (and, when Track motion follows rotation, its turn and growth in `track<i>_warp` = [degrees, scale], so one track can solve rotation and scale) (NCC on luminance, sub-pixel); the output applies or removes the motion relative to the reference frame; **To Transform: Match-move / Stabilize** adds a Transform keyed with that motion on every tracked frame, to move another layer with the shot (or steady it); with all four tracks on, **To Corner Pin** adds a Corner Pin that follows them in perspective; `motion_blur`, `shutter`, `shutter_offset` blur the match-move/stabilize output over the shutter, as for Transform |
-| `write` | 1 | `path` | `.exr` = float; others = 8-bit sRGB |
+| `write` | 1 | `path` | `.exr` = float, with every render pass as a layer (`depth.Z`, `P.x`, `N.x`, `uv.u`, `motion.u`, `matte.<node>.A`, `diffuse.R`, …), read back by name; others = 8-bit sRGB, the color only |
 | `media_out` | 1 | `path`, `first_frame`, `last_frame`, `fps`, `dpx` (DPX encoding), `codec` (`auto`/`H.264 8-bit`/`HEVC 10-bit`/`ProRes 422 HQ 10-bit`/`ProRes 4444 + alpha`) | renders a range to a sequence or a video; `auto` = ProRes 422 HQ for `.mov`, H.264 otherwise; ProRes needs `.mov`/`.mkv`; the 10-bit codecs are fed 16-bit frames, ProRes 4444 keeps alpha |
 | `viewer` | 1 | — | pass-through; marks what the GUI viewer shows |
 | `camera` | 0 | `focal` (mm), `film_back` [2] (mm), `translate`/`rotate`/`scale` [3], `near`, `far` | 3D: outputs a scene holding a camera (right-handed, Y up, looking down −Z; rotate in degrees, X then Y then Z) |

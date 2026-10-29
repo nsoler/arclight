@@ -107,6 +107,8 @@ pub enum ParamKind {
     Choice(&'static [&'static str]),
     /// A file path. `save` picks a save dialog rather than an open dialog.
     Path { save: bool },
+    /// Free text (a Shuffle's plane names).
+    Text,
     Bool,
     /// A flat array of point data, `stride` numbers per point (x, y first).
     /// Animates as a whole: one key holds every point.
@@ -207,7 +209,7 @@ pub struct OpInfo {
     pub help: &'static str,
 }
 
-const MERGE_OPS: &[&str] = &["over", "under", "add", "multiply", "screen", "min", "max"];
+const MERGE_OPS: &[&str] = &["over", "under", "add", "multiply", "screen", "min", "max", "zmerge"];
 
 macro_rules! p {
     ($name:literal, $label:literal, $kind:expr, $default:expr) => {
@@ -412,7 +414,9 @@ pub static OPS: &[OpInfo] = &[
         overlay: Overlay::None,
         mask_base: Some(1),
         help: "Combines A (foreground) with B (background). The mask limits \
-               where A is combined; outside it the output is B.",
+               where A is combined; outside it the output is B. zmerge combines by the \
+               inputs' depth passes: at each pixel the nearer goes over the farther \
+               (A in front where they tie), soft edges blended, the other passes carried.",
     },
     OpInfo {
         name: "transform",
@@ -565,6 +569,28 @@ pub static OPS: &[OpInfo] = &[
         help: "Builds each output channel from any channel of A or B, or a \
                constant. Copies values as stored (premultiplied). Alpha from B \
                copies a matte across; follow with Premultiply if A's color was straight.",
+    },
+    OpInfo {
+        name: "shuffle",
+        label: "Shuffle",
+        category: Category::Channel,
+        inputs: &[IN],
+        params: &[
+            fixed!("in", "In", ParamKind::Text, "rgba"),
+            fixed!("red", "Red from", ParamKind::Text, "R"),
+            fixed!("green", "Green from", ParamKind::Text, "G"),
+            fixed!("blue", "Blue from", ParamKind::Text, "B"),
+            fixed!("alpha", "Alpha from", ParamKind::Text, "A"),
+            fixed!("out", "Out", ParamKind::Text, "rgba"),
+            fixed!("remove", "Remove", ParamKind::Text, ""),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Moves channels and render passes. In brings a pass (P, N, depth, matte.<node>, diffuse, …) \
+               into the color, to grade, blur or key it with any node; Red, Green, Blue and Alpha from take \
+               each channel from R, G, B, A, any plane (N.y, matte.Cube1) or 0 / 1. Out writes the result \
+               into a named pass instead, leaving the color as it was; Remove drops passes once used \
+               (names separated by commas or spaces, * for all). Values are copied as stored.",
     },
     OpInfo {
         name: "switch",
@@ -1383,6 +1409,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "premult" => Ok(mapped(input(inputs, 0, op)?, color::premultiply)),
         "unpremult" => Ok(mapped(input(inputs, 0, op)?, color::unpremultiply)),
         "channel_select" => channel_select(params, inputs),
+        "shuffle" => shuffle(params, inputs),
         "switch" => switch(params, inputs),
         "dissolve" => dissolve(params, inputs),
         "keymix" => keymix(inputs),
@@ -1563,6 +1590,12 @@ fn merge(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: Merge = parse(params, "merge")?;
     let fg = input(inputs, 0, "merge")?;
     let bg = input(inputs, 1, "merge")?;
+    if p.operation == "zmerge" {
+        // By depth, passes and all, in B's frame.
+        let mut out = Image::zmerge(fg, bg);
+        out.format = bg.format;
+        return Ok(out);
+    }
 
     // B's frame, holding both inputs' data.
     let op = p.operation.as_str();
@@ -2038,6 +2071,45 @@ fn channel_select(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let windows: Vec<IRect> = [Some(a), b].into_iter().flatten().map(Image::window).collect();
     let window = pointwise_window(a.format, &windows, pick(color::TRANSPARENT, color::TRANSPARENT));
     Ok(generate(a.format, window, |x, y| pick(a.at(x, y), b.map_or(color::TRANSPARENT, |b| b.at(x, y)))))
+}
+
+#[derive(Deserialize)]
+struct Shuffle {
+    #[serde(rename = "in")]
+    from: String,
+    red: String,
+    green: String,
+    blue: String,
+    alpha: String,
+    out: String,
+    remove: String,
+}
+
+/// Channels and passes moved about: `in` (a layer, or `rgba`) into the
+/// color, each channel then from any channel or plane, the result into
+/// `out` (a layer, keeping the color, or `rgba`; an existing layer keeps
+/// its channel count, a new one gets `in`'s), and `remove`'s layers
+/// dropped.
+fn shuffle(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
+    let p: Shuffle = parse(params, "shuffle")?;
+    let a = input(inputs, 0, "shuffle")?;
+    let whole = |s: &str| s.trim().is_empty() || s.trim().eq_ignore_ascii_case("rgba");
+    let (img, count) = if whole(&p.from) { (a.clone(), 4) } else { (a.layer_to_rgba(p.from.trim())?, a.layer(p.from.trim()).len()) };
+    fn pick<'a>(s: &'a str, default: &'static str) -> &'a str {
+        if s.trim().is_empty() { default } else { s.trim() }
+    }
+    let rgba = [pick(&p.red, "R"), pick(&p.green, "G"), pick(&p.blue, "B"), pick(&p.alpha, "A")];
+    let mut out = img.shuffle(rgba)?;
+    if !whole(&p.out) {
+        // Into an existing pass, as many channels as it has; else as many
+        // as came in.
+        let existing = a.layer(p.out.trim()).len();
+        out.rgba_to_layer(p.out.trim(), if existing > 0 { existing } else { count })?;
+        out.pixels.clone_from(&a.pixels);
+    }
+    let drop: Vec<&str> = p.remove.split([',', ' ']).filter(|s| !s.is_empty()).collect();
+    out.remove_layers(&drop);
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -3221,6 +3293,59 @@ mod tests {
         assert!(approx(straight.get(0, 0)[0], 0.4));
         let back = eval("premult", &json!({}), &[Some(&straight)], &CTX).unwrap();
         assert!(approx(back.get(0, 0)[0], 0.2) && approx(back.get(0, 0)[3], 0.5));
+    }
+
+    #[test]
+    fn shuffle_moves_passes_and_channels() {
+        let mut img = solid(2, 2, [0.1, 0.2, 0.3, 1.0]);
+        for (c, v) in [("P.x", 1.0), ("P.y", 2.0), ("P.z", 3.0), ("N.y", -1.0), ("depth", 7.0)] {
+            *img.plane_mut(c) = vec![v; 4];
+        }
+        let run = |p: Value| eval("shuffle", &p, &[Some(&img)], &CTX);
+        // Defaults change nothing.
+        let same = run(json!({})).unwrap();
+        assert_eq!((&same.pixels, &same.planes), (&img.pixels, &img.planes));
+        // A pass into the color, any plane into a channel.
+        let p = run(json!({ "in": "P" })).unwrap();
+        assert_eq!(p.get(1, 1), [1.0, 2.0, 3.0, 1.0]);
+        assert_eq!(run(json!({ "green": "N.y", "alpha": "1" })).unwrap().get(0, 0), [0.1, -1.0, 0.3, 1.0]);
+        assert_eq!(run(json!({ "in": "depth" })).unwrap().get(0, 0), [7.0, 7.0, 7.0, 1.0]);
+        // And back: graded in between, the pass changes, the color doesn't.
+        let mut graded = p.clone();
+        graded.pixels.iter_mut().for_each(|px| px[0] *= 2.0);
+        let back = eval("shuffle", &json!({ "out": "P" }), &[Some(&graded)], &CTX).unwrap();
+        assert_eq!((back.plane_at("P.x", 0, 0), back.plane_at("P.y", 0, 0)), (2.0, 2.0));
+        let round = eval("shuffle", &json!({ "out": "P" }), &[Some(&p)], &CTX).unwrap();
+        assert_eq!(round.planes, img.planes, "a pass to RGBA and back is unchanged");
+        // The color into a new pass, keeping the color.
+        let glow = run(json!({ "out": "glow" })).unwrap();
+        assert_eq!((glow.pixels.clone(), glow.plane_at("glow.B", 0, 0)), (img.pixels.clone(), 0.3));
+        // Removing passes.
+        let some = run(json!({ "remove": "P, depth" })).unwrap();
+        assert_eq!(some.planes.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["N.y"]);
+        assert!(run(json!({ "remove": "*" })).unwrap().planes.is_empty());
+        // Missing layers and channels are named.
+        assert!(run(json!({ "in": "motion" })).err().unwrap().to_string().contains("motion"));
+        assert!(run(json!({ "blue": "N.q" })).err().unwrap().to_string().contains("N.q"));
+    }
+
+    #[test]
+    fn merge_by_depth() {
+        // A: red 5 away on the left half; B: blue 3 away on the right half
+        // and red's middle.
+        let mut a = solid(4, 1, [1.0, 0.0, 0.0, 1.0]);
+        *a.plane_mut("depth") = vec![5.0; 4];
+        let mut b = solid(4, 1, [0.0, 0.0, 1.0, 1.0]);
+        b.pixels[0] = [0.0; 4];
+        *b.plane_mut("depth") = vec![0.0, 3.0, 3.0, 3.0];
+        let m = eval("merge", &json!({ "operation": "zmerge" }), &[Some(&a), Some(&b), None], &CTX).unwrap();
+        assert_eq!((m.get(0, 0), m.get(2, 0), m.plane_at("depth", 2, 0)), ([1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0], 3.0));
+        // With B behind, A shows; mix still blends toward B.
+        *b.plane_mut("depth") = vec![0.0, 9.0, 9.0, 9.0];
+        let m = eval("merge", &json!({ "operation": "zmerge" }), &[Some(&a), Some(&b), None], &CTX).unwrap();
+        assert_eq!(m.get(2, 0), [1.0, 0.0, 0.0, 1.0]);
+        let half = eval("merge", &json!({ "operation": "zmerge", "mix": 0.5 }), &[Some(&a), Some(&b), None], &CTX).unwrap();
+        assert_eq!(half.get(2, 0), [0.5, 0.0, 0.5, 1.0]);
     }
 
     #[test]

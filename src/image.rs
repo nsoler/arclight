@@ -116,12 +116,22 @@ impl Image {
     }
 
     /// Roughly how much memory this image holds: pixels, planes and a
-    /// scene's card textures and points, plus a little for the struct
-    /// itself, so an image carrying only a scene never counts as nothing.
+    /// scene's card textures, meshes (with their textures) and points, plus
+    /// a little for the struct itself, so an image carrying only a scene
+    /// never counts as nothing. A mesh or texture shared by several objects
+    /// counts once for each.
     pub fn bytes(&self) -> usize {
         let planes: usize = self.planes.iter().map(|p| p.data.len() * 4).sum();
         let scene = self.scene.as_ref().map_or(0, |s| {
-            s.cards.iter().map(|c| c.image.bytes() + 256).sum::<usize>() + s.cameras.len() * 256 + s.points.len() * 24
+            let meshes: usize = s
+                .meshes
+                .iter()
+                .map(|m| {
+                    let g = &m.mesh;
+                    (g.positions.len() + g.normals.len()) * 24 + g.uvs.len() * 16 + g.triangles.len() * 12 + m.texture.as_ref().map_or(0, |t| t.bytes()) + 256
+                })
+                .sum();
+            s.cards.iter().map(|c| c.image.bytes() + 256).sum::<usize>() + meshes + s.cameras.len() * 256 + s.points.len() * 24
         });
         std::mem::size_of::<Image>() + self.pixels.len() * std::mem::size_of::<Rgba>() + planes + scene
     }
@@ -959,6 +969,29 @@ mod tests {
         assert!(out.layer("P").is_empty() && out.plane("matte.card1").is_none() && out.plane("id").is_none() && !out.layer("N").is_empty());
         out.remove_layers(&["*"]);
         assert!(out.planes.is_empty());
+    }
+
+    #[test]
+    fn a_scene_counts_its_meshes() {
+        let mut img = Image::new(1, 1);
+        let bare = img.bytes();
+        let mesh = std::sync::Arc::new(crate::mesh::sphere(1.0, [16, 8]));
+        let model = |texture: Option<std::sync::Arc<Image>>| crate::scene::Model {
+            mesh: mesh.clone(),
+            world: crate::geom::Mat4::identity(),
+            material: crate::mesh::Material::default(),
+            texture,
+            holdout: false,
+            name: String::new(),
+            node: String::new(),
+        };
+        img.scene = Some(std::sync::Arc::new(crate::scene::Scene { meshes: vec![model(None)], ..Default::default() }));
+        let one = img.bytes() - bare;
+        // 153 vertices (positions, normals, uvs) and 224 triangles.
+        assert_eq!(one, 153 * (24 + 24 + 16) + 224 * 12 + 256);
+        let tex = std::sync::Arc::new(Image::new(64, 64));
+        img.scene = Some(std::sync::Arc::new(crate::scene::Scene { meshes: vec![model(None), model(Some(tex.clone()))], ..Default::default() }));
+        assert_eq!(img.bytes() - bare, 2 * one + tex.bytes());
     }
 
     /// A 6 × 1 strip in an 8 × 2 frame: color `c` with alpha per pixel,

@@ -146,6 +146,26 @@ until it's unlinked.
 - Each has Translate / Rotate / Scale, like a Card; wire them into a Scene
   and a Scanline Render draws them with the cards.
 
+## Render passes
+
+Scanline Render can add render passes to its image: depth, position
+(**P**), normal (**N**), texture coordinates (**uv**), motion, object
+**id**, a matte per object (**matte.<node>**) and the lighting parts
+(**diffuse**, **specular**, **emission**, **ambient**), which add up to the
+picture. The viewer's plane buttons show any pass.
+
+- **Shuffle** works on passes with any node: set **In** to a pass to see it
+  as color (then grade, blur or key it), take single channels with **Red /
+  Green / Blue / Alpha from** (any channel, a plane such as `N.y`, or `0` /
+  `1`), set **Out** to write the color back into a pass instead, and list
+  passes in **Remove** (`*` for all) to drop them once used. The ▾ beside
+  each field offers the usual names.
+- **Merge** with **zmerge** combines two renders by their depth: the nearer
+  is in front at each pixel, its soft edges blended over what's behind.
+- Writing **EXR** keeps every pass as a layer (`P.x`, `N.x`, `depth.Z`,
+  `matte.<node>.A`, …) that other compositing and 3D apps read; other
+  formats write the picture only.
+
 ## Camera Tracker
 
 - **Track & Solve** in its panel follows features through the frame range
