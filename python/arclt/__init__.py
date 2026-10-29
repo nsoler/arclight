@@ -236,11 +236,13 @@ def op_info(op: str) -> dict:
     return _call("describe_op", op=op)
 
 
-def project(first: int | None = None, last: int | None = None, fps: float | None = None) -> dict:
-    """Read, or with arguments set, the timeline (first_frame, last_frame, fps)."""
-    if first is None and last is None and fps is None:
+def project(first: int | None = None, last: int | None = None, fps: float | None = None,
+            width: int | None = None, height: int | None = None) -> dict:
+    """Read, or with arguments set, the timeline (first_frame, last_frame, fps)
+    and format (the frame size of sources whose own width/height is 0)."""
+    if first is None and last is None and fps is None and width is None and height is None:
         return graph()["project"]
-    return _call("set_project", first_frame=first, last_frame=last, fps=fps)
+    return _call("set_project", first_frame=first, last_frame=last, fps=fps, width=width, height=height)
 
 
 def undo() -> bool:

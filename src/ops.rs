@@ -168,6 +168,68 @@ const CHANNEL_SOURCES: &[&str] = &[
 const SWITCH_PORTS: usize = 5;
 
 const SIZE: ParamKind = ParamKind::Int { min: 1, max: 16384 };
+/// A source's frame size: 0 takes the project's format.
+const FRAME_SIZE: ParamKind = ParamKind::Int { min: 0, max: 16384 };
+
+/// The project format when none is set, and the frame of sources whose size
+/// is 0 when evaluated outside a graph.
+pub const DEFAULT_FORMAT: Size = Size { width: 1920, height: 1080 };
+
+/// Ops whose `width` / `height` set their frame when they have no input to
+/// take one from.
+const SIZED_SOURCES: [&str; 6] = ["constant", "checkerboard", "rectangle", "ellipse", "polygon", "roto"];
+
+/// Give a source whose `width` / `height` is 0 (the default) the project's
+/// `format`. The graph evaluator calls this after resolving keyframes, so
+/// the cache key follows the format too.
+pub fn apply_format(op: &str, params: &mut Value, format: Size) {
+    if !SIZED_SOURCES.contains(&op) {
+        return;
+    }
+    for (name, v) in [("width", format.width), ("height", format.height)] {
+        if params.get(name).and_then(Value::as_f64).is_none_or(|x| x < 1.0) {
+            params[name] = json!(v);
+        }
+    }
+}
+
+/// Fit a new shape's default geometry (drawn for a 512×512 frame) to
+/// `format`: centered, scaled to the shorter side. Call on a fresh node's
+/// defaults, before any params given for it.
+pub fn fit_new_shape(op: &str, params: &mut Value, format: Size) {
+    let k = format.width.min(format.height) as f64 / 512.0;
+    let (cx, cy) = (format.width as f64 / 2.0, format.height as f64 / 2.0);
+    let num = |v: &Value| v.as_f64().unwrap_or(0.0);
+    let place = |x: &Value, y: &Value| [cx + (num(x) - 256.0) * k, cy + (num(y) - 256.0) * k];
+    match op {
+        "rectangle" | "ellipse" => {
+            let (c, s) = (params["center"].clone(), params["size"].clone());
+            params["center"] = json!(place(&c[0], &c[1]));
+            params["size"] = json!([num(&s[0]) * k, num(&s[1]) * k]);
+        }
+        "polygon" | "roto" => {
+            let stride = if op == "roto" { 6 } else { 2 };
+            let v: Vec<Value> = params["points"].as_array().cloned().unwrap_or_default();
+            let fitted: Vec<f64> = v
+                .chunks(stride)
+                .flat_map(|c| {
+                    let [x, y] = place(&c[0], &c[1]);
+                    // Tangent offsets only scale.
+                    std::iter::once(x).chain(std::iter::once(y)).chain(c[2..].iter().map(|t| num(t) * k)).collect::<Vec<_>>()
+                })
+                .collect();
+            params["points"] = json!(fitted);
+        }
+        _ => {}
+    }
+}
+
+/// A source's frame from its own size, 0 meaning [`DEFAULT_FORMAT`] (for
+/// evaluation outside a graph, which fills in the project's).
+fn source_size(width: usize, height: usize) -> Size {
+    let pick = |own: usize, default: usize| if own == 0 { default } else { own };
+    Size { width: pick(width, DEFAULT_FORMAT.width), height: pick(height, DEFAULT_FORMAT.height) }
+}
 const FEATHER: ParamKind = ParamKind::Float { min: 0.0, max: 200.0 };
 const OPACITY: ParamKind = ParamKind::Float { min: 0.0, max: 1.0 };
 const SHAPE_OPS: &[&str] = &["over", "subtract"];
@@ -208,8 +270,8 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Source,
         inputs: &[],
         params: &[
-            p!("width", "Width", SIZE, 512),
-            p!("height", "Height", SIZE, 512),
+            p!("width", "Width", FRAME_SIZE, 0),
+            p!("height", "Height", FRAME_SIZE, 0),
             p!("color", "Color", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]),
         ],
         overlay: Overlay::None,
@@ -222,8 +284,8 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Source,
         inputs: &[],
         params: &[
-            p!("width", "Width", SIZE, 512),
-            p!("height", "Height", SIZE, 512),
+            p!("width", "Width", FRAME_SIZE, 0),
+            p!("height", "Height", FRAME_SIZE, 0),
             p!("size", "Square size", ParamKind::Int { min: 1, max: 4096 }, 32),
             p!("color_a", "Color A", ParamKind::Color, [0.18, 0.18, 0.18, 1.0]),
             p!("color_b", "Color B", ParamKind::Color, [0.5, 0.5, 0.5, 1.0]),
@@ -452,8 +514,8 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Shape,
         inputs: &[opt("background")],
         params: &[
-            p!("width", "Width", SIZE, 512),
-            p!("height", "Height", SIZE, 512),
+            p!("width", "Width", FRAME_SIZE, 0),
+            p!("height", "Height", FRAME_SIZE, 0),
             p!("center", "Center", ParamKind::Vec2, [256.0, 256.0]),
             p!("size", "Size", ParamKind::Vec2, [256.0, 256.0]),
             p!("rotate", "Rotate", ParamKind::Float { min: -360.0, max: 360.0 }, 0.0),
@@ -473,8 +535,8 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Shape,
         inputs: &[opt("background")],
         params: &[
-            p!("width", "Width", SIZE, 512),
-            p!("height", "Height", SIZE, 512),
+            p!("width", "Width", FRAME_SIZE, 0),
+            p!("height", "Height", FRAME_SIZE, 0),
             p!("center", "Center", ParamKind::Vec2, [256.0, 256.0]),
             p!("size", "Size", ParamKind::Vec2, [256.0, 256.0]),
             p!("rotate", "Rotate", ParamKind::Float { min: -360.0, max: 360.0 }, 0.0),
@@ -494,8 +556,8 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Shape,
         inputs: &[opt("background")],
         params: &[
-            p!("width", "Width", SIZE, 512),
-            p!("height", "Height", SIZE, 512),
+            p!("width", "Width", FRAME_SIZE, 0),
+            p!("height", "Height", FRAME_SIZE, 0),
             p!("points", "Points", ParamKind::Points { stride: 2 }, [156.0, 356.0, 256.0, 156.0, 356.0, 356.0]),
             fixed!("fill_rule", "Fill rule", ParamKind::Choice(FILL_RULES), "non-zero"),
             p!("color", "Color", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]),
@@ -515,8 +577,8 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Shape,
         inputs: &[opt("background")],
         params: &[
-            p!("width", "Width", SIZE, 512),
-            p!("height", "Height", SIZE, 512),
+            p!("width", "Width", FRAME_SIZE, 0),
+            p!("height", "Height", FRAME_SIZE, 0),
             // A circle: per vertex x, y, in-handle and out-handle offsets.
             p!("points", "Points", ParamKind::Points { stride: 6 }, [
                 256.0, 136.0, -66.3, 0.0, 66.3, 0.0,
@@ -903,11 +965,8 @@ struct Constant {
 
 fn constant(params: &Value) -> Result<Image> {
     let p: Constant = parse(params, "constant")?;
-    Ok(Image::filled(
-        p.width,
-        p.height,
-        color::premultiply(p.color),
-    ))
+    let f = source_size(p.width, p.height);
+    Ok(Image::filled(f.width, f.height, color::premultiply(p.color)))
 }
 
 #[derive(Deserialize)]
@@ -924,8 +983,9 @@ fn checkerboard(params: &Value) -> Result<Image> {
     let size = p.size.max(1);
     let a = color::premultiply(p.color_a);
     let b = color::premultiply(p.color_b);
-    let mut img = Image::new(p.width, p.height);
-    let w = p.width;
+    let f = source_size(p.width, p.height);
+    let mut img = Image::new(f.width, f.height);
+    let w = f.width;
     img.pixels
         .par_iter_mut()
         .enumerate()
@@ -1557,7 +1617,7 @@ struct Polygon {
 fn shape_op(op: &str, params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let style: ShapeStyle = parse(params, op)?;
     let bg = inputs.first().copied().flatten();
-    let format = bg.map_or(Size { width: style.width, height: style.height }, |b| b.format);
+    let format = bg.map_or(source_size(style.width, style.height), |b| b.format);
     let (outline, rule) = match op {
         "rectangle" | "ellipse" => {
             let b: BoxShape = parse(params, op)?;
@@ -1821,7 +1881,8 @@ mod tests {
     #[test]
     fn roto_draws_a_smooth_closed_curve() {
         let out = eval("roto", &json!({}), &[None], &CTX).unwrap();
-        assert_eq!((out.format.width, out.format.height), (512, 512));
+        // Size 0: the default format, outside a graph.
+        assert_eq!(out.format, DEFAULT_FORMAT);
         assert_eq!(out.at(256, 256)[3], 1.0);
         // The default circle has radius 120: a square's corner at 45° would be inside, the circle's isn't.
         assert_eq!(out.at(256 + 100, 256 + 100)[3], 0.0);

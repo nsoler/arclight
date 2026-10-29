@@ -82,9 +82,10 @@ static TOOLS: &[Tool] = &[
         {"type": "object", "properties": {"from": {"type": "string"}, "to": {"type": "string"}, "port": {"type": ["integer", "string"]}}, "required": ["from", "to"]}),
     tool!("disconnect", "Disconnect input 'port' (index or label) of a node.",
         {"type": "object", "properties": {"node": {"type": "string"}, "port": {"type": ["integer", "string"]}}, "required": ["node", "port"]}),
-    tool!("set_project", "Set the timeline: first/last frame and fps.",
-        {"type": "object", "properties": {"first_frame": {"type": "integer"}, "last_frame": {"type": "integer"}, "fps": {"type": "number"}}}),
-    tool!("render_frame", "Render a node at a frame. Returns size and mean/min/max color; 'path' also writes the image (.exr keeps float); 'preview' returns a PNG.",
+    tool!("set_project", "Set the timeline (first/last frame, fps) and the format: the frame size (width, height) of sources whose own size is 0, the default.",
+        {"type": "object", "properties": {"first_frame": {"type": "integer"}, "last_frame": {"type": "integer"}, "fps": {"type": "number"},
+            "width": {"type": "integer"}, "height": {"type": "integer"}}}),
+    tool!("render_frame", "Render a node at a frame. Returns its frame size, data window ([x0, y0, x1, y1]: where pixels are stored) and mean/min/max color over the frame; 'path' also writes the image (.exr keeps float); 'preview' returns a PNG.",
         {"type": "object", "properties": {
             "node": {"type": "string"},
             "frame": {"type": "integer"},
@@ -238,7 +239,15 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
         }
         "set_project" => {
             let int = |k| args.get(k).and_then(Value::as_i64);
-            s.set_project(int("first_frame"), int("last_frame"), args.get("fps").and_then(Value::as_f64))?;
+            let format = match (int("width"), int("height")) {
+                (None, None) => None,
+                (w, h) => {
+                    let f = s.graph.project.format;
+                    let size = |v: Option<i64>, d: usize| v.map_or(d, |v| v.max(0) as usize);
+                    Some(crate::image::Size { width: size(w, f.width), height: size(h, f.height) })
+                }
+            };
+            s.set_project(int("first_frame"), int("last_frame"), args.get("fps").and_then(Value::as_f64), format)?;
             json!(s.graph.project)
         }
         "render_frame" => {
@@ -603,6 +612,28 @@ mod tests {
         let pin = call(&mut s, "describe_node", json!({"node": r["structuredContent"]["node"]}))["structuredContent"].clone();
         assert_eq!((pin["op"].as_str(), &pin["params"]["to1"]), (Some("corner_pin"), &json!([10.5, 10.5])));
         assert_eq!(pin["params"]["from1"]["keys"][1], json!([4, [13.5, 9.5]]));
+    }
+
+    #[test]
+    fn sources_follow_the_project_format() {
+        let mut s = Server::new(Session::default());
+        let stats = |s: &mut Server, node: &str| call(s, "render_frame", json!({"node": node}))["structuredContent"].clone();
+        call(&mut s, "create_node", json!({"op": "constant", "name": "c"}));
+        assert_eq!((stats(&mut s, "c")["width"].as_u64(), stats(&mut s, "c")["height"].as_u64()), (Some(1920), Some(1080)));
+        assert_eq!(call(&mut s, "set_project", json!({"width": 640, "height": 360}))["isError"], false);
+        assert_eq!(stats(&mut s, "c")["width"], 640, "re-rendered at the new format");
+        // A new shape is centered in the format and stores only its bounds.
+        call(&mut s, "create_node", json!({"op": "rectangle", "name": "r"}));
+        let r = call(&mut s, "describe_node", json!({"node": "r"}))["structuredContent"]["params"].clone();
+        assert_eq!(r["center"], json!([320.0, 180.0]));
+        let st = stats(&mut s, "r");
+        // 180 px wide (256 scaled to the 360 px short side) from x = 230,
+        // plus 2 px of edge padding.
+        assert_eq!((st["width"].as_u64(), st["window"][0].as_i64()), (Some(640), Some(228)));
+        // An explicit size wins.
+        call(&mut s, "set_params", json!({"node": "c", "params": {"width": 32, "height": 16}}));
+        assert_eq!(stats(&mut s, "c")["width"], 32);
+        assert_eq!(call(&mut s, "set_project", json!({"width": 0}))["isError"], true);
     }
 
     #[test]

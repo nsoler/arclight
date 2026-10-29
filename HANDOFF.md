@@ -16,8 +16,8 @@ Last updated 2026-10-28 (end of session 5). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~13,300 lines of Rust + Python. Tests: 70 library + 10 CLI + 31 GUI
-  (`cargo test --release`) and 8 Python (see "Working tips"), all passing.
+- ~13,300 lines of Rust + Python. Tests: 71 library + 10 CLI + 31 GUI
+  (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Clippy is clean apart from two old style lints (`Graph::from_str` name,
   `chunks_exact_mut(4)` in media.rs).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
@@ -316,6 +316,17 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   `Response::probe` → `Display::input_window` →
   `Overlays::set_input_window` → `node_geo` sets `Geo::Transform::layer`;
   `layer_frame` maps that rect.
+- **Session 6, part 8**: Phase 0.6 milestone 5, project format.
+  `Project::format` (`Size`, serde default 1920×1080). Constant,
+  Checkerboard and shapes have `width`/`height` kind `FRAME_SIZE` (min 0,
+  default 0); `ops::apply_format` fills 0 with the project format after
+  `resolve_params` in `Evaluator::run` and `Evaluator::key` (so the cache
+  follows it); direct `ops::eval` falls back to `DEFAULT_FORMAT`
+  (`source_size`). `ops::fit_new_shape` centers/scales a new shape's
+  512-square defaults into the format (`Doc::add_node`,
+  `Session::create_node`). `set_project` takes width/height (MCP, Python
+  `project(width=, height=)`); transport bar has a Format field;
+  `image_stats` adds `window`. Old files keep their stored sizes.
 
 ## Architecture in one page
 

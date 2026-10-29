@@ -123,6 +123,6 @@ export don't change.
 4. **Done (session 6).** **Viewer and overlays.** Data-window outline and overscan in the
    viewer; overlays use the format; the worker reports the selected
    node's input window for Transform's layer frame. Screenshot checks.
-5. **Project format (D2)** and stats in MCP/Python (`format`, `window`).
+5. **Done (session 6).** **Project format (D2)** and stats in MCP/Python (`format`, `window`).
 6. **Measure**: time a 4K comp of small shapes before/after; note results
    in HANDOFF.

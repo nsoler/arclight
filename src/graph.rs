@@ -4,7 +4,7 @@
 //! node's op, params, inputs' keys and (for time-varying ops) the frame. A
 //! change to one node therefore only re-renders that node and its downstream.
 
-use crate::image::Image;
+use crate::image::{Image, Size};
 use crate::ops::{self, EvalContext};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -38,11 +38,19 @@ pub struct Project {
     pub first_frame: i64,
     pub last_frame: i64,
     pub fps: f64,
+    /// The frame size for sources with no input to take one from (a
+    /// Constant, a shape without a background) whose own size is 0.
+    #[serde(default = "default_format")]
+    pub format: Size,
+}
+
+fn default_format() -> Size {
+    ops::DEFAULT_FORMAT
 }
 
 impl Default for Project {
     fn default() -> Self {
-        Project { first_frame: 1, last_frame: 100, fps: 24.0 }
+        Project { first_frame: 1, last_frame: 100, fps: 24.0, format: ops::DEFAULT_FORMAT }
     }
 }
 
@@ -182,7 +190,7 @@ impl Evaluator {
         let index = graph.index()?;
         self.cache.retain(|id, _| index.contains_key(id.as_str()));
         let order = Graph::order(&index, [target.to_string()])?;
-        self.run(&index, &order, ctx)?;
+        self.run(&index, &order, ctx, graph.project.format)?;
         Ok(self.cache[target].1.clone())
     }
 
@@ -195,7 +203,7 @@ impl Evaluator {
         let index = graph.index()?;
         self.cache.retain(|id, _| index.contains_key(id.as_str()));
         let order = Graph::order(&index, graph.nodes.iter().map(|n| n.id.clone()))?;
-        self.run(&index, &order, ctx)?;
+        self.run(&index, &order, ctx, graph.project.format)?;
         Ok(order
             .into_iter()
             .map(|id| {
@@ -213,7 +221,8 @@ impl Evaluator {
         let mut keys = HashMap::new();
         for id in &order {
             let node = index[id.as_str()];
-            let params = ops::resolve_params(&node.op, &node.params, ctx.frame);
+            let mut params = ops::resolve_params(&node.op, &node.params, ctx.frame);
+            ops::apply_format(&node.op, &mut params, graph.project.format);
             let k = node_key(node, &params, &keys, ctx);
             keys.insert(id.as_str(), k);
         }
@@ -225,13 +234,15 @@ impl Evaluator {
         index: &HashMap<&str, &NodeSpec>,
         order: &[String],
         ctx: &EvalContext,
+        graph_format: Size,
     ) -> Result<(), NodeError> {
         let mut keys: HashMap<&str, u64> = HashMap::with_capacity(order.len());
         for id in order {
             let node = index[id.as_str()];
             // Keyframes are resolved first and the resolved values hashed, so a
             // curve that holds between frames still hits the cache.
-            let params = ops::resolve_params(&node.op, &node.params, ctx.frame);
+            let mut params = ops::resolve_params(&node.op, &node.params, ctx.frame);
+            ops::apply_format(&node.op, &mut params, graph_format);
             let key = node_key(node, &params, &keys, ctx);
             keys.insert(id.as_str(), key);
             if self.cache.get(id).is_some_and(|(k, _)| *k == key) {

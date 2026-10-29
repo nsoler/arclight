@@ -67,6 +67,13 @@ class ArcltTest(unittest.TestCase):
             arclt.load(path)
             self.assertEqual([n.name for n in arclt.nodes()], ["checks"])
 
+    def test_project_format(self):
+        arclt.project(width=320, height=200)
+        self.assertEqual(arclt.project()["format"], {"width": 320, "height": 200})
+        c = arclt.create_node("constant")
+        w, h, _ = arclt.pixels(c)
+        self.assertEqual((w, h), (320, 200))
+
     def test_keyframes_and_project(self):
         arclt.project(first=1, last=10, fps=25)
         self.assertEqual(arclt.project()["fps"], 25)

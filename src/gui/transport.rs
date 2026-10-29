@@ -161,6 +161,11 @@ impl Transport {
                 .add(egui::DragValue::new(&mut project.fps).range(1.0..=240.0).speed(0.1).max_decimals(3))
                 .changed();
             ui.checkbox(&mut self.looping, "Loop");
+            ui.separator();
+            ui.label("Format").on_hover_text("The frame size of Constants, Checkerboards and shapes whose own width/height is 0 (the default)");
+            project_changed |= ui.add(egui::DragValue::new(&mut project.format.width).range(1..=16384)).changed();
+            ui.label("×");
+            project_changed |= ui.add(egui::DragValue::new(&mut project.format.height).range(1..=16384)).changed();
             if self.play != Play::Stopped && self.shown_fps > 0.0 {
                 ui.separator();
                 let color = if self.shown_fps + 0.5 < project.fps as f32 {

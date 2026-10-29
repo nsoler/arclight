@@ -144,6 +144,7 @@ impl Doc {
         let info = ops::info(op).expect("known op");
         let id = self.unique_id(op);
         let mut params = ops::params_with_defaults(op, &Value::Null);
+        ops::fit_new_shape(op, &mut params, self.graph.project.format);
         if op == "media_out" {
             params["first_frame"] = self.graph.project.first_frame.into();
             params["last_frame"] = self.graph.project.last_frame.into();

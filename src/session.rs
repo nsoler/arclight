@@ -7,7 +7,7 @@
 
 use crate::anim;
 use crate::graph::{Evaluator, Graph, NodeSpec};
-use crate::image::Image;
+use crate::image::{Image, Size};
 use crate::ops::{self, EvalContext, OpInfo, ParamKind};
 use crate::render::{self, Progress};
 use crate::track;
@@ -181,6 +181,7 @@ impl Session {
             None => self.unique_id(op),
         };
         let mut values = ops::params_with_defaults(op, &Value::Null);
+        ops::fit_new_shape(op, &mut values, self.graph.project.format);
         if op == "media_out" {
             values["first_frame"] = self.graph.project.first_frame.into();
             values["last_frame"] = self.graph.project.last_frame.into();
@@ -329,11 +330,15 @@ impl Session {
             .ok_or_else(|| anyhow!("'{id}' has no input '{label}'"))
     }
 
-    pub fn set_project(&mut self, first: Option<i64>, last: Option<i64>, fps: Option<f64>) -> Result<()> {
+    pub fn set_project(&mut self, first: Option<i64>, last: Option<i64>, fps: Option<f64>, format: Option<Size>) -> Result<()> {
         let mut p = self.graph.project.clone();
         p.first_frame = first.unwrap_or(p.first_frame);
         p.last_frame = last.unwrap_or(p.last_frame);
         p.fps = fps.unwrap_or(p.fps);
+        p.format = format.unwrap_or(p.format);
+        if !(1..=16384).contains(&p.format.width) || !(1..=16384).contains(&p.format.height) {
+            bail!("the format must be 1 to 16384 pixels each way");
+        }
         if p.last_frame < p.first_frame {
             bail!("last frame {} is before first frame {}", p.last_frame, p.first_frame);
         }
@@ -507,6 +512,8 @@ pub fn op_schema(info: &OpInfo) -> Value {
 /// Size and average/min/max color of an image, for reporting a render
 /// without shipping its pixels.
 pub fn image_stats(img: &Image) -> Value {
+    // The frame's size and stats; `window` is where data is stored.
+    let orig = img;
     let img = img.flat();
     let n = img.pixels.len().max(1) as f64;
     let mut sum = [0f64; 4];
@@ -523,6 +530,7 @@ pub fn image_stats(img: &Image) -> Value {
     json!({
         "width": img.width,
         "height": img.height,
+        "window": [orig.x0, orig.y0, orig.x0 + orig.width as i32, orig.y0 + orig.height as i32],
         "mean_rgba": sum.map(|s| round(s / n)),
         "min_rgba": if img.pixels.is_empty() { [0.0; 4] } else { lo.map(|x| round(x as f64)) },
         "max_rgba": if img.pixels.is_empty() { [0.0; 4] } else { hi.map(|x| round(x as f64)) },

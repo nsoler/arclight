@@ -2,11 +2,12 @@
 
 use crate::color::{self, Rgba};
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::path::Path;
 
 /// A frame size in pixels.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Size {
     pub width: usize,
     pub height: usize,
