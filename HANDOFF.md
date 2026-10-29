@@ -16,7 +16,7 @@ Last updated 2026-10-28 (session 7). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~14,400 lines of Rust + Python. Tests: 76 library + 10 CLI + 37 GUI
+- ~14,400 lines of Rust + Python. Tests: 76 library + 10 CLI + 38 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
 - **Release build (end of session 6):** `cargo build --release --workspace`
   and `python/build.sh` were run at the final commit, so
@@ -78,8 +78,7 @@ steps": take them in this order, one milestone at a time (commit, push and
 fast-forward `main` after each, per the standing instruction above), and
 report back after a few milestones.
 
-1. **Small UX debts:** Keyer: matte shrink/grow and softness; Corner Pin's default
-   From/To is a 512 square (add "From = image corners"); per-track tracker
+1. **Small UX debts:** Keyer: matte shrink/grow and softness; per-track tracker
    box sizes and offsets are only editable in the viewer; no filtering when
    Transform / Tracker output / Corner Pin shrink the image (aliasing).
 2. **Session-4 follow-ups** (small to medium):
@@ -219,7 +218,7 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   "To Transform" / "To Corner Pin" rows. Known gaps: no filtering when a
   warp shrinks the image (aliasing, same as Transform); the default
   From/To is a 512 square, so a hand-made Corner Pin on another size needs
-  its From corners set (a "From = image corners" button would help).
+  its From corners set (session 7 added "From/To = image corners").
 - **Session 5, part 4** (`d08e081`): Tracker boxes follow its shown output. `Xf` has
   an optional `warp` (overlay points → shown image), set by
   `Xf::for_node` when the selected Tracker is what the viewer shows
@@ -423,6 +422,12 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   `_motion` sample also gets `ref<i>`/`refwarp<i>` (`add_reference_tracks`);
   no samples while Output is "input". A test checks it matches a blurred
   exported Transform.
+- **Session 7, part 12**: Corner Pin panel buttons "From = image corners"
+  and "To = image corners" (`corner_pin_extras`, `corner_pin_corners`:
+  (0,0), (w,0), (w,h), (0,h), clockwise from the top left), via
+  `edit_param` (keys if animated). The input's frame comes from the probe,
+  now also requested for `Overlay::CornerPin`; `Properties::layer` carries
+  the input's window and format.
 - **CorridorKey** (AI keyer, github.com/nikopueringer/CorridorKey; the
   OFX port gitcapoom/corridorkey_ofx is Windows/Resolve-only): the user
   deferred it. If revisited: run upstream's PyTorch engine (Linux OK; the

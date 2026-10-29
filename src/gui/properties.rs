@@ -60,9 +60,10 @@ pub struct Properties {
     frame: i64,
     /// A frame the user asked to jump to (e.g. "next key").
     seek: Option<i64>,
-    /// The selected Transform and its input's data window, which places
-    /// its automatic center.
-    pub layer: Option<(String, arclight::image::IRect)>,
+    /// The selected node (a Transform, Corner Pin, …) and its input's data
+    /// window and frame: they place a Transform's automatic center and a
+    /// Corner Pin's image corners.
+    pub layer: Option<(String, arclight::image::IRect, arclight::image::Size)>,
 }
 
 impl Properties {
@@ -184,6 +185,7 @@ impl Properties {
                 "media_in" => self.media_in_extras(ui, doc, id),
                 "media_out" => self.media_out_extras(ui, doc, id),
                 "tracker" => self.tracker_extras(ui, doc, id),
+                "corner_pin" => self.corner_pin_extras(ui, doc, id),
                 _ => {}
             }
 
@@ -215,7 +217,7 @@ impl Properties {
     /// What an unset param with an automatic default stands for, when
     /// known: a Transform's center is its input layer's.
     fn auto_value(&self, id: &str, spec: &ParamSpec) -> Option<Value> {
-        let (_, w) = self.layer.as_ref().filter(|(node, w)| node == id && !w.is_empty())?;
+        let (_, w, _) = self.layer.as_ref().filter(|(node, w, _)| node == id && !w.is_empty())?;
         (spec.name == "center").then(|| json!([(w.x0 + w.x1) as f32 / 2.0, (w.y0 + w.y1) as f32 / 2.0]))
     }
 
@@ -466,6 +468,25 @@ impl Properties {
                     }
                 }
                 doc.changed();
+            }
+        });
+    }
+
+    /// Set a Corner Pin's From (or To) quad to its input's frame corners.
+    fn corner_pin_extras(&mut self, ui: &mut egui::Ui, doc: &mut Doc, id: &str) {
+        let size = self.layer.as_ref().filter(|(node, ..)| node == id).map(|(.., f)| *f);
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            for (quad, label) in [("from", "From"), ("to", "To")] {
+                let button = ui
+                    .add_enabled(size.is_some(), egui::Button::new(format!("{label} = image corners")))
+                    .on_hover_text(format!("Put the {label} corners on the input's frame corners, clockwise from the top left"))
+                    .on_disabled_hover_text("Connect an input first");
+                if let (true, Some(f)) = (button.clicked(), size) {
+                    for (i, c) in corner_pin_corners(f).into_iter().enumerate() {
+                        doc.edit_param(id, &format!("{quad}{}", i + 1), self.frame, json!(c));
+                    }
+                }
             }
         });
     }
@@ -800,10 +821,36 @@ fn describe_media(path: &str) -> String {
     }
 }
 
+/// A frame's corners, clockwise from the top left (Corner Pin's 1 to 4).
+fn corner_pin_corners(f: arclight::image::Size) -> [[f32; 2]; 4] {
+    let (w, h) = (f.width as f32, f.height as f32);
+    [[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arclight::graph::{Graph, NodeSpec};
+
+    #[test]
+    fn a_corner_pin_from_and_to_the_image_corners_leaves_the_image_alone() {
+        use arclight::image::{Image, Size};
+        use arclight::ops::{self, EvalContext};
+        let mut src = Image::new(30, 20);
+        for (i, p) in src.pixels.iter_mut().enumerate() {
+            *p = [(i % 30) as f32 / 30.0, (i / 30) as f32 / 20.0, 0.5, 1.0];
+        }
+        let corners = corner_pin_corners(Size { width: 30, height: 20 });
+        assert_eq!(corners, [[0.0, 0.0], [30.0, 0.0], [30.0, 20.0], [0.0, 20.0]]);
+        let mut params = json!({});
+        for (i, c) in corners.iter().enumerate() {
+            params[format!("from{}", i + 1)] = json!(c);
+            params[format!("to{}", i + 1)] = json!(c);
+        }
+        let out = ops::eval("corner_pin", &params, &[Some(&src), None], &EvalContext { frame: 1, write_outputs: false }).unwrap();
+        let diff = out.flat().pixels.iter().zip(&src.pixels).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0, f32::max);
+        assert!(diff < 1e-4, "off by {diff}");
+    }
 
     #[test]
     fn clearing_keys_after_a_frame_spares_tracks_that_are_off() {
