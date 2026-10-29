@@ -11,6 +11,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.17 — 2026-10-29
+
+- glTF 2.0 import, engine side (`gltf::read_gltf`): .gltf and .glb, node
+  transforms applied, triangles / strips / fans with normals and UVs,
+  PBR materials mapped to ours (base color and texture, roughness,
+  metallic as the highlight color, emission with strength, opacity for
+  blended materials, unlit), external and embedded textures. Sample:
+  `examples/geo/crate.gltf`. Not yet a node. New dependency: `gltf` 1.4
+  (MIT / Apache); needs Rust 1.88+ (M10 step e).
+
 ## 0.9.16 — 2026-10-29
 
 - Shading, engine side (`src/shade.rs`): ambient, directional, point,
