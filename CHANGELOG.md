@@ -7,6 +7,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.31 — 2026-10-29
+
+- Groundwork for the 3D camera tracker (no node yet): `src/features.rs`
+  finds corners (Shi–Tomasi) and follows them from frame to frame
+  (pyramidal Lucas–Kanade with a forward–backward check), topping up
+  features as they're lost. Tested on exact shifts (sub-0.02 px median,
+  shifts up to ~22 px) and on a camera move rendered with Scanline Render.
+  Phase 4 milestone 5, part 1.
+
 ## 0.0.30 — 2026-10-29
 
 - Python wheels: the `arclt` module is packaged with maturin as one abi3

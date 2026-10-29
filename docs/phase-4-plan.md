@@ -2,7 +2,7 @@
 
 Status: **agreed** (2026-10-29). The user chose the proposed option for
 D1–D4; D5 (viewport) and D6 (order) stand as proposed until milestone 9.
-Milestones 1–4 done. The work goes one milestone at a time, as in
+Milestones 1–4 done, 5 partly. The work goes one milestone at a time, as in
 `phase-0.6-plan.md`.
 
 ## Goal
@@ -229,7 +229,15 @@ then poses of in-between frames by PnP and a final pass).
    makes it fill the frame renders like the image; depth equals that
    distance; perspective (a tilted card's near edge is wider); two
    overlapping cards sort by depth.
-5. **Features and KLT.** Shi–Tomasi on a pyramid, pyramidal LK, forward–
+5. **Partly done (2026-10-29).** **Features and KLT.** (As built:
+   `src/features.rs`: Gray, Pyramid, detect (Shi–Tomasi), follow /
+   follow_checked (pyramidal LK, forward–backward), FeatureTracker
+   (top-up below 90 %). Nothing calls it yet. Open: on a rendered camera
+   move, error grows ~0.05 px a frame (pure pan ~1 % of the motion; a
+   still camera gives 0); refining against the first frame didn't
+   change it, so a Scanline Render / `geom` projection mismatch is a
+   suspect. Ignored test `rendered_tracks_drift_under_a_tenth_of_a_pixel`
+   holds the target.) Shi–Tomasi on a pyramid, pyramidal LK, forward–
    backward check. Tests on synthetic renders (Scanline Render of
    textured cards through a known moving camera: ground truth for free).
 6. **Two-view initialization and triangulation.** Fundamental /

@@ -37,7 +37,7 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.30**.
+  in the same commit as the change. Current: **0.0.31**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -932,8 +932,24 @@ correctly from the CLI in 0.12 s at 3×3 samples. Tests:
 perspective_depth_order_transparency_and_edges,
 the_scanline_render_node_follows_the_camera,
 renders_over_a_background_and_draws_points}`.
-Next: M5, features + KLT (new `src/features.rs`; synthetic test shots
-rendered with Scanline Render).
+**M5 partly done (v0.0.31): features + KLT, library only** (nothing
+calls it yet; no node or GUI). `src/features.rs`: `Gray` (luma, bilinear
+sample), `Pyramid` (binomial blur + halve, down to ~32 px),
+`detect(gray, max, min_distance, quality, border, avoid)` (Shi–Tomasi
+min eigenvalue over 5×5, 3×3 local maxima, greedy spacing via a grid),
+`lk_level` / `follow` / `follow_checked` (pyramidal LK, 15×15 window,
+forward–backward error ≤ 0.5 px), `FeatureTrack {start, points}`,
+`FeatureTracker::push(frame, img)`. Positions in frame pixels (pixel i
+spans i..i+1). **Open issue before M6/M7 rely on long tracks:** on a
+rendered camera move, error against ground truth grows ~0.05 px/frame
+(pure 0.4°/frame pan: ~0.013 px/frame, about 1% of the motion; still
+camera: exactly 0). Refining against the feature's first frame instead
+of chaining didn't change it, so suspect a small Scanline Render vs
+`geom::Camera::project` mismatch, or the test's ground truth; next,
+measure the tracked/true displacement ratio. The ignored test
+`features::tests::rendered_tracks_drift_under_a_tenth_of_a_pixel` holds
+the target; `features_track_a_rendered_camera_move` asserts what holds
+now (one-frame accuracy, survival, top-up).
 
 - 3D needs a scene system first: Camera (focal length, film back, transform,
   animatable), Card / geometry nodes, a Scene node, and a **scanline renderer**
