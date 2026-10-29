@@ -44,7 +44,10 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   `assets/arclight.png` is rendered from it at 256 px on transparency
   (`rsvg-convert -w 256 -h 256`) and built into the GUI (`app_icon()`);
   re-render it after editing the SVG, then rebuild and `./install.sh`.
-  The lettering is dark teal (#033c3a), faint on dark backgrounds.
+  The lettering is #4e9290 (the logo's mid teal; was #033c3a, invisible on
+  dark themes): contrast ≥ 3.6:1 on white and on dark backgrounds. At
+  48 px the word is too small to read; a text-free small variant is an
+  option if the user wants one.
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
   (Rectangle, Ellipse, Polygon, Roto), Transform layer dragging in the viewer,
