@@ -75,6 +75,13 @@ class ArcltTest(unittest.TestCase):
         self.assertLess(mean_rgba(c, 1)[0], 1e-6)
         self.assertGreater(mean_rgba(c, 10)[0], 0.999)
 
+    def test_view_tools_need_a_gui(self):
+        c = arclt.create_node("constant")
+        with self.assertRaisesRegex(arclt.ArcltError, "attach_instance"):
+            arclt.view(c)
+        with self.assertRaisesRegex(arclt.ArcltError, "attach_instance"):
+            arclt.view_state()
+
     def test_ops_catalog(self):
         names = {o["name"] for o in arclt.ops()}
         self.assertTrue({"merge", "grade", "blur", "media_in"} <= names)

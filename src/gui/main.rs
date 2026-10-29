@@ -135,6 +135,55 @@ impl App {
         }
     }
 
+    /// `select_node`, `view_node`, `get_view`: the window's view state.
+    fn view_call(&mut self, tool: &str, args: &Value) -> anyhow::Result<Value> {
+        let node = args.get("node").and_then(Value::as_str);
+        let known = |doc: &Doc, id: &str| match doc.node(id) {
+            Some(_) => Ok(id.to_string()),
+            None => Err(anyhow::anyhow!("no node named '{id}'")),
+        };
+        match tool {
+            "select_node" => {
+                self.doc.selected = node.map(|id| known(&self.doc, id)).transpose()?;
+            }
+            "view_node" => {
+                let id = known(&self.doc, node.ok_or_else(|| anyhow::anyhow!("missing string argument 'node'"))?)?;
+                self.doc.commit(false);
+                self.doc.view_node(&id);
+                self.doc.place_new_nodes();
+                self.doc.commit(false);
+                self.doc.selected = Some(id);
+                if let Some(frame) = args.get("frame").and_then(Value::as_i64) {
+                    self.transport.set_play(Play::Stopped);
+                    self.transport.seek(frame, &self.doc.graph.project);
+                }
+            }
+            _ => {}
+        }
+        if let Some(pos) = self.doc.selected.as_ref().and_then(|id| self.doc.node(id)).and_then(|n| n.pos) {
+            if tool != "get_view" {
+                self.editor.reveal(pos);
+            }
+        }
+        Ok(self.view_state())
+    }
+
+    /// What the user is looking at.
+    fn view_state(&self) -> Value {
+        let viewer = self.doc.graph.nodes.iter().find(|n| n.op == "viewer");
+        let viewing = match viewer {
+            Some(v) => v.inputs.first().filter(|i| !i.is_empty()).cloned(),
+            None => self.doc.selected.clone(),
+        };
+        json!({
+            "selected": self.doc.selected,
+            "viewer": viewer.map(|v| &v.id),
+            "viewing": viewing,
+            "frame": self.transport.frame,
+            "playing": self.transport.play != Play::Stopped,
+        })
+    }
+
     /// Run tool calls that arrived over the bridge. Renders go to worker
     /// threads (on a snapshot of the graph); everything else runs here.
     fn handle_bridge(&mut self, ctx: &egui::Context) {
@@ -161,6 +210,9 @@ impl App {
     /// Apply one bridged tool to the document: the tool runs on a session
     /// over a copy of the graph, and a changed graph comes back as one undo step.
     fn bridge_call(&mut self, tool: &str, args: &Value) -> anyhow::Result<Value> {
+        if arclight::mcp::is_gui_tool(tool) {
+            return self.view_call(tool, args);
+        }
         match tool {
             "undo" | "redo" => {
                 self.doc.commit(false);

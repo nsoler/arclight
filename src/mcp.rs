@@ -97,6 +97,12 @@ static TOOLS: &[Tool] = &[
     tool!("redo", "Redo the last undone edit.", {"type": "object", "properties": {}}),
     tool!("list_plugins", "Plugin libraries found at startup and the ops each added (or why it failed).",
         {"type": "object", "properties": {}}),
+    tool!("select_node", "In an attached GUI: select a node (its properties open, the node graph scrolls to it). null clears the selection.",
+        {"type": "object", "properties": {"node": {"type": ["string", "null"]}}, "required": ["node"]}),
+    tool!("view_node", "In an attached GUI: show a node in the viewer (routes it into the Viewer node, creating one if needed) and select it; 'frame' also moves the playhead.",
+        {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}}, "required": ["node"]}),
+    tool!("get_view", "In an attached GUI: what the user is looking at: selected node, viewed node, current frame, playing.",
+        {"type": "object", "properties": {}}),
     tool!("list_instances", "Running Arclight GUI windows that tools can be sent to.", {"type": "object", "properties": {}}),
     tool!("attach_instance", "Send all further tools to a running GUI (by pid, default the newest).",
         {"type": "object", "properties": {"pid": {"type": "integer"}}}),
@@ -130,6 +136,12 @@ fn obj_arg(args: &Value, name: &str) -> Result<Map<String, Value>> {
         Some(Value::Object(m)) => Ok(m.clone()),
         Some(_) => Err(anyhow!("'{name}' must be an object")),
     }
+}
+
+/// Tools about a window's view state (selection, viewer, playhead). Only a
+/// GUI answers them; the headless session refuses them.
+pub fn is_gui_tool(tool: &str) -> bool {
+    matches!(tool, "select_node" | "view_node" | "get_view")
 }
 
 /// Tools that can run for a long time: front ends with an interactive
@@ -253,6 +265,9 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
                 Err(e) => json!({"path": r.path, "error": e}),
             })
             .collect::<Vec<_>>()),
+        gui if is_gui_tool(gui) => {
+            return Err(anyhow!("'{gui}' needs a running Arclight window: call attach_instance first"))
+        }
         other => return Err(anyhow!("unknown tool '{other}'")),
     })
 }
@@ -561,6 +576,10 @@ mod tests {
         assert_eq!(r["isError"], false, "{r}");
         assert_eq!(r["structuredContent"]["width"], 64);
         assert_eq!(r["content"][1]["type"], "image");
+
+        let gui = call(&mut s, "view_node", json!({"node": "comp"}));
+        assert_eq!(gui["isError"], true);
+        assert!(gui["content"][0]["text"].as_str().unwrap().contains("attach_instance"));
 
         let bad = call(&mut s, "set_params", json!({"node": "comp", "params": {"operation": "explode"}}));
         assert_eq!(bad["isError"], true);

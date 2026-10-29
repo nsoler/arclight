@@ -62,8 +62,6 @@ order of value:
    - Python plugins (custom ops written in Python): embed Python in the
      host via the `python/` crate, or run them out of process.
    - Plugin process isolation: a crashing native plugin kills the app.
-   - A `select`/`view` bridge tool so scripts can show a node in the GUI's
-     viewer (the GUI-only state `Doc::selected` / `view_node`).
    - Package the Python module as a wheel (`maturin build` from `python/`,
      `pyproject.toml` is ready). maturin isn't installed on this machine.
    - Not planned: OpenFX hosting (large; its own project), licensing (the
@@ -105,7 +103,7 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
 - **`session.rs`**: headless editing API (validated `create_node`/`set_params`/
   `set_key`/`connect`/…, undo/redo, render, save/load). MCP, Python and the
   GUI bridge all go through it.
-- **`mcp.rs`**: MCP server (`arclight mcp`, stdio or `--http`), 24 tools.
+- **`mcp.rs`**: MCP server (`arclight mcp`, stdio or `--http`), 27 tools.
   `call_tool(&mut Session, tool, args)` is the shared tool dispatcher.
   `render_frame` with `preview` returns a PNG image content block.
 - **`bridge.rs`**: each GUI listens on `$XDG_RUNTIME_DIR/arclight/gui-<pid>.sock`
@@ -226,6 +224,12 @@ changed, commits pending edits, swaps the graph in, places new nodes
 (`Doc::place_new_nodes`: right of their input, moved down until clear) and
 commits again, so each script call is one undo step. `undo`/`redo` use the
 Doc's history; `load_graph`/`new_graph` refuse while the window is dirty.
+View tools (`mcp::is_gui_tool`: `select_node`, `view_node`, `get_view`)
+go to `App::view_call` instead: they set `doc.selected`, route through
+`Doc::view_node` (an undoable graph edit, like the V key), seek the
+transport, and scroll the node graph with `NodeEditor::reveal`. Every one
+returns `App::view_state()`. Headless, `call_tool` refuses them with
+"call attach_instance first".
 Render tools skip all that: `handle_bridge` hands them to
 `ScriptJobs::spawn` (`gui/script_jobs.rs`), which renders a snapshot of the
 graph on a thread via `mcp::call_tool_with_progress`, replies to the client

@@ -30,6 +30,7 @@ __all__ = [
     "ArcltError", "Node", "create_node", "node", "nodes", "delete", "connect", "disconnect",
     "save", "load", "new", "render", "pixels", "to_numpy", "ops", "op_info", "project",
     "undo", "redo", "metadata", "graph", "plugins", "instances", "attach", "detach",
+    "select", "view", "view_state",
 ]
 
 
@@ -121,6 +122,12 @@ class Node:
 
     def render(self, frame: int | None = None, path: str | None = None) -> dict:
         return render(self, frame=frame, path=path)
+
+    def select(self) -> dict:
+        return select(self)
+
+    def view(self, frame: int | None = None) -> dict:
+        return view(self, frame)
 
     def __repr__(self) -> str:
         return f"<arclt.Node {self._name}>"
@@ -262,3 +269,22 @@ def attach(pid: int | None = None) -> dict:
 def detach() -> None:
     """Go back to this module's own headless graph."""
     _call("detach_instance")
+
+
+def select(n: "Node | str | None") -> dict:
+    """Select a node in the attached GUI (opens its properties); None clears.
+    Returns the view state, like ``view_state()``."""
+    # A missing node (None is dropped by _call) clears the selection.
+    return _call("select_node", node=None if n is None else _name(n))
+
+
+def view(n: "Node | str", frame: int | None = None) -> dict:
+    """Show a node in the attached GUI's viewer and select it; ``frame`` also
+    moves the playhead. Returns the view state."""
+    return _call("view_node", node=_name(n), frame=frame)
+
+
+def view_state() -> dict:
+    """What the attached GUI's user is looking at: selected, viewer, viewing,
+    frame, playing."""
+    return _call("get_view")

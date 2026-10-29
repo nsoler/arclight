@@ -116,6 +116,17 @@ impl NodeEditor {
         self.fit_pending = true;
     }
 
+    /// Scroll so the node at graph position `pos` is centered, unless it's
+    /// already fully on screen.
+    pub fn reveal(&mut self, pos: [f32; 2]) {
+        let node = Rect::from_min_size(Pos2::new(pos[0], pos[1]), Vec2::new(NODE_W, NODE_H));
+        let on_screen = Rect::from_min_max(self.to_screen(node.min), self.to_screen(node.max));
+        if !self.rect.is_positive() || self.rect.contains_rect(on_screen) {
+            return;
+        }
+        self.pan = self.rect.size() / 2.0 - node.center().to_vec2() * self.zoom;
+    }
+
     /// Open the node browser at the pointer, or mid-editor if the pointer
     /// is elsewhere.
     pub fn open_browser(&mut self, pointer: Option<Pos2>) {

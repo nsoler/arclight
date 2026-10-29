@@ -174,7 +174,11 @@ Tools: `list_ops`, `describe_op`, `get_graph`, `describe_node`, `create_node`,
 `set_project`, `render_frame` (stats, optional file and PNG preview the model can
 see), `render_output`, `probe_media`, `new_graph`, `load_graph`, `save_graph`,
 `undo`, `redo`, `list_plugins`, `list_instances`, `attach_instance`,
-`detach_instance`. Invalid calls come back as tool errors (`isError: true`) with
+`detach_instance`. A few tools only work on an attached GUI: `select_node`
+(selects a node, opens its properties and scrolls the node graph to it),
+`view_node` (shows a node in the viewer, optionally at a frame) and
+`get_view` (what the user is looking at: selection, viewed node, frame,
+playing). Invalid calls come back as tool errors (`isError: true`) with
 a message naming the bad param or node. Protocol errors use the standard
 JSON-RPC codes.
 
@@ -203,8 +207,10 @@ arclt.attach()        # from now on, edit the project open in the GUI
 
 Also: `node`, `nodes`, `delete`, `connect`, `disconnect`, `load`, `new`,
 `pixels`, `ops`, `op_info`, `project`, `undo`, `redo`, `metadata` (media file
-info), `graph`, `plugins`, `instances`, `detach`; `Node` has `info`,
-`params`, `set`, `input(s)`, `set_input`, `outputs`, `rename`, `render`.
+info), `graph`, `plugins`, `instances`, `detach`, and, when attached,
+`select`, `view(node, frame=None)`, `view_state`. `Node` has `info`,
+`params`, `set`, `input(s)`, `set_input`, `outputs`, `rename`, `render`,
+`select`, `view`.
 Errors raise `arclt.ArcltError`. Tests:
 `PYTHONPATH=python python3 -m unittest discover -s python/tests`.
 
