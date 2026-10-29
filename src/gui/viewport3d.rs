@@ -1,7 +1,8 @@
 //! The 3D viewport: the viewed node's scene from a free camera that belongs
 //! to the viewer, with Blender-style navigation (the conventions only; no
 //! Blender code), picking and selection shared with the node graph, and the
-//! cards textured by the CPU renderer on a worker thread.
+//! cards textured and meshes shaded by the CPU renderer on a worker thread
+//! (meshes lit from the view, or drawn as wireframes).
 //!
 //! Navigation: middle-drag orbits (turntable: yaw about world Y, pitch
 //! short of the poles), ⇧ + middle-drag pans, scroll or ⌃ + middle-drag
@@ -11,7 +12,8 @@
 //! owns them): 1 / 3 / 7 front / right / top (⌃: the opposite side), 5
 //! perspective / orthographic, 0 through the scene camera, 2 / 4 / 6 / 8
 //! orbit 15°, . or F frame the selection, Home frame everything, A select
-//! all, Alt+A or Esc deselect, ` a pie of views. (egui doesn't tell the numpad from the
+//! all, Alt+A or Esc deselect, Z solid / wireframe meshes, ` a pie of
+//! views. (egui doesn't tell the numpad from the
 //! number row, so both work.) A navigation gizmo in the top-right corner
 //! does the same with the mouse.
 //!
@@ -48,11 +50,14 @@ pub struct ViewCam {
     /// goes back to perspective (Blender's "auto perspective").
     #[serde(default)]
     pub auto_ortho: bool,
+    /// Meshes as wireframes, not solid.
+    #[serde(default)]
+    pub wireframe: bool,
 }
 
 impl Default for ViewCam {
     fn default() -> ViewCam {
-        ViewCam { center: [0.0; 3], yaw: 30.0, pitch: 25.0, distance: 12.0, ortho: false, auto_ortho: false }
+        ViewCam { center: [0.0; 3], yaw: 30.0, pitch: 25.0, distance: 12.0, ortho: false, auto_ortho: false, wireframe: false }
     }
 }
 
@@ -258,6 +263,9 @@ fn bounds(scene: &Scene, only: Option<&dyn Fn(&str) -> bool>) -> Option<(Vec3, f
     for c in scene.cards.iter().filter(|c| keep(&c.node)) {
         pts.extend(c.corners());
     }
+    for (lo, hi) in scene.meshes.iter().filter(|m| keep(&m.node)).filter_map(|m| m.bounds()) {
+        pts.extend([lo, hi]);
+    }
     for (i, p) in scene.points.iter().enumerate() {
         if keep(scene.point_node(i)) {
             pts.push(*p);
@@ -283,7 +291,7 @@ fn frustum(cam: &geom::Camera, size: f64, aspect: f64) -> (Vec3, [Vec3; 4]) {
 /// What a click picked.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Hit {
-    /// A card, camera or locator: its node.
+    /// A card, mesh, camera or locator: its node.
     Object(String),
     /// Point `.1` of the point cloud (or Camera Tracker) node `.0`.
     Point(String, usize),
@@ -293,8 +301,9 @@ pub enum Hit {
 const PICK_RADIUS: f32 = 7.0;
 
 /// What's under screen point `s` in `scene` seen through `p`: the nearest
-/// point, locator or camera within reach, else the nearest card the ray
-/// through `s` hits. `is_locator` tells a locator's point from a cloud's.
+/// point, locator or camera within reach, else the nearest card or mesh
+/// the ray through `s` hits. `is_locator` tells a locator's point from a
+/// cloud's.
 pub fn pick(scene: &Scene, p: &Projector, s: Pos2, is_locator: &dyn Fn(&str) -> bool) -> Option<Hit> {
     let mut best: Option<(f32, f64, Hit)> = None;
     let mut consider = |at: Vec3, hit: Hit| {
@@ -315,8 +324,9 @@ pub fn pick(scene: &Scene, p: &Projector, s: Pos2, is_locator: &dyn Fn(&str) -> 
     if let Some((_, _, hit)) = best {
         return Some(hit);
     }
-    // Cards: the nearest the ray hits inside its rectangle.
+    // Cards (the nearest the ray hits inside its rectangle) and meshes.
     let (o, d) = p.ray(s);
+    let meshes = scene.meshes.iter().filter_map(|m| Some((ray_mesh(m, &o, &d)?, m.node.clone())));
     scene
         .cards
         .iter()
@@ -333,12 +343,76 @@ pub fn pick(scene: &Scene, p: &Projector, s: Pos2, is_locator: &dyn Fn(&str) -> 
             let world_t = (geom::transform_point(&c.world, &hit) - o).dot(&d);
             (t > 0.0 && inside && world_t > 0.0).then_some((world_t, c.node.clone()))
         })
+        .chain(meshes)
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, n)| Hit::Object(n))
 }
 
+/// How far along ray (`o`, unit `d`) it first meets model `m`'s triangles
+/// (Möller–Trumbore, in the scene), if it does.
+fn ray_mesh(m: &arclight::scene::Model, o: &Vec3, d: &Vec3) -> Option<f64> {
+    let (lo, hi) = m.bounds()?;
+    // Past the box around it: no need to try each triangle.
+    let (mut t0, mut t1) = (0.0f64, f64::INFINITY);
+    for k in 0..3 {
+        if d[k].abs() < 1e-12 {
+            if o[k] < lo[k] || o[k] > hi[k] {
+                return None;
+            }
+            continue;
+        }
+        let (a, b) = ((lo[k] - o[k]) / d[k], (hi[k] - o[k]) / d[k]);
+        t0 = t0.max(a.min(b));
+        t1 = t1.min(a.max(b));
+    }
+    if t0 > t1 {
+        return None;
+    }
+    let world: Vec<Vec3> = m.mesh.positions.iter().map(|p| geom::transform_point(&m.world, p)).collect();
+    m.mesh
+        .triangles
+        .iter()
+        .filter_map(|t| {
+            let idx = t.map(|i| i as usize);
+            if idx.iter().any(|&i| i >= world.len()) {
+                return None;
+            }
+            let [a, b, c] = idx.map(|i| world[i]);
+            let (e1, e2) = (b - a, c - a);
+            let h = d.cross(&e2);
+            let det = e1.dot(&h);
+            if det.abs() < 1e-12 {
+                return None;
+            }
+            let sv = o - a;
+            let u = sv.dot(&h) / det;
+            let q = sv.cross(&e1);
+            let v = d.dot(&q) / det;
+            let t = e2.dot(&q) / det;
+            (u >= 0.0 && v >= 0.0 && u + v <= 1.0 && t > 0.0).then_some(t)
+        })
+        .min_by(f64::total_cmp)
+}
+
+/// Mesh `m`'s edges, each once (by position, so a seam's or a hard edge's
+/// split vertices don't draw it twice).
+fn mesh_edges(m: &arclight::mesh::Mesh) -> Vec<[u32; 2]> {
+    let key = |i: u32| m.positions.get(i as usize).map(|p| [p.x.to_bits(), p.y.to_bits(), p.z.to_bits()]);
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for t in &m.triangles {
+        for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            let (Some(ka), Some(kb)) = (key(a), key(b)) else { continue };
+            if seen.insert(if ka <= kb { (ka, kb) } else { (kb, ka) }) {
+                out.push([a, b]);
+            }
+        }
+    }
+    out
+}
+
 /// What a box from `a` to `b` (screen) holds: objects whose centers fall
-/// inside (cards, cameras, locators) and points.
+/// inside (cards, meshes, cameras, locators) and points.
 pub fn box_pick(scene: &Scene, p: &Projector, a: Pos2, b: Pos2, is_locator: &dyn Fn(&str) -> bool) -> (Vec<String>, Vec<(String, usize)>) {
     let r = Rect::from_two_pos(a, b);
     let inside = |x: Vec3| p.project(x).is_some_and(|(q, _)| r.contains(q));
@@ -350,6 +424,9 @@ pub fn box_pick(scene: &Scene, p: &Projector, a: Pos2, b: Pos2, is_locator: &dyn
     };
     for c in scene.cards.iter().filter(|c| inside(geom::transform_point(&c.world, &Vec3::zeros()))) {
         add(&c.node);
+    }
+    for m in scene.meshes.iter().filter(|m| inside(geom::transform_point(&m.world, &Vec3::zeros()))) {
+        add(&m.node);
     }
     for (i, cam) in scene.cameras.iter().enumerate() {
         if inside(geom::transform_point(&cam.world, &Vec3::zeros())) {
@@ -459,6 +536,8 @@ pub struct Viewport3d {
     frame_first_scene: bool,
     /// The backtick pie, open at this screen point.
     pie: Option<Pos2>,
+    /// Each shown mesh's edges (by the mesh's address), for wireframes.
+    edges: std::collections::HashMap<usize, Arc<Vec<[u32; 2]>>>,
 }
 
 impl Default for Viewport3d {
@@ -485,6 +564,7 @@ impl Default for Viewport3d {
             restored: None,
             frame_first_scene: false,
             pie: None,
+            edges: Default::default(),
         }
     }
 }
@@ -496,6 +576,9 @@ const Y_COLOR: Color32 = Color32::from_rgb(120, 200, 60);
 const Z_COLOR: Color32 = Color32::from_rgb(70, 130, 235);
 const CAMERA: Color32 = Color32::from_rgb(200, 200, 205);
 const CARD: Color32 = Color32::from_rgb(230, 170, 60);
+const MESH: Color32 = Color32::from_rgb(150, 170, 190);
+/// Meshes with more edges than this are outlined by their box.
+const MAX_EDGES: usize = 40_000;
 const POINT: Color32 = Color32::from_rgb(90, 175, 225);
 const SELECTED: Color32 = Color32::from_rgb(255, 160, 40);
 
@@ -514,12 +597,15 @@ impl Viewport3d {
     }
 
     /// The world matrix of node `node`'s object in the viewed scene (a
-    /// card, camera or locator; no parenting yet, so it's the node's own
+    /// card, mesh, camera or locator; no parenting yet, so it's the node's own
     /// translate / rotate / scale).
     pub fn object_world(&self, node: &str) -> Option<Mat4> {
         let s = self.scene.as_ref()?;
         if let Some(c) = s.cards.iter().find(|c| c.node == node) {
             return Some(c.world);
+        }
+        if let Some(m) = s.meshes.iter().find(|m| m.node == node) {
+            return Some(m.world);
         }
         if let Some(i) = (0..s.cameras.len()).find(|&i| s.camera_node(i) == node) {
             return Some(s.cameras[i].world);
@@ -598,7 +684,7 @@ impl Viewport3d {
         let graph = self.graph.as_ref().unwrap().1.clone();
         let render = self.scene.is_some().then(|| render_camera(&self.view, p, self.through_camera(), pixels));
         if let Some(w) = &self.worker {
-            w.request(SceneRequest { graph, node, frame, render, rect: Some(target) });
+            w.request(SceneRequest { graph, node, frame, render, solid: !self.view.wireframe, rect: Some(target) });
         }
         self.asked = Some(ask);
     }
@@ -647,7 +733,7 @@ impl Viewport3d {
         if let Some(e) = &self.error {
             painter.text(rect.left_bottom() + Vec2::new(10.0, -10.0), Align2::LEFT_BOTTOM, e, FontId::proportional(13.0), Color32::from_rgb(255, 110, 100));
         } else if self.scene.is_none() {
-            painter.text(rect.center(), Align2::CENTER_CENTER, "No 3D scene here: view a Camera, Card, Scene, Camera Tracker or Scanline Render", FontId::proportional(14.0), Color32::GRAY);
+            painter.text(rect.center(), Align2::CENTER_CENTER, "No 3D scene here: view a Camera, Card, mesh, Scene, Camera Tracker or Scanline Render", FontId::proportional(14.0), Color32::GRAY);
         }
     }
 
@@ -852,7 +938,7 @@ impl Viewport3d {
     fn select_everything(&mut self, doc: &mut Doc) {
         let Some(s) = self.scene.clone() else { return };
         let is_locator = Self::locator(doc);
-        let mut objects: Vec<String> = s.cards.iter().map(|c| c.node.clone()).chain((0..s.cameras.len()).map(|i| s.camera_node(i).to_string())).collect();
+        let mut objects: Vec<String> = s.cards.iter().map(|c| c.node.clone()).chain(s.meshes.iter().map(|m| m.node.clone())).chain((0..s.cameras.len()).map(|i| s.camera_node(i).to_string())).collect();
         self.points.clear();
         for i in 0..s.points.len() {
             let n = s.point_node(i);
@@ -926,7 +1012,7 @@ impl Viewport3d {
     fn keys(&mut self, ui: &egui::Ui, doc: &mut Doc) {
         use egui::Key;
         let (pressed, ctrl, alt) = ui.input(|i| {
-            let keys = [Key::Num0, Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Period, Key::Home, Key::F, Key::A, Key::Escape, Key::Backtick];
+            let keys = [Key::Num0, Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Period, Key::Home, Key::F, Key::A, Key::Z, Key::Escape, Key::Backtick];
             (keys.into_iter().filter(|k| i.key_pressed(*k)).collect::<Vec<_>>(), i.modifiers.command || i.modifiers.ctrl, i.modifiers.alt)
         });
         for k in pressed {
@@ -953,6 +1039,7 @@ impl Viewport3d {
                     doc.clear_selection();
                 }
                 Key::A => self.select_everything(doc),
+                Key::Z => self.view.wireframe = !self.view.wireframe,
                 Key::Backtick if self.pie.is_none() => self.pie = ui.input(|i| i.pointer.hover_pos()),
                 // Esc cancels a box first, else deselects.
                 Key::Escape if self.marquee.take().is_none() => {
@@ -1007,6 +1094,7 @@ impl Viewport3d {
         let mut picked = Scene { points: self.points.iter().filter_map(|(_, i)| s.points.get(*i).copied()).collect(), ..Scene::default() };
         let only = |n: &str| sel.iter().any(|s| s == n);
         picked.cards = s.cards.iter().filter(|c| only(&c.node)).cloned().collect();
+        picked.meshes = s.meshes.iter().filter(|m| only(&m.node)).cloned().collect();
         for (i, c) in s.cameras.iter().enumerate() {
             if only(s.camera_node(i)) {
                 picked.cameras.push(c.clone());
@@ -1055,7 +1143,7 @@ impl Viewport3d {
         // The textured cards, under the outlines (the newest render, which
         // may lag the view by a frame while it moves).
         if let (Some(tex), Some(r)) = (&self.texture, self.texture_rect) {
-            if self.scene.as_ref().is_some_and(|s| !s.cards.is_empty()) {
+            if self.scene.as_ref().is_some_and(|s| !s.cards.is_empty() || (!self.view.wireframe && !s.meshes.is_empty())) {
                 painter.image(tex.id(), r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
             }
         }
@@ -1066,6 +1154,30 @@ impl Viewport3d {
             let stroke = Stroke::new(if selected(&c.node) { 2.0 } else { 1.0 }, if selected(&c.node) { SELECTED } else { CARD });
             for i in 0..4 {
                 line(k[i], k[(i + 1) % 4], stroke);
+            }
+        }
+        // Meshes: every edge as a wireframe, else the selected ones' edges
+        // over the solid render (a box round one too big to outline).
+        self.edges.retain(|k, _| scene.meshes.iter().any(|m| Arc::as_ptr(&m.mesh) as usize == *k));
+        for m in &scene.meshes {
+            let on = selected(&m.node);
+            if !self.view.wireframe && !on {
+                continue;
+            }
+            let stroke = Stroke::new(if on { 1.5 } else { 1.0 }, if on { SELECTED } else { MESH });
+            let edges = self.edges.entry(Arc::as_ptr(&m.mesh) as usize).or_insert_with(|| Arc::new(mesh_edges(&m.mesh))).clone();
+            if edges.len() > MAX_EDGES {
+                if let Some((lo, hi)) = m.mesh.bounds() {
+                    let c = |i: usize| geom::transform_point(&m.world, &Vec3::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z }));
+                    for (a, b) in [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)] {
+                        line(c(a), c(b), stroke);
+                    }
+                }
+                continue;
+            }
+            let world: Vec<Vec3> = m.mesh.positions.iter().map(|q| geom::transform_point(&m.world, q)).collect();
+            for [a, b] in edges.iter() {
+                line(world[*a as usize], world[*b as usize], stroke);
             }
         }
         let size = bounds(&scene, None).map_or(1.0, |(_, r)| (r * 0.08).max(0.15));
@@ -1327,7 +1439,7 @@ mod tests {
     #[test]
     fn projection_and_rays_agree() {
         for ortho in [false, true] {
-            let v = ViewCam { center: [1.0, 0.5, -2.0], yaw: 40.0, pitch: 20.0, distance: 9.0, ortho, auto_ortho: false };
+            let v = ViewCam { center: [1.0, 0.5, -2.0], yaw: 40.0, pitch: 20.0, distance: 9.0, ortho, auto_ortho: false, wireframe: false };
             let p = v.projector(rect());
             // The orbit center is the middle of the view.
             let (c, depth) = p.project(Vec3::from(v.center)).unwrap();
@@ -1442,7 +1554,7 @@ mod tests {
             pos: None,
         });
         let doc = Doc::new(Graph { nodes: nodes.collect(), ..Default::default() }, None);
-        let p = ViewCam { center: [0.0, 0.0, -8.0], yaw: 0.0, pitch: 0.0, distance: 8.0, ortho: false, auto_ortho: false }.projector(rect());
+        let p = ViewCam { center: [0.0, 0.0, -8.0], yaw: 0.0, pitch: 0.0, distance: 8.0, ortho: false, auto_ortho: false, wireframe: false }.projector(rect());
         (s, p, doc)
     }
 
@@ -1464,6 +1576,37 @@ mod tests {
         // A box around the left half: the left point, the camera.
         let (objects, points) = box_pick(&s, &p, Pos2::new(0.0, 0.0), Pos2::new(rect().center().x - 50.0, rect().max.y), &loc);
         assert_eq!((objects, points), (vec!["cam".to_string()], vec![("cloud".to_string(), 1)]));
+    }
+
+    #[test]
+    fn meshes_are_picked_framed_and_outlined() {
+        let (mut s, p, _) = picking_scene();
+        let loc = |_: &str| false;
+        let at = |x: Vec3| p.project(x).unwrap().0;
+        // A ball in front of the near card, and a crate off to the right.
+        let mut ball = arclight::scene::primitive_model("sphere", &serde_json::json!({ "radius": 0.5, "segments": [16, 8], "translate": [0, 0, -4] }), None).unwrap();
+        ball.node = "ball".into();
+        let mut crate_ = arclight::scene::primitive_model("cube", &serde_json::json!({ "translate": [3.5, 2.5, -9], "rotate": [0, 30, 0] }), None).unwrap();
+        crate_.node = "crate".into();
+        s.meshes = vec![ball, crate_];
+        // Through the ball's middle: the ball, nearer than both cards; just
+        // past its edge, the near card; on the crate's middle, the crate.
+        assert_eq!(pick(&s, &p, rect().center(), &loc), Some(Hit::Object("ball".into())));
+        assert_eq!(pick(&s, &p, at(Vec3::new(0.6, 0.0, -4.0)), &loc), Some(Hit::Object("near".into())));
+        assert_eq!(pick(&s, &p, at(Vec3::new(3.5, 2.5, -9.0)), &loc), Some(Hit::Object("crate".into())));
+        // A box around the right half takes the crate (by its center).
+        let (objects, _) = box_pick(&s, &p, Pos2::new(rect().center().x + 40.0, 0.0), rect().max, &loc);
+        assert!(objects.contains(&"crate".to_string()) && !objects.contains(&"ball".to_string()), "{objects:?}");
+        // Framing takes in its box; its world is its placement.
+        let (c, r) = bounds(&Scene { meshes: vec![s.meshes[1].clone()], ..Scene::default() }, None).unwrap();
+        assert!((c - Vec3::new(3.5, 2.5, -9.0)).norm() < 1e-9 && r > 0.8 && r < 1.2, "{c} {r}");
+        let mut v = Viewport3d { scene: Some(Arc::new(s.clone())), ..Viewport3d::default() };
+        assert_eq!(v.object_world("crate"), Some(s.meshes[1].world));
+        v.frame_selected(Some(&["crate".to_string()]));
+        assert!((Vec3::from(v.view.center) - Vec3::new(3.5, 2.5, -9.0)).norm() < 1e-6);
+        // A cube's edges: 12 sides and a diagonal across each face, once
+        // each though every face has its own corners.
+        assert_eq!(mesh_edges(&arclight::mesh::cube([1.0; 3], [1; 3])).len(), 18);
     }
 
     #[test]

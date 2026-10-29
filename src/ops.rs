@@ -76,7 +76,7 @@ impl Kind {
 /// The kind of output `op` makes.
 pub fn output_kind(op: &str) -> Kind {
     match op {
-        "camera" | "card" | "scene" | "point_cloud" | "locator" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -226,6 +226,11 @@ macro_rules! fixed {
 const MASK: Port = opt("mask");
 /// The generic mix param of ops with [`OpInfo::mask_base`].
 const MIX: ParamSpec = p!("mix", "Mix", ParamKind::Float { min: 0.0, max: 1.0 }, 1.0);
+/// A 3D object's placement (as Card's) and a primitive's color.
+const PLACE_T: ParamSpec = p!("translate", "Translate", ParamKind::Vec3, [0.0, 0.0, 0.0]);
+const PLACE_R: ParamSpec = p!("rotate", "Rotate", ParamKind::Vec3, [0.0, 0.0, 0.0]);
+const PLACE_S: ParamSpec = p!("scale", "Scale", ParamKind::Vec3, [1.0, 1.0, 1.0]);
+const SURFACE_COLOR: ParamSpec = p!("color", "Color", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]);
 
 const CHANNEL_SOURCES: &[&str] = &[
     "A red", "A green", "A blue", "A alpha", "B red", "B green", "B blue", "B alpha", "zero", "one",
@@ -664,6 +669,98 @@ pub static OPS: &[OpInfo] = &[
                Outputs a scene holding the card.",
     },
     OpInfo {
+        name: "cube",
+        label: "Cube",
+        category: Category::Scene,
+        inputs: &[opt("texture")],
+        params: &[
+            PLACE_T,
+            PLACE_R,
+            PLACE_S,
+            p!("size", "Size", ParamKind::Vec3, [1.0, 1.0, 1.0]),
+            fixed!("segments", "Segments", ParamKind::Vec3, [1.0, 1.0, 1.0]),
+            SURFACE_COLOR,
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "A box in 3D, Size across, centered on its origin, each face divided into Segments, then scaled, \
+               rotated and moved. Each face shows the whole texture (if connected) times Color. Outputs a scene holding it.",
+    },
+    OpInfo {
+        name: "sphere",
+        label: "Sphere",
+        category: Category::Scene,
+        inputs: &[opt("texture")],
+        params: &[
+            PLACE_T,
+            PLACE_R,
+            PLACE_S,
+            p!("radius", "Radius", ParamKind::Float { min: 0.001, max: 10000.0 }, 0.5),
+            fixed!("segments", "Segments (around, up)", ParamKind::Vec2, [32.0, 16.0]),
+            SURFACE_COLOR,
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "A sphere in 3D, centered on its origin, made of Segments around and up, then scaled, rotated and moved. \
+               The texture (if connected) wraps around it once, its middle facing +Z; times Color. Outputs a scene holding it.",
+    },
+    OpInfo {
+        name: "cylinder",
+        label: "Cylinder",
+        category: Category::Scene,
+        inputs: &[opt("texture")],
+        params: &[
+            PLACE_T,
+            PLACE_R,
+            PLACE_S,
+            p!("radius", "Radius", ParamKind::Float { min: 0.001, max: 10000.0 }, 0.5),
+            p!("height", "Height", ParamKind::Float { min: 0.001, max: 10000.0 }, 1.0),
+            fixed!("segments", "Segments (around, up)", ParamKind::Vec2, [32.0, 1.0]),
+            fixed!("caps", "Caps", ParamKind::Bool, true),
+            SURFACE_COLOR,
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "A cylinder in 3D standing on its Y axis, centered on its origin, with flat ends if Caps, then scaled, \
+               rotated and moved. The texture (if connected) wraps around its side once; times Color. Outputs a scene holding it.",
+    },
+    OpInfo {
+        name: "plane",
+        label: "Plane",
+        category: Category::Scene,
+        inputs: &[opt("texture")],
+        params: &[
+            PLACE_T,
+            PLACE_R,
+            PLACE_S,
+            p!("size", "Size", ParamKind::Vec2, [1.0, 1.0]),
+            fixed!("segments", "Segments", ParamKind::Vec2, [1.0, 1.0]),
+            SURFACE_COLOR,
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "A flat rectangle in 3D facing +Z, Size wide and high, divided into Segments across and up, then scaled, \
+               rotated and moved: like a Card, but sized by its own params and repeating its texture (times Color). \
+               Outputs a scene holding it.",
+    },
+    OpInfo {
+        name: "read_geo",
+        label: "Read Geo",
+        category: Category::Scene,
+        inputs: &[],
+        params: &[
+            fixed!("file", "File", ParamKind::Path { save: false }, ""),
+            PLACE_T,
+            PLACE_R,
+            PLACE_S,
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Reads meshes from a Wavefront OBJ file (with the colors and textures of its MTL materials) or a glTF 2.0 \
+               file (.gltf or .glb), then scales, rotates and moves them all. Outputs a scene holding one mesh per object \
+               and material in the file.",
+    },
+    OpInfo {
         name: "scene",
         label: "Scene",
         category: Category::Scene,
@@ -671,7 +768,7 @@ pub static OPS: &[OpInfo] = &[
         params: &[],
         overlay: Overlay::None,
         mask_base: None,
-        help: "Gathers cameras, cards and other scenes into one scene.",
+        help: "Gathers cameras, cards, meshes and other scenes into one scene.",
     },
     OpInfo {
         name: "camera_tracker",
@@ -1299,6 +1396,12 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
             Ok(scene_output(img.format, Scene { cards: vec![scene::card(params, img)], ..Scene::default() }))
         }
         "scene" => gather(inputs),
+        "cube" | "sphere" | "cylinder" | "plane" => {
+            let texture = inputs.first().copied().flatten();
+            let model = scene::primitive_model(op, params, texture).context("unknown primitive")?;
+            Ok(scene_output(texture.map_or(DEFAULT_FORMAT, |t| t.format), Scene { meshes: vec![model], ..Scene::default() }))
+        }
+        "read_geo" => read_geo(params),
         "scanline_render" => scanline_render(params, inputs),
         // The solve lives in its params; in the graph the plate passes through.
         "camera_tracker" => Ok(input(inputs, 0, "camera_tracker")?.clone()),
@@ -2268,6 +2371,57 @@ fn scanline_render(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let format = bg.map_or(source_size(p.width, p.height), |b| b.format);
     let empty = Scene::default();
     Ok(render3d::render(scene.as_deref().unwrap_or(&empty), &camera, format, p.samples, bg))
+}
+
+/// A Read Geo's meshes: the file's parts (OBJ, or glTF for .gltf / .glb;
+/// read once per path and change time, with their textures), placed by its
+/// transform.
+fn read_geo(params: &Value) -> Result<Image> {
+    type Parts = std::sync::Arc<Vec<(crate::mesh::Part, Option<std::sync::Arc<Image>>)>>;
+    static CACHE: std::sync::Mutex<Option<(std::path::PathBuf, Option<std::time::SystemTime>, Parts)>> = std::sync::Mutex::new(None);
+    let file = params["file"].as_str().unwrap_or("");
+    if file.is_empty() {
+        bail!("no file: choose an OBJ file");
+    }
+    let path = std::path::PathBuf::from(file);
+    let modified = std::fs::metadata(&path).with_context(|| format!("can't read {file}"))?.modified().ok();
+    let cached = CACHE.lock().unwrap().as_ref().filter(|c| c.0 == path && c.1 == modified).map(|c| c.2.clone());
+    let parts = match cached {
+        Some(p) => p,
+        None => {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+            let parts = match ext.as_str() {
+                "gltf" | "glb" => crate::gltf::read_gltf(&path)?,
+                _ => crate::mesh::read_obj(&path)?,
+            };
+            let loaded: Parts = std::sync::Arc::new(
+                parts
+                    .into_iter()
+                    .map(|part| {
+                        // A texture that won't load leaves the color alone.
+                        let tex = part.material.texture.as_deref().and_then(|t| Image::read(t).ok()).map(std::sync::Arc::new);
+                        (part, tex)
+                    })
+                    .collect(),
+            );
+            *CACHE.lock().unwrap() = Some((path, modified, loaded.clone()));
+            loaded
+        }
+    };
+    let world = scene::placement(params);
+    let meshes = parts
+        .iter()
+        .map(|(part, tex)| scene::Model {
+            mesh: std::sync::Arc::new(part.mesh.clone()),
+            world,
+            material: part.material.clone(),
+            texture: tex.clone(),
+            holdout: false,
+            name: part.name.clone(),
+            node: String::new(),
+        })
+        .collect();
+    Ok(scene_output(DEFAULT_FORMAT, Scene { meshes, ..Scene::default() }))
 }
 
 /// Everything in the connected scenes, in port order; the first one's

@@ -159,13 +159,15 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
 }
 
 /// What the 3D viewport asks for: the scene a node shows at a frame, and
-/// optionally its cards rendered through a camera.
+/// optionally its cards (and meshes) rendered through a camera.
 pub struct SceneRequest {
     pub graph: Arc<Graph>,
     pub node: String,
     pub frame: i64,
     /// Render the cards through this camera into a frame this size.
     pub render: Option<(arclight::geom::Camera, arclight::image::Size)>,
+    /// Render the meshes too, solid (else the viewport draws their edges).
+    pub solid: bool,
     /// Where the render goes on screen (echoed back).
     pub rect: Option<eframe::egui::Rect>,
 }
@@ -200,11 +202,13 @@ impl SceneWorker {
                     }
                     let t0 = Instant::now();
                     let scene = scene_of(&mut eval, &req.graph, &req.node, req.frame);
-                    // Only the cards are textured; the viewport draws the rest.
+                    // Only cards and solid meshes are rendered; the viewport
+                    // draws the rest.
                     let render = match (&scene, &req.render) {
-                        (Ok(Some(s)), Some((cam, format))) if !s.cards.is_empty() => {
-                            let cards = arclight::scene::Scene { cards: s.cards.clone(), ..Default::default() };
-                            Some(Arc::new(arclight::render3d::render(&cards, cam, *format, 1, None)))
+                        (Ok(Some(s)), Some((cam, format))) if !s.cards.is_empty() || (req.solid && !s.meshes.is_empty()) => {
+                            let meshes = if req.solid { s.meshes.clone() } else { Vec::new() };
+                            let shown = arclight::scene::Scene { cards: s.cards.clone(), meshes, ..Default::default() };
+                            Some(Arc::new(arclight::render3d::render_preview(&shown, cam, *format)))
                         }
                         _ => None,
                     };

@@ -63,9 +63,10 @@ hold **⇧** (Shift) when choosing it for the Camera alone.
 ## 3D view
 
 Switch the viewer to **3D** (or press **Tab** over it) to see the viewed
-node's scene: a Camera, Card, Scene, Camera Tracker or Scanline Render. The
-controls follow Blender's defaults. Arclight's world is Y up, so the top
-view looks down −Y and the front view down −Z.
+node's scene: a Camera, Card, Cube, Sphere, Cylinder, Plane, Read Geo,
+Scene, Camera Tracker or Scanline Render. The controls follow Blender's
+defaults. Arclight's world is Y up, so the top view looks down −Y and the
+front view down −Z.
 
 ### Navigating
 
@@ -97,6 +98,7 @@ orthographic.
 | **.** or **F** | Frame the selection |
 | **Home** | Frame everything |
 | **`** (backtick) | A pie of views: point at one and click, or let go of the key |
+| **Z** | Meshes solid (lit from the view) or as wireframes |
 
 The number row works as well as the numpad. Axis views switch to
 orthographic until you orbit away. Orbiting leaves a camera view for the
@@ -104,8 +106,8 @@ free view from where the camera was.
 
 ### Selecting in 3D
 
-- Left-click a card, camera, locator or tracker point; **⇧**-click adds or
-  removes.
+- Left-click a card, mesh, camera, locator or tracker point; **⇧**-click
+  adds or removes. A selected mesh shows its edges.
 - Left-drag on empty space box-selects (**⇧** adds).
 - **A** selects everything; **⌥A** or **Esc** deselects (**Esc** first
   cancels a box).
@@ -133,6 +135,16 @@ axes), **All**, or **Select** for none; **Global / Local** sets the axes. Gizmo
 drags and G / R / S key animated parameters at the current frame and are
 one undo step each. A parameter linked to another node can't be moved
 until it's unlinked.
+
+### 3D objects
+
+- **Cube**, **Sphere**, **Cylinder** and **Plane** (3D category) make
+  meshes with their own size and segments; connect an image to their
+  **texture** input to wrap it on, times **Color**.
+- **Read Geo** reads an OBJ file (with its MTL colors and textures) or a
+  glTF file (.gltf, .glb).
+- Each has Translate / Rotate / Scale, like a Card; wire them into a Scene
+  and a Scanline Render draws them with the cards.
 
 ## Camera Tracker
 

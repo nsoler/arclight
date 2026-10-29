@@ -7,15 +7,17 @@
 
 use crate::geom::{self, Camera, Mat4, Vec3};
 use crate::image::Image;
+use crate::mesh::{Material, Mesh};
 use serde_json::Value;
 use std::sync::Arc;
 
-/// Cameras, textured cards and points, placed in one space (see
+/// Cameras, textured cards, meshes and points, placed in one space (see
 /// [`crate::geom`] for its conventions).
 #[derive(Clone, Default)]
 pub struct Scene {
     pub cameras: Vec<Camera>,
     pub cards: Vec<Card>,
+    pub meshes: Vec<Model>,
     /// A point cloud (a camera tracker's), drawn as dots.
     pub points: Vec<Vec3>,
     /// The node each camera and point came from, in the same order (filled
@@ -39,6 +41,35 @@ pub struct Card {
     pub node: String,
 }
 
+/// A mesh placed in the scene: a primitive's or a file's.
+#[derive(Clone)]
+pub struct Model {
+    pub mesh: Arc<Mesh>,
+    pub world: Mat4,
+    pub material: Material,
+    /// The image the material's color is multiplied by (a primitive's
+    /// texture input, or the file's texture), if any.
+    pub texture: Option<Arc<Image>>,
+    /// Renders nothing, but cuts out what is behind it.
+    pub holdout: bool,
+    /// Its name within the node (a file's object), and the node it came
+    /// from ("" until tagged).
+    pub name: String,
+    pub node: String,
+}
+
+impl Model {
+    /// A box around it in scene space (its mesh's box, placed), or None for
+    /// an empty mesh.
+    pub fn bounds(&self) -> Option<(Vec3, Vec3)> {
+        let (lo, hi) = self.mesh.bounds()?;
+        let corners = (0..8).map(|i| Vec3::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z }));
+        let placed: Vec<Vec3> = corners.map(|c| geom::transform_point(&self.world, &c)).collect();
+        let fold = |f: fn(f64, f64) -> f64, init: f64| Vec3::new(placed.iter().map(|p| p.x).fold(init, f), placed.iter().map(|p| p.y).fold(init, f), placed.iter().map(|p| p.z).fold(init, f));
+        Some((fold(f64::min, f64::INFINITY), fold(f64::max, f64::NEG_INFINITY)))
+    }
+}
+
 impl Card {
     /// The four corners in scene space: top left, top right, bottom right,
     /// bottom left (as the image's own corners).
@@ -54,6 +85,7 @@ impl Scene {
         self.fill_nodes();
         self.cameras.extend(other.cameras.iter().cloned());
         self.cards.extend(other.cards.iter().cloned());
+        self.meshes.extend(other.meshes.iter().cloned());
         self.points.extend(other.points.iter().copied());
         let mut other = other.clone();
         other.fill_nodes();
@@ -73,7 +105,7 @@ impl Scene {
     /// node made itself; what it gathered from upstream is marked already).
     pub fn tag(&mut self, id: &str) {
         self.fill_nodes();
-        for n in self.camera_nodes.iter_mut().chain(self.point_nodes.iter_mut()).chain(self.cards.iter_mut().map(|c| &mut c.node)) {
+        for n in self.camera_nodes.iter_mut().chain(self.point_nodes.iter_mut()).chain(self.cards.iter_mut().map(|c| &mut c.node)).chain(self.meshes.iter_mut().map(|m| &mut m.node)) {
             if n.is_empty() {
                 *n = id.to_string();
             }
@@ -94,6 +126,9 @@ impl Scene {
     pub fn describe(&self) -> String {
         let n = |k: usize, one: &str, many: &str| format!("{k} {}", if k == 1 { one } else { many });
         let mut parts = vec![n(self.cameras.len(), "camera", "cameras"), n(self.cards.len(), "card", "cards")];
+        if !self.meshes.is_empty() {
+            parts.push(n(self.meshes.len(), "mesh", "meshes"));
+        }
         if !self.points.is_empty() {
             parts.push(n(self.points.len(), "point", "points"));
         }
@@ -133,6 +168,52 @@ pub fn card(p: &Value, image: &Image) -> Card {
         None => [1.0, image.format.height as f64 / image.format.width.max(1) as f64],
     };
     Card { image: Arc::new(image.clone()), world: placement(p), size, node: String::new() }
+}
+
+/// The surface look a primitive's params give: Color (straight RGBA) as an
+/// unlit material.
+pub fn material(p: &Value) -> Material {
+    let c = numbers::<4>(&p["color"], 1.0).map(|v| v as f32);
+    Material { color: [c[0], c[1], c[2]], opacity: c[3], ..Material::default() }
+}
+
+/// A primitive node's mesh (`op` one of cube, sphere, cylinder, plane),
+/// from its resolved params, in its own space.
+pub fn primitive(op: &str, p: &Value) -> Option<Mesh> {
+    use crate::mesh;
+    // Segment counts (missing ones: the node's defaults).
+    let segs = |d: [f64; 3]| -> [usize; 3] { std::array::from_fn(|i| p["segments"].get(i).and_then(Value::as_f64).unwrap_or(d[i]).round().clamp(1.0, 512.0) as usize) };
+    let num = |n: &str, d: f64| p[n].as_f64().filter(|v| v.is_finite() && *v > 0.0).unwrap_or(d);
+    Some(match op {
+        "cube" => mesh::cube(numbers::<3>(&p["size"], 1.0), segs([1.0; 3])),
+        "sphere" => {
+            let s = segs([32.0, 16.0, 1.0]);
+            mesh::sphere(num("radius", 0.5), [s[0].max(3), s[1].max(2)])
+        }
+        "cylinder" => {
+            let s = segs([32.0, 1.0, 1.0]);
+            mesh::cylinder(num("radius", 0.5), num("height", 1.0), [s[0].max(3), s[1]], p["caps"].as_bool().unwrap_or(true))
+        }
+        "plane" => {
+            let s = segs([1.0; 3]);
+            mesh::plane(numbers::<2>(&p["size"], 1.0), [s[0], s[1]])
+        }
+        _ => return None,
+    })
+}
+
+/// A primitive node's scene object: its mesh placed by its transform, with
+/// its color, textured by `texture` when connected.
+pub fn primitive_model(op: &str, p: &Value, texture: Option<&Image>) -> Option<Model> {
+    Some(Model {
+        mesh: Arc::new(primitive(op, p)?),
+        world: placement(p),
+        material: material(p),
+        texture: texture.map(|t| Arc::new(t.clone())),
+        holdout: p["holdout"].as_bool().unwrap_or(false),
+        name: String::new(),
+        node: String::new(),
+    })
 }
 
 #[cfg(test)]

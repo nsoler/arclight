@@ -52,6 +52,12 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
       `<tmp>/arclight_gltf/<hash>.png`); dep `gltf` 1.4; Rust ≥ 1.88.
     - 0.9.18 `Image::zmerge(a, b)` (depth 0 / none = empty / background;
       coverage passes blended over, data passes from the nearer).
+    - 0.9.19 (3DWorker) (a2): `Scene.meshes: Vec<Model {mesh: Arc<Mesh>,
+      world, material, texture, holdout, name, node}>`; nodes cube /
+      sphere / cylinder / plane / read_geo (cached by path + mtime);
+      `render3d::render_preview` (headlit, viewport); viewport solid /
+      wireframe (Z), ray-triangle picking. `holdout` param read, not yet
+      rendered. `Image::bytes` doesn't count mesh memory yet.
   - **Working now (uncommitted in the tree at this update):**
     - **3DWorker** (wD:p4, `worker3d`), owns scene.rs, render3d.rs,
       ops.rs, graph.rs, gui/*: step (a2): Scene meshes, Cube / Sphere /
@@ -69,7 +75,7 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
     free: the Shuffle node and Merge's zmerge option (MathWiz has the
     engine for both), Read Geo choosing glTF by extension. Then README
     node table, `docs/help.md`, MCP / Python, and the release.
-  - Next version: **0.9.19**.
+  - Next version: **0.9.20**.
 - **Ask the user first** how the Mac builds (v0.9.11 universal DMG) went
   on their M4 Pro, and whether anyone tried an Intel Mac. Mac-only bugs
   come first.
@@ -280,7 +286,7 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.18**.
+  in the same commit as the change. Current: **0.9.19**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

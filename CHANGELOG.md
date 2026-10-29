@@ -11,6 +11,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.19 — 2026-10-29
+
+- 3D objects: **Cube, Sphere, Cylinder** and **Plane** nodes (with a
+  texture input and a color) and **Read Geo** (OBJ with MTL, glTF
+  .gltf / .glb), rendered by Scanline Render with the cards. The 3D
+  viewport shows meshes solid (lit from the camera) or as wireframes
+  (**Z**), and picks, frames and moves them like cards (M10 step a).
+
 ## 0.9.18 — 2026-10-29
 
 - Depth merge, engine side (`Image::zmerge`): combines two images pixel

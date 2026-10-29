@@ -1,5 +1,5 @@
-//! Scanline Render: draws a 3D scene's cards through a camera into an
-//! image, with a `depth` plane.
+//! Scanline Render: draws a 3D scene's cards and meshes through a camera
+//! into an image, with a `depth` plane.
 //!
 //! Everything drawn is a triangle mesh (a [`Surface`]): a card is two
 //! triangles. Each triangle is clipped against the camera's near plane in
@@ -30,15 +30,19 @@ pub(crate) struct Surface<'a> {
     pub positions: Cow<'a, [Vec3]>,
     /// Per vertex (empty: each triangle's own facing).
     pub normals: Cow<'a, [Vec3]>,
-    /// Per vertex, in image space: (0, 0) the texture's top left, (1, 1)
-    /// its bottom right (empty: all (0, 0)).
+    /// Per vertex: (0, 0) the texture's top left, (1, 1) its bottom right
+    /// (empty: all (0, 0)); with `v_up`, (0, 0) is its bottom left (a
+    /// mesh's, as OBJ has them).
     pub uvs: Cow<'a, [[f64; 2]]>,
+    pub v_up: bool,
     pub triangles: Cow<'a, [[u32; 3]]>,
     pub color: Rgba,
     pub texture: Option<&'a Image>,
     /// Texture coordinates past 0–1 repeat the texture (else they clamp to
     /// its edge, as a card's do).
     pub wrap: bool,
+    /// Shade by a light at the camera (the 3D viewport's solid view).
+    pub headlight: bool,
 }
 
 /// Card `card` as two triangles (top left, top right, bottom right; top
@@ -54,12 +58,33 @@ fn card_surface(card: &crate::scene::Card) -> Surface<'_> {
         color: [1.0; 4],
         texture: Some(&card.image),
         wrap: false,
+        v_up: false,
+        headlight: false,
     }
 }
 
-/// Everything in `scene` to draw, in order.
+/// Model `m`: its mesh, its material's color (premultiplied by its
+/// opacity) times its texture, which repeats.
+fn model_surface(m: &crate::scene::Model) -> Surface<'_> {
+    let [r, g, b] = m.material.color;
+    let a = m.material.opacity;
+    Surface {
+        world: m.world,
+        positions: Cow::Borrowed(&m.mesh.positions),
+        normals: Cow::Borrowed(&m.mesh.normals),
+        uvs: Cow::Borrowed(&m.mesh.uvs),
+        triangles: Cow::Borrowed(&m.mesh.triangles),
+        color: [r * a, g * a, b * a, a],
+        texture: m.texture.as_deref(),
+        wrap: true,
+        v_up: true,
+        headlight: false,
+    }
+}
+
+/// Everything in `scene` to draw, in order: cards, then meshes.
 pub(crate) fn surfaces(scene: &Scene) -> Vec<Surface<'_>> {
-    scene.cards.iter().map(card_surface).collect()
+    scene.cards.iter().map(card_surface).chain(scene.meshes.iter().map(model_surface)).collect()
 }
 
 /// A triangle corner: in camera space and in the scene, with its texture
@@ -138,7 +163,7 @@ fn triangles(surfs: &[Surface], cam: &Camera, format: Size) -> Vec<Tri> {
             let corner = |i: usize| Vert {
                 p: cam_p[i],
                 world: world_p[i],
-                uv: s.uvs.get(i).copied().unwrap_or([0.0, 0.0]),
+                uv: s.uvs.get(i).map_or([0.0, 0.0], |uv| if s.v_up { [uv[0], 1.0 - uv[1]] } else { *uv }),
                 n: world_n.get(i).copied().unwrap_or(face),
             };
             let tri = [corner(a), corner(b), corner(c)];
@@ -209,16 +234,29 @@ impl Tri {
 fn shade(s: &Surface, uv: [f64; 2]) -> Rgba {
     let Some(img) = s.texture else { return s.color };
     let (fw, fh) = (img.format.width as f64, img.format.height as f64);
-    let (tx, ty) = if s.wrap {
-        let (u, v) = (uv[0].rem_euclid(1.0), uv[1].rem_euclid(1.0));
-        (u * fw - 0.5, v * fh - 0.5)
-    } else {
+    if s.wrap {
+        let px = sample_wrapped(img, uv[0] * fw - 0.5, uv[1] * fh - 0.5);
+        return if s.color == [1.0; 4] { px } else { std::array::from_fn(|c| px[c] * s.color[c]) };
+    }
+    let (tx, ty) = {
         // Clamped to the image's frame, so a card's edge is sharp (the
         // samples soften it) rather than fading over half a texel.
         ((uv[0] * fw - 0.5).clamp(0.0, (fw - 1.0).max(0.0)), (uv[1] * fh - 0.5).clamp(0.0, (fh - 1.0).max(0.0)))
     };
     let px = img.sample_bilinear(tx as f32, ty as f32);
     if s.color == [1.0; 4] { px } else { std::array::from_fn(|c| px[c] * s.color[c]) }
+}
+
+/// Bilinear sample of `img` at frame position (x, y) (pixel centers on
+/// integers), the image repeating across and down: the taps past an edge
+/// wrap round to the other.
+fn sample_wrapped(img: &Image, x: f64, y: f64) -> Rgba {
+    let (w, h) = (img.format.width.max(1) as i64, img.format.height.max(1) as i64);
+    let (x0, y0) = (x.floor(), y.floor());
+    let (fx, fy) = ((x - x0) as f32, (y - y0) as f32);
+    let tap = |dx: i64, dy: i64| img.at((x0 as i64 + dx).rem_euclid(w) as i32, (y0 as i64 + dy).rem_euclid(h) as i32);
+    let (p00, p10, p01, p11) = (tap(0, 0), tap(1, 0), tap(0, 1), tap(1, 1));
+    std::array::from_fn(|c| (p00[c] * (1.0 - fx) + p10[c] * fx) * (1.0 - fy) + (p01[c] * (1.0 - fx) + p11[c] * fx) * fy)
 }
 
 /// Per pixel row, the triangles touching it, left edges in order.
@@ -245,12 +283,24 @@ pub fn render(scene: &Scene, cam: &Camera, format: Size, samples: usize, backgro
     }
 }
 
+/// `scene`'s cards and meshes through `cam`, one sample a pixel, the meshes
+/// lit from the camera (so their shape shows without lights): what the 3D
+/// viewport shows under its outlines.
+pub fn render_preview(scene: &Scene, cam: &Camera, format: Size) -> Image {
+    let mut surfs = surfaces(scene);
+    for s in surfs.iter_mut().skip(scene.cards.len()) {
+        s.headlight = true;
+    }
+    draw(&surfs, &[], cam, format, 1)
+}
+
 /// Surfaces `surfs` and dots at `points` through `cam` into a frame of
 /// `format` (see [`render`]).
 fn draw(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, samples: usize) -> Image {
     let n = samples.clamp(1, 16);
     let tris = triangles(surfs, cam, format);
     let rows = bin_rows(&tris, format.height);
+    let eye = geom::transform_point(&cam.world, &Vec3::zeros());
     let frame = IRect::frame(format);
     let (w, h) = (format.width, format.height);
     let mut color = vec![color::TRANSPARENT; w * h];
@@ -288,7 +338,16 @@ fn draw(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, samples:
                         if hits.iter().any(|h| tris[h.tri].surf == t.surf && (h.depth - d).abs() <= 1e-9 * d) {
                             continue;
                         }
-                        hits.push(Hit { depth: d, tri: ti as usize, color: shade(&surfs[t.surf], t.uv(&bary)) });
+                        let s = &surfs[t.surf];
+                        let mut color = shade(s, t.uv(&bary));
+                        if s.headlight {
+                            let at = |f: fn(&Vert) -> Vec3| t.v.iter().zip(&bary).map(|(v, b)| f(v) * *b).sum::<Vec3>();
+                            let (n, p) = (at(|v| v.n), at(|v| v.world));
+                            let facing = n.try_normalize(1e-300).zip((eye - p).try_normalize(1e-300)).map_or(1.0, |(n, v)| n.dot(&v).abs());
+                            let k = (0.25 + 0.75 * facing) as f32;
+                            (0..3).for_each(|c| color[c] *= k);
+                        }
+                        hits.push(Hit { depth: d, tri: ti as usize, color });
                     }
                     if hits.is_empty() {
                         continue;
@@ -441,7 +500,7 @@ mod tests {
 
     /// A mesh from its corners and triangles, flat-shaded, in one color.
     fn mesh(positions: Vec<Vec3>, triangles: Vec<[u32; 3]>, world: Mat4, color: Rgba) -> Surface<'static> {
-        Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: Cow::Owned(Vec::new()), triangles: triangles.into(), color, texture: None, wrap: false }
+        Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: Cow::Owned(Vec::new()), triangles: triangles.into(), color, texture: None, wrap: false, v_up: false, headlight: false }
     }
 
     /// A cube `s` across, centered on the origin, its faces wound
@@ -498,7 +557,7 @@ mod tests {
         let at = |i: usize, j: usize| (j * (n + 1) + i) as u32;
         let triangles: Vec<[u32; 3]> = (0..n).flat_map(|j| (0..n).flat_map(move |i| [[at(i, j), at(i, j + 1), at(i + 1, j + 1)], [at(i, j), at(i + 1, j + 1), at(i + 1, j)]])).collect();
         let world = geom::trs([0.0, 0.0, -5.0], [0.0; 3], [1.0; 3]);
-        let plane = Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: uvs.clone().into(), triangles: triangles.clone().into(), color: [1.0; 4], texture: Some(&img), wrap: false };
+        let plane = Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: uvs.clone().into(), triangles: triangles.clone().into(), color: [1.0; 4], texture: Some(&img), wrap: false, v_up: false, headlight: false };
         let card = card_surface_of(&img, world);
         for samples in [1, 3] {
             let (a, b) = (draw(&[plane_ref(&plane)], &[], &camera(), FMT, samples), draw(&[card_surface(&card)], &[], &camera(), FMT, samples));
@@ -507,7 +566,7 @@ mod tests {
         }
         // Twice the coordinates, repeating: the checker twice over.
         let doubled: Vec<[f64; 2]> = uvs.iter().map(|uv| [uv[0] * 2.0, uv[1] * 2.0]).collect();
-        let tiled = Surface { world, positions: plane.positions.clone(), normals: Cow::Owned(Vec::new()), uvs: doubled.into(), triangles: triangles.into(), color: [1.0; 4], texture: Some(&img), wrap: true };
+        let tiled = Surface { world, positions: plane.positions.clone(), normals: Cow::Owned(Vec::new()), uvs: doubled.into(), triangles: triangles.into(), color: [1.0; 4], texture: Some(&img), wrap: true, v_up: false, headlight: false };
         let out = draw(&[tiled], &[], &camera(), FMT, 1);
         assert!((0..32).all(|y| (0..32).all(|x| out.at(x, y) == out.at(x + 32, y))), "repeats across");
     }
@@ -519,7 +578,98 @@ mod tests {
 
     /// A borrowed copy of `s`.
     fn plane_ref<'a>(s: &'a Surface) -> Surface<'a> {
-        Surface { world: s.world, positions: Cow::Borrowed(&s.positions), normals: Cow::Borrowed(&s.normals), uvs: Cow::Borrowed(&s.uvs), triangles: Cow::Borrowed(&s.triangles), color: s.color, texture: s.texture, wrap: s.wrap }
+        Surface { world: s.world, positions: Cow::Borrowed(&s.positions), normals: Cow::Borrowed(&s.normals), uvs: Cow::Borrowed(&s.uvs), triangles: Cow::Borrowed(&s.triangles), color: s.color, texture: s.texture, wrap: s.wrap, v_up: s.v_up, headlight: s.headlight }
+    }
+
+    /// Primitives and Read Geo through the graph, each at 5 in front of the
+    /// usual 90° camera (64 × 32).
+    #[test]
+    fn primitives_and_read_geo_render_through_the_graph() {
+        use crate::graph::{Evaluator, Graph};
+        use crate::ops::EvalContext;
+        use serde_json::json;
+        let obj = format!("{}/examples/geo/crate.obj", env!("CARGO_MANIFEST_DIR"));
+        let g: Graph = serde_json::from_value(json!({
+            "project": { "first_frame": 1, "last_frame": 1, "fps": 24, "format": { "width": 64, "height": 32 } },
+            "nodes": [
+                { "id": "cam", "op": "camera", "params": { "focal": 18 } },
+                { "id": "box", "op": "cube", "params": { "translate": [0, 0, -5], "color": [1, 0, 0, 1] } },
+                { "id": "plate", "op": "checkerboard", "params": { "width": 64, "height": 32, "size": 4 } },
+                { "id": "flat", "op": "plane", "inputs": ["plate"], "params": { "translate": [0, 0, -5], "size": [10, 5] } },
+                { "id": "card1", "op": "card", "inputs": ["plate"], "params": { "translate": [0, 0, -5], "size": [10, 5] } },
+                { "id": "crate", "op": "read_geo", "params": { "file": obj, "translate": [0, 0, -5] } },
+                { "id": "crate_gltf", "op": "read_geo", "params": { "file": obj.replace(".obj", ".gltf"), "translate": [0, 0, -5] } },
+                { "id": "nofile", "op": "read_geo", "params": { "file": "/no/such/file.obj" } },
+                { "id": "r_box", "op": "scanline_render", "inputs": ["box", "cam", ""], "params": { "samples": 1 } },
+                { "id": "r_flat", "op": "scanline_render", "inputs": ["flat", "cam", ""], "params": { "samples": 1 } },
+                { "id": "r_card", "op": "scanline_render", "inputs": ["card1", "cam", ""], "params": { "samples": 1 } },
+                { "id": "r_crate", "op": "scanline_render", "inputs": ["crate", "cam", ""], "params": { "samples": 1 } },
+                { "id": "r_gltf", "op": "scanline_render", "inputs": ["crate_gltf", "cam", ""], "params": { "samples": 1 } },
+                { "id": "r_nofile", "op": "scanline_render", "inputs": ["nofile", "cam", ""] },
+            ] })).unwrap();
+        let mut ev = Evaluator::new();
+        let at = |ev: &mut Evaluator, node: &str| ev.evaluate(&g, node, &EvalContext { frame: 1, write_outputs: false });
+        // A unit cube face on: its front (4.5 away) an 8 × 8 square, red.
+        let boxed = at(&mut ev, "r_box").unwrap();
+        let covered = |img: &Image| (0..32).flat_map(|y| (0..64).map(move |x| (x, y))).filter(|&(x, y)| img.at(x, y)[3] > 0.0).collect::<Vec<_>>();
+        let square = covered(&boxed);
+        assert_eq!((square.len(), square[0], *square.last().unwrap()), (64, (28, 12), (35, 19)));
+        assert_eq!(boxed.at(32, 16), [1.0, 0.0, 0.0, 1.0]);
+        // A plane with the plate is the card with the plate.
+        let (flat, card) = (at(&mut ev, "r_flat").unwrap(), at(&mut ev, "r_card").unwrap());
+        let worst = flat.pixels.iter().zip(&card.pixels).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0, f32::max);
+        assert!(worst < 1e-4, "{worst}");
+        // The crate file: the same cube, in its material's color.
+        let s = at(&mut ev, "crate").unwrap();
+        assert_eq!(s.scene.as_ref().unwrap().describe(), "0 cameras, 0 cards, 1 mesh");
+        let crate_img = at(&mut ev, "r_crate").unwrap();
+        assert_eq!(covered(&crate_img), square);
+        let c = crate_img.at(32, 16);
+        assert!((c[0] - 0.6).abs() < 1e-6 && (c[1] - 0.4).abs() < 1e-6 && (c[2] - 0.2).abs() < 1e-6 && c[3] == 1.0, "{c:?}");
+        // The same crate as glTF: the same square.
+        assert_eq!(covered(&at(&mut ev, "r_gltf").unwrap()), square);
+        let e = at(&mut ev, "r_nofile").err().unwrap();
+        assert!(e.message.contains("can't read /no/such/file.obj"), "{}", e.message);
+    }
+
+    #[test]
+    fn the_preview_lights_meshes_from_the_camera() {
+        let sphere = crate::scene::primitive_model("sphere", &serde_json::json!({ "radius": 2.0, "segments": [48, 24], "translate": [0, 0, -5] }), None).unwrap();
+        let red = card(Image::filled(4, 4, [1.0, 0.0, 0.0, 1.0]), [4.5, 0.0, -5.0], [0.0, 60.0, 0.0], [2.0, 2.0]);
+        let scene = Scene { cards: vec![red], meshes: vec![sphere], ..Scene::default() };
+        let out = render_preview(&scene, &camera(), FMT);
+        // Facing the camera in the middle, turning away at the rim; the
+        // card as it renders.
+        let (mid, rim) = (out.at(32, 16)[0], out.at(32, 16 - 13)[0]);
+        assert!(mid > 0.98 && rim < mid - 0.05 && rim > 0.25, "{mid} {rim}");
+        assert_eq!(out.at(60, 16), [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(render(&scene, &camera(), FMT, 1, None).at(32, 16 - 13), [1.0; 4], "unlit in a render");
+    }
+
+    #[test]
+    fn a_textured_sphere_has_no_seam() {
+        // A texture whose color only changes across, and comes back round:
+        // red 1 at its left and right edges, 0 in the middle.
+        let (w, h) = (64, 16);
+        let mut tex = Image::new(w, h);
+        for (i, p) in tex.pixels.iter_mut().enumerate() {
+            let u = ((i % w) as f64 + 0.5) / w as f64;
+            *p = [(0.5 + 0.5 * (std::f64::consts::TAU * u).cos()) as f32, 0.0, 0.0, 1.0];
+        }
+        let sphere = crate::scene::primitive_model("sphere", &serde_json::json!({ "radius": 2.0, "segments": [48, 24], "translate": [0, 0, -5], "rotate": [0, 180, 0] }), Some(&tex)).unwrap();
+        let out = render(&Scene { meshes: vec![sphere.clone()], ..Scene::default() }, &camera(), FMT, 3, None);
+        // Turned round, its seam faces the camera down the middle: no crack
+        // (full coverage) and no jump in color across it.
+        for y in 10..22 {
+            for x in 28..36 {
+                let p = out.at(x, y);
+                assert!(p[3] > 0.999 && p[0] > 0.9, "({x}, {y}): {p:?}");
+            }
+        }
+        // Facing the other way, the texture's middle (red 0) shows there.
+        let front = crate::scene::Model { world: geom::trs([0.0, 0.0, -5.0], [0.0; 3], [1.0; 3]), ..sphere };
+        let out = render(&Scene { meshes: vec![front], ..Scene::default() }, &camera(), FMT, 3, None);
+        assert!(out.at(32, 16)[0] < 0.1 && out.at(32, 16)[3] > 0.999);
     }
 
     /// Through the graph: a plate on a card, an animated camera, the
