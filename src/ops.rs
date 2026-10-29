@@ -464,6 +464,8 @@ pub static OPS: &[OpInfo] = &[
             p!("clip_black", "Clip black", ParamKind::Float { min: 0.0, max: 1.0 }, 0.0),
             p!("clip_white", "Clip white", ParamKind::Float { min: 0.0, max: 1.0 }, 1.0),
             p!("despill", "Despill", ParamKind::Float { min: 0.0, max: 1.0 }, 1.0),
+            p!("shrink_grow", "Shrink / grow", ParamKind::Float { min: -50.0, max: 50.0 }, 0.0),
+            p!("softness", "Softness", ParamKind::Float { min: 0.0, max: 50.0 }, 0.0),
             fixed!("output", "Output", ParamKind::Choice(KEYER_OUTPUTS), "keyed"),
             MIX,
         ],
@@ -476,7 +478,8 @@ pub static OPS: &[OpInfo] = &[
                or Ctrl+drag in the viewer picks it from the input. Balance \
                weighs the larger of the other two channels (1) against the smaller \
                (0). Clip black/white crush the matte's ends; despill pulls the \
-               screen channel down to the others. Output: the keyed image \
+               screen channel down to the others. Shrink / grow moves the matte's edge in \
+               (negative) or out by that many pixels; Softness blurs it, reaching about that far. Output: the keyed image \
                (premultiplied), the matte, or the despilled plate.",
     },
     OpInfo {
@@ -1653,6 +1656,8 @@ struct Keyer {
     clip_black: f32,
     clip_white: f32,
     despill: f32,
+    shrink_grow: f32,
+    softness: f32,
     output: String,
 }
 
@@ -1710,10 +1715,13 @@ fn keyer(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let screen = p.screen.unwrap_or_else(|| estimate_screen(src));
     let output = KEYER_OUTPUTS.iter().position(|o| *o == p.output).ok_or_else(|| anyhow!("unknown output '{}'", p.output))?;
     let span = (p.clip_white - p.clip_black).max(1e-4);
-    let key = |px: Rgba, plate_px: Option<Rgba>| -> Rgba {
+    // At (x, y): the matte (the keyed image's alpha) and the despilled
+    // straight color.
+    let key = |x: i32, y: i32| -> (f32, Rgba) {
+        let px = src.at(x, y);
         let c = color::unpremultiply(px);
         // The screen here: the clean plate's, where it shows one.
-        let s = plate_px.map(color::unpremultiply).filter(|s| s[3] > 0.0).unwrap_or(screen);
+        let s = plate.map(|pl| color::unpremultiply(pl.at(x, y))).filter(|s| s[3] > 0.0).unwrap_or(screen);
         let (pc, q, r) = screen_channels(s);
         let ds = s[pc] - others(s, q, r, p.balance);
         let dc = c[pc] - others(c, q, r, p.balance);
@@ -1721,19 +1729,80 @@ fn keyer(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
         let alpha = ((raw - p.clip_black) / span).clamp(0.0, 1.0);
         let mut fg = c;
         fg[pc] -= p.despill * (c[pc] - others(c, q, r, p.balance)).max(0.0);
+        (alpha * px[3], fg)
+    };
+    let shade = |m: f32, fg: Rgba| -> Rgba {
         match output {
-            0 => {
-                let a = alpha * px[3];
-                [fg[0] * a, fg[1] * a, fg[2] * a, a]
-            }
-            1 => [alpha, alpha, alpha, 1.0],
+            0 => [fg[0] * m, fg[1] * m, fg[2] * m, m],
+            1 => [m, m, m, 1.0],
             _ => color::premultiply(fg),
         }
     };
     let mut windows = vec![src.window()];
     windows.extend(plate.map(Image::window));
-    let window = pointwise_window(src.format, &windows, key(color::TRANSPARENT, None));
-    Ok(generate(src.format, window, |x, y| key(src.at(x, y), plate.map(|pl| pl.at(x, y)))))
+    let data = windows.iter().fold(IRect::default(), |u, w| u.union(w));
+    let grow = p.shrink_grow.clamp(-50.0, 50.0);
+    // Softness is how far the soft edge reaches: three box passes of a
+    // third of it each (at least one pixel).
+    let soft = if p.softness > 0.0 { (p.softness.min(50.0) / 3.0).round().max(1.0) as usize } else { 0 };
+    if output == 2 || (grow == 0.0 && soft == 0) {
+        // Pixel by pixel.
+        let window = pointwise_window(src.format, &windows, shade(0.0, color::TRANSPARENT));
+        return Ok(generate(src.format, window, |x, y| {
+            let (m, fg) = key(x, y);
+            shade(m, fg)
+        }));
+    }
+    // The matte over the data, grown into the space around it (up to the
+    // frame), then shrunk or grown and softened.
+    let pad = grow.max(0.0).ceil() as i32 + 3 * soft as i32;
+    let region = data.expand(pad).intersect(&data.union(&IRect::frame(src.format)));
+    let mut matte = generate(src.format, region, |x, y| [key(x, y).0; 4]);
+    morph(&mut matte, grow);
+    if soft > 0 {
+        // Three box passes: close to a gaussian.
+        for _ in 0..3 {
+            box_pass_h(&mut matte, soft);
+            box_pass_v(&mut matte, soft);
+        }
+    }
+    let window = if output == 1 { region.union(&IRect::frame(src.format)) } else { region };
+    Ok(generate(src.format, window, |x, y| shade(matte.at(x, y)[3], key(x, y).1)))
+}
+
+/// Grow (`by` > 0) or shrink a matte (in every channel) by `by` pixels:
+/// one-pixel steps alternating 4- and 8-neighbor max (or min), which keeps
+/// round edges round (an octagon), the fraction blended. Edges repeat.
+fn morph(img: &mut Image, by: f32) {
+    let steps = by.abs().ceil() as usize;
+    let frac = by.abs() - by.abs().floor();
+    let (w, h) = (img.width, img.height);
+    if steps == 0 || w == 0 || h == 0 {
+        return;
+    }
+    let pick = |a: f32, b: f32| if by > 0.0 { a.max(b) } else { a.min(b) };
+    let mut before = Vec::new();
+    for step in 0..steps {
+        if step + 1 == steps && frac > 0.0 {
+            before = img.pixels.clone();
+        }
+        let src = img.pixels.clone();
+        let square = step % 2 == 1;
+        img.pixels.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+            for (x, out) in row.iter_mut().enumerate() {
+                let mut v = src[y * w + x][3];
+                for (dx, dy) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)].into_iter().take(if square { 8 } else { 4 }) {
+                    let sx = (x as i32 + dx).clamp(0, w as i32 - 1) as usize;
+                    let sy = (y as i32 + dy).clamp(0, h as i32 - 1) as usize;
+                    v = pick(v, src[sy * w + sx][3]);
+                }
+                *out = [v; 4];
+            }
+        });
+    }
+    if !before.is_empty() {
+        img.pixels.iter_mut().zip(&before).for_each(|(p, b)| *p = [b[3] + (p[3] - b[3]) * frac; 4]);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2113,6 +2182,38 @@ mod tests {
             assert!((total(&blurred) - total(&sharp)).abs() < 2.0, "{op}: {} {}", total(&blurred), total(&sharp));
             assert!(blurred.window().x0 <= 45 && blurred.window().x1 >= 75, "{op}: {:?}", blurred.window());
         }
+    }
+
+    #[test]
+    fn keyer_matte_shrinks_grows_and_softens() {
+        // A 10×10 subject at x 15–25 on a 40×20 green screen.
+        let mut plate = solid(40, 20, [0.1, 0.6, 0.1, 1.0]);
+        for y in 5..15 {
+            for x in 15..25 {
+                plate.pixels[y * 40 + x] = [0.5, 0.4, 0.3, 1.0];
+            }
+        }
+        let matte = |extra: Value| {
+            let mut p = json!({ "output": "matte", "screen": [0.1, 0.6, 0.1, 1.0] });
+            p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            let img = eval("keyer", &p, &[Some(&plate), None, None], &CTX).unwrap();
+            (0..40).map(|x| img.at(x, 10)[0]).collect::<Vec<f32>>()
+        };
+        let row = matte(json!({}));
+        assert_eq!((row[14], row[15], row[24], row[25]), (0.0, 1.0, 1.0, 0.0));
+        let grown = matte(json!({ "shrink_grow": 2 }));
+        assert_eq!((grown[12], grown[13], grown[26], grown[27]), (0.0, 1.0, 1.0, 0.0));
+        let shrunk = matte(json!({ "shrink_grow": -2 }));
+        assert_eq!((shrunk[16], shrunk[17], shrunk[22], shrunk[23]), (0.0, 1.0, 1.0, 0.0));
+        let half = matte(json!({ "shrink_grow": 0.5 }));
+        assert!(approx(half[14], 0.5) && approx(half[13], 0.0) && approx(half[15], 1.0));
+        // Softness: a ramp across the edge, the middle still solid.
+        let soft = matte(json!({ "softness": 2 }));
+        assert!(soft[15] > 0.3 && soft[15] < 0.8 && soft[13] < soft[15] && approx(soft[20], 1.0), "{soft:?}");
+        assert!((soft.iter().sum::<f32>() - 10.0).abs() < 0.1, "softness keeps the matte's area");
+        // Keyed output follows the matte; the frame's edges aren't eaten.
+        let edge = eval("keyer", &json!({ "screen": [0.1, 0.6, 0.1, 1.0], "shrink_grow": -3, "softness": 1 }), &[Some(&solid(10, 10, [0.5, 0.4, 0.3, 1.0])), None, None], &CTX).unwrap();
+        assert!(approx(edge.at(0, 0)[3], 1.0), "{:?}", edge.at(0, 0));
     }
 
     #[test]

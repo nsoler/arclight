@@ -16,7 +16,7 @@ Last updated 2026-10-28 (session 7). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~14,400 lines of Rust + Python. Tests: 76 library + 10 CLI + 39 GUI
+- ~14,400 lines of Rust + Python. Tests: 77 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
 - **Release build (end of session 6):** `cargo build --release --workspace`
   and `python/build.sh` were run at the final commit, so
@@ -78,7 +78,7 @@ steps": take them in this order, one milestone at a time (commit, push and
 fast-forward `main` after each, per the standing instruction above), and
 report back after a few milestones.
 
-1. **Small UX debts:** Keyer: matte shrink/grow and softness; per-track tracker
+1. **Small UX debts:** per-track tracker
    box sizes and offsets are only editable in the viewer; no filtering when
    Transform / Tracker output / Corner Pin shrink the image (aliasing).
 2. **Session-4 follow-ups** (small to medium):
@@ -432,6 +432,14 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   opens the Shift+E node browser at the pointer (the old category context
   menu, `add_menu` / `menu_at`, is gone); over a wire the browser shows
   "Insert between …" and its node goes into the wire.
+- **Session 7, part 14** (user request): Keyer `shrink_grow` (−50…50 px)
+  and `softness` (0…50). With either set (and Output not "despill
+  only"), `keyer` builds the matte (alpha × input alpha) over the data
+  grown by the reach (within the frame), runs `morph` (1-px steps
+  alternating 4/8-neighbor max or min = octagonal, fraction blended,
+  edges repeat), then 3 `box_pass_h/v` of round(softness/3) px, and
+  shades color from the filtered matte. Otherwise the old pixel path.
+  The matte output is now alpha × input alpha (0 outside the data).
 - **CorridorKey** (AI keyer, github.com/nikopueringer/CorridorKey; the
   OFX port gitcapoom/corridorkey_ofx is Windows/Resolve-only): the user
   deferred it. If revisited: run upstream's PyTorch engine (Linux OK; the
