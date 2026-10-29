@@ -9,35 +9,19 @@ done, M10 specified), `docs/help.md` (the in-app help) and
 
 ## Start here (next session)
 
-- **State:** version **0.9.7** on branch **`wip-ns-3dwork`**, commit
-  `5d9caa1`; `main` and both remote branches match, the tree is clean.
-  `wip-ns-effects` is frozen at v0.8.4. Local release build
-  (`target/release`, Python `.so`) is 0.9.7, so the Omarchy launcher
-  entry (repo `install.sh`) runs 0.9.7.
-- **Latest release: v0.9.7**
-  (github.com/nsoler/arclight/releases/tag/v0.9.7): Linux x86_64 tarball
-  (checked: installs with its `install.sh` and runs on this Omarchy
-  machine), **macOS universal DMG** (Apple Silicon + Intel), `arclt`
-  wheels (macOS universal2, Linux manylinux2014) and sdist. Earlier:
-  v0.9.5, v0.8.4 (first universal DMG), v0.8.3, and v0.0.19–v0.0.36
-  (old numbering).
-- **Versions:** `0.<phase>.<increment>`; phase 9 (3D viewport) started
-  at 0.9.0 by the user's choice, so the next change is **0.9.8**. Don't
-  change the phase number unless the user says so.
-- **Sessions 8–9 shipped:** (8) release packaging; links and formulas;
-  Phase 4 M1–M8 up to the Camera Tracker; then 0.8.x: renumbering, the
-  Camera rig (adding a Camera brings Scene + Scanline Render, wired),
-  node graph multi-selection + backdrops (group boxes; pan moved to
-  middle / Alt-drag), the universal macOS build. (9) **M9, the 3D
-  viewport, Blender-style** (0.9.1–0.9.6): 2D | 3D toggle (Tab over the
-  viewer), navigation (mouse, trackpad, emulate-3-button), numpad views,
-  pie, navigation gizmo, look-through, textured cards, frusta / paths /
-  points (colored by error) / locators, picking and shared selection,
-  G / R / S and move / rotate / scale gizmos, viewport camera saved with
-  the project; and (0.9.7) **Help → Arclight Help… / F1**, a markdown
-  help window from `docs/help.md`. Help → About (logo, creator, version,
-  build time) is unchanged.
-- **Ask the user first** how the Mac builds (v0.9.7 universal DMG) went
+- **State:** version **0.9.11** on branch **`wip-ns-3dwork`**, commit
+  `c127e53` (M11 complete), merged to `main`. The local build
+  (`target/release`) is 0.9.11, so the Omarchy launcher entry (repo
+  `install.sh`) runs 0.9.11. (The Python `.so` in `python/` is still
+  0.9.7; rebuild with `python/build.sh` if needed.)
+- **Latest release: v0.9.11**
+  (github.com/nsoler/arclight/releases/tag/v0.9.11): Linux x86_64 tarball
+  `arclight-0.9.11-linux-x86_64.tar.gz`, macOS universal DMG
+  `Arclight-0.9.11-universal.dmg` (Apple Silicon + Intel), and the `arclt`
+  wheels (Linux manylinux2014, macOS universal2) + sdist. Both
+  workflows passed. Earlier: v0.9.7, v0.9.5, v0.8.4, v0.8.3 and the
+  0.0.x pre-releases.
+- **Ask the user first** how the Mac builds (v0.9.11 universal DMG) went
   on their M4 Pro, and whether anyone tried an Intel Mac. Mac-only bugs
   come first.
 - **Next work, in order:** (1) Mac feedback; (2) hand checks of the 3D
