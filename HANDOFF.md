@@ -1,6 +1,6 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-28 (session 7). Read this, then `README.md`
+Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
 (user-facing features, file format, shortcuts, scripting) and
 `docs/spec-coverage.md` (what the planning docs ask for vs. what exists).
 
@@ -16,20 +16,31 @@ Last updated 2026-10-28 (session 7). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~14,400 lines of Rust + Python. Tests: 77 library + 10 CLI + 39 GUI
+- ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
-- **Release build (end of session 6):** `cargo build --release --workspace`
+  Some tests need ffmpeg (with libx265) and skip without it.
+- **Release build (end of session 7):** `cargo build --release --workspace`
   and `python/build.sh` were run at the final commit, so
   `target/release/arclight-gui` (GUI), `target/release/arclight` (CLI /
   MCP server), `target/release/libarclight_plugin_example.so` and
   `python/arclt/_arclt.abi3.so` are current. Run the GUI with
-  `./target/release/arclight-gui [project.json]`. The user asked for the
-  build to try the session's work by hand; these were only exercised
-  headlessly (tests / screenshots), so they're the things to check:
-  node-graph insert-into-wire, shake-to-disconnect, minimap, wiring a
-  Merge's inputs; viewer box select / Ctrl+A / transform box on Roto and
-  Polygon; the data-window outline, overscan and Format field.
+  `./target/release/arclight-gui [project.json]`, or from the Omarchy
+  launcher (Super+Space, "Arclight"): `install.sh` was run, and its entry
+  runs this checkout's release binary, so rebuilding is enough.
   Clippy is clean apart from one old style lint (`Graph::from_str` name).
+- **To check by hand** (session 7 work exercised only by tests,
+  screenshots and headless renders): Keyer Ctrl+click/Ctrl+drag screen
+  pick, shrink/grow, softness on real footage; right-click node browser;
+  dragging an output onto a wire (Merge, dropped node in A); view
+  override (double-click a node, click the Viewer to go back); the
+  close-with-unsaved-changes dialog's Save / Don't Save buttons; Corner
+  Pin From/To = image corners buttons; motion blur on real animation;
+  10-bit footage and DPX/TIFF/EXR sequences from real productions.
+- **App icon:** the user replaced the placeholder `assets/arclight.svg` /
+  `.png` with their own design (teal, "ARCLIGHT", on a 612×792 page with
+  white background). As an icon it renders small and non-square; offer to
+  crop the SVG viewBox to the logo (square) if they want, but don't change
+  their art unasked. The PNG is built into the GUI (`app_icon()`).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
   (Rectangle, Ellipse, Polygon, Roto), Transform layer dragging in the viewer,
@@ -44,6 +55,20 @@ Last updated 2026-10-28 (session 7). Read this, then `README.md`
   graph insert-into-wire, shake-to-disconnect and minimap; Phase 0.6
   (formats, data windows, overscan, project format; plan and measurements
   in `docs/phase-0.6-plan.md`).
+  Session 7 (all user requests; see "Progress log", parts 1–21): port
+  styling and drag-output-onto-wire → Merge; close-with-unsaved warning;
+  narrow viewer toolbar; Transform auto pivot (`center`); Keyer node
+  (color difference, despill, clean plate, viewer color pick, shrink/grow,
+  softness); viewer override instead of rewiring, unplugged inputs read
+  as empty; motion blur on shapes, Transform, Corner Pin and Tracker
+  output; Corner Pin From/To = image corners; right-click opens the node
+  browser; app launcher entry (`install.sh` / `uninstall.sh`, icon,
+  app id `arclight`); viewer crash past the GPU texture limit fixed; big
+  and 16-bit stills; EXR/TIFF/Targa/WebP sequences checked, missing frames
+  hold, TIFF alpha tagged; DPX read/write (log, 10/16-bit video); 10-bit
+  video decode and encode (HEVC 10-bit, ProRes 422 HQ, ProRes 4444).
+  CorridorKey (AI keyer) was researched and deferred by the user (notes
+  in part 5).
 - **Not done:** small UX debts, session-4 follow-ups, Phase 4 (3D). See
   "Next steps".
 - Development is on Linux (Omarchy/Hyprland): use `sed -i` (not
@@ -77,9 +102,11 @@ steps": take them in this order, one milestone at a time (commit, push and
 fast-forward `main` after each, per the standing instruction above), and
 report back after a few milestones.
 
-1. **Small UX debts:** per-track tracker
-   box sizes and offsets are only editable in the viewer; no filtering when
-   Transform / Tracker output / Corner Pin shrink the image (aliasing).
+1. **Small UX debts:** per-track tracker box sizes and offsets are only
+   editable in the viewer; no filtering when Transform / Tracker output /
+   Corner Pin shrink the image (aliasing). Formats: RLE / float / 1-bit
+   DPX, DPX with alpha, EXR data windows (EXR reads ignore the file's data
+   window), video color tags (encodes carry no color metadata).
 2. **Session-4 follow-ups** (small to medium):
    - Python plugins (custom ops written in Python): embed Python in the
      host via the `python/` crate, or run them out of process.

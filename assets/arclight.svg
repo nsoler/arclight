@@ -1,44 +1,28 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Arclight placeholder icon (in development): an arc of light over a
-     small node graph, with a "DEV" band. -->
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 612 792">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#232a3a"/>
-      <stop offset="1" stop-color="#11141c"/>
-    </linearGradient>
-    <linearGradient id="arc" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#ffb347"/>
-      <stop offset="0.5" stop-color="#fff1c2"/>
-      <stop offset="1" stop-color="#ffb347"/>
-    </linearGradient>
-    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#ffd27a" stop-opacity="0.55"/>
-      <stop offset="1" stop-color="#ffd27a" stop-opacity="0"/>
-    </radialGradient>
-    <clipPath id="tile">
-      <rect x="8" y="8" width="240" height="240" rx="48"/>
-    </clipPath>
+    <style>
+      .cls-1{fill:#1b8684}
+      .cls-2{fill:#4e9290}
+      .cls-3{fill:#75aaa9}
+      .cls-4{fill:#90b9b8}
+      .cls-5{fill:none;stroke:#1b8684;stroke-width:6;stroke-linecap:round;stroke-linejoin:bevel}
+      .cls-6{font-family:&apos;Source Sans 3&apos;, sans-serif;font-size:12;fill:#033c3a}
+    </style>
   </defs>
-
-  <rect x="8" y="8" width="240" height="240" rx="48" fill="url(#bg)"/>
-  <rect x="8.5" y="8.5" width="239" height="239" rx="47.5" fill="none" stroke="#3a4560" stroke-width="1"/>
-
-  <!-- The arc of light. -->
-  <ellipse cx="128" cy="92" rx="92" ry="56" fill="url(#glow)"/>
-  <path d="M 44 120 A 84 84 0 0 1 212 120" fill="none" stroke="url(#arc)" stroke-width="14" stroke-linecap="round"/>
-  <circle cx="128" cy="36" r="9" fill="#fff6dc"/>
-
-  <!-- A node graph beneath it: two inputs into a merge, out to the right. -->
-  <path d="M 78 150 C 104 150, 104 176, 128 176 M 78 202 C 104 202, 104 176, 128 176 M 128 176 L 182 176"
-        fill="none" stroke="#9aa6c0" stroke-width="5" stroke-linecap="round"/>
-  <rect x="64" y="141" width="18" height="18" rx="3" fill="#e9cd3c"/>
-  <rect x="64" y="193" width="18" height="18" rx="3" fill="#e9cd3c"/>
-  <circle cx="128" cy="176" r="12" fill="#8ce18c"/>
-  <circle cx="186" cy="176" r="9" fill="#8ce18c"/>
-
-  <!-- In development. -->
-  <rect x="8" y="222" width="240" height="26" fill="#d9534f" clip-path="url(#tile)"/>
-  <text x="128" y="241" font-family="DejaVu Sans, Liberation Sans, sans-serif" font-size="18" font-weight="bold"
-        letter-spacing="6" fill="#ffffff" text-anchor="middle">DEV</text>
+  <title>Artboard 1</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M245.555 378.339 L178.022 296.17 C178.022 296.17 190.239 244.787 236.812 216.67 C283.385 188.552 328.466 188.779 361.226 220.752 C393.985 252.726 422.965 380.158 422.965 380.158 Z" class="cls-1"/>
+    <path d="M242.348 368.947 L184.331 299.69 C184.331 299.69 195.103 256.152 235.468 232.162 C275.832 208.171 314.789 208.174 342.965 235.097 C371.141 262.019 395.652 369.745 395.652 369.745 Z" class="cls-2"/>
+    <path d="M242.365 357.968 L195.86 302.471 C195.86 302.471 204.499 267.582 236.859 248.354 C269.22 229.126 300.45 229.125 323.036 250.698 C345.621 272.271 365.263 358.597 365.263 358.597 Z" class="cls-3"/>
+    <path d="M243.621 340.82 L213.962 306.662 C213.962 306.662 219.729 284.972 240.696 272.861 C261.663 260.751 281.792 260.573 296.227 273.825 C310.662 287.078 322.831 340.511 322.831 340.511 Z" class="cls-4"/>
+    <path d="M427.407 355.642" class="cls-1"/>
+    <g>
+    </g>
+    <path d="M236.066 380.842 L235.046 379.616 C235.046 379.616 193.77 407.628 170.347 401.494 C148.901 395.878 141.472 379.051 141.886 364.362 C142.438 344.774 172.762 304.8 172.762 304.8 Z" class="cls-4"/>
+    <path d="M162.93 355.873 L178.371 333.873" class="cls-5"/>
+    <path d="M174.967 368.567 L195.914 351.725" class="cls-5"/>
+    <path d="M186.978 382.901 L211.145 371.138" class="cls-5"/>
+    <text transform="matrix(3.488 0 0 1.387 245.555 393.66)" x="0" y="0" xml:space="preserve" class="cls-6"><tspan x="0" y="0">ARCLIGHT</tspan></text>
+  </g>
 </svg>
