@@ -237,8 +237,8 @@ impl Doc {
     }
 
     /// Bring `node` into the wire from `src` to input `port` of `dst` with a
-    /// new Merge, halfway along the wire: `src` feeds its A, `node` its B,
-    /// and the Merge feeds that port. The Merge's id, or None (changing
+    /// new Merge, halfway along the wire: `node` feeds its A (over), `src`
+    /// its B (under), and the Merge feeds that port. The Merge's id, or None (changing
     /// nothing) when `node` has no output, is an end of the wire, or would
     /// close a cycle.
     pub fn merge_into_wire(&mut self, node: &str, src: &str, dst: &str, port: usize) -> Option<String> {
@@ -254,8 +254,8 @@ impl Doc {
         let (a, b) = (at(src), at(dst));
         let merge = self.add_node("merge", [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]);
         let m = self.node_mut(&merge).unwrap();
-        m.inputs[0] = src.to_string();
-        m.inputs[1] = node.to_string();
+        m.inputs[0] = node.to_string();
+        m.inputs[1] = src.to_string();
         self.node_mut(dst).unwrap().inputs[port] = merge.clone();
         self.changed();
         Some(merge)

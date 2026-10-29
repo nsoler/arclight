@@ -351,7 +351,8 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   inputs hollow). Dragging an output onto a wire (`NodeEditor::input_at`
   wins first, then `wire_at`, lit while dragging) calls
   `Doc::merge_into_wire`: a new Merge halfway between the wire's ends, the
-  wire's source into A, the dragged node into B, the Merge into the old
+  dragged node into A (over), the wire's source into B (swapped at the
+  user's request in part 8), the Merge into the old
   port; refused on a cycle. Dragging a node *body* onto a wire still
   splices it (`insert_on_wire`).
 - **Session 7, part 2**: closing the window with unsaved changes asks
@@ -402,9 +403,10 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   Viewer yet, `route_to_viewer` makes and wires one, which file drops
   still use). Clicking the Viewer node clears it too. Status line: "(click
   viewer1 to go back)"; the node graph draws an eye on the overriding
-  node. MCP `view_node` follows the same rule. Note `merge_into_wire` puts
-  the wire's source in A (over) and the dropped node in B, as the user
-  asked.
+  node. MCP `view_node` follows the same rule.
+- **Session 7, part 8**: `merge_into_wire` now puts the dropped node in A
+  (over) and the wire's source in B, so a keyed foreground lands over its
+  background.
 - **CorridorKey** (AI keyer, github.com/nikopueringer/CorridorKey; the
   OFX port gitcapoom/corridorkey_ofx is Windows/Resolve-only): the user
   deferred it. If revisited: run upstream's PyTorch engine (Linux OK; the

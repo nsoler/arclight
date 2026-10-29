@@ -3,8 +3,8 @@
 //! Inputs sit on a node's left edge, its output on the right. Drag from an
 //! output to an input (or the reverse) to connect; drag a connected input away
 //! to reroute or disconnect. Drop a wire dragged from an output onto another
-//! wire to join the two with a new Merge (the wire's source into A, the
-//! dragged node into B). Inputs are yellow squares, outputs green circles.
+//! wire to join the two with a new Merge (the dragged node into A, over
+//! the wire's source in B). Inputs are yellow squares, outputs green circles.
 //! Right-click the canvas, or press Shift+E for a
 //! searchable node browser, to add nodes; over a wire, the new node goes into
 //! it. Drop an unconnected node on a wire to splice it in; shake a node while
@@ -976,22 +976,22 @@ mod tests {
             NodeEditor::out_port(h.rect(doc, &d.inputs[port])).lerp(NodeEditor::in_port(h.rect(doc, dst), port, d.inputs.len()), 0.5)
         };
         let inputs = |doc: &Doc, id: &str| doc.node(id).unwrap().inputs.clone();
-        // A source's output onto src → blur: a Merge, src into A, it into B.
+        // A source's output onto src → blur: a Merge, it into A over src in B.
         let (out, to) = (NodeEditor::out_port(h.rect(&doc, &other)), mid(&h, &doc, &blur, 0));
         h.drag(&mut doc, out, to);
         let m1 = inputs(&doc, &blur)[0].clone();
         assert_eq!(doc.node(&m1).unwrap().op, "merge");
-        assert_eq!(inputs(&doc, &m1)[..2], [src.clone(), other.clone()]);
+        assert_eq!(inputs(&doc, &m1)[..2], [other.clone(), src.clone()]);
         // A node with an input works the same, onto the new wire m1 → blur.
         let (out, to) = (NodeEditor::out_port(h.rect(&doc, &grade)), mid(&h, &doc, &blur, 0));
         h.drag(&mut doc, out, to);
         let m2 = inputs(&doc, &blur)[0].clone();
-        assert_eq!(inputs(&doc, &m2)[..2], [m1.clone(), grade.clone()]);
+        assert_eq!(inputs(&doc, &m2)[..2], [grade.clone(), m1.clone()]);
         // A node downstream of the wire would close a cycle: nothing changes.
         let before = doc.graph.nodes.len();
         let (out, to) = (NodeEditor::out_port(h.rect(&doc, &blur)), mid(&h, &doc, &m1, 0));
         h.drag(&mut doc, out, to);
-        assert_eq!((doc.graph.nodes.len(), inputs(&doc, &m1)[0].clone()), (before, src.clone()));
+        assert_eq!((doc.graph.nodes.len(), inputs(&doc, &m1)[0].clone()), (before, other.clone()));
     }
 
     #[test]
