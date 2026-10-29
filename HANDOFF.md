@@ -16,7 +16,7 @@ Last updated 2026-10-28 (session 7). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~14,400 lines of Rust + Python. Tests: 76 library + 10 CLI + 38 GUI
+- ~14,400 lines of Rust + Python. Tests: 76 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
 - **Release build (end of session 6):** `cargo build --release --workspace`
   and `python/build.sh` were run at the final commit, so
@@ -428,6 +428,10 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   `edit_param` (keys if animated). The input's frame comes from the probe,
   now also requested for `Overlay::CornerPin`; `Properties::layer` carries
   the input's window and format.
+- **Session 7, part 13** (user request): right-click on the node graph
+  opens the Shift+E node browser at the pointer (the old category context
+  menu, `add_menu` / `menu_at`, is gone); over a wire the browser shows
+  "Insert between …" and its node goes into the wire.
 - **CorridorKey** (AI keyer, github.com/nikopueringer/CorridorKey; the
   OFX port gitcapoom/corridorkey_ofx is Windows/Resolve-only): the user
   deferred it. If revisited: run upstream's PyTorch engine (Linux OK; the
@@ -463,7 +467,7 @@ GUI (`src/gui/`, binary `arclight-gui`, eframe/egui 0.37):
 |------|------|
 | `main.rs` | App shell: panel layout, menus, keyboard shortcuts (`shortcuts()`), file drop, starter graph, `ARCLIGHT_SCREENSHOT` hook. Commits undo once per gesture; an active tracking run counts as a gesture. |
 | `doc.rs` | `Doc`: the graph plus every edit (`add_node`, `connect`, `set_param`, `edit_param` with auto-key, ...). **Undo** is whole-graph snapshots, committed once per finished gesture. Mutate the graph only through `Doc` methods that call `changed()` or `touched()`. |
-| `node_editor.rs` | Canvas: nodes, ports (hollow = optional), wires, pan/zoom, right-click add menu, Shift+E browser; both place nodes via `place`. |
+| `node_editor.rs` | Canvas: nodes, ports (yellow squares in, green circles out; hollow = optional), wires, pan/zoom, the node browser (right-click or Shift+E), which places nodes via `place`. |
 | `properties.rs` | Property panels generated from `ParamSpec`s; keyframe diamonds; media extras; render jobs (`RenderJob`); tracking (`tracker_extras`, `TrackJob`, `collect_tracks`). |
 | `viewer.rs` | Shows the image; pan/zoom; channels; exposure; pixel readout. Hosts the overlays. |
 | `overlay.rs` | Handles for the selected node's `Overlay` kind: `Xf` (image↔screen), `geo` (resolve at the frame), `hit`, `press`, `apply` (drag → `edit_param`), `draw`. Add new handle kinds here. Positions use the viewed image's size (no bbox yet). |

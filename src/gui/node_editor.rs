@@ -59,8 +59,6 @@ pub struct NodeEditor {
     pan: Vec2,
     zoom: f32,
     wire: Option<Wire>,
-    /// Where the add-node menu was opened, in graph coordinates.
-    menu_at: Pos2,
     fit_pending: bool,
     browser: Option<Browser>,
     /// The wire a node added from the menu or browser goes into.
@@ -90,7 +88,6 @@ impl Default for NodeEditor {
             pan: Vec2::new(40.0, 40.0),
             zoom: 1.0,
             wire: None,
-            menu_at: Pos2::ZERO,
             fit_pending: true,
             browser: None,
             target_wire: None,
@@ -202,6 +199,7 @@ impl NodeEditor {
     }
 
     fn browser_ui(&mut self, ctx: &egui::Context, doc: &mut Doc) {
+        let into = self.target_wire.as_ref().map(|w| format!("Insert between {} and {}", w.src, w.dst));
         let Some(b) = &mut self.browser else { return };
         let hits = browse(&b.query);
         let (down, up, enter, esc) = ctx.input_mut(|i| {
@@ -234,6 +232,9 @@ impl NodeEditor {
                     if b.just_opened {
                         edit.request_focus();
                         b.just_opened = false;
+                    }
+                    if let Some(into) = &into {
+                        ui.weak(into);
                     }
                     if edit.changed() {
                         b.sel = 0;
@@ -321,13 +322,11 @@ impl NodeEditor {
         if bg.clicked() {
             doc.selected = None;
         }
+        // Right-click opens the node browser there (over a wire, its node
+        // goes into the wire).
         if bg.secondary_clicked() {
-            if let Some(p) = bg.interact_pointer_pos() {
-                self.menu_at = self.to_graph(p);
-                self.target_wire = self.wire_at(doc, p, None);
-            }
+            self.open_browser(bg.interact_pointer_pos());
         }
-        bg.context_menu(|ui| self.add_menu(ui, doc));
         if let Some(at) = self.browser.as_ref().filter(|b| b.just_opened).map(|b| b.at) {
             self.target_wire = self.wire_at(doc, at, None);
         }
@@ -719,23 +718,6 @@ impl NodeEditor {
             );
         }
     }
-
-    fn add_menu(&mut self, ui: &mut egui::Ui, doc: &mut Doc) {
-        if let Some(w) = &self.target_wire {
-            ui.label(egui::RichText::new(format!("Insert between {} and {}", w.src, w.dst)).weak());
-            ui.separator();
-        }
-        for (cat, name) in CATEGORIES {
-            ui.menu_button(name, |ui| {
-                for op in ops::all().into_iter().filter(|o| o.category == cat) {
-                    if ui.button(op.label).on_hover_text(op.help).clicked() {
-                        self.place(doc, op, self.menu_at);
-                        ui.close();
-                    }
-                }
-            });
-        }
-    }
 }
 
 fn bezier(a: Pos2, b: Pos2, stroke: Stroke) -> CubicBezierShape {
@@ -992,6 +974,37 @@ mod tests {
         let (out, to) = (NodeEditor::out_port(h.rect(&doc, &blur)), mid(&h, &doc, &m1, 0));
         h.drag(&mut doc, out, to);
         assert_eq!((doc.graph.nodes.len(), inputs(&doc, &m1)[0].clone()), (before, other.clone()));
+    }
+
+    #[test]
+    fn right_click_opens_the_node_browser_and_targets_a_wire_under_it() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let src = doc.add_node("constant", [0.0, 0.0]);
+        let blur = doc.add_node("blur", [500.0, 0.0]);
+        doc.connect(&src, &blur, 0);
+        let mut h = Harness::new();
+        h.frame(&mut doc, vec![]);
+        let right = |pos: Pos2, pressed: bool| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
+        let click = |h: &mut Harness, doc: &mut Doc, at: Pos2| {
+            h.frame(doc, vec![egui::Event::PointerMoved(at)]);
+            h.frame(doc, vec![right(at, true)]);
+            h.frame(doc, vec![right(at, false)]);
+            h.frame(doc, vec![]);
+        };
+        // Empty canvas: the browser opens there, with no wire to go into.
+        let empty = Pos2::new(300.0, 400.0);
+        click(&mut h, &mut doc, empty);
+        assert_eq!(h.ed.browser.as_ref().map(|b| b.at), Some(empty));
+        assert!(h.ed.target_wire.is_none());
+        // On the wire: placing from it splices the new node in.
+        h.ed.browser = None;
+        let mid = NodeEditor::out_port(h.rect(&doc, &src)).lerp(NodeEditor::in_port(h.rect(&doc, &blur), 0, 2), 0.5);
+        click(&mut h, &mut doc, mid);
+        assert!(h.ed.browser.is_some());
+        assert_eq!(h.ed.target_wire, Some(WireRef { src: src.clone(), dst: blur.clone(), port: 0 }));
+        h.ed.place(&mut doc, ops::info("grade").unwrap(), h.ed.to_graph(mid));
+        let grade = doc.selected.clone().unwrap();
+        assert_eq!((doc.node(&grade).unwrap().inputs[0].as_str(), doc.node(&blur).unwrap().inputs[0].as_str()), (src.as_str(), grade.as_str()));
     }
 
     #[test]
