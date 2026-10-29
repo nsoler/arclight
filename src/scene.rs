@@ -8,16 +8,19 @@
 use crate::geom::{self, Camera, Mat4, Vec3};
 use crate::image::Image;
 use crate::mesh::{Material, Mesh};
+use crate::shade::{Light, LightKind};
 use serde_json::Value;
 use std::sync::Arc;
 
-/// Cameras, textured cards, meshes and points, placed in one space (see
-/// [`crate::geom`] for its conventions).
+/// Cameras, textured cards, meshes, lights and points, placed in one space
+/// (see [`crate::geom`] for its conventions).
 #[derive(Clone, Default)]
 pub struct Scene {
     pub cameras: Vec<Camera>,
     pub cards: Vec<Card>,
     pub meshes: Vec<Model>,
+    /// Lights (each knows its node); with none, everything renders unlit.
+    pub lights: Vec<Light>,
     /// A point cloud (a camera tracker's), drawn as dots.
     pub points: Vec<Vec3>,
     /// The node each camera and point came from, in the same order (filled
@@ -86,6 +89,7 @@ impl Scene {
         self.cameras.extend(other.cameras.iter().cloned());
         self.cards.extend(other.cards.iter().cloned());
         self.meshes.extend(other.meshes.iter().cloned());
+        self.lights.extend(other.lights.iter().cloned());
         self.points.extend(other.points.iter().copied());
         let mut other = other.clone();
         other.fill_nodes();
@@ -105,7 +109,7 @@ impl Scene {
     /// node made itself; what it gathered from upstream is marked already).
     pub fn tag(&mut self, id: &str) {
         self.fill_nodes();
-        for n in self.camera_nodes.iter_mut().chain(self.point_nodes.iter_mut()).chain(self.cards.iter_mut().map(|c| &mut c.node)).chain(self.meshes.iter_mut().map(|m| &mut m.node)) {
+        for n in self.camera_nodes.iter_mut().chain(self.point_nodes.iter_mut()).chain(self.cards.iter_mut().map(|c| &mut c.node)).chain(self.meshes.iter_mut().map(|m| &mut m.node)).chain(self.lights.iter_mut().map(|l| &mut l.node)) {
             if n.is_empty() {
                 *n = id.to_string();
             }
@@ -128,6 +132,9 @@ impl Scene {
         let mut parts = vec![n(self.cameras.len(), "camera", "cameras"), n(self.cards.len(), "card", "cards")];
         if !self.meshes.is_empty() {
             parts.push(n(self.meshes.len(), "mesh", "meshes"));
+        }
+        if !self.lights.is_empty() {
+            parts.push(n(self.lights.len(), "light", "lights"));
         }
         if !self.points.is_empty() {
             parts.push(n(self.points.len(), "point", "points"));
@@ -216,6 +223,23 @@ pub fn primitive_model(op: &str, p: &Value, texture: Option<&Image>) -> Option<M
     })
 }
 
+/// A light node's light (`op` one of light_ambient, light_directional,
+/// light_point, light_spot), from its resolved params: placed by its
+/// translate and rotate, shining down its −Z.
+pub fn light(op: &str, p: &Value) -> Option<Light> {
+    let num = |n: &str, d: f64| p[n].as_f64().filter(|v| v.is_finite()).unwrap_or(d);
+    let kind = match op {
+        "light_ambient" => LightKind::Ambient,
+        "light_directional" => LightKind::Directional,
+        "light_point" => LightKind::Point,
+        "light_spot" => LightKind::Spot { cone: num("cone", 40.0).clamp(0.0, 179.0), penumbra: num("penumbra", 5.0).max(0.0) },
+        _ => return None,
+    };
+    let c = numbers::<3>(&p["color"], 1.0).map(|v| v as f32);
+    let world = geom::trs(numbers(&p["translate"], 0.0), numbers(&p["rotate"], 0.0), [1.0; 3]);
+    Some(Light { kind, color: c, intensity: num("intensity", 1.0) as f32, decay: num("decay", 0.0).max(0.0), world, node: String::new() })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,6 +262,38 @@ mod tests {
         let mut s = Scene { cameras: vec![cam], ..Scene::default() };
         s.extend(&Scene { cards: vec![c.clone(), c], ..Scene::default() });
         assert_eq!(s.describe(), "1 camera, 2 cards");
+    }
+
+    /// Light nodes make scenes of one light each, placed and shaped by
+    /// their params; a Scene gathers them with everything else.
+    #[test]
+    fn light_nodes_make_lights() {
+        use crate::graph::{Evaluator, Graph};
+        use crate::ops::EvalContext;
+        let g: Graph = serde_json::from_value(json!({ "nodes": [
+            { "id": "fill", "op": "light_ambient", "params": { "color": [0.2, 0.3, 0.4, 1], "intensity": 0.5 } },
+            { "id": "sun", "op": "light_directional", "params": { "rotate": [-90, 0, 0] } },
+            { "id": "bulb", "op": "light_point", "params": { "translate": [1, 2, 3], "decay": 2 } },
+            { "id": "spot", "op": "light_spot", "params": { "translate": [0, 5, 0], "rotate": [-90, 0, 0], "cone": 30, "penumbra": 4 } },
+            { "id": "box", "op": "cube", "params": {} },
+            { "id": "lit", "op": "scene", "inputs": ["fill", "sun", "bulb", "spot"] },
+            { "id": "all", "op": "scene", "inputs": ["lit", "box", "", ""] },
+        ] })).unwrap();
+        let mut ev = Evaluator::new();
+        let out = ev.evaluate(&g, "all", &EvalContext { frame: 1, write_outputs: false }).unwrap();
+        let s = out.scene.as_ref().unwrap();
+        assert_eq!(s.describe(), "0 cameras, 0 cards, 1 mesh, 4 lights");
+        let nodes: Vec<&str> = s.lights.iter().map(|l| l.node.as_str()).collect();
+        assert_eq!(nodes, ["fill", "sun", "bulb", "spot"], "each light knows its node");
+        let (fill, sun, bulb, spot) = (&s.lights[0], &s.lights[1], &s.lights[2], &s.lights[3]);
+        assert_eq!((fill.kind, fill.color, fill.intensity), (LightKind::Ambient, [0.2, 0.3, 0.4], 0.5));
+        assert!(sun.kind == LightKind::Directional && (sun.direction() + Vec3::y()).norm() < 1e-12, "turned to shine down");
+        assert_eq!((bulb.kind, bulb.position(), bulb.decay), (LightKind::Point, Vec3::new(1.0, 2.0, 3.0), 2.0));
+        assert_eq!(spot.kind, LightKind::Spot { cone: 30.0, penumbra: 4.0 });
+        // Defaults: white, intensity 1, no falloff.
+        let d = light("light_point", &json!({})).unwrap();
+        assert_eq!((d.color, d.intensity, d.decay), ([1.0; 3], 1.0, 0.0));
+        assert!(light("cube", &json!({})).is_none());
     }
 
     /// Camera and Card nodes make scenes, a Scene node gathers them, and

@@ -76,7 +76,7 @@ impl Kind {
 /// The kind of output `op` makes.
 pub fn output_kind(op: &str) -> Kind {
     match op {
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "light_ambient" | "light_directional" | "light_point" | "light_spot" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -235,6 +235,10 @@ const PLACE_T: ParamSpec = p!("translate", "Translate", ParamKind::Vec3, [0.0, 0
 const PLACE_R: ParamSpec = p!("rotate", "Rotate", ParamKind::Vec3, [0.0, 0.0, 0.0]);
 const PLACE_S: ParamSpec = p!("scale", "Scale", ParamKind::Vec3, [1.0, 1.0, 1.0]);
 const SURFACE_COLOR: ParamSpec = p!("color", "Color", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]);
+/// A light's color, strength and falloff.
+const LIGHT_COLOR: ParamSpec = p!("color", "Color", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]);
+const LIGHT_INTENSITY: ParamSpec = p!("intensity", "Intensity", ParamKind::Float { min: 0.0, max: 100.0 }, 1.0);
+const LIGHT_DECAY: ParamSpec = p!("decay", "Decay", ParamKind::Float { min: 0.0, max: 3.0 }, 0.0);
 /// A 3D object that renders nothing but hides what's behind it.
 const HOLDOUT: ParamSpec = fixed!("holdout", "Holdout", ParamKind::Bool, false);
 
@@ -796,6 +800,59 @@ pub static OPS: &[OpInfo] = &[
                and material in the file.",
     },
     OpInfo {
+        name: "light_ambient",
+        label: "Ambient Light",
+        category: Category::Scene,
+        inputs: &[],
+        params: &[LIGHT_COLOR, LIGHT_INTENSITY],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Light from everywhere, evenly: lights the dark sides of Lambert and Blinn objects as much as the \
+               lit ones (Color × Intensity of their color). Outputs a scene holding it; with no lights in a scene, \
+               everything renders unlit.",
+    },
+    OpInfo {
+        name: "light_directional",
+        label: "Directional Light",
+        category: Category::Scene,
+        inputs: &[],
+        params: &[PLACE_T, PLACE_R, LIGHT_COLOR, LIGHT_INTENSITY],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Parallel light, as from the sun, shining down its −Z axis as Rotate turns it (Translate only places it \
+               in the 3D view); the same strength everywhere. Outputs a scene holding it.",
+    },
+    OpInfo {
+        name: "light_point",
+        label: "Point Light",
+        category: Category::Scene,
+        inputs: &[],
+        params: &[PLACE_T, LIGHT_COLOR, LIGHT_INTENSITY, LIGHT_DECAY],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Light from a point, every way. Decay is how it fades with distance d: Intensity / d^Decay \
+               (0: not at all, 1: linearly, 2: as real light does). Outputs a scene holding it.",
+    },
+    OpInfo {
+        name: "light_spot",
+        label: "Spot Light",
+        category: Category::Scene,
+        inputs: &[],
+        params: &[
+            PLACE_T,
+            PLACE_R,
+            LIGHT_COLOR,
+            LIGHT_INTENSITY,
+            LIGHT_DECAY,
+            p!("cone", "Cone angle", ParamKind::Float { min: 0.0, max: 179.0 }, 40.0),
+            p!("penumbra", "Penumbra", ParamKind::Float { min: 0.0, max: 90.0 }, 5.0),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Light from a point down its −Z axis, within a cone Cone angle degrees across, its edge softened over \
+               Penumbra degrees; fading with distance by Decay (as a Point Light). Outputs a scene holding it.",
+    },
+    OpInfo {
         name: "scene",
         label: "Scene",
         category: Category::Scene,
@@ -803,7 +860,7 @@ pub static OPS: &[OpInfo] = &[
         params: &[],
         overlay: Overlay::None,
         mask_base: None,
-        help: "Gathers cameras, cards, meshes and other scenes into one scene.",
+        help: "Gathers cameras, cards, meshes, lights and other scenes into one scene.",
     },
     OpInfo {
         name: "camera_tracker",
@@ -1442,6 +1499,10 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
             Ok(scene_output(texture.map_or(DEFAULT_FORMAT, |t| t.format), Scene { meshes: vec![model], ..Scene::default() }))
         }
         "read_geo" => read_geo(params),
+        "light_ambient" | "light_directional" | "light_point" | "light_spot" => {
+            let light = scene::light(op, params).context("unknown light")?;
+            Ok(scene_output(DEFAULT_FORMAT, Scene { lights: vec![light], ..Scene::default() }))
+        }
         "scanline_render" => scanline_render(params, inputs),
         // The solve lives in its params; in the graph the plate passes through.
         "camera_tracker" => Ok(input(inputs, 0, "camera_tracker")?.clone()),

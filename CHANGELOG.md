@@ -11,6 +11,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.23 — 2026-10-29
+
+- **Ambient, Directional, Point** and **Spot Light** nodes (color,
+  intensity, decay, cone and penumbra) go into scenes (`Scene.lights`);
+  rendering with them comes next (M10 step d).
+
 ## 0.9.22 — 2026-10-29
 
 - Scanline Render's **Passes** checkboxes choose depth, P, N, uv, id and
