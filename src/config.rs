@@ -6,7 +6,8 @@ use std::path::PathBuf;
 
 const APP: &str = "arclight";
 
-fn home() -> PathBuf {
+/// The user's home directory (`$HOME`).
+pub fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/tmp"))
 }
 

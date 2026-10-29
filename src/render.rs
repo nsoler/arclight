@@ -94,7 +94,7 @@ mod tests {
     /// ProRes refuses an .mp4. Needs ffmpeg (with libx265); skipped without.
     #[test]
     fn video_codecs_keep_their_depth() {
-        if Command::new("ffmpeg").arg("-version").output().is_err() {
+        if Command::new(media::tool("ffmpeg")).arg("-version").output().is_err() {
             eprintln!("skipping: no ffmpeg");
             return;
         }

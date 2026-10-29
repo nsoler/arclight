@@ -1,0 +1,30 @@
+# Build the Apple Silicon macOS app and DMG (packaging/macos/build-dmg.sh)
+# on a GitHub-hosted M-series Mac. Runs when started by hand (Actions tab →
+# "macOS build" → Run workflow) or on a version tag (v0.1.0, …); the DMG is
+# attached to the run as an artifact. Not run on every push: macOS minutes
+# on private repositories count against the account's allowance.
+name: macOS build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  dmg:
+    runs-on: macos-14 # Apple Silicon (arm64)
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          brew install librsvg ffmpeg
+          rustup target add aarch64-apple-darwin
+      - name: Test
+        run: cargo test --release
+      - name: Build the app and DMG
+        run: packaging/macos/build-dmg.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Arclight-macOS-arm64
+          path: dist/*.dmg
+          if-no-files-found: error

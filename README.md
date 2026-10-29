@@ -50,6 +50,25 @@ Space) and any freedesktop desktop's menu. The entry runs this checkout's
 `target/release/arclight-gui`, so later release builds need no reinstall.
 No root needed; nothing outside `~/.local/share` is touched.
 
+### macOS (Apple Silicon)
+
+```sh
+brew install librsvg ffmpeg       # icon drawing for the build; video I/O at run time
+packaging/macos/build-dmg.sh      # -> dist/Arclight.app, dist/Arclight-<version>-arm64.dmg
+```
+
+Run on a Mac: Apple's SDK, `iconutil` and `hdiutil` only run there. Without
+one, the **macOS build** GitHub Actions workflow (`.github/workflows/macos.yml`)
+does the same on a GitHub-hosted M-series Mac, started by hand from the
+Actions tab or by pushing a `v*` tag; the DMG is attached to the run. The
+app is signed ad hoc, not with a Developer ID, so a downloaded copy opens
+the first time with right-click → **Open** (or `xattr -dr
+com.apple.quarantine /Applications/Arclight.app`). ffmpeg isn't bundled:
+Arclight finds Homebrew's (`/opt/homebrew/bin`) or MacPorts' even when
+opened from the Finder. The CLI is inside the bundle at
+`Arclight.app/Contents/MacOS/arclight`. Plugins on macOS are
+`libarclight_plugin_*.dylib`.
+
 ## GUI
 
 ```sh

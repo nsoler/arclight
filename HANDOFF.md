@@ -52,6 +52,22 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   ~20–32 px: `AppLibrary.qml` indexes SVGs before PNGs) and at 16–64 px;
   128/256 px PNGs use the full logo. The GUI's window icon is still the
   full logo (`assets/arclight.png`).
+- **macOS (session 7, part 22, user request):** `cargo check --target
+  aarch64-apple-darwin` is clean (target installed here). Portability
+  fixes: `media::tool` finds ffmpeg/ffprobe beside the executable, on
+  PATH, or in /opt/homebrew/bin, /usr/local/bin, /opt/local/bin (Finder
+  apps get a bare PATH); plugins use `DLL_SUFFIX` (.dylib on macOS); the
+  starter project looks for its clip in the bundle's Resources and renders
+  to ~/Movies/Arclight when the source checkout isn't there.
+  `packaging/macos/build-dmg.sh` (macOS only) builds arm64 with
+  MACOSX_DEPLOYMENT_TARGET 11.0, assembles Arclight.app (Info.plist id
+  `com.github.nsoler.arclight`, .icns via iconutil from both SVGs, the
+  example clip, the CLI), signs ad hoc, and makes a UDZO DMG with an
+  Applications link. `.github/workflows/macos.yml` runs it on macos-14
+  (workflow_dispatch or `v*` tags) and uploads the DMG. **Not yet run on
+  a Mac**: the first workflow run is the real test (expect to fix small
+  things). No Developer ID signing / notarization (needs a paid Apple
+  account); ffmpeg not bundled (GPL builds; Homebrew instead).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
   (Rectangle, Ellipse, Polygon, Roto), Transform layer dragging in the viewer,

@@ -90,10 +90,12 @@ pub fn init() {
     });
 }
 
-/// Plugin libraries are named `libarclight_plugin_*.so` or `*.arclight.so`,
-/// so other libraries sharing a directory are never loaded (loading runs code).
+/// Plugin libraries are named `libarclight_plugin_*.so` or `*.arclight.so`
+/// (`.dylib` on macOS), so other libraries sharing a directory are never
+/// loaded (loading runs code).
 pub fn is_plugin_file(name: &str) -> bool {
-    (name.starts_with("libarclight_plugin_") && name.ends_with(".so")) || name.ends_with(".arclight.so")
+    let ext = std::env::consts::DLL_SUFFIX;
+    (name.starts_with("libarclight_plugin_") && name.ends_with(ext)) || name.ends_with(&format!(".arclight{ext}"))
 }
 
 /// Every library [`init`] tried to load.
@@ -361,10 +363,11 @@ mod tests {
 
     #[test]
     fn only_plugin_named_libraries_are_loaded() {
-        assert!(is_plugin_file("libarclight_plugin_example.so"));
-        assert!(is_plugin_file("grain.arclight.so"));
-        assert!(!is_plugin_file("lib_arclt.so"));
-        assert!(!is_plugin_file("libarclight_plugin_example.so.d"));
+        let ext = std::env::consts::DLL_SUFFIX;
+        assert!(is_plugin_file(&format!("libarclight_plugin_example{ext}")));
+        assert!(is_plugin_file(&format!("grain.arclight{ext}")));
+        assert!(!is_plugin_file(&format!("lib_arclt{ext}")));
+        assert!(!is_plugin_file(&format!("libarclight_plugin_example{ext}.d")));
     }
 
     #[test]

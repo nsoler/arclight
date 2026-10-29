@@ -16,6 +16,24 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 const VIDEO_EXTS: &[&str] = &["mp4", "mov", "m4v", "mkv", "avi", "webm", "mxf", "mpg", "mpeg"];
 
+/// Where to run an external tool (`ffmpeg`, `ffprobe`) from: next to this
+/// executable (a bundled copy), else on `PATH`, else the usual package
+/// manager prefixes. Apps opened from the macOS Finder get a bare `PATH`
+/// (`/usr/bin:/bin:…`) without Homebrew's or MacPorts' bin directory.
+pub fn tool(name: &str) -> PathBuf {
+    static FOUND: LazyLock<Mutex<HashMap<String, PathBuf>>> = LazyLock::new(Default::default);
+    let mut found = FOUND.lock().unwrap();
+    if let Some(p) = found.get(name) {
+        return p.clone();
+    }
+    let beside = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(name)));
+    let on_path = std::env::var_os("PATH").into_iter().flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).map(|d| d.join(name));
+    let usual = ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin"].map(|d| Path::new(d).join(name));
+    let path = beside.into_iter().chain(on_path).chain(usual).find(|p| p.is_file()).unwrap_or_else(|| PathBuf::from(name));
+    found.insert(name.to_string(), path.clone());
+    path
+}
+
 pub fn is_video(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -188,7 +206,7 @@ pub fn probe_video(path: &Path) -> Result<VideoInfo> {
     if let Some(info) = PROBES.lock().unwrap().get(path) {
         return Ok(*info);
     }
-    let out = Command::new("ffprobe")
+    let out = Command::new(tool("ffprobe"))
         .args(["-v", "error", "-select_streams", "v:0", "-show_entries"])
         .arg("stream=width,height,r_frame_rate,avg_frame_rate,nb_frames,duration,pix_fmt,bits_per_raw_sample:format=duration")
         .args(["-of", "json"])
@@ -246,7 +264,7 @@ impl Decoder {
         self.stop();
         // Seek a quarter frame early so rounding never skips the wanted frame.
         let t = ((index as f64 - 0.25) / self.info.fps).max(0.0);
-        let mut child = Command::new("ffmpeg")
+        let mut child = Command::new(tool("ffmpeg"))
             .args(["-v", "error", "-nostdin", "-ss", &format!("{t:.6}"), "-i"])
             .arg(path)
             .args(["-f", "rawvideo", "-pix_fmt", if self.info.bits > 8 { "rgba64le" } else { "rgba" }, "-"])
@@ -420,7 +438,7 @@ impl VideoWriter {
             }
         }
         let input = if codec.deep() { "rgba64le" } else { "rgba" };
-        let mut child = Command::new("ffmpeg")
+        let mut child = Command::new(tool("ffmpeg"))
             .args(["-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", input])
             .args(["-s", &format!("{width}x{height}"), "-r", &format!("{fps}"), "-i", "-"])
             // 4:2:0 / 4:2:2 chroma needs even dimensions.
@@ -521,7 +539,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let clip = dir.join("ramp.mkv");
         // gbrp10le FFV1: lossless, so the codes are exact.
-        let made = Command::new("ffmpeg")
+        let made = Command::new(tool("ffmpeg"))
             .args(["-v", "error", "-y", "-f", "lavfi", "-i", "nullsrc=s=1024x2:d=0.1,format=gbrp10le,geq=r='X':g='X':b='X'"])
             .args(["-frames:v", "1", "-c:v", "ffv1", "-pix_fmt", "gbrp10le"])
             .arg(&clip)
