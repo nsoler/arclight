@@ -9,6 +9,7 @@ mod doc;
 mod node_editor;
 mod overlay;
 mod properties;
+mod script_jobs;
 mod transport;
 mod viewer;
 mod worker;
@@ -22,6 +23,7 @@ use doc::Doc;
 use eframe::egui::{self, Key, KeyboardShortcut, Modifiers};
 use node_editor::NodeEditor;
 use properties::Properties;
+use script_jobs::ScriptJobs;
 use rfd::{MessageButtons, MessageDialog, MessageDialogResult};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -95,6 +97,8 @@ struct App {
     /// Socket that MCP servers and Python scripts (`arclt.attach()`) drive
     /// this window through.
     bridge: Option<bridge::Server>,
+    /// Bridged renders running on worker threads.
+    scripts: ScriptJobs,
 }
 
 impl App {
@@ -127,13 +131,28 @@ impl App {
                 (PathBuf::from(p), std::time::Instant::now(), delay)
             }),
             bridge,
+            scripts: ScriptJobs::default(),
         }
     }
 
-    /// Run tool calls that arrived over the bridge.
-    fn handle_bridge(&mut self) {
+    /// Run tool calls that arrived over the bridge. Renders go to worker
+    /// threads (on a snapshot of the graph); everything else runs here.
+    fn handle_bridge(&mut self, ctx: &egui::Context) {
         let Some(server) = &self.bridge else { return };
         for req in server.poll() {
+            if arclight::mcp::is_render_tool(&req.tool) {
+                let (tool, args) = (req.tool.clone(), req.arguments.clone());
+                let wake = ctx.clone();
+                self.scripts.spawn(
+                    self.doc.graph.clone(),
+                    self.doc.path.clone(),
+                    &tool,
+                    args,
+                    Box::new(move |r| req.reply(r)),
+                    move || wake.request_repaint(),
+                );
+                continue;
+            }
             let result = self.bridge_call(&req.tool, &req.arguments).map_err(|e| format!("{e:#}"));
             req.reply(result);
         }
@@ -551,6 +570,22 @@ impl App {
                 ui.spinner();
                 ui.label("Tracking…");
             }
+            let scripts = self.scripts.running();
+            for job in scripts {
+                ui.separator();
+                ui.spinner();
+                let p = &job.progress;
+                let total = p.total.load(std::sync::atomic::Ordering::Relaxed);
+                let done = p.done.load(std::sync::atomic::Ordering::Relaxed);
+                let text = if total > 1 { format!("Script: {} {done}/{total}", job.label) } else { format!("Script: {}", job.label) };
+                ui.label(text).on_hover_text("Requested by a script or AI agent (MCP / Python)");
+                if ui.small_button("Cancel").clicked() {
+                    job.cancel();
+                }
+            }
+            if !scripts.is_empty() {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+            }
         });
     }
 }
@@ -558,7 +593,7 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        self.handle_bridge();
+        self.handle_bridge(&ctx);
         self.handle_drops(&ctx);
         self.shortcuts(&ctx);
         if self.transport.play != Play::Stopped {

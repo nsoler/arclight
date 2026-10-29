@@ -132,9 +132,21 @@ fn obj_arg(args: &Value, name: &str) -> Result<Map<String, Value>> {
     }
 }
 
+/// Tools that can run for a long time: front ends with an interactive
+/// thread (the GUI) run these on a worker, on a snapshot of the graph.
+pub fn is_render_tool(tool: &str) -> bool {
+    matches!(tool, "render_frame" | "render_output")
+}
+
 /// Run one graph tool against `s`. Returns the tool's JSON result. A
 /// requested preview comes back as `preview_png_base64`.
 pub fn call_tool(s: &mut Session, tool: &str, args: &Value) -> Result<Value> {
+    call_tool_with_progress(s, tool, args, &Progress::default())
+}
+
+/// [`call_tool`], reporting `render_output`'s progress through `progress`
+/// (which can also cancel it).
+pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progress: &Progress) -> Result<Value> {
     let ok = || json!({"ok": true});
     Ok(match tool {
         "list_ops" => {
@@ -219,7 +231,7 @@ pub fn call_tool(s: &mut Session, tool: &str, args: &Value) -> Result<Value> {
         }
         "render_output" => {
             let node = str_arg(args, "node")?;
-            let frames = s.render_output(node, &Progress::default())?;
+            let frames = s.render_output(node, progress)?;
             json!({"frames": frames, "path": s.node(node).and_then(|n| n.params.get("path")).cloned()})
         }
         "probe_media" => probe_media(Path::new(str_arg(args, "path")?))?,

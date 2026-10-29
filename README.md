@@ -157,7 +157,8 @@ Every front end edits graphs through one engine API (`session.rs`), so
 validation, undo/redo and error messages are the same everywhere. A running
 GUI also listens on a local socket (`bridge.rs`), so scripts and AI agents can
 **attach** to it and edit the open project live. Their edits land in the GUI's
-undo history.
+undo history. Renders they request run in the background. The menu bar
+shows their progress and a Cancel button, and the window stays usable.
 
 ### MCP server (AI agents)
 

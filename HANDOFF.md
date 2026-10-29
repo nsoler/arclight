@@ -59,10 +59,6 @@ as the planning docs describe. Ask which of these to take next; in rough
 order of value:
 
 0. **Session-4 follow-ups** (small to medium):
-   - Run bridged renders (`render_frame`/`render_output` from MCP or
-     Python into the GUI) on a worker thread. They run on the GUI thread
-     today and freeze the UI for long ranges. Possibly reuse `RenderJob`
-     from `gui/properties.rs`.
    - Python plugins (custom ops written in Python): embed Python in the
      host via the `python/` crate, or run them out of process.
    - Plugin process isolation: a crashing native plugin kills the app.
@@ -117,8 +113,9 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   `Session` over a copy of `doc.graph`, then swaps the graph back in as one
   undo step and places new nodes with `Doc::place_new_nodes`. `undo`/`redo`
   map to the Doc's own history. `load_graph`/`new_graph` refuse while the
-  window has unsaved changes. Renders run on the GUI thread, so a long
-  `render_output` freezes the UI until it finishes (a TODO).
+  window has unsaved changes. Render tools (`mcp::is_render_tool`) run on
+  worker threads (`gui/script_jobs.rs`), on a snapshot of the graph, with
+  progress and Cancel in the menu bar.
 - **`plugin.rs`** + `include/arclight_plugin.h`: C ABI v1. Ops are
   registered at runtime (`ops::info` falls back to the plugin registry;
   `ops::all()` replaces direct `OPS` iteration in the GUI). Plugin param
@@ -229,6 +226,12 @@ changed, commits pending edits, swaps the graph in, places new nodes
 (`Doc::place_new_nodes`: right of their input, moved down until clear) and
 commits again, so each script call is one undo step. `undo`/`redo` use the
 Doc's history; `load_graph`/`new_graph` refuse while the window is dirty.
+Render tools skip all that: `handle_bridge` hands them to
+`ScriptJobs::spawn` (`gui/script_jobs.rs`), which renders a snapshot of the
+graph on a thread via `mcp::call_tool_with_progress`, replies to the client
+and wakes the UI. The menu bar lists running jobs with progress and Cancel.
+A client's next call waits for the reply (the bridge is request/response
+per connection), but other clients and the user keep working meanwhile.
 
 Other crates in the workspace (root `Cargo.toml` is package + workspace; a
 plain `cargo build` builds only the root crate):
@@ -353,7 +356,8 @@ rather than the viewed image's (Transform pivot/frame, Tracker boxes).
 - Viewer display conversion is on the CPU (rayon); fine to ~4K.
 - Video decode is sequential-friendly: playing backward re-seeks every frame
   (slow for long-GOP files; the frame cache hides it on second pass).
-- Bridged renders block the GUI thread (see Next steps 0).
+- A bridged render renders the graph as it was when the request arrived;
+  edits made during it don't affect that render.
 - Bridged edits in the GUI were checked with Python + screenshot, not by
   hand mid-gesture. A script edit during a user drag commits the partial
   drag as its own undo step.
