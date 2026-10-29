@@ -11,6 +11,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.42 — 2026-10-29
+
+- New **Light 2D** node (Color category): spot, area, point or
+  directional light on a flat image, with color, intensity, exposure and
+  add / screen / multiply. An optional **normals** input (an N pass or a
+  normal map) relights for real, with height, elevation, specular and
+  roughness, plus an optional **depth** input; the mask / mix options
+  apply. Viewer handles move, aim (⇧ snaps to 15°), open the cone,
+  soften, and size areas, all animatable. Properties shows only the
+  chosen type's settings (M12 step c).
+
 ## 0.9.41 — 2026-10-29
 
 - Particle node definitions and lazy particle streams

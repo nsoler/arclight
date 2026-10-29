@@ -83,7 +83,8 @@ choose in Properties:
   image) and **3D** (the scene); so do the **2D / 3D** buttons (**3D ●**
   when the viewed node has a scene).
 - The selected node's handles draw over the image: drag them to edit (a
-  Transform's gizmo, shape boxes and vertices, tracker boxes, corner pins).
+  Transform's gizmo, shape boxes and vertices, tracker boxes, corner pins,
+  a Light 2D's position, aim, cone and softness).
   **⌘**-click (or **⌘**-drag) in a Keyer picks the screen color.
 
 ## Player
@@ -312,6 +313,39 @@ color).
 - Writing **EXR** keeps every pass as a layer (`P.x`, `N.x`, `depth.Z`,
   `matte.<node>.A`, …) that other compositing and 3D apps read; other
   formats write the picture only.
+
+## Light 2D
+
+**Light 2D** lights a flat image: a lamp on a plate, a spot on a wall, the
+sun coming from one side.
+
+- **Type:** **spot** (from **Position** toward **Direction**, within **Cone
+  angle**, its edge soft over **Softness** degrees, fading to half at
+  **Reach** pixels; 0 doesn't fade), **area** (a rectangle or ellipse
+  **Size** across, turned by **Rotation**, its edge soft over **Feather**
+  pixels), **point** (full at Position, nothing past **Radius**, falling
+  faster with a higher **Falloff**) or **directional** (across the frame
+  toward Direction, fading over **Gradient** pixels past Position; 0 lights
+  everything). Directions are degrees: 0 points right, 90 down. The panel
+  shows only the type's own settings.
+- **Color**, **Intensity** and **Exposure** (stops) set how strong;
+  **Blend** puts it on by **add**, **screen** (adding, but easing off near
+  white) or **multiply** (the image lit by it alone: dark where it doesn't
+  reach).
+- **Normals** input: a render's **N** pass (or a normal map, RGB 0–1 for
+  −1–1) makes it real relighting: the image is shaded as a surface, the
+  light **Height** pixels above it (a directional light at **Elevation**
+  degrees), with a **Specular** highlight (**Roughness** sharp to broad).
+  A **depth** input (a Z pass × **Depth scale** pixels) moves the surface
+  back from the light. Without normals it's a shaped glow.
+- **mask**, **Mix**, **Mask channel** and **Invert mask** limit it, as on
+  other nodes. Stack several Light 2D nodes for several lights.
+- **In the viewer** (node selected): drag the middle to move it, the round
+  knob to aim it (**⇧** snaps to 15°), a square on a cone edge to open or
+  close the cone, a dot inside it to set the softness, a point light's
+  square to set its radius and a directional light's to set its gradient;
+  an area light has a box's handles (corners and edges size it, the stem
+  turns it). Animated settings get a key at the current frame.
 
 ## Camera Tracker
 

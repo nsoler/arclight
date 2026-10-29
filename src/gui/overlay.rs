@@ -26,6 +26,8 @@ const AXIS: f32 = 70.0;
 const RING: f32 = 50.0;
 /// Distance of a box's rotation handle beyond its top edge, in screen points.
 const STEM: f32 = 24.0;
+/// Length of a Light 2D's cone edges and aim, in screen points.
+const BEAM: f32 = 90.0;
 /// Fewest vertices a point list keeps when deleting.
 const MIN_POINTS: usize = 3;
 /// Stride of a spline's points: x, y, in-handle and out-handle offsets.
@@ -124,6 +126,13 @@ enum Part {
     EdgeMove { i: usize, t: f32 },
     /// Inside a point list's shape: dragging moves the whole shape.
     Body,
+    /// A Light 2D's aim (its direction), one of its cone's edges, the
+    /// inner edge of its softness, and its radius (a point light's) or
+    /// gradient (a directional light's).
+    LightAim,
+    LightCone,
+    LightSoft,
+    LightReach,
 }
 
 /// A handle of the selected vertices' transform box.
@@ -193,6 +202,45 @@ enum Geo {
     CornerPin { names: [[&'static str; 4]; 2], to: [Vec2; 4], from: [Vec2; 4] },
     /// A color param to pick from the input.
     Pick { param: &'static str },
+    /// A Light 2D (not an area light, which is a [`Geo::Box`]): its type
+    /// (spot, point or directional), position, direction, cone and
+    /// softness (degrees), and radius (point) or gradient (directional).
+    Light { kind: LightType, pos: Vec2, dir: f32, cone: f32, soft: f32, reach: f32 },
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum LightType {
+    Spot,
+    Point,
+    Directional,
+}
+
+/// Where a Light 2D's handles are on screen: the aim, the cone's two edges,
+/// the softness's two inner edges, and the radius or gradient (`None`
+/// where the type has none).
+struct LightHandles {
+    aim: Option<Pos2>,
+    cone: Vec<Pos2>,
+    soft: Vec<Pos2>,
+    reach: Option<Pos2>,
+}
+
+fn light_handles(xf: &Xf, kind: LightType, pos: Vec2, dir: f32, cone: f32, soft: f32, reach: f32) -> LightHandles {
+    let c = xf.screen(pos);
+    let along = |deg: f32, len: f32| c + rot(Vec2::X, deg) * len;
+    match kind {
+        LightType::Spot => {
+            let inner = (cone / 2.0 - soft / 2.0).max(0.0);
+            LightHandles {
+                aim: Some(along(dir, BEAM * 1.35)),
+                cone: vec![along(dir - cone / 2.0, BEAM), along(dir + cone / 2.0, BEAM)],
+                soft: vec![along(dir - inner, BEAM * 0.7), along(dir + inner, BEAM * 0.7)],
+                reach: None,
+            }
+        }
+        LightType::Point => LightHandles { aim: None, cone: Vec::new(), soft: Vec::new(), reach: Some(along(0.0, reach * xf.zoom)) },
+        LightType::Directional => LightHandles { aim: Some(along(dir, BEAM * 1.35)), cone: Vec::new(), soft: Vec::new(), reach: Some(along(dir, reach * xf.zoom)) },
+    }
 }
 
 impl Geo {
@@ -201,6 +249,7 @@ impl Geo {
         match *self {
             Geo::Transform { center, translate, .. } => center + translate,
             Geo::Box { center, .. } => center,
+            Geo::Light { pos, .. } => pos,
             _ => Vec2::ZERO,
         }
     }
@@ -314,6 +363,19 @@ fn geo(doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
             names: [to, from],
             to: to.map(|n| vec2(&at(n))),
             from: from.map(|n| vec2(&at(n))),
+        },
+        // An area light's box is a Box's; the others have their own handles.
+        Overlay::Light2d => match at("type").as_str() {
+            Some("area") => Geo::Box { names: ["position", "size", "rotation"], center: vec2(&at("position")), size: vec2(&at("size")), rotate: num(&at("rotation")), ellipse: at("shape").as_str() == Some("ellipse") },
+            kind => {
+                let kind = match kind {
+                    Some("point") => LightType::Point,
+                    Some("directional") => LightType::Directional,
+                    _ => LightType::Spot,
+                };
+                let reach = num(&at(if kind == LightType::Point { "radius" } else { "gradient" }));
+                Geo::Light { kind, pos: vec2(&at("position")), dir: num(&at("direction")), cone: num(&at("cone")), soft: num(&at("softness")), reach }
+            }
         },
     })
 }
@@ -460,6 +522,21 @@ fn inset_rect(xf: &Xf, v: [f32; 4], size: Vec2) -> Rect {
 /// point list, whose tangent handles are live.
 fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
     match *g {
+        Geo::Light { kind, pos, dir, cone, soft, reach } => {
+            let h = light_handles(xf, kind, pos, dir, cone, soft, reach);
+            let near = |q: &Pos2| q.distance(p) < GRAB;
+            if h.aim.as_ref().is_some_and(near) {
+                Some(Part::LightAim)
+            } else if h.cone.iter().any(near) {
+                Some(Part::LightCone)
+            } else if h.soft.iter().any(near) {
+                Some(Part::LightSoft)
+            } else if h.reach.as_ref().is_some_and(near) {
+                Some(Part::LightReach)
+            } else {
+                (xf.screen(pos).distance(p) < GRAB * 1.5).then_some(Part::Move)
+            }
+        }
         Geo::Point { value, .. } => (xf.screen(value).distance(p) < GRAB * 1.5).then_some(Part::Point),
         // No handles: Ctrl+click picks (see `Overlays::press`).
         Geo::Pick { .. } => None,
@@ -897,6 +974,60 @@ impl Overlays {
                     ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
                 }
             }
+            Geo::Light { kind, pos, dir, cone, soft, reach } => {
+                let c = xf.screen(pos);
+                let h = light_handles(xf, kind, pos, dir, cone, soft, reach);
+                let line = |a: Pos2, b: Pos2, col: Color32, w: f32| {
+                    painter.line_segment([a, b], Stroke::new(w + 1.5, Color32::from_black_alpha(140)));
+                    painter.line_segment([a, b], Stroke::new(w, col));
+                };
+                let faint = Color32::from_white_alpha(110);
+                let along = |deg: f32, len: f32| c + rot(Vec2::X, deg) * len;
+                match kind {
+                    LightType::Spot => {
+                        // The cone's edges and an arc across them; fainter, where
+                        // the softness starts and ends.
+                        for e in &h.cone {
+                            line(c, *e, color(Part::LightCone, HANDLE), 1.5);
+                        }
+                        let half = cone / 2.0;
+                        for a in [half - soft / 2.0, half + soft / 2.0].into_iter().filter(|a| *a > 0.0 && soft > 0.0) {
+                            line(c, along(dir - a, BEAM * 0.85), faint, 1.0);
+                            line(c, along(dir + a, BEAM * 0.85), faint, 1.0);
+                        }
+                        let arc: Vec<Pos2> = (0..=24).map(|i| along(dir - half + cone * i as f32 / 24.0, BEAM)).collect();
+                        painter.add(Shape::line(arc, Stroke::new(1.0, faint)));
+                    }
+                    LightType::Point => {
+                        let r = reach * xf.zoom;
+                        painter.circle_stroke(c, r, Stroke::new(3.0, Color32::from_black_alpha(140)));
+                        painter.circle_stroke(c, r, Stroke::new(1.5, color(Part::LightReach, HANDLE)));
+                    }
+                    LightType::Directional => {
+                        // The line where it starts to fade, and where it's gone.
+                        let across = rot(Vec2::X, dir + 90.0) * (size.length() * xf.zoom);
+                        line(c - across, c + across, HANDLE, 1.5);
+                        if let Some(g) = h.reach {
+                            line(g - across, g + across, color(Part::LightReach, faint), 1.0);
+                        }
+                    }
+                }
+                if let Some(a) = h.aim {
+                    line(c, a, color(Part::LightAim, HANDLE), 1.5);
+                    painter.circle(a, 5.0, color(Part::LightAim, HANDLE), outline);
+                }
+                for q in &h.cone {
+                    painter.rect(Rect::from_center_size(*q, Vec2::splat(8.0)), 1.0, color(Part::LightCone, HANDLE), outline, egui::StrokeKind::Middle);
+                }
+                for q in &h.soft {
+                    painter.circle(*q, 4.0, color(Part::LightSoft, faint), outline);
+                }
+                if let Some(q) = h.reach {
+                    painter.rect(Rect::from_center_size(q, Vec2::splat(8.0)), 1.0, color(Part::LightReach, HANDLE), outline, egui::StrokeKind::Middle);
+                }
+                painter.circle(c, 6.0, color(Part::Move, HANDLE), outline);
+                crosshair(painter, c, 11.0, Stroke::new(1.0, color(Part::Move, HANDLE)));
+            }
             Geo::Point { value, .. } => {
                 let c = xf.screen(value);
                 painter.circle(c, 5.0, color(Part::Point, HANDLE), outline);
@@ -1218,6 +1349,32 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
                 }
             }
         }
+        Geo::Light { kind, pos, dir, cone, .. } => {
+            let to = p - pos;
+            // The pointer's angle from the aim, either way (degrees).
+            let off = || {
+                let a = to.y.atan2(to.x).to_degrees() - dir;
+                ((a + 180.0).rem_euclid(360.0) - 180.0).abs()
+            };
+            match drag.part {
+                Part::Move => {
+                    let c = pos + if shift { constrain(delta) } else { delta };
+                    doc.edit_param(&id, "position", frame, json!([c.x, c.y]));
+                }
+                Part::LightAim => {
+                    let mut deg = dir + turn(drag, p);
+                    if shift {
+                        deg = (deg / 15.0).round() * 15.0;
+                    }
+                    doc.edit_param(&id, "direction", frame, json!(deg));
+                }
+                Part::LightCone => doc.edit_param(&id, "cone", frame, json!((2.0 * off()).min(360.0))),
+                Part::LightSoft => doc.edit_param(&id, "softness", frame, json!((2.0 * (cone / 2.0 - off())).clamp(0.0, cone.max(0.0)))),
+                Part::LightReach if kind == LightType::Point => doc.edit_param(&id, "radius", frame, json!(to.length())),
+                Part::LightReach => doc.edit_param(&id, "gradient", frame, json!(to.dot(rot(Vec2::X, dir)).max(0.0))),
+                _ => {}
+            }
+        }
         Geo::Box { names, center, size, rotate, .. } => match drag.part {
             Part::Move => {
                 let c = center + if shift { constrain(delta) } else { delta };
@@ -1349,6 +1506,8 @@ fn cursor(part: Part) -> CursorIcon {
     match part {
         Part::Point | Part::Move | Part::Body | Part::EdgeMove { .. } | Part::Vertex(_) | Part::Tangent { .. } | Part::Pull(_) | Part::Track(_) | Part::TrackOffset(_) | Part::Corner { .. } => CursorIcon::Move,
         Part::Marquee | Part::Pick => CursorIcon::Crosshair,
+        Part::LightAim | Part::LightCone | Part::LightSoft => CursorIcon::Alias,
+        Part::LightReach => CursorIcon::ResizeHorizontal,
         Part::SelBox(BoxHandle::Move) => CursorIcon::Move,
         Part::SelBox(BoxHandle::Rotate) => CursorIcon::Alias,
         Part::SelBox(BoxHandle::Scale { x, y }) => match (x, y) {
@@ -1629,6 +1788,42 @@ mod tests {
         drag(&mut d, c, c + Vec2::new(20.0, 0.0), 5);
         assert_eq!(vec2(&d.param_at("n", "translate", 5)), Vec2::new(20.0, 0.0));
         assert_eq!(vec2(&d.param_at("n", "translate", 1)), Vec2::ZERO);
+    }
+
+    #[test]
+    fn light_2d_handles_aim_open_soften_and_reach() {
+        // A spot at (100, 50) aiming right, 60° across, 10° soft.
+        let mut d = doc("light_2d", json!({ "type": "spot", "position": [100, 50], "direction": 0, "cone": 60, "softness": 10 }));
+        let c = Pos2::new(100.0, 50.0);
+        let at = |deg: f32, len: f32| c + rot(Vec2::X, deg) * len;
+        // A cone edge to 45° off the aim: 90° across.
+        assert_eq!(drag(&mut d, at(-30.0, BEAM), at(45.0, 50.0), 1), Part::LightCone);
+        assert!((num(&d.param("n", "cone")) - 90.0).abs() < 1e-3, "{}", d.param("n", "cone"));
+        // The softness's inner edge (45 − 5 = 40° out) to 30°: 30° soft.
+        assert_eq!(drag(&mut d, at(40.0, BEAM * 0.7), at(30.0, 60.0), 1), Part::LightSoft);
+        assert!((num(&d.param("n", "softness")) - 30.0).abs() < 1e-3);
+        // The aim, turned to point down (90°).
+        assert_eq!(drag(&mut d, at(0.0, BEAM * 1.35), at(90.0, 80.0), 1), Part::LightAim);
+        assert!((num(&d.param("n", "direction")) - 90.0).abs() < 1e-3);
+        // The middle moves it.
+        assert_eq!(drag(&mut d, c, Pos2::new(80.0, 40.0), 1), Part::Move);
+        assert_eq!(vec2(&d.param("n", "position")), Vec2::new(80.0, 40.0));
+        // A point light's radius, and a directional light's gradient
+        // (measured along its direction).
+        let mut d = doc("light_2d", json!({ "type": "point", "position": [100, 50], "radius": 40 }));
+        assert_eq!(drag(&mut d, Pos2::new(140.0, 50.0), Pos2::new(100.0, 120.0), 1), Part::LightReach);
+        assert!((num(&d.param("n", "radius")) - 70.0).abs() < 1e-3);
+        let mut d = doc("light_2d", json!({ "type": "directional", "position": [100, 50], "direction": 0, "gradient": 30 }));
+        assert_eq!(drag(&mut d, Pos2::new(130.0, 50.0), Pos2::new(160.0, 80.0), 1), Part::LightReach);
+        assert!((num(&d.param("n", "gradient")) - 60.0).abs() < 1e-3);
+        // An area light: a box's handles (a corner sizes it about its middle).
+        let mut d = doc("light_2d", json!({ "type": "area", "position": [100, 50], "size": [40, 20] }));
+        assert_eq!(drag(&mut d, Pos2::new(120.0, 60.0), Pos2::new(130.0, 70.0), 1), Part::Size { x: true, y: true });
+        assert_eq!(vec2(&d.param("n", "size")), Vec2::new(60.0, 40.0));
+        // Animated: a key at the frame.
+        let mut d = doc("light_2d", json!({ "type": "point", "position": { "keys": [[1, [10, 10]], [10, [100, 50]]], "interp": "linear" }, "radius": 40 }));
+        drag(&mut d, Pos2::new(100.0, 50.0), Pos2::new(90.0, 50.0), 10);
+        assert!(anim::has_key_at(&d.param("n", "position"), 10) && vec2(&anim::evaluate(&d.param("n", "position"), 10.0)) == Vec2::new(90.0, 50.0));
     }
 
     #[test]

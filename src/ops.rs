@@ -168,6 +168,9 @@ pub enum Overlay {
     CameraTracker,
     /// A quad of four Vec2 corners (`to`), and the four it is mapped from.
     CornerPin { to: [&'static str; 4], from: [&'static str; 4] },
+    /// A Light 2D's handles, by its type: position, aim, cone and
+    /// softness, radius, gradient, or an area's box.
+    Light2d,
 }
 
 /// An input port.
@@ -521,6 +524,49 @@ pub static OPS: &[OpInfo] = &[
         overlay: Overlay::None,
         mask_base: Some(0),
         help: "Brightens or darkens color by photographic stops (×2 per stop).",
+    },
+    OpInfo {
+        name: "light_2d",
+        label: "Light 2D",
+        category: Category::Color,
+        inputs: &[IN, opt("normals"), opt("depth"), MASK],
+        params: &[
+            fixed!("type", "Type", ParamKind::Choice(&["spot", "area", "point", "directional"]), "spot"),
+            p!("position", "Position", ParamKind::Vec2, [960.0, 540.0]),
+            p!("direction", "Direction", ParamKind::Float { min: -360.0, max: 360.0 }, 90.0),
+            p!("cone", "Cone angle", ParamKind::Float { min: 0.0, max: 360.0 }, 60.0),
+            p!("softness", "Softness", ParamKind::Float { min: 0.0, max: 180.0 }, 10.0),
+            p!("reach", "Reach", ParamKind::Float { min: 0.0, max: 100000.0 }, 0.0),
+            fixed!("shape", "Area shape", ParamKind::Choice(&["rectangle", "ellipse"]), "rectangle"),
+            p!("size", "Size", ParamKind::Vec2, [400.0, 300.0]),
+            p!("rotation", "Rotation", ParamKind::Float { min: -360.0, max: 360.0 }, 0.0),
+            p!("feather", "Feather", ParamKind::Float { min: 0.0, max: 10000.0 }, 50.0),
+            p!("radius", "Radius", ParamKind::Float { min: 0.0, max: 100000.0 }, 400.0),
+            p!("falloff", "Falloff", ParamKind::Float { min: 0.0, max: 20.0 }, 1.0),
+            p!("gradient", "Gradient", ParamKind::Float { min: 0.0, max: 100000.0 }, 300.0),
+            p!("color", "Color", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]),
+            p!("intensity", "Intensity", ParamKind::Float { min: 0.0, max: 100.0 }, 1.0),
+            p!("exposure", "Exposure (stops)", ParamKind::Float { min: -10.0, max: 10.0 }, 0.0),
+            fixed!("blend", "Blend", ParamKind::Choice(&["add", "screen", "multiply"]), "add"),
+            p!("height", "Height", ParamKind::Float { min: 0.0, max: 100000.0 }, 100.0),
+            p!("elevation", "Elevation", ParamKind::Float { min: 0.0, max: 90.0 }, 45.0),
+            p!("specular", "Specular", ParamKind::Float { min: 0.0, max: 1.0 }, 0.0),
+            p!("roughness", "Roughness", ParamKind::Float { min: 0.0, max: 1.0 }, 0.5),
+            p!("depth_scale", "Depth scale", ParamKind::Float { min: 0.0, max: 10000.0 }, 1.0),
+            MIX,
+            MASK_CHANNEL,
+            MASK_INVERT,
+        ],
+        overlay: Overlay::Light2d,
+        mask_base: Some(0),
+        help: "Lights the image in 2D: a Spot from Position toward Direction (degrees, 0 right, clockwise) within Cone angle, \
+               its edge soft over Softness degrees, fading to half at Reach pixels (0: no fade); an Area rectangle or ellipse \
+               Size across, turned by Rotation, its edge soft over Feather pixels; a Point full at Position and gone at Radius \
+               ((1 − d / Radius)^Falloff); a Directional light across the frame toward Direction, fading over Gradient pixels \
+               past Position (0: even). Color × Intensity × 2^Exposure goes on by Blend (add, screen, multiply). With normals \
+               (a render's N pass, or a normal map) it shades the image as a surface, the light Height pixels above it (a \
+               directional one at Elevation degrees), with a Specular highlight sharp to broad by Roughness; depth (a Z pass \
+               × Depth scale pixels) moves the surface back. Drag its handles in the viewer.",
     },
     OpInfo {
         name: "saturation",
@@ -1633,6 +1679,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "transform" => transform(params, inputs),
         "blur" => blur(params, inputs),
         "exposure" => exposure(params, inputs),
+        "light_2d" => light_2d(params, inputs),
         "saturation" => saturation(params, inputs),
         "invert" => invert(params, inputs),
         "clamp" => clamp(params, inputs),
@@ -2246,6 +2293,46 @@ fn exposure(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: Exposure = parse(params, "exposure")?;
     let k = 2f32.powf(p.stops);
     Ok(mapped(input(inputs, 0, "exposure")?, |px| [px[0] * k, px[1] * k, px[2] * k, px[3]]))
+}
+
+/// Light 2D: the light its params describe (see [`crate::light2d`]).
+pub fn light_2d_light(p: &Value) -> crate::light2d::Light2d {
+    use crate::light2d::{Blend, Light2d, Shape};
+    let num = |n: &str, d: f64| p[n].as_f64().filter(|v| v.is_finite()).unwrap_or(d);
+    let pos = crate::scene::numbers::<2>(&p["position"], 0.0);
+    let shape = match p["type"].as_str() {
+        Some("area") => Shape::Area { center: pos, size: crate::scene::numbers(&p["size"], 400.0), rotation: num("rotation", 0.0), ellipse: p["shape"].as_str() == Some("ellipse"), softness: num("feather", 50.0).max(0.0) },
+        Some("point") => Shape::Point { position: pos, radius: num("radius", 400.0).max(0.0), falloff: num("falloff", 1.0).max(0.0) },
+        Some("directional") => Shape::Directional { angle: num("direction", 90.0), position: pos, falloff: num("gradient", 300.0).max(0.0) },
+        _ => Shape::Spot { position: pos, direction: num("direction", 90.0), cone: num("cone", 60.0).clamp(0.0, 360.0), softness: num("softness", 10.0).max(0.0), reach: num("reach", 0.0).max(0.0) },
+    };
+    let c = crate::scene::numbers::<3>(&p["color"], 1.0).map(|v| v as f32);
+    let blend = match p["blend"].as_str() {
+        Some("screen") => Blend::Screen,
+        Some("multiply") => Blend::Multiply,
+        _ => Blend::Add,
+    };
+    Light2d {
+        color: c,
+        intensity: num("intensity", 1.0) as f32,
+        exposure: num("exposure", 0.0) as f32,
+        blend,
+        height: num("height", 100.0),
+        elevation: num("elevation", 45.0),
+        specular: num("specular", 0.0) as f32,
+        roughness: num("roughness", 0.5) as f32,
+        ..Light2d::new(shape)
+    }
+}
+
+/// Light 2D on its input, with its normals (a render's `N` pass if it
+/// has one, else a normal map) and depth inputs if connected.
+fn light_2d(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
+    use crate::light2d::{Depth, Normals};
+    let img = input(inputs, 0, "light_2d")?;
+    let normals = inputs.get(1).copied().flatten().map(|n| if n.plane("N.x").is_some() { Normals::Pass(n) } else { Normals::Map(n) });
+    let depth = inputs.get(2).copied().flatten().map(|image| Depth { image, scale: params["depth_scale"].as_f64().unwrap_or(1.0) });
+    Ok(crate::light2d::light2d(img, &[light_2d_light(params)], normals, depth, None))
 }
 
 /// Rec. 709 luminance weights.
@@ -3865,6 +3952,43 @@ mod tests {
 
     /// A comp saved before Swap and the mask choices loads and renders as
     /// it did, and saves without them.
+    #[test]
+    fn light_2d_lights_the_image_by_its_type() {
+        let img = solid(100, 80, [0.25, 0.25, 0.25, 1.0]);
+        let lit = |p: Value, inputs: &[Option<&Image>]| eval("light_2d", &p, inputs, &CTX).unwrap();
+        // A spot at a pixel lights it most; half at its cone's (soft) edge.
+        let spot = json!({ "type": "spot", "position": [50.5, 40.5], "direction": 0, "cone": 60, "softness": 10 });
+        let out = lit(spot.clone(), &[Some(&img), None, None, None]);
+        let added = |x: usize, y: usize| out.get(x, y)[0] - 0.25;
+        assert!(approx(added(70, 40), 1.0) && approx(added(20, 40), 0.0), "{} {}", added(70, 40), added(20, 40));
+        let light = light_2d_light(&spot);
+        let a = 30f64.to_radians();
+        assert!((light.reach(50.5 + 30.0 * a.cos(), 40.5 + 30.0 * a.sin()) - 0.5).abs() < 1e-9);
+        // Each type's params make its shape; color, intensity and exposure
+        // its strength; the blend how it goes on.
+        let p = json!({ "type": "point", "position": [10, 10], "radius": 20, "falloff": 2, "color": [1, 0.5, 0, 1], "intensity": 2, "exposure": 1, "blend": "multiply" });
+        let l = light_2d_light(&p);
+        assert!(matches!(l.shape, crate::light2d::Shape::Point { radius: 20.0, falloff: 2.0, .. }) && l.blend == crate::light2d::Blend::Multiply);
+        assert!(approx(lit(p, &[Some(&img), None, None, None]).get(10, 10)[1], 0.25 * 0.5 * 4.0 * (1.0 - 0.5f32.sqrt() / 20.0).powi(2)));
+        assert!(matches!(light_2d_light(&json!({ "type": "area", "shape": "ellipse" })).shape, crate::light2d::Shape::Area { ellipse: true, .. }));
+        assert!(matches!(light_2d_light(&json!({ "type": "directional", "gradient": 50 })).shape, crate::light2d::Shape::Directional { falloff: 50.0, .. }));
+        // Normals: a render's N pass and a normal map light alike (flat,
+        // facing out: a directional light at 30° elevation gives sin 30°).
+        let mut pass = solid(100, 80, [0.0; 4]);
+        for (axis, v) in [("N.x", 0.0), ("N.y", 0.0), ("N.z", 1.0)] {
+            *pass.plane_mut(axis) = vec![v; 100 * 80];
+        }
+        let map = solid(100, 80, [0.5, 0.5, 1.0, 1.0]);
+        let sun = json!({ "type": "directional", "gradient": 0, "elevation": 30 });
+        let (a, b) = (lit(sun.clone(), &[Some(&img), Some(&pass), None, None]), lit(sun, &[Some(&img), Some(&map), None, None]));
+        assert!(approx(a.get(5, 5)[0] - 0.25, 0.5) && approx(b.get(5, 5)[0], a.get(5, 5)[0]), "{} {}", a.get(5, 5)[0], b.get(5, 5)[0]);
+        // The generic mask: none of it where the mask is empty.
+        let mut mask = solid(100, 80, [0.0; 4]);
+        mask.pixels[40 * 100 + 70] = [0.0, 0.0, 0.0, 1.0];
+        let out = lit(spot, &[Some(&img), None, None, Some(&mask)]);
+        assert!(approx(out.get(70, 40)[0], 1.25) && approx(out.get(71, 40)[0], 0.25));
+    }
+
     #[test]
     fn old_merges_and_masks_load_unchanged() {
         use crate::graph::{Evaluator, Graph};

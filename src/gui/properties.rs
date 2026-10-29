@@ -280,6 +280,10 @@ impl Properties {
                     if op == "merge" && spec.name == "swap" {
                         continue;
                     }
+                    // A Light 2D shows only what its type uses.
+                    if op == "light_2d" && !light_2d_shows(doc.param(id, "type").as_str().unwrap_or("spot"), spec.name) {
+                        continue;
+                    }
                     let linked = arclight::link::is_link(&doc.param(id, spec.name));
                     ui.horizontal(|ui| {
                         if spec.animatable && !linked {
@@ -1203,6 +1207,21 @@ pub struct Browse {
     pub frame: i64,
 }
 
+/// Whether a Light 2D of type `kind` uses param `name` (the shape params
+/// of other types are hidden; the rest always show).
+fn light_2d_shows(kind: &str, name: &str) -> bool {
+    let only: &[&str] = match name {
+        "cone" | "softness" | "reach" => &["spot"],
+        "direction" => &["spot", "directional"],
+        "shape" | "size" | "rotation" | "feather" => &["area"],
+        "radius" | "falloff" => &["point"],
+        "gradient" | "elevation" => &["directional"],
+        "height" => &["spot", "area", "point"],
+        _ => return true,
+    };
+    only.contains(&kind)
+}
+
 /// A Merge's Swap A / B toggle: lit while A and B are swapped.
 fn swap_button(ui: &mut egui::Ui, doc: &mut Doc, id: &str) {
     let on = doc.param(id, "swap").as_bool().unwrap_or(false);
@@ -1461,6 +1480,19 @@ fn formula_help(ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_light_2d_shows_only_its_types_params() {
+        let shown = |kind: &str| -> Vec<&str> { arclight::ops::info("light_2d").unwrap().params.iter().map(|p| p.name).filter(|n| light_2d_shows(kind, n)).collect() };
+        let spot = shown("spot");
+        assert!(spot.contains(&"cone") && spot.contains(&"direction") && !spot.contains(&"radius") && !spot.contains(&"size"));
+        assert!(shown("area").contains(&"feather") && !shown("area").contains(&"cone"));
+        assert!(shown("point").contains(&"radius") && !shown("point").contains(&"direction"));
+        assert!(shown("directional").contains(&"gradient") && !shown("directional").contains(&"height"));
+        for kind in ["spot", "area", "point", "directional"] {
+            assert!(["type", "position", "color", "intensity", "exposure", "blend", "mix"].iter().all(|n| shown(kind).contains(n)), "{kind}");
+        }
+    }
     use arclight::graph::{Graph, NodeSpec};
 
     #[test]
