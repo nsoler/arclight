@@ -28,6 +28,7 @@ pub mod render;
 pub mod render3d;
 pub mod scene;
 pub mod session;
+pub mod shade;
 pub mod sfm;
 pub mod shape;
 pub mod solve;

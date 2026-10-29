@@ -11,6 +11,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.16 — 2026-10-29
+
+- Shading, engine side (`src/shade.rs`): ambient, directional, point,
+  spot (cone and soft penumbra) and area lights with distance falloff;
+  Lambert and Blinn–Phong shading of a point, split into diffuse,
+  specular, emission and ambient parts that add up to the beauty (the
+  lighting passes), per light too. Without lights a surface shows its
+  color as it is. Not yet used by Scanline Render (M10 step d).
+
 ## 0.9.15 — 2026-10-29
 
 - Render passes in EXR: every plane is written under the standard

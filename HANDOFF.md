@@ -55,7 +55,13 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
     **0.9.15 (MathWiz): EXR planes + Shuffle engine** (image.rs:
     `layer.channel` names, `layers`, `channel`, `shuffle`, `copy_to_plane`,
     `layer_to_rgba`, `rgba_to_layer`, `remove_layers`). Shuffle *node* in
-    ops.rs still to do (when ops.rs is free). MathWiz next: `src/shade.rs`.
+    ops.rs still to do (when ops.rs is free).
+    **0.9.16 (MathWiz): `src/shade.rs`** (LightKind Ambient / Directional /
+    Point / Spot {cone, penumbra} / Area {size}; `Light {kind, color,
+    intensity, decay, world, node}` aiming down -Z; `shade(hit, material,
+    albedo, lights) -> Shaded {diffuse, specular, emission, ambient}`,
+    per-light `light()`; no lights or Unlit = color as is). Light *nodes*
+    and render3d use still to do (3DWorker).
 - **Ask the user first** how the Mac builds (v0.9.11 universal DMG) went
   on their M4 Pro, and whether anyone tried an Intel Mac. Mac-only bugs
   come first.
@@ -266,7 +272,7 @@ and M11 done, M10 in progress, M12–M13 specified), `docs/help.md` (the in-app 
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.15**.
+  in the same commit as the change. Current: **0.9.16**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.
