@@ -669,6 +669,70 @@ impl Image {
         Ok(())
     }
 
+    /// `a` and `b` merged by depth (their `depth` planes; 0 or no plane is
+    /// nothing there, as far as can be): at each pixel the nearer goes over
+    /// the farther, so an antialiased edge in front blends with what's
+    /// behind it and both images' coverage adds up as in Merge's over. With
+    /// no depth on either side, `a` goes over `b`. The result covers both
+    /// windows in `a`'s frame; its depth is the nearer one. Other planes:
+    /// coverage passes (mattes, and layers of R, G, B, A such as `diffuse`)
+    /// merge the same way; data passes (`P`, `N`, `uv`, `motion`, `id`,
+    /// ...) take the nearer image's value where it covers the pixel, else
+    /// the other's.
+    pub fn zmerge(a: &Image, b: &Image) -> Image {
+        let window = a.window().union(&b.window());
+        let mut out = Image::blank(a.format, window);
+        let ww = window.width().max(1);
+        let at = |i: usize| (window.x0 + (i % ww) as i32, window.y0 + (i / ww) as i32);
+        let depth = |img: &Image, x: i32, y: i32| img.plane("depth").map_or(0.0, |p| img.plane_value(p, x, y));
+        let n = out.width * out.height;
+        // Whether a is in front at each pixel: nearer, or the only one
+        // with depth, or (neither has) as given.
+        let a_front: Vec<bool> = (0..n)
+            .map(|i| {
+                let (x, y) = at(i);
+                let (da, db) = (depth(a, x, y), depth(b, x, y));
+                if da > 0.0 && db > 0.0 { da <= db } else { db <= 0.0 }
+            })
+            .collect();
+        let pair = |i: usize| if a_front[i] { (a, b) } else { (b, a) };
+        for (i, px) in out.pixels.iter_mut().enumerate() {
+            let (x, y) = at(i);
+            let (f, k) = pair(i);
+            let (fp, kp) = (f.at(x, y), k.at(x, y));
+            *px = std::array::from_fn(|c| fp[c] + kp[c] * (1.0 - fp[3]));
+        }
+        let mut names: Vec<String> = Vec::new();
+        for p in a.planes.iter().chain(&b.planes) {
+            if !names.contains(&p.name) {
+                names.push(p.name.clone());
+            }
+        }
+        for name in names {
+            let (pa, pb) = (a.plane(&name), b.plane(&name));
+            let value = |img: &Image, p: Option<&Plane>, x: i32, y: i32| p.map_or(0.0, |p| img.plane_value(p, x, y));
+            let coverage = name.starts_with("matte.") || matches!(split_plane(&name).1, Some("R" | "G" | "B" | "A"));
+            let data: Vec<f32> = (0..n)
+                .map(|i| {
+                    let (x, y) = at(i);
+                    let (va, vb) = (value(a, pa, x, y), value(b, pb, x, y));
+                    let (vf, vk, f, fp) = if a_front[i] { (va, vb, a, pa) } else { (vb, va, b, pb) };
+                    if name == "depth" {
+                        [va, vb].into_iter().filter(|d| *d > 0.0).fold(0.0, |m: f32, d| if m == 0.0 { d } else { m.min(d) })
+                    } else if coverage {
+                        vf + vk * (1.0 - f.at(x, y)[3])
+                    } else if fp.is_some() && f.at(x, y)[3] > 0.0 {
+                        vf
+                    } else {
+                        vk
+                    }
+                })
+                .collect();
+            *out.plane_mut(&name) = data;
+        }
+        out
+    }
+
     /// Drop layers `layers` (each a plane, or all of a layer's planes);
     /// `*` drops every plane.
     pub fn remove_layers(&mut self, layers: &[&str]) {
@@ -895,5 +959,88 @@ mod tests {
         assert!(out.layer("P").is_empty() && out.plane("matte.card1").is_none() && out.plane("id").is_none() && !out.layer("N").is_empty());
         out.remove_layers(&["*"]);
         assert!(out.planes.is_empty());
+    }
+
+    /// A 6 × 1 strip in an 8 × 2 frame: color `c` with alpha per pixel,
+    /// at `depth` where covered (0 elsewhere).
+    fn strip(x0: i32, alpha: [f32; 6], c: [f32; 3], depth: f32) -> Image {
+        let mut img = Image::blank(Size { width: 8, height: 2 }, IRect::new(x0, 0, x0 + 6, 1));
+        img.pixels = alpha.iter().map(|&a| [c[0] * a, c[1] * a, c[2] * a, a]).collect();
+        *img.plane_mut("depth") = alpha.iter().map(|&a| if a > 0.0 { depth } else { 0.0 }).collect();
+        img
+    }
+
+    fn near(a: Rgba, b: Rgba) -> bool {
+        (0..4).all(|c| (a[c] - b[c]).abs() < 1e-6)
+    }
+
+    #[test]
+    fn zmerge_puts_the_nearer_in_front() {
+        // Red 5 away on x 0..6, blue 3 away on x 2..8; overlapping on 2..6.
+        let red = strip(0, [1.0; 6], [1.0, 0.0, 0.0], 5.0);
+        let blue = strip(2, [1.0; 6], [0.0, 0.0, 1.0], 3.0);
+        let m = Image::zmerge(&red, &blue);
+        assert_eq!(m.window(), IRect::new(0, 0, 8, 1));
+        for x in 0..8 {
+            let want = if x < 2 { [1.0, 0.0, 0.0, 1.0] } else { [0.0, 0.0, 1.0, 1.0] };
+            assert!(near(m.at(x, 0), want), "x {x}: {:?}", m.at(x, 0));
+            assert_eq!(m.plane_at("depth", x, 0), if x < 2 { 5.0 } else { 3.0 });
+        }
+        // Either order: the same where the depths differ.
+        let n = Image::zmerge(&blue, &red);
+        assert!((0..8).all(|x| near(m.at(x, 0), n.at(x, 0)) && m.plane_at("depth", x, 0) == n.plane_at("depth", x, 0)));
+        // Moved behind, red shows through.
+        let far = strip(2, [1.0; 6], [0.0, 0.0, 1.0], 9.0);
+        let m = Image::zmerge(&red, &far);
+        assert!(near(m.at(4, 0), [1.0, 0.0, 0.0, 1.0]) && near(m.at(7, 0), [0.0, 0.0, 1.0, 1.0]));
+    }
+
+    #[test]
+    fn zmerge_blends_edges_and_coverage() {
+        // A soft-edged blue in front (depth 2) of opaque red (8): the edge
+        // pixels are blue over red; where only one covers, it alone.
+        let red = strip(0, [1.0; 6], [1.0, 0.0, 0.0], 8.0);
+        let blue = strip(0, [0.0, 0.25, 0.5, 1.0, 0.5, 0.0], [0.0, 0.0, 1.0], 2.0);
+        let m = Image::zmerge(&red, &blue);
+        for (x, a) in [0.0f32, 0.25, 0.5, 1.0, 0.5, 0.0].iter().enumerate() {
+            assert!(near(m.at(x as i32, 0), [1.0 - a, 0.0, *a, 1.0]), "x {x}: {:?}", m.at(x as i32, 0));
+        }
+        // A soft edge behind an opaque front is hidden.
+        let front = strip(0, [1.0; 6], [0.0, 1.0, 0.0], 1.0);
+        assert!((0..6).all(|x| near(Image::zmerge(&blue, &front).at(x, 0), [0.0, 1.0, 0.0, 1.0])));
+        // Where both are partly covered, coverage adds as in over.
+        let half_red = strip(0, [0.5; 6], [1.0, 0.0, 0.0], 8.0);
+        let m = Image::zmerge(&half_red, &blue);
+        assert!(near(m.at(2, 0), [0.25, 0.0, 0.5, 0.75]), "{:?}", m.at(2, 0));
+        // An image without depth is as far as can be: behind.
+        let mut bg = Image::filled(8, 2, [0.0, 1.0, 0.0, 1.0]);
+        bg.planes.clear();
+        let m = Image::zmerge(&bg, &blue);
+        assert!(near(m.at(3, 0), [0.0, 0.0, 1.0, 1.0]) && near(m.at(2, 0), [0.0, 0.5, 0.5, 1.0]) && near(m.at(0, 1), [0.0, 1.0, 0.0, 1.0]));
+        assert_eq!((m.plane_at("depth", 3, 0), m.plane_at("depth", 0, 1)), (2.0, 0.0));
+        // Neither with depth: a over b.
+        let (mut a, mut b) = (strip(0, [0.5; 6], [1.0, 0.0, 0.0], 1.0), strip(0, [1.0; 6], [0.0, 0.0, 1.0], 1.0));
+        a.planes.clear();
+        b.planes.clear();
+        assert!(near(Image::zmerge(&a, &b).at(1, 0), [0.5, 0.0, 0.5, 1.0]));
+    }
+
+    #[test]
+    fn zmerge_carries_passes_by_kind() {
+        let mut red = strip(0, [1.0; 6], [1.0, 0.0, 0.0], 5.0);
+        let mut blue = strip(2, [1.0, 1.0, 0.5, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 3.0);
+        *red.plane_mut("N.x") = vec![1.0; 6];
+        *blue.plane_mut("N.x") = vec![-1.0; 6];
+        *red.plane_mut("matte.red") = vec![1.0; 6];
+        *blue.plane_mut("matte.blue") = vec![1.0, 1.0, 0.5, 0.0, 0.0, 0.0];
+        let m = Image::zmerge(&red, &blue);
+        // Normals from whichever is nearer where it covers.
+        assert_eq!((0..6).map(|x| m.plane_at("N.x", x, 0)).collect::<Vec<_>>(), [1.0, 1.0, -1.0, -1.0, -1.0, 1.0]);
+        // Mattes as coverage: blue's whole; red's cut where blue is in
+        // front, half at blue's soft edge.
+        assert_eq!((0..6).map(|x| m.plane_at("matte.blue", x, 0)).collect::<Vec<_>>(), [0.0, 0.0, 1.0, 1.0, 0.5, 0.0]);
+        assert_eq!((0..6).map(|x| m.plane_at("matte.red", x, 0)).collect::<Vec<_>>(), [1.0, 1.0, 0.0, 0.0, 0.5, 1.0]);
+        // The mattes still add up to the alpha.
+        assert!((0..6).all(|x| (m.plane_at("matte.red", x, 0) + m.plane_at("matte.blue", x, 0) - m.at(x, 0)[3]).abs() < 1e-6));
     }
 }

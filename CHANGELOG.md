@@ -11,6 +11,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.18 — 2026-10-29
+
+- Depth merge, engine side (`Image::zmerge`): combines two images pixel
+  by pixel by their depth passes, the nearer over the farther with soft
+  edges blended, and carries the other passes along (mattes and color
+  passes blended, position / normal / id taken from the nearer). The
+  Merge option comes next (M10 step e).
+
 ## 0.9.17 — 2026-10-29
 
 - glTF 2.0 import, engine side (`gltf::read_gltf`): .gltf and .glb, node
