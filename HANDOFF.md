@@ -44,9 +44,12 @@ done, M10 specified), `docs/help.md` (the in-app help) and
   view (below); (3) M9 leftovers: a true orthographic texture path in
   render3d (ortho views now use a 1000×-away long lens), the pivot at
   the median of a multi-selection, transforming several objects at once;
-  (4) **M10, 3D objects and render passes (AOVs)** ("Milestone 10 in
-  detail" in `docs/phase-4-plan.md`); (5) M8 follow-ups and older items
-  under "Next steps". Keep `docs/help.md` in step with new features.
+  (4) **M11, PnP and the tripod solve** ("Milestone 11 in detail" in
+  `docs/phase-4-plan.md`; added 2026-10-29 at the user's request: M7
+  left out PnP, and a camera that only turns is refused today) —
+  suggested before M10, after trying the tracker on real footage;
+  (5) **M10, 3D objects and render passes (AOVs)** ("Milestone 10 in
+  detail"); (6) other M8 follow-ups and older items under "Next steps". Keep `docs/help.md` in step with new features.
 - **Not yet tried by hand** (session 9): all of the 3D view with a real
   mouse and trackpad (orbit / pan / zoom feel, numpad and pie, the
   navigation gizmo's buttons, box select, G / R / S typing, gizmo drags,
@@ -490,12 +493,13 @@ the user asks, usually after a visible feature lands.
 3. **Phase 4 M10: 3D objects and render passes (AOVs)**, as specified
    there (order: meshes + primitives; P / N / uv / id / mattes + Shuffle;
    OBJ import; materials, lights, lighting passes; motion, zmerge, glTF).
-4. **M8 follow-ups:** a live link from a Camera to the solve (Export
-   bakes keys today); point picking over a Scanline Render of the solved
-   scene; solving frames between solved ones when tracks allow (unsolved
-   frames are listed); nodal (tripod) and lens-distortion solves; a mask
-   input to ignore moving objects; motion blur in Scanline Render;
-   mipmaps for minified cards.
+4. **M11: PnP and the tripod solve** (specified in the plan; covers the
+   old follow-ups "solving frames between solved ones" and "nodal
+   solve"). **Other M8 follow-ups:** a live link from a Camera to the
+   solve (Export bakes keys today); point picking over a Scanline Render
+   of the solved scene; a lens-distortion solve; a mask input to ignore
+   moving objects; motion blur in Scanline Render; mipmaps for minified
+   cards.
 5. **Older follow-ups** (small to medium):
    - Python plugins (custom ops written in Python): embed Python in the
      host via the `python/` crate, or run them out of process.

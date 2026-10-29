@@ -302,12 +302,19 @@ then poses of in-between frames by PnP and a final pass).
    params to). The same through MCP / Python (`place_on_points`). Test: a
    card placed on solved points renders locked to the plate.
 9. **3D viewport (D5)**, specified below, and the remaining follow-ups
-   (nodal solve, distortion solve, mask input, motion blur in Scanline
-   Render).
+   (distortion solve, mask input, motion blur in Scanline Render; the
+   nodal solve is now part of M11).
 10. **3D objects and render passes (AOVs)**, specified below (added
     2026-10-29, user request): geometry beyond cards (primitives and
     imported meshes), simple lights and shading, and Scanline Render
     writing render passes as image planes.
+11. **Camera solve: PnP and the tripod solve**, specified below (added
+    2026-10-29, user request): M7 left these out. PnP places a frame's
+    camera from 3D points it sees, so solves survive jumps, gaps and
+    restarts; the tripod (nodal) solve handles shots where the camera
+    only turns, which the solver refuses today ("the camera may only be
+    turning, not moving"). Suggested before M10, since it makes the
+    tracker work on more real shots.
 
 ## Milestone 9 in detail: the 3D viewport
 
@@ -553,3 +560,92 @@ for meshes with many triangles.
 meshes; (b) `P`, `N`, `uv`, `id`, mattes and Shuffle; (c) OBJ import;
 (d) materials, lights and the lighting passes; (e) `motion`, zmerge,
 glTF.
+
+## Milestone 11 in detail: PnP and the tripod solve
+
+Specified 2026-10-29 at the user's request, after reviewing M1–M8: M7's
+plan listed PnP, which was left out (each frame starts from its
+neighbour's camera), and D4 put the nodal (tripod) solve "later".
+
+**Where the solver stands.** `sfm::solve` starts from the frame pair
+with the most parallax, then adds frames nearest-first, each starting
+from its neighbour's pose (a constant-velocity guess) refined with
+cameras-only bundle adjustment. That works on smooth video but has
+three gaps: (1) a jump (a cut, a dropped stretch of frames, a whip pan)
+leaves the guess too far off to converge; (2) frames between solved
+ones are listed as unsolved instead of being placed from the points
+they see; (3) a camera that only turns has no parallax, so
+`initial_pair` finds no start pair and the solve is refused.
+
+**PnP (perspective-n-point).**
+- `solve::pnp(points_3d, pixels, intrinsics) -> Option<(Pose, inliers)>`:
+  a minimal solver (P3P, Kneip or Lambda Twist, up to four poses per
+  sample, checked with a fourth point) inside RANSAC (adaptive iteration
+  count, the same `max_error` threshold as the solve), then refined on
+  the inliers with Levenberg–Marquardt (a cameras-only `bundle::Problem`
+  with the points fixed). EPnP as the many-point fallback (and for the
+  final fit), so flat scenes (all points on a floor or wall), where P3P
+  samples get unstable, still solve.
+- Use in `sfm::solve`: (a) each new frame tries the neighbour guess
+  first and falls back to PnP when the guess's reprojection error is
+  over `max_error` or fewer than half its tracks agree; (b) after the
+  main pass, frames left unsolved (gaps) are placed by PnP from the
+  points they see, then adjusted; (c) a solve can restart after a cut
+  from any frame that sees enough known points.
+- The solver reports which frames came from PnP (for the panel's
+  per-frame list).
+
+**Tripod (nodal) solve.**
+- **Detection:** when no pair reaches `start_parallax` but tracks are
+  long and consistent, fit a homography between frames (RANSAC, then
+  refined). If homographies explain the tracks (median error under
+  `max_error`) and they decompose as `K R K⁻¹` (a pure rotation), the
+  shot is nodal. The Camera Tracker's **Solve** setting becomes
+  **Auto / Free move / Tripod**: Auto (the default) picks Tripod when it
+  detects one, and says so; Free move keeps today's behaviour, and
+  refuses a nodal shot with a message suggesting Tripod.
+- **Model:** the camera has a fixed center (at the origin) and a
+  rotation per frame; each track is a direction (a unit vector), not a
+  point. Initialize rotations by chaining the frame-to-frame homographies
+  (`R = K⁻¹ H K`, orthonormalized), then refine everything in a
+  rotation-only bundle adjustment (`bundle::Problem` with the camera
+  centers fixed at 0 and the points constrained to the unit sphere; or
+  a separate small solver). The focal length is solvable here too
+  (homographies constrain it well when the camera turns enough).
+- **Output:** a Camera keyed on rotation only (translate constant), and
+  the point cloud placed on a sphere at a user-chosen **Distance**
+  (default 10 units; points at infinity have no real depth), so cards
+  can still be put "on" points and the scene stays a normal 3D scene.
+  Set origin / ground / scale tools work, except that scale only changes
+  the sphere's radius.
+- Lens distortion: not in this milestone (still a follow-up), but the
+  homography fit must tolerate mild distortion (a looser threshold for
+  the nodal test).
+
+**MCP / Python.** `track_camera` gains `mode` (`auto` / `free` /
+`tripod`) and `distance`; `camera_solution` reports `mode` and, per
+frame, whether it came from PnP. Same as `Node.track_camera(...)`
+arguments.
+
+**Tests.**
+- PnP: noiseless points give the exact pose (P3P and EPnP); 0.5 px
+  noise + 30 % outliers within 0.1° and 1 % of the distance; a flat
+  scene (all points on a plane) still solves; too few points return
+  None.
+- Solver with PnP: a synthetic shot with a 10-frame gap and a 30° jump
+  solves every frame, with the jump's frames marked as PnP; a restart
+  after a cut.
+- Tripod: a synthetic pan-and-tilt shot (camera turning about its
+  center, 40 frames) is detected as nodal under Auto, rotations within
+  0.1° of the truth, focal solved from 10 % off within 1 %; Free move
+  refuses it with the message; a shot with real parallax is *not*
+  detected as nodal.
+- End to end: a rendered pan with Scanline Render, tracked and solved in
+  Tripod mode; a card placed on the solved points stays locked to the
+  plate.
+
+**Order inside M11:** (a) `pnp` + tests; (b) PnP in the solver
+(fallback, gap filling, restart) + panel marks; (c) homography fit and
+nodal detection; (d) rotation-only adjustment, sphere points, output;
+(e) the Camera Tracker's Auto / Free move / Tripod setting, MCP /
+Python, help text (`docs/help.md`).
