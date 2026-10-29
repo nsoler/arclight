@@ -70,9 +70,7 @@ order of value:
      (originality rule).
 
 1. **Tracker follow-ups** (small to medium, builds on fresh code):
-   - An offset point (track one spot, place the
-     result at another); weak frames on the timeline too (they show on the
-     viewer path and in the panel now).
+   - An offset point (track one spot, place the result at another).
 2. **Phase 2 extras for Roto/Polygon:** box-select of vertices, select all
    (Ctrl+A in the viewer), move/scale/rotate a whole shape (a transform box
    around the selection), motion blur later.
@@ -233,6 +231,10 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   Shift+drag sets the shared size and drops every override
   (`Doc::remove_param`). The panel's Pattern/Search size fields only reach
   tracks without their own size (no per-track fields in the panel).
+- **Session 5, part 7**: weak frames on the timeline. `track::weak_frames`
+  (built on the private `scores`, shared with `weakest`) feeds a new `weak`
+  argument of `Transport::ui`, drawn as an orange band behind the key
+  diamonds while a Tracker is selected.
 
 ## Architecture in one page
 

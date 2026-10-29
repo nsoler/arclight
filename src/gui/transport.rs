@@ -114,10 +114,11 @@ impl Transport {
     }
 
     /// Draw the transport. Returns true if the project settings were edited.
-    /// `keys` are keyframe frames to mark on the timeline.
-    pub fn ui(&mut self, ui: &mut egui::Ui, project: &mut Project, cached: &[i64], keys: &[i64]) -> bool {
+    /// `keys` are keyframe frames to mark on the timeline, `weak` frames to
+    /// flag (a Tracker's weak matches).
+    pub fn ui(&mut self, ui: &mut egui::Ui, project: &mut Project, cached: &[i64], keys: &[i64], weak: &[i64]) -> bool {
         let mut project_changed = false;
-        self.timeline(ui, project, cached, keys);
+        self.timeline(ui, project, cached, keys, weak);
         ui.horizontal(|ui| {
             let (first, last) = (project.first_frame, project.last_frame);
             if icon_button(ui, Icon::ToStart, false, "Go to start (Home)") {
@@ -177,7 +178,7 @@ impl Transport {
         project_changed
     }
 
-    fn timeline(&mut self, ui: &mut egui::Ui, project: &Project, cached: &[i64], keys: &[i64]) {
+    fn timeline(&mut self, ui: &mut egui::Ui, project: &Project, cached: &[i64], keys: &[i64], weak: &[i64]) {
         let (first, last) = (project.first_frame, project.last_frame.max(project.first_frame));
         let width = ui.available_width();
         let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, 30.0), Sense::click_and_drag());
@@ -195,6 +196,12 @@ impl Transport {
                 Pos2::new(x_of(f) + frame_w.max(1.0), rect.bottom()),
             );
             painter.rect_filled(r, 0.0, Color32::from_rgb(70, 160, 90));
+        }
+
+        // Flagged frames: an orange band behind the keys.
+        for &f in weak.iter().filter(|&&f| f >= first && f <= last) {
+            let r = Rect::from_min_max(Pos2::new(x_of(f), rect.bottom() - 16.0), Pos2::new(x_of(f) + frame_w.max(2.0), rect.bottom() - 4.0));
+            painter.rect_filled(r, 0.0, Color32::from_rgb(240, 120, 50).gamma_multiply(0.7));
         }
 
         // Ticks with labels at a readable spacing.

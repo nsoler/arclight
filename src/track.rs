@@ -431,14 +431,29 @@ pub fn weak_below(min_score: f32) -> f32 {
     (min_score + 1.0) / 2.0
 }
 
-/// The worst match score keyed on an enabled track (`track<i>_score`, keyed
-/// by tracking runs): track index, frame and score.
-pub fn weakest(params: &Value) -> Option<(usize, i64, f32)> {
+/// The match scores keyed on enabled tracks (`track<i>_score`, keyed by
+/// tracking runs): track index, frame and score.
+fn scores(params: &Value) -> Vec<(usize, i64, f32)> {
     let p = ops::params_with_defaults("tracker", params);
     (0..TRACKS)
         .filter(|i| p[format!("track{}_on", i + 1)].as_bool() == Some(true))
         .flat_map(|i| crate::anim::keys(&p[format!("track{}_score", i + 1)]).into_iter().map(move |k| (i, k.frame, k.value[0] as f32)))
-        .min_by(|a, b| a.2.total_cmp(&b.2))
+        .collect()
+}
+
+/// The worst match on an enabled track: track index, frame and score.
+pub fn weakest(params: &Value) -> Option<(usize, i64, f32)> {
+    scores(params).into_iter().min_by(|a, b| a.2.total_cmp(&b.2))
+}
+
+/// Frames where some enabled track matched weakly (see [`weak_below`]),
+/// in order.
+pub fn weak_frames(params: &Value) -> Vec<i64> {
+    let min = ops::params_with_defaults("tracker", params)["min_score"].as_f64().unwrap_or(0.7) as f32;
+    let mut frames: Vec<i64> = scores(params).into_iter().filter(|s| s.2 < weak_below(min)).map(|s| s.1).collect();
+    frames.sort_unstable();
+    frames.dedup();
+    frames
 }
 
 /// Each enabled track's position at `frame`, from a Tracker node's params.
@@ -900,6 +915,7 @@ mod tests {
         assert_eq!(weakest(&params), Some((0, 3, 0.81)));
         assert_eq!(weakest(&json!({ "track2_on": true, "track2_score": params["track2_score"] })), Some((1, 2, 0.72)));
         assert_eq!(weakest(&json!({})), None);
+        assert_eq!(weak_frames(&params), [3]);
         assert!(0.81 < weak_below(0.7) && weak_below(0.7) < 0.9);
     }
 

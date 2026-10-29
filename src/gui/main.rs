@@ -694,8 +694,10 @@ impl eframe::App for App {
         egui::CentralPanel::default_margins().show(ui, |ui| {
             egui::Panel::bottom("transport").show(ui, |ui| {
                 ui.add_space(4.0);
+                let selected = self.doc.selected.as_ref().and_then(|id| self.doc.node(id));
                 let keys = self.doc.selected.as_ref().map(|id| self.doc.node_key_frames(id)).unwrap_or_default();
-                if self.transport.ui(ui, &mut self.doc.graph.project, &self.cached, &keys) {
+                let weak = selected.filter(|n| n.op == "tracker").map(|n| arclight::track::weak_frames(&n.params)).unwrap_or_default();
+                if self.transport.ui(ui, &mut self.doc.graph.project, &self.cached, &keys, &weak) {
                     self.doc.changed();
                 }
                 ui.add_space(2.0);
