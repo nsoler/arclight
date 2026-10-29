@@ -28,8 +28,16 @@ struct RenderJob {
 }
 
 /// Positions found so far by a tracking run, per frame.
-/// Positions found per frame, and warps when the run follows rotation.
-type Found = Arc<Mutex<Vec<(i64, Vec<Option<track::Pt>>, Option<Vec<track::Warp>>)>>>;
+/// What a tracking run found on one frame: positions, match scores, and
+/// warps when the run follows rotation.
+struct Tracked {
+    frame: i64,
+    pos: Vec<Option<track::Pt>>,
+    scores: Vec<f32>,
+    warps: Option<Vec<track::Warp>>,
+}
+
+type Found = Arc<Mutex<Vec<Tracked>>>;
 
 struct TrackJob {
     progress: Arc<Progress>,
@@ -472,11 +480,11 @@ impl Properties {
             // Checked before draining, so a finished run's last frame isn't missed.
             let finished = job.handle.as_ref().is_some_and(|h| h.is_finished());
             let found = std::mem::take(&mut *job.found.lock().unwrap());
-            for (frame, pos, warps) in &found {
-                key_tracks(doc, id, *frame, pos, warps.as_deref());
+            for t in &found {
+                key_tracks(doc, id, t.frame, &t.pos, t.warps.as_deref(), Some(&t.scores));
             }
-            if let Some(&(frame, ..)) = found.last() {
-                self.seek = Some(frame);
+            if let Some(t) = found.last() {
+                self.seek = Some(t.frame);
             }
             if finished {
                 job.result = Some(match job.handle.take().unwrap().join() {
@@ -533,6 +541,14 @@ impl Properties {
             .response
             .on_disabled_hover_text("Connect an input to track");
         });
+        ui.horizontal(|ui| {
+            if ui.button("Clear ◀").on_hover_text(format!("Remove the enabled tracks' keys before frame {frame}")).clicked() {
+                clear_track_keys(doc, id, frame, false);
+            }
+            if ui.button("Clear ▶").on_hover_text(format!("Remove the enabled tracks' keys after frame {frame}")).clicked() {
+                clear_track_keys(doc, id, frame, true);
+            }
+        });
         if ui.button("Reference = this frame").on_hover_text("Solve the output transform relative to the current frame").clicked() {
             doc.set_param(id, "reference_frame", json!(frame));
         }
@@ -568,6 +584,17 @@ impl Properties {
             let color = if *ok { Color32::from_rgb(110, 200, 120) } else { Color32::from_rgb(235, 100, 90) };
             ui.colored_label(color, msg);
         }
+        if let Some(node) = doc.node(id) {
+            let min = ops::params_with_defaults("tracker", &node.params)["min_score"].as_f64().unwrap_or(0.7) as f32;
+            if let Some((i, f, score)) = track::weakest(&node.params) {
+                let text = format!("Weakest match: track {} at frame {f} ({score:.2})", i + 1);
+                let weak = score < track::weak_below(min);
+                let label = if weak { RichText::new(text).color(Color32::from_rgb(235, 150, 60)) } else { RichText::new(text).weak() };
+                if ui.add(egui::Label::new(label).sense(egui::Sense::click())).on_hover_text("Click to go to that frame").clicked() {
+                    self.seek = Some(f);
+                }
+            }
+        }
     }
 
     fn start_tracking(&mut self, doc: &mut Doc, id: &str, from: i64, to: i64) {
@@ -579,7 +606,7 @@ impl Properties {
         let follow = settings.motion != track::Solve::Translate;
         let base: Vec<_> = track::warps(&node.params, from).into_iter().map(Option::unwrap_or_default).collect();
         // Anchor each track's curve at the start frame.
-        key_tracks(doc, id, from, &start, follow.then_some(&base[..]));
+        key_tracks(doc, id, from, &start, follow.then_some(&base[..]), None);
         let frames = match track::input_frames(&doc.graph, id) {
             Ok(f) => f,
             Err(e) => {
@@ -592,9 +619,9 @@ impl Properties {
         let found = Found::default();
         let (pg, out) = (progress.clone(), found.clone());
         let handle = std::thread::spawn(move || {
-            track::track(frames, &start, from, to, &settings, &pg, |f, p, w| {
-                let warps = follow.then(|| base.iter().zip(w).map(|(b, w)| b.then(*w)).collect());
-                out.lock().unwrap().push((f, p.to_vec(), warps))
+            track::track(frames, &start, from, to, &settings, &pg, |frame, step| {
+                let warps = follow.then(|| base.iter().zip(step.warps).map(|(b, w)| b.then(*w)).collect());
+                out.lock().unwrap().push(Tracked { frame, pos: step.pos.to_vec(), scores: step.scores.to_vec(), warps })
             })
         });
         self.tracks.insert(id.to_string(), TrackJob { progress, handle: Some(handle), found, result: None });
@@ -619,17 +646,36 @@ fn export_tracker(doc: &mut Doc, id: &str, op: &str, stabilize: bool) -> anyhow:
 }
 
 /// Key each found track position of tracker `id` at `frame`, and its warp
-/// (`track<i>_warp`) when given.
-fn key_tracks(doc: &mut Doc, id: &str, frame: i64, pos: &[Option<track::Pt>], warps: Option<&[track::Warp]>) {
+/// (`track<i>_warp`) and match score (`track<i>_score`) when given.
+fn key_tracks(doc: &mut Doc, id: &str, frame: i64, pos: &[Option<track::Pt>], warps: Option<&[track::Warp]>, scores: Option<&[f32]>) {
+    let mut key = |name: String, v: Value| {
+        let raw = doc.param(id, &name);
+        doc.set_param(id, &name, anim::set_key(&raw, frame, &v));
+    };
     for (i, p) in pos.iter().enumerate() {
         if let Some(p) = p {
-            let name = format!("track{}", i + 1);
-            let raw = doc.param(id, &name);
-            doc.set_param(id, &name, anim::set_key(&raw, frame, &json!(p)));
+            key(format!("track{}", i + 1), json!(p));
             if let Some(w) = warps.and_then(|w| w.get(i)) {
-                let name = format!("track{}_warp", i + 1);
-                let raw = doc.param(id, &name);
-                doc.set_param(id, &name, anim::set_key(&raw, frame, &json!(w.to_param())));
+                key(format!("track{}_warp", i + 1), json!(w.to_param()));
+            }
+            if let Some(s) = scores.and_then(|s| s.get(i)) {
+                key(format!("track{}_score", i + 1), json!((*s as f64 * 1e4).round() / 1e4));
+            }
+        }
+    }
+}
+
+/// Remove the keys of tracker `id`'s enabled tracks (positions, warps and
+/// scores) before `frame`, or after it with `after`.
+fn clear_track_keys(doc: &mut Doc, id: &str, frame: i64, after: bool) {
+    let Some(node) = doc.node(id) else { return };
+    let on: Vec<bool> = track::positions(&node.params, frame).iter().map(Option::is_some).collect();
+    for i in (1..=on.len()).filter(|i| on[i - 1]) {
+        for name in [format!("track{i}"), format!("track{i}_warp"), format!("track{i}_score")] {
+            let raw = doc.param(id, &name);
+            if anim::is_animated(&raw) {
+                let drop = |f: i64| if after { f > frame } else { f < frame };
+                doc.set_param(id, &name, anim::remove_keys(&raw, drop, frame as f64));
             }
         }
     }
@@ -688,5 +734,25 @@ fn describe_media(path: &str) -> String {
         "Still image".into()
     } else {
         "File not found".into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arclight::graph::{Graph, NodeSpec};
+
+    #[test]
+    fn clearing_keys_after_a_frame_spares_tracks_that_are_off() {
+        let curve = json!({ "keys": [[1, [0, 0]], [2, [1, 0]], [3, [2, 0]]], "interp": "linear" });
+        let params = json!({ "track1": curve, "track1_score": { "keys": [[2, 0.9], [3, 0.8]] }, "track2": curve });
+        let g = Graph { nodes: vec![NodeSpec { id: "t".into(), op: "tracker".into(), inputs: vec![String::new()], params, pos: None }], ..Default::default() };
+        let mut doc = Doc::new(g, None);
+        clear_track_keys(&mut doc, "t", 2, true);
+        assert_eq!(anim::key_frames(&doc.param("t", "track1")), [1, 2]);
+        assert_eq!(anim::key_frames(&doc.param("t", "track1_score")), [2]);
+        assert_eq!(anim::key_frames(&doc.param("t", "track2")), [1, 2, 3]);
+        clear_track_keys(&mut doc, "t", 2, false);
+        assert_eq!(anim::key_frames(&doc.param("t", "track1")), [2]);
     }
 }

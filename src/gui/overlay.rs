@@ -34,6 +34,8 @@ const TRACK_PARAMS: [&str; track::TRACKS] = ["track1", "track2", "track3", "trac
 
 const HANDLE: Color32 = Color32::from_rgb(240, 200, 80);
 const HOT: Color32 = Color32::WHITE;
+/// Tracked frames whose match was weak.
+const WEAK: Color32 = Color32::from_rgb(240, 120, 50);
 const X_AXIS: Color32 = Color32::from_rgb(235, 90, 80);
 const Y_AXIS: Color32 = Color32::from_rgb(110, 210, 100);
 
@@ -737,16 +739,20 @@ impl Overlays {
                 for (i, c) in pos.iter().enumerate() {
                     let Some(c) = *c else { continue };
                     // The tracked path: the position at every keyed frame.
-                    let raw = node.map(|n| ops::params_with_defaults(&n.op, &n.params)[TRACK_PARAMS[i]].clone()).unwrap_or_default();
-                    let path: Vec<Pos2> = anim::key_frames(&raw)
-                        .into_iter()
-                        .map(|f| vec2(&json!(anim::sample(&raw, f as f64))))
-                        .map(|v| xf.screen(v))
-                        .collect();
+                    let p = node.map(|n| ops::params_with_defaults(&n.op, &n.params)).unwrap_or_default();
+                    let (raw, scores) = (&p[TRACK_PARAMS[i]], &p[format!("track{}_score", i + 1)]);
+                    let weak = track::weak_below(p["min_score"].as_f64().unwrap_or(0.7) as f32) as f64;
+                    let frames = anim::key_frames(raw);
+                    let path: Vec<Pos2> = frames.iter().map(|&f| xf.screen(vec2(&json!(anim::sample(raw, f as f64))))).collect();
                     if path.len() >= 2 {
                         painter.add(Shape::line(path.clone(), Stroke::new(1.0, Color32::from_rgba_unmultiplied(240, 200, 80, 120))));
-                        for &q in &path {
-                            painter.circle_filled(q, 1.5, Color32::from_rgba_unmultiplied(240, 200, 80, 160));
+                        for (&q, &f) in path.iter().zip(&frames) {
+                            // Frames that barely matched stand out.
+                            if anim::has_key_at(scores, f) && anim::sample(scores, f as f64)[0] < weak {
+                                painter.circle_filled(q, 3.0, WEAK);
+                            } else {
+                                painter.circle_filled(q, 1.5, Color32::from_rgba_unmultiplied(240, 200, 80, 160));
+                            }
                         }
                     }
                     let hot_track = hot == Some(Part::Track(i));

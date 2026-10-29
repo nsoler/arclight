@@ -379,7 +379,7 @@ mod tests {
         let start = track::positions(&g.node("trk").unwrap().params, 1);
         let settings = track::Settings { pattern: 25, search: 45, min_score: 0.8, update: false, motion: track::Solve::Rotate };
         let mut found = Vec::new();
-        let out = track::track(frames, &start, 1, 11, &settings, &Progress::default(), |f, p, _| found.push((f, p[0]))).unwrap();
+        let out = track::track(frames, &start, 1, 11, &settings, &Progress::default(), |f, s| found.push((f, s.pos[0]))).unwrap();
         assert_eq!((out.frames, out.lost.len()), (10, 0));
         for (f, p) in found {
             let t = (f - 1) as f32 / 10.0;

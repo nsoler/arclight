@@ -344,6 +344,19 @@ pub fn remove_key(v: &Value, frame: i64) -> Value {
     }
 }
 
+/// Remove every key whose frame `drop` picks. When none remain, the
+/// parameter keeps its value at frame `hold` as a static value.
+pub fn remove_keys(v: &Value, drop: impl Fn(i64) -> bool, hold: f64) -> Value {
+    let Some(mut c) = Curve::parse(v) else { return v.clone() };
+    let held = c.sample(hold);
+    c.keys.retain(|k| !drop(k.frame));
+    if c.keys.is_empty() {
+        unflatten(&held, c.scalar)
+    } else {
+        c.to_value()
+    }
+}
+
 pub fn interp(v: &Value) -> Option<Interp> {
     Curve::parse(v).map(|c| c.interp)
 }
@@ -430,6 +443,15 @@ mod tests {
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
+    }
+
+    #[test]
+    fn removing_keys_keeps_the_rest_or_holds_the_value() {
+        let c = json!({ "keys": [[1, 0.0], [5, 4.0], [9, 8.0]], "interp": "linear" });
+        assert_eq!(key_frames(&remove_keys(&c, |f| f > 5, 5.0)), [1, 5]);
+        // Nothing left: the value at the hold frame stays.
+        assert_eq!(remove_keys(&c, |_| true, 3.0), json!(2.0));
+        assert_eq!(remove_keys(&json!(7.0), |_| true, 3.0), json!(7.0));
     }
 
     #[test]

@@ -303,11 +303,19 @@ pub struct Outcome {
     pub lost: Vec<(usize, i64)>,
 }
 
+/// One frame of a tracking run, per track: its position (`None` once
+/// lost), its turn and growth since the run's start frame, and how well its
+/// pattern matched (correlation, 1 = perfectly).
+pub struct Step<'a> {
+    pub pos: &'a [Option<Pt>],
+    pub warps: &'a [Warp],
+    pub scores: &'a [f32],
+}
+
 /// Track points through the frames `from` → `to` (either direction) on
 /// `image(frame)`. `start` holds each track's position at `from` (`None`
-/// skips it). `found(frame, positions, warps)` is called after each frame
-/// with the tracks still alive and each one's turn and growth since `from`.
-/// Stops early when every track is lost.
+/// skips it). `found(frame, step)` is called after each frame. Stops early
+/// when every track is lost.
 pub fn track(
     mut image: impl FnMut(i64) -> Result<Image>,
     start: &[Option<Pt>],
@@ -315,7 +323,7 @@ pub fn track(
     to: i64,
     settings: &Settings,
     progress: &Progress,
-    mut found: impl FnMut(i64, &[Option<Pt>], &[Warp]),
+    mut found: impl FnMut(i64, Step),
 ) -> Result<Outcome> {
     let (r, s) = settings.radii();
     let step = if to >= from { 1 } else { -1 };
@@ -329,6 +337,7 @@ pub fn track(
     // Each feature's turn and growth since the start, and its last step.
     let mut warps = vec![Warp::default(); pos.len()];
     let mut turn = vec![Warp::default(); pos.len()];
+    let mut scores = vec![1.0; pos.len()];
     let mut pats: Vec<Option<Pattern>> = pos.iter().map(|p| p.and_then(|p| Pattern::new(&first, p, r, &IDENTITY))).collect();
     for (i, p) in pos.iter_mut().enumerate() {
         if p.is_some() && pats[i].is_none() {
@@ -360,12 +369,13 @@ pub fn track(
             vel[i] = [q[0] - p[0], q[1] - p[1]];
             turn[i] = Warp { angle: w.angle - before.angle, scale: w.scale / before.scale };
             warps[i] = w;
+            scores[i] = score;
             pos[i] = Some(q);
             if settings.update {
                 pats[i] = Pattern::new(&img, q, r, &w.matrix());
             }
         }
-        found(frame, &pos, &warps);
+        found(frame, Step { pos: &pos, warps: &warps, scores: &scores });
         out.frames += 1;
         progress.done.fetch_add(1, Ordering::Relaxed);
     }
@@ -397,6 +407,22 @@ pub fn warps(params: &Value, frame: i64) -> Vec<Option<Warp>> {
             (on && v.len() >= 2).then(|| Warp { angle: (v[0] as f32).to_radians(), scale: v[1] as f32 })
         })
         .collect()
+}
+
+/// Below this a match counts as weak: halfway from `min_score` (where a
+/// track is lost) to a perfect 1.
+pub fn weak_below(min_score: f32) -> f32 {
+    (min_score + 1.0) / 2.0
+}
+
+/// The worst match score keyed on an enabled track (`track<i>_score`, keyed
+/// by tracking runs): track index, frame and score.
+pub fn weakest(params: &Value) -> Option<(usize, i64, f32)> {
+    let p = ops::params_with_defaults("tracker", params);
+    (0..TRACKS)
+        .filter(|i| p[format!("track{}_on", i + 1)].as_bool() == Some(true))
+        .flat_map(|i| crate::anim::keys(&p[format!("track{}_score", i + 1)]).into_iter().map(move |k| (i, k.frame, k.value[0] as f32)))
+        .min_by(|a, b| a.2.total_cmp(&b.2))
 }
 
 /// Each enabled track's position at `frame`, from a Tracker node's params.
@@ -724,7 +750,7 @@ mod tests {
         let mut seen = Vec::new();
         // The second track sits on a flat corner and can't be followed.
         let start = [Some([30.0, 40.0]), Some([5.0, 120.0]), None];
-        let out = track(frame, &start, 1, 9, &settings, &Progress::default(), |f, p, _| seen.push((f, p.to_vec()))).unwrap();
+        let out = track(frame, &start, 1, 9, &settings, &Progress::default(), |f, s| seen.push((f, s.pos.to_vec()))).unwrap();
         assert_eq!(out.frames, 8);
         assert_eq!(out.lost, vec![(1, 1)]);
         let (f, last) = seen.last().unwrap();
@@ -739,16 +765,16 @@ mod tests {
         let frame = |f: i64| Ok(blobs(128, 128, [2.0 * f as f32, 0.0]));
         let settings = Settings { pattern: 21, search: 41, min_score: 0.8, update: true, motion: Solve::Rotate };
         let mut last = None;
-        track(frame, &[Some([70.0, 30.0])], 5, 2, &settings, &Progress::default(), |_, p, _| last = p[0]).unwrap();
+        track(frame, &[Some([70.0, 30.0])], 5, 2, &settings, &Progress::default(), |_, s| last = s.pos[0]).unwrap();
         let p = last.unwrap();
         assert!((p[0] - 64.0).abs() < 0.02 && (p[1] - 30.0).abs() < 0.02, "{p:?}");
     }
 
     /// The blobs turning `deg` per frame (and growing by `grow`) about
     /// (60, 55) while drifting right; returns the error at each frame
-    /// tracking the point (50, 40), or `None` once it is lost, and the
-    /// track's warp at the last frame.
-    fn track_turning(deg: f32, grow: f32, motion: Solve, update: bool) -> (Vec<Option<f32>>, Warp) {
+    /// tracking the point (50, 40), or `None` once it is lost, the track's
+    /// warp at the last frame and its lowest match score.
+    fn track_turning(deg: f32, grow: f32, motion: Solve, update: bool) -> (Vec<Option<f32>>, Warp, f32) {
         let at = |f: i64| {
             let t = (f - 1) as f32;
             let (s, c) = (deg * t).to_radians().sin_cos();
@@ -759,35 +785,37 @@ mod tests {
         };
         let frame = |f: i64| Ok(blobs_moved(128, 128, &at(f)));
         let settings = Settings { pattern: 25, search: 45, min_score: 0.8, update, motion };
-        let (mut errors, mut warp) = (Vec::new(), Warp::default());
-        track(frame, &[Some([50.0, 40.0])], 1, 21, &settings, &Progress::default(), |f, p, w| {
+        let (mut errors, mut warp, mut worst) = (Vec::new(), Warp::default(), 1.0f32);
+        track(frame, &[Some([50.0, 40.0])], 1, 21, &settings, &Progress::default(), |f, s| {
             let truth = apply(&at(f), [50.0, 40.0]);
-            errors.push(p[0].map(|p| ((p[0] - truth[0]).powi(2) + (p[1] - truth[1]).powi(2)).sqrt()));
-            warp = w[0];
+            errors.push(s.pos[0].map(|p| ((p[0] - truth[0]).powi(2) + (p[1] - truth[1]).powi(2)).sqrt()));
+            worst = worst.min(s.scores[0]);
+            warp = s.warps[0];
         })
         .unwrap();
-        (errors, warp)
+        (errors, warp, worst)
     }
 
     #[test]
     fn rotating_features_are_followed_without_drift() {
         // 2° a frame: 40° by the end.
         for update in [false, true] {
-            let (errors, warp) = track_turning(2.0, 1.0, Solve::Rotate, update);
+            let (errors, warp, score) = track_turning(2.0, 1.0, Solve::Rotate, update);
+            assert!(score > 0.95, "update {update}: lowest score {score}");
             assert_eq!(errors.len(), 20);
             let worst = errors.iter().map(|e| e.expect("never lost")).fold(0.0, f32::max);
             assert!(worst < 0.1, "update {update}: worst error {worst} px");
             assert!((warp.to_param()[0] - 40.0).abs() < 0.2 && warp.scale == 1.0, "update {update}: {warp:?}");
         }
         // Matching shifts only can't follow it.
-        let (errors, _) = track_turning(2.0, 1.0, Solve::Translate, false);
+        let (errors, ..) = track_turning(2.0, 1.0, Solve::Translate, false);
         assert!(errors.iter().any(|e| e.is_none_or(|e| e > 1.0)), "{errors:?}");
     }
 
     #[test]
     fn scaling_features_are_followed() {
         // Turning 1° and growing 2% a frame: 49% bigger by the end.
-        let (errors, warp) = track_turning(1.0, 1.02, Solve::Scale, false);
+        let (errors, warp, _) = track_turning(1.0, 1.02, Solve::Scale, false);
         let worst = errors.iter().map(|e| e.expect("never lost")).fold(0.0, f32::max);
         assert!(worst < 0.15, "worst error {worst} px");
         let [deg, scale] = warp.to_param();
@@ -837,6 +865,18 @@ mod tests {
         assert!((project(&h2, [50.0, 50.0]).unwrap()[1] - y).abs() < 1e-3);
         // Three in a line: no map.
         assert!(homography(&[[0.0, 0.0], [50.0, 0.0], [100.0, 0.0], [0.0, 100.0]], &trap).is_none());
+    }
+
+    #[test]
+    fn weakest_match_skips_tracks_that_are_off() {
+        let params = json!({
+            "track1_score": { "keys": [[2, 0.95], [3, 0.81]] },
+            "track2_score": { "keys": [[2, 0.72]] },
+        });
+        assert_eq!(weakest(&params), Some((0, 3, 0.81)));
+        assert_eq!(weakest(&json!({ "track2_on": true, "track2_score": params["track2_score"] })), Some((1, 2, 0.72)));
+        assert_eq!(weakest(&json!({})), None);
+        assert!(0.81 < weak_below(0.7) && weak_below(0.7) < 0.9);
     }
 
     #[test]
