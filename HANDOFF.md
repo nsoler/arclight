@@ -16,7 +16,7 @@ Last updated 2026-10-28 (end of session 5). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~13,300 lines of Rust + Python. Tests: 66 library + 10 CLI + 30 GUI
+- ~13,300 lines of Rust + Python. Tests: 68 library + 10 CLI + 30 GUI
   (`cargo test --release`) and 8 Python (see "Working tips"), all passing.
   Clippy is clean apart from two old style lints (`Graph::from_str` name,
   `chunks_exact_mut(4)` in media.rs).
@@ -287,6 +287,17 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   about the hovered spot). Unit tests cover the graph edits, shake
   detection and wire distance; the drag gestures themselves haven't been
   tried with a mouse.
+- **Session 6, part 5** (`916ae1e`): Phase 0.6 milestone 2, windows that
+  shrink. `ops.rs` helpers: `generate(format, window, f(x, y))` and
+  `pointwise_window` (inputs' union, grown to the frame when transparent
+  inputs give a non-transparent result; `mapped` applies it). Shapes store
+  only their outline bounds + feather (∩ frame; whole frame inverted;
+  coverage computed on that window); Merge / Dissolve / Keymix / Channel
+  Select use B's (or A's) frame and the union; Crop intersects ("shrink
+  canvas" shifts); mask/mix works in frame coordinates. Transform, Tracker
+  output, Corner Pin, Blur and Resize `flat()` their input until milestone
+  3. A 12-node test graph renders identically (MAE 0) to the previous
+  commit.
 
 ## Architecture in one page
 
