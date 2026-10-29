@@ -263,12 +263,24 @@ pub const DEFAULT_FORMAT: Size = Size { width: 1920, height: 1080 };
 
 /// Ops whose `width` / `height` set their frame when they have no input to
 /// take one from.
+/// How Read and Media In scale what they read to the project's format.
+const PROJECT_FITS: &[&str] = &["none", "fit", "fill", "stretch", "width", "height"];
+/// Its param. The default is none, so a project saved before it reads as it
+/// did; new nodes get fit (see [`fit_new_shape`]).
+const PROJECT_FIT: ParamSpec = fixed!("fit", "Fit to project", ParamKind::Choice(PROJECT_FITS), "none");
+
 const SIZED_SOURCES: [&str; 7] = ["constant", "checkerboard", "rectangle", "ellipse", "polygon", "roto", "scanline_render"];
 
 /// Give a source whose `width` / `height` is 0 (the default) the project's
 /// `format`. The graph evaluator calls this after resolving keyframes, so
 /// the cache key follows the format too.
 pub fn apply_format(op: &str, params: &mut Value, format: Size) {
+    // A Read or Media In fitting to the project: it reads the format, and
+    // its cache key changes with it.
+    if matches!(op, "read" | "media_in") && params.get("fit").and_then(Value::as_str).is_some_and(|f| f != "none") {
+        params["project_format"] = json!([format.width, format.height]);
+        return;
+    }
     if !SIZED_SOURCES.contains(&op) {
         return;
     }
@@ -280,9 +292,14 @@ pub fn apply_format(op: &str, params: &mut Value, format: Size) {
 }
 
 /// Fit a new shape's default geometry (drawn for a 512×512 frame) to
-/// `format`: centered, scaled to the shorter side. Call on a fresh node's
-/// defaults, before any params given for it.
+/// `format`: centered, scaled to the shorter side; and a new Read or Media
+/// In fits what it reads to the project. Call on a fresh node's defaults,
+/// before any params given for it.
 pub fn fit_new_shape(op: &str, params: &mut Value, format: Size) {
+    if matches!(op, "read" | "media_in") {
+        params["fit"] = json!("fit");
+        return;
+    }
     let k = format.width.min(format.height) as f64 / 512.0;
     let (cx, cy) = (format.width as f64 / 2.0, format.height as f64 / 2.0);
     let num = |v: &Value| v.as_f64().unwrap_or(0.0);
@@ -357,11 +374,14 @@ pub static OPS: &[OpInfo] = &[
             p!("path", "File", ParamKind::Path { save: false }, ""),
             fixed!("first_frame", "First frame", FRAME, 1),
             fixed!("last_frame", "Last frame", FRAME, 1),
+            PROJECT_FIT,
         ],
         overlay: Overlay::None,
         mask_base: None,
         help: "Reads a still, an image sequence (shot.####.exr) or a video file. \
-               Frames outside the range hold the first/last frame.",
+               Frames outside the range hold the first/last frame. Fit to project scales it to the project's format: \
+               fit (all of it, with transparent bars), fill (covering it, cropped), stretch (exactly, ignoring the aspect), \
+               width or height (matching that, keeping the aspect), or none (its own size).",
     },
     OpInfo {
         name: "constant",
@@ -398,10 +418,11 @@ pub static OPS: &[OpInfo] = &[
         label: "Read (still)",
         category: Category::Source,
         inputs: &[],
-        params: &[p!("path", "File", ParamKind::Path { save: false }, "")],
+        params: &[p!("path", "File", ParamKind::Path { save: false }, ""), PROJECT_FIT],
         overlay: Overlay::None,
         mask_base: None,
-        help: "Reads a single image file. Prefer Media In for sequences and video.",
+        help: "Reads a single image file. Prefer Media In for sequences and video. Fit to project scales it to the \
+               project's format (as Media In's).",
     },
     OpInfo {
         name: "grade",
@@ -1571,10 +1592,19 @@ struct MediaIn {
     path: String,
     first_frame: i64,
     last_frame: i64,
+    fit: String,
+    /// Set by [`apply_format`] when fitting.
+    #[serde(default)]
+    project_format: Option<[usize; 2]>,
 }
 
 fn media_in(params: &Value, ctx: &EvalContext) -> Result<Image> {
     let p: MediaIn = parse(params, "media_in")?;
+    fit_to_project(read_media(&p, ctx)?, &p.fit, p.project_format)
+}
+
+/// What a Media In reads at `ctx`'s frame, at its own size.
+fn read_media(p: &MediaIn, ctx: &EvalContext) -> Result<Image> {
     if p.path.is_empty() {
         bail!("no file selected");
     }
@@ -1635,6 +1665,9 @@ fn checkerboard(params: &Value) -> Result<Image> {
 #[derive(Deserialize)]
 struct Read {
     path: String,
+    fit: String,
+    #[serde(default)]
+    project_format: Option<[usize; 2]>,
 }
 
 fn read(params: &Value, ctx: &EvalContext) -> Result<Image> {
@@ -1642,7 +1675,39 @@ fn read(params: &Value, ctx: &EvalContext) -> Result<Image> {
     if p.path.is_empty() {
         bail!("no file selected");
     }
-    Image::read(&media::frame_path(&p.path, ctx.frame))
+    fit_to_project(Image::read(&media::frame_path(&p.path, ctx.frame))?, &p.fit, p.project_format)
+}
+
+/// `img` scaled to the project's `format` (None outside a graph: the
+/// default format) as `fit` says (see [`PROJECT_FITS`]), centered; as it
+/// is for none, or when it already has that size.
+fn fit_to_project(img: Image, fit: &str, format: Option<[usize; 2]>) -> Result<Image> {
+    if fit == "none" {
+        return Ok(img);
+    }
+    let [w, h] = format.unwrap_or([DEFAULT_FORMAT.width, DEFAULT_FORMAT.height]).map(|v| v.max(1));
+    let (sx, sy) = (w as f32 / img.format.width.max(1) as f32, h as f32 / img.format.height.max(1) as f32);
+    let (sx, sy) = match fit {
+        "fit" => (sx.min(sy), sx.min(sy)),
+        "fill" => (sx.max(sy), sx.max(sy)),
+        "stretch" => (sx, sy),
+        "width" => (sx, sx),
+        "height" => (sy, sy),
+        other => bail!("unknown fit '{other}' (one of: {})", PROJECT_FITS.join(", ")),
+    };
+    if img.format == (Size { width: w, height: h }) && sx == 1.0 && sy == 1.0 {
+        return Ok(img);
+    }
+    // Cut to the frame: what fill crops is gone, and so is the filter's
+    // spill past the edges.
+    let fitted = resample(&img, Size { width: w, height: h }, sx, sy, true);
+    let window = fitted.window().intersect(&fitted.frame());
+    if window == fitted.window() {
+        return Ok(fitted);
+    }
+    let mut out = generate(fitted.format, window, |x, y| fitted.at(x, y));
+    out.carry_planes(&fitted, |x, y| Some([x as f32, y as f32]));
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -2482,20 +2547,52 @@ fn resize(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
         "fill" => (sx.max(sy), sx.max(sy)),
         other => bail!("unknown fit '{other}'"),
     };
+    Ok(resample(src, Size { width: w, height: h }, sx, sy, false))
+}
+
+/// `src` scaled by `sx` × `sy` into a frame of `format`, centered: a box
+/// filter shrinking (taps spread over each output pixel's footprint),
+/// bilinear growing. Its planes come along. With `hard_edges`, taps past
+/// the source's data stay on its edge pixels and only how much of each
+/// output pixel the scaled data covers softens its outline (a plate
+/// filling the frame keeps a solid border); else they fade to transparent
+/// (Resize).
+fn resample(src: &Image, format: Size, sx: f32, sy: f32, hard_edges: bool) -> Image {
+    let (w, h) = (format.width, format.height);
     // Center the scaled image in the output frame.
     let ox = (w as f32 - src.format.width as f32 * sx) / 2.0;
     let oy = (h as f32 - src.format.height as f32 * sy) / 2.0;
     // Source pixels per output pixel, and how many taps cover that span.
     let (fx, fy) = (1.0 / sx, 1.0 / sy);
     let (nx, ny) = (fx.ceil().max(1.0) as usize, fy.ceil().max(1.0) as usize);
-    let format = Size { width: w, height: h };
-    let window = moved_window(src.window(), format, |[x, y]| Some([(x + 0.5) * sx + ox - 0.5, (y + 0.5) * sy + oy - 0.5]));
+    let sw = src.window();
+    // Where the scaled data lands (output pixels).
+    let (px0, px1) = (ox + sw.x0 as f32 * sx, ox + sw.x1 as f32 * sx);
+    let (py0, py1) = (oy + sw.y0 as f32 * sy, oy + sw.y1 as f32 * sy);
+    let window = if hard_edges {
+        IRect::new(px0.floor() as i32, py0.floor() as i32, px1.ceil() as i32, py1.ceil() as i32)
+    } else {
+        moved_window(sw, format, |[x, y]| Some([(x + 0.5) * sx + ox - 0.5, (y + 0.5) * sy + oy - 0.5]))
+    };
+    let sample = |x: f32, y: f32| {
+        if hard_edges && !sw.is_empty() {
+            src.sample_bilinear(x.clamp(sw.x0 as f32, (sw.x1 - 1) as f32), y.clamp(sw.y0 as f32, (sw.y1 - 1) as f32))
+        } else {
+            src.sample_bilinear(x, y)
+        }
+    };
+    // How much of output pixel (x, y) the scaled data covers.
+    let cover = |x: i32, y: i32| -> f32 {
+        let span = |a: f32, lo: f32, hi: f32| (hi.min(a + 1.0) - lo.max(a)).clamp(0.0, 1.0);
+        span(x as f32, px0, px1) * span(y as f32, py0, py1)
+    };
     let mut out = generate(format, window, |x, y| {
         // Source position of this output pixel's center.
         let cx = (x as f32 + 0.5 - ox) * fx - 0.5;
         let cy = (y as f32 + 0.5 - oy) * fy - 0.5;
+        let k = if hard_edges { cover(x, y) } else { 1.0 };
         if nx == 1 && ny == 1 {
-            return src.sample_bilinear(cx, cy);
+            return sample(cx, cy).map(|v| v * k);
         }
         // Average an nx × ny grid of bilinear taps spread over the footprint.
         let mut acc = [0.0f32; 4];
@@ -2503,17 +2600,17 @@ fn resize(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
             for k in 0..nx {
                 let tx = cx + fx * ((k as f32 + 0.5) / nx as f32 - 0.5);
                 let ty = cy + fy * ((j as f32 + 0.5) / ny as f32 - 0.5);
-                let s = src.sample_bilinear(tx, ty);
+                let s = sample(tx, ty);
                 for c in 0..4 {
                     acc[c] += s[c];
                 }
             }
         }
-        let norm = 1.0 / (nx * ny) as f32;
+        let norm = k / (nx * ny) as f32;
         acc.map(|v| v * norm)
     });
     out.carry_planes(src, |x, y| Some([(x as f32 + 0.5 - ox) * fx - 0.5, (y as f32 + 0.5 - oy) * fy - 0.5]));
-    Ok(out)
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -2848,6 +2945,80 @@ fn write(params: &Value, inputs: &[Option<&Image>], ctx: &EvalContext) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 960 × 540 still (white, with a red column at its left edge) in a
+    /// 1920 × 1080 project, through a Read and a Media In with each fit.
+    #[test]
+    fn reads_fit_their_media_to_the_project() {
+        use crate::graph::{Evaluator, Graph};
+        let dir = std::env::temp_dir().join(format!("arclight_fit_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("still.exr");
+        let mut still = Image::filled(960, 540, [1.0; 4]);
+        for y in 0..540 {
+            still.pixels[y * 960] = [1.0, 0.0, 0.0, 1.0];
+        }
+        still.write(&file).unwrap();
+        let path = file.to_string_lossy().to_string();
+        let graph = |w: usize, h: usize, fit: Option<&str>| -> Graph {
+            let mut read = json!({ "id": "r", "op": "read", "params": { "path": path } });
+            let mut media = json!({ "id": "m", "op": "media_in", "params": { "path": path, "first_frame": 1, "last_frame": 1 } });
+            if let Some(f) = fit {
+                read["params"]["fit"] = json!(f);
+                media["params"]["fit"] = json!(f);
+            }
+            serde_json::from_value(json!({ "project": { "first_frame": 1, "last_frame": 1, "fps": 24, "format": { "width": w, "height": h } }, "nodes": [read, media] })).unwrap()
+        };
+        let ctx = EvalContext { frame: 1, write_outputs: false };
+        let eval = |g: &Graph, n: &str| Evaluator::new().evaluate(g, n, &ctx).unwrap();
+        // Saved without the param (an older project): as read.
+        for n in ["r", "m"] {
+            let img = eval(&graph(1920, 1080, None), n);
+            assert_eq!((img.format, img.window()), (Size { width: 960, height: 540 }, IRect::new(0, 0, 960, 540)));
+        }
+        let img = eval(&graph(1920, 1080, Some("none")), "r");
+        assert_eq!(img.format, Size { width: 960, height: 540 });
+        // Same aspect: fit, fill, stretch, width and height all double it
+        // exactly into the frame.
+        for fit in ["fit", "fill", "stretch", "width", "height"] {
+            for n in ["r", "m"] {
+                let img = eval(&graph(1920, 1080, Some(fit)), n);
+                assert_eq!((img.format, img.window()), (Size { width: 1920, height: 1080 }, IRect::new(0, 0, 1920, 1080)), "{fit} {n}");
+                // Doubled (bilinear): the red column's first pixel solid red
+                // (the edge stays solid, as do the corners), the next a
+                // quarter white, then white.
+                assert_eq!((img.at(0, 500), img.at(1, 500), img.at(5, 500), img.at(1919, 1079), img.at(1919, 0)), ([1.0, 0.0, 0.0, 1.0], [1.0, 0.25, 0.25, 1.0], [1.0; 4], [1.0; 4], [1.0; 4]), "{fit}");
+            }
+        }
+        // Into a square 1080 × 1080 project: fit has bars above and below,
+        // fill crops the sides, stretch squeezes, width matches the width
+        // (bars), height the height (cropped).
+        let sq = |fit: &str| eval(&graph(1080, 1080, Some(fit)), "r");
+        let fit = sq("fit");
+        let a = |img: &Image, y: i32| img.at(540, y)[3];
+        assert_eq!(fit.format, Size { width: 1080, height: 1080 });
+        assert_eq!((a(&fit, 230), a(&fit, 240), a(&fit, 839), a(&fit, 850)), (0.0, 1.0, 1.0, 0.0), "1080 × 607.5 (rows 236–844), transparent bars above and below");
+        assert_eq!(fit.at(0, 540), [1.0, 0.0, 0.0, 1.0], "the left edge kept");
+        let fill = sq("fill");
+        assert_eq!((fill.window(), fill.at(0, 540)), (IRect::new(0, 0, 1080, 1080), [1.0; 4]), "1920 wide, cut to the frame: its left edge cropped off");
+        let stretch = sq("stretch");
+        assert_eq!((stretch.window(), stretch.at(0, 540), stretch.at(3, 540)), (IRect::new(0, 0, 1080, 1080), [1.0, 0.0, 0.0, 1.0], [1.0; 4]), "squeezed, edge to edge");
+        assert_eq!((sq("width").window(), sq("width").pixels == fit.pixels), (fit.window(), true));
+        assert_eq!((sq("height").window(), sq("height").pixels == fill.pixels), (fill.window(), true));
+        // Changing the project's format re-fits (it's in the cache key).
+        let (a, b) = (graph(1920, 1080, Some("fit")), graph(1280, 720, Some("fit")));
+        assert_ne!(Evaluator::key(&a, "r", &ctx).unwrap(), Evaluator::key(&b, "r", &ctx).unwrap());
+        assert_eq!(Evaluator::key(&graph(1920, 1080, None), "r", &ctx).unwrap(), Evaluator::key(&graph(1280, 720, None), "r", &ctx).unwrap(), "none doesn't care");
+        let mut ev = Evaluator::new();
+        assert_eq!(ev.evaluate(&a, "m", &ctx).unwrap().format, Size { width: 1920, height: 1080 });
+        assert_eq!(ev.evaluate(&b, "m", &ctx).unwrap().format, Size { width: 1280, height: 720 });
+        // New nodes fit; an old one loaded keeps none.
+        let mut s = crate::session::Session::new(graph(1920, 1080, None));
+        let id = s.create_node("read", None, json!({ "path": path }).as_object().unwrap(), &[]).unwrap();
+        assert_eq!((s.graph.node(&id).unwrap().params["fit"].as_str(), s.graph.node("r").unwrap().params.get("fit")), (Some("fit"), None));
+        assert_eq!(s.render(&id, 1).unwrap().format, Size { width: 1920, height: 1080 });
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     const CTX: EvalContext = EvalContext { frame: 1, write_outputs: false };
 

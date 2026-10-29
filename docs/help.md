@@ -47,6 +47,27 @@ hold **⇧** (Shift) when choosing it for the Camera alone.
 | **⌥←** / **⌥→** | Previous / next key |
 | **Home** / **End** | First / last frame |
 
+## Project settings
+
+**File ▸ Project Settings…** (**⇧⌘P**) sets the project's frame size, frame
+rate and frame range. Pick a format (HD, UHD, 2K or 4K DCI, 720p, PAL,
+NTSC, square, vertical…) or type the width and height (⇄ swaps them), and
+a frame rate (23.976 to 60, or your own). **Match media** takes the size,
+rate and frame range from the selected Media In or Read (its size as in
+the file). **Apply** or **OK** changes the project (one undo step);
+**Cancel** leaves it as it was. The transport bar's In, Out, FPS and Format
+fields change the same settings directly.
+
+New **Read** and **Media In** nodes fit what they read to the project's
+size (**Fit to project**), and follow it when it changes:
+
+- **fit**: all of the picture, with transparent bars where its shape
+  differs (the default for new nodes);
+- **fill**: covering the frame, cropped where it overflows;
+- **stretch**: exactly the frame, ignoring the picture's shape;
+- **width** / **height**: matching that side, keeping the shape;
+- **none**: its own size (as nodes in projects saved before this read).
+
 ## Keyframes
 
 - Click a parameter's **◇** to set or remove a key at the current frame.

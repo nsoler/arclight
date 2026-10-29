@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.9.28** (alpha); see `CHANGELOG.md`.
+Version **0.9.29** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -248,8 +248,8 @@ result is blended back toward the main input (B for merge/keymix) by
 
 | op | inputs | key params | notes |
 |----|--------|-----------|-------|
-| `media_in` | 0 | `path`, `first_frame`, `last_frame` | still, sequence (`shot.####.exr` / `shot.%04d.exr`) or video (via ffmpeg); holds outside the range |
-| `read` | 0 | `path` | `.exr` = linear float; others decoded from sRGB 8-bit |
+| `media_in` | 0 | `path`, `first_frame`, `last_frame`, `fit` (`none` / `fit` / `fill` / `stretch` / `width` / `height`) | still, sequence (`shot.####.exr` / `shot.%04d.exr`) or video (via ffmpeg); holds outside the range. `fit` scales it to the project format (follows it when it changes): fit = all of it with transparent bars, fill = covering it and cropped, stretch = exactly, ignoring the aspect, width / height = matching that and keeping the aspect; new nodes default to `fit`, projects saved without it read as `none` |
+| `read` | 0 | `path`, `fit` (as `media_in`) | `.exr` = linear float; others decoded from sRGB 8-bit; scaled to the project format as `fit` says |
 | `constant` | 0 | `width`, `height`, `color` [r,g,b,a] | solid fill (color is straight/unassociated) |
 | `checkerboard` | 0 | `width`, `height`, `size`, `color_a`, `color_b` | test pattern |
 | `grade` | 1 + mask | `multiply` [3], `offset` [3], `gamma` [3] | lift/gain/gamma on unassociated color |

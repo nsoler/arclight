@@ -11,6 +11,18 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.29 — 2026-10-29
+
+- Read and Media In **fit what they read to the project's format**
+  (**Fit to project**: fit, fill, stretch, width, height or none),
+  following it when it changes; new nodes fit by default, older projects
+  keep their media at its own size. Edges stay solid when a plate fills
+  the frame. Help: a Project settings section.
+- Note: tracks and camera solves are in the fitted image's pixels; a
+  fit with a different aspect (bars or crop) needs Solve focal on, or
+  the project format matched to the media (Project Settings ▸ Match
+  media).
+
 ## 0.9.28 — 2026-10-29
 
 - **File ▸ Project Settings…** (⇧⌘P / Ctrl+Shift+P): set the project's
