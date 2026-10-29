@@ -7,6 +7,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.18 — 2026-10-29
+
+- Video color: exported video now converts RGB to YUV with the BT.709
+  matrix (ffmpeg's default was BT.601, so apps decoding HD as BT.709
+  showed colors shifted: 200,100,50 came out about 209,105,45) and is
+  tagged BT.709 primaries and matrix, sRGB transfer, video range, so
+  players and editors show it as Arclight does. All four codecs.
+
 ## 0.0.17 — 2026-10-29
 
 - DPX with alpha: a DPX alpha setting on Media Out and Write stores RGBA

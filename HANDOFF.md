@@ -20,7 +20,7 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.17**.
+  in the same commit as the change. Current: **0.0.18**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -129,7 +129,17 @@ Last updated 2026-10-28 (end of session 7). Read this, then `README.md`
   linear unless transfer is a video code (4–10). Interop: integer RGBA
   read correctly by ImageMagick, OIIO, ffmpeg; float matches OIIO's
   layout and OIIO reads it exactly, but ImageMagick and ffmpeg can't read
-  float DPX at all (not even their own / OIIO's). No Developer ID signing / notarization (needs a paid Apple
+  float DPX at all (not even their own / OIIO's).
+- **Session 8, part 3**, **v0.0.18**: video color tags. `VideoWriter`'s
+  filter chain: pad → `scale=out_color_matrix=bt709:out_range=tv` →
+  `format=<VideoCodec::pix_fmt>` → `setparams=color_primaries=bt709:
+  color_trc=iec61966-2-1:colorspace=bt709:range=tv` (ffmpeg 7 takes tags
+  from frames; the `-color_*` output options alone left trc/primaries
+  unknown). Before, swscale's BT.601 default made BT.709 decoders show
+  200,100,50 as ~209,105,45. Arclight's own decode follows the tags (reads
+  back 200,100,50). `video_codecs_keep_their_depth` checks the tags.
+  Not done: RLE and 1-bit DPX (rare; ffmpeg, ImageMagick and OIIO can't
+  make them, so there's nothing to test against). No Developer ID signing / notarization (needs a paid Apple
   account); ffmpeg not bundled (GPL builds; Homebrew instead).
 - **Done:** Phase 0.1–0.5 (Shift+E browser, optional inputs, generic
   mask/mix, Switch ports, viewer overlays), Phase 1 (simple nodes), Phase 2
@@ -193,7 +203,7 @@ fast-forward `main` after each, per the standing instruction above), and
 report back after a few milestones.
 
 1. **Small UX debts:** formats: RLE / 1-bit DPX (rare;
-   no test files), video color tags (encodes carry no color metadata).
+   no test files: ask the user for a sample before writing a reader).
 2. **Session-4 follow-ups** (small to medium):
    - Python plugins (custom ops written in Python): embed Python in the
      host via the `python/` crate, or run them out of process.

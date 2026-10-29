@@ -407,6 +407,16 @@ impl VideoCodec {
         self != VideoCodec::H264
     }
 
+    /// The encoder's pixel format.
+    fn pix_fmt(self) -> &'static str {
+        match self {
+            VideoCodec::H264 => "yuv420p",
+            VideoCodec::Hevc10 => "yuv420p10le",
+            VideoCodec::ProRes422Hq => "yuv422p10le",
+            VideoCodec::ProRes4444 => "yuva444p10le",
+        }
+    }
+
     fn args(self) -> &'static [&'static str] {
         match self {
             VideoCodec::H264 => &["-c:v", "libx264", "-crf", "16", "-preset", "medium", "-pix_fmt", "yuv420p"],
@@ -441,8 +451,17 @@ impl VideoWriter {
         let mut child = Command::new(tool("ffmpeg"))
             .args(["-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", input])
             .args(["-s", &format!("{width}x{height}"), "-r", &format!("{fps}"), "-i", "-"])
-            // 4:2:0 / 4:2:2 chroma needs even dimensions.
-            .args(["-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"])
+            // 4:2:0 / 4:2:2 chroma needs even dimensions. RGB → YUV with the
+            // BT.709 matrix (swscale's default is BT.601, which players
+            // decoding HD as BT.709 show shifted: 200,100,50 came out 209,105,45).
+            // …and say so, on the frames (ffmpeg takes these from them, not
+            // from output options): BT.709 primaries and matrix, sRGB-coded
+            // values (Arclight's display encoding), video range.
+            .args(["-vf", &format!(
+                "pad=ceil(iw/2)*2:ceil(ih/2)*2,scale=out_color_matrix=bt709:out_range=tv,format={},\
+                 setparams=color_primaries=bt709:color_trc=iec61966-2-1:colorspace=bt709:range=tv",
+                codec.pix_fmt()
+            )])
             .args(codec.args())
             .arg(path)
             .stdin(Stdio::piped())

@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.0.17** (alpha); see `CHANGELOG.md`.
+Version **0.0.18** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -316,7 +316,8 @@ what loaded, and `arclight ops [OP]` to see the op catalog.
   earlier frame. Media Out and Write take `####` / `%04d` patterns.
 - **Video** (via ffmpeg): `.mp4 .mov .m4v .mkv .avi .webm .mxf .mpg .mpeg`
   in; out as H.264 (8-bit), HEVC (10-bit), ProRes 422 HQ (10-bit) or
-  ProRes 4444 with alpha (Media Out's Codec). Sources deeper than 8 bits
+  ProRes 4444 with alpha (Media Out's Codec), converted with the BT.709
+  matrix and tagged BT.709 primaries/matrix, sRGB transfer, video range. Sources deeper than 8 bits
   (10-bit HEVC, 10/12-bit ProRes, DNxHR HQX, …) are decoded at 16 bits, so
   their full precision reaches the comp; 8-bit sources stay on the lighter
   8-bit path. The Media In panel shows the clip's bit depth.

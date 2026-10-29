@@ -124,6 +124,15 @@ mod tests {
         ] {
             render(file, codec).unwrap();
             let path = dir.join(file);
+            // Tagged as what it is: BT.709 matrix and primaries, sRGB-coded,
+            // video range.
+            let tags = Command::new(media::tool("ffprobe"))
+                .args(["-v", "error", "-select_streams", "v:0", "-show_entries"])
+                .args(["stream=color_space,color_transfer,color_primaries,color_range", "-of", "csv=p=0"])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert_eq!(String::from_utf8_lossy(&tags.stdout).trim(), "tv,bt709,iec61966-2-1,bt709", "{file}");
             assert_eq!(media::probe_video(&path).unwrap().bits, bits, "{file}");
             let img = media::read_video_frame(&path, 0).unwrap();
             let mut levels: Vec<u32> = (0..1024).map(|x| img.at(x, 8)[0].to_bits()).collect();
