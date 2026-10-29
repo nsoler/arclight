@@ -1,15 +1,22 @@
 # Changelog
 
 Arclight is alpha software: versions are `0.<phase>.<increment>`. The
-middle number is the development phase the project is in (8 now), and
-every feature or change that ships bumps the last number (0.8.1, 0.8.2,
-…); a new phase, when the user declares one, starts again at `.1`
-(e.g. 0.9.1). Renumbered from `0.0.36` to `0.8.1` on 2026-10-29 at the
+middle number is the development phase the project is in (9 now: the 3D
+viewport, on branch `wip-ns-3dwork`), and every feature or change that
+ships bumps the last number (0.9.1, 0.9.2, … 0.9.nn). Phase 9 started
+at 0.9.0 (the user's choice); phase 8 ran 0.8.1–0.8.4. Renumbered from `0.0.36` to `0.8.1` on 2026-10-29 at the
 user's request (nothing else changed then). The version is
 set in `Cargo.toml` (also `python/Cargo.toml` and
 `plugins/example/Cargo.toml`, kept in step) and shows in the GUI's Help
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
+
+## 0.9.0 — 2026-10-29
+
+- Phase 9 begins: work on the 3D viewport (M9 of `docs/phase-4-plan.md`)
+  moves to branch `wip-ns-3dwork`, with Blender-style controls (the
+  spec's navigation, selection and G / R / S transform keys now follow
+  Blender's defaults). No code change yet.
 
 ## 0.8.4 — 2026-10-29
 

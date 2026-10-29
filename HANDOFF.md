@@ -28,6 +28,11 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
 - **The user is testing v0.0.36 on an M4 Pro Mac** (first real-Mac run of
   the GUI). Ask how it went before starting new work; Mac-only bugs come
   first.
+- **Phase 9 (started 2026-10-29): M9, the 3D viewport, with
+  Blender-style controls,** on branch `wip-ns-3dwork`, from 0.9.0. Spec:
+  `docs/phase-4-plan.md`, "Milestone 9 in detail". Workers: wD:p4
+  (viewport camera, navigation, drawing, picking, textured cards) and
+  mathwiz/wD:p3 (2D/3D toggle and Tab, G/R/S and gizmos).
 - **Next work, in order:** (1) anything from the Mac test; (2) the
   hand checks listed below for session 8's GUI work; (3) **M9, the 3D
   viewport** (fully specified in `docs/phase-4-plan.md`, "Milestone 9 in
@@ -50,12 +55,14 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
   `~/Projects/arclight-compound/arclight/`. The planning docs (C++/Qt
   "Linux port" plans that session 4 implemented in Rust) are in
   `~/Projects/arclight-compound/Archlight-Development-Documentationm/`.
-- **Branches:** work happens on `wip-ns-effects` (tracks
-  `origin/wip-ns-effects`). **Standing instruction from the user:** when a
+- **Branches:** since 2026-10-29 (phase 9) work happens on
+  **`wip-ns-3dwork`** (made from `main` at v0.8.4, tracks
+  `origin/wip-ns-3dwork`); `wip-ns-effects` is the finished phase-8
+  branch and stays at v0.8.4 (`aa04861`), not updated any more. **Standing instruction from the user:** when a
   milestone is finished (tests and clippy pass, README/HANDOFF updated),
-  commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
+  commit it, push `wip-ns-3dwork`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
-  `main`, `wip-ns-effects` and both remote branches at the same commit.
+  `main`, `wip-ns-3dwork` and both remote branches at the same commit.
 - **Several agent sessions (herdr), one master (2026-10-29, user
   instruction):** the user runs several Claude sessions in herdr on this
   one checkout. One of them is the **master** (herdr agent name `master`;
@@ -78,11 +85,12 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
   that are v0.0.x). Scheme: `0.<phase>.<increment>`: the middle number
   is the phase the user says the project is in (8 now); the last counts
   shipped changes within it. Every feature or change that ships bumps
-  the last number (0.8.1 → 0.8.2 → …); when the user declares a new
-  phase, the middle number goes up and the last restarts at 1 (0.9.1).
+  the last number; when the user declares a new phase, the middle number
+  goes up and the last restarts (the user set **0.9.0** for phase 9, the
+  3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.8.4**.
+  in the same commit as the change. Current: **0.9.0**.
 - ~23,200 lines of Rust + Python. Tests: 134 library + 10 CLI + 46 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

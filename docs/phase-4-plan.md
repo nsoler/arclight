@@ -311,8 +311,8 @@ then poses of in-between frames by PnP and a final pass).
 
 ## Milestone 9 in detail: the 3D viewport
 
-Specified 2026-10-29 at the user's request; to be built after M8, in a
-later session.
+Specified 2026-10-29 at the user's request. **In progress** on branch
+`wip-ns-3dwork` (versions 0.9.x), with Blender-style controls.
 
 **What it is.** A mode of the existing Viewer panel (a **2D / 3D**
 toggle in the viewer toolbar, and **Tab** to switch, only while the
@@ -325,23 +325,40 @@ free *viewport camera* that belongs to the viewer, not to the graph.
 Switching back to 2D shows the image as now. The viewport camera is
 saved per project (like the viewer's zoom), not as a node.
 
-**Navigation** (the same buttons as the 2D viewer where they overlap):
-- **Orbit:** Alt + left-drag, or left-drag on empty space in 3D mode
-  (turntable: yaw about world Y, pitch clamped short of the poles).
-- **Pan:** middle-drag, or Alt + middle-drag / ⇧ + Alt + left-drag
-  (moves the orbit center in the view plane).
-- **Zoom (dolly):** scroll / pinch, toward the point under the pointer;
-  Alt + right-drag for a smooth dolly.
-- **F** frames the selection (or everything if nothing is selected);
-  **Home** resets to a default three-quarter view.
-- **Look through a camera:** a menu of the scene's cameras ("Viewport",
-  "camera1", …). Through a camera the view is exactly that camera's
-  (what Scanline Render would draw, with its film-back frame outlined);
-  orbiting leaves it and goes back to the free viewport camera.
-- Orthographic **Top / Front / Side** views from the same menu (numpad
-  7 / 1 / 3), handy for laying cards on a ground plane.
-- A **view cube** (or axis tripod) in a corner shows the orientation;
-  clicking a face snaps to that view.
+**Navigation: Blender-style** (user request, 2026-10-29, when M9
+started on branch `wip-ns-3dwork`). The controls follow Blender's
+defaults so they feel familiar; only the conventions are borrowed (no
+Blender code: it's GPL). Arclight's world is Y-up, so "top" looks down
+−Y where Blender's looks down −Z.
+- **Orbit:** middle-drag (turntable: yaw about world Y, pitch clamped
+  short of the poles). **Pan:** ⇧ + middle-drag. **Zoom:** scroll, or
+  ⌃/Ctrl + middle-drag; toward the point under the pointer.
+- **Trackpads** (the user's Macs): two-finger scroll orbits, ⇧ +
+  two-finger scroll pans, pinch or ⌃/Ctrl + two-finger scroll zooms, as
+  Blender does on macOS.
+- **Emulate 3-button mouse** (a viewer setting, off by default): Alt +
+  left-drag orbits, ⇧ + Alt + left-drag pans, ⌃/Ctrl + Alt + left-drag
+  zooms (Blender's option of the same name; also how Alt-drag worked in
+  the earlier draft of this spec).
+- **Numpad views:** 1 front, 3 right, 7 top; ⌃/Ctrl + 1 / 3 / 7 the
+  opposite sides; 5 toggles perspective / orthographic; 0 looks through
+  the scene camera (the first, or the one chosen in the menu); 2 / 4 / 6
+  / 8 orbit in 15° steps; numpad . frames the selection; **Home** frames
+  everything. Without a numpad: the same views from the view menu and
+  the navigation gizmo, and **`** (backtick) opens a pie of views as in
+  Blender.
+- **Navigation gizmo** in the top-right corner, as in Blender: an axis
+  ball (X red, Y green, Z blue; click an axis to view along it, drag the
+  ball to orbit), and buttons under it: hand (drag to pan), magnifier
+  (drag to zoom), camera (look through the scene camera), grid
+  (perspective / orthographic).
+- **Look through a camera:** numpad 0 or the camera button / menu
+  ("Viewport", "camera1", …). Through a camera the view is exactly that
+  camera's (what Scanline Render would draw, with its film-back frame
+  outlined, the outside darkened); orbiting leaves it for the free
+  viewport camera.
+- **F** also frames the selection (Arclight's existing key, kept beside
+  numpad .).
 
 **What it draws.**
 - Cards textured with their image (the CPU renderer, D5), plus their
@@ -356,10 +373,11 @@ saved per project (like the viewer's zoom), not as a node.
 - The current frame follows the timeline, so scrubbing moves animated
   cameras and cards.
 
-**Selection.**
-- Click a card, camera, locator or point to select it; ⇧-click adds or
-  removes; drag a box on empty space to box-select (points and objects
-  whose centers fall inside). **Esc** deselects.
+**Selection** (Blender-style):
+- Left-click selects a card, camera, locator or point; ⇧-click adds or
+  removes; left-drag on empty space box-selects (points and objects whose
+  centers fall inside); **A** selects all, **Alt+A** deselects all,
+  **Esc** cancels a gesture or deselects.
 - Picking is done in screen space: points and object centers projected
   through the viewport camera, cards by ray-quad intersection with the
   nearest hit winning, so it stays exact and cheap.
@@ -369,22 +387,36 @@ saved per project (like the viewer's zoom), not as a node.
 - Selected points feed M8's **Place Card here / Place locator**, also
   offered in the viewport's right-click menu.
 
-**Gizmos** (on the selected object, drawn over the render as vectors so
-they stay crisp and fast):
-- **Move** (W): three axis arrows (drag along one axis), three plane
-  squares (drag in a plane), and the center (drag in the view plane).
-- **Rotate** (E): three axis rings plus an outer view-axis ring; drag a
-  ring to turn about it; ⇧ snaps to 15°.
-- **Scale** (R): axis handles with cubes, center for uniform scale; ⇧
-  keeps proportions.
-- **Local / world** axes toggle; the pivot is the object's origin.
-- Drags edit the node's translate / rotate / scale params, set keys when
-  the param is animated (as 2D handles do), and are one undo step per
-  drag. Linked params (e.g. a Card linked to tracker points) show the
-  gizmo grayed with a tooltip naming the link; Unlink makes them
-  editable.
-- Numeric entry: while dragging, typing a number sets the move, angle or
-  scale exactly (Enter applies), as in common 3D apps.
+**Transforming: Blender-style keys plus gizmos.**
+- **G** grab (move), **R** rotate, **S** scale the selection as a modal
+  gesture, as in Blender: the selection follows the mouse; then **X /
+  Y / Z** constrain to that world axis (press twice for the local
+  axis), **⇧ + X / Y / Z** excludes an axis (moves in the other two);
+  typing a number sets the amount exactly (e.g. `G X 2 Enter`,
+  `R Z 90 Enter`, `S 0.5 Enter`; `-` negates); ⌃/Ctrl snaps (1 unit,
+  15°, 0.1 scale); **left-click or Enter** confirms, **right-click or
+  Esc** cancels and restores. **Alt+G / Alt+R / Alt+S** reset
+  translate / rotate / scale.
+- **Gizmos** on the selected object (drawn over the render as vectors,
+  so they stay crisp and fast), switched from the viewer toolbar (Move,
+  Rotate, Scale, or all three, like Blender's toolbar tools):
+  - Move: three axis arrows, three plane squares, and a center circle
+    (drag in the view plane).
+  - Rotate: three axis rings plus an outer view-axis ring and a
+    trackball area inside.
+  - Scale: axis handles with cubes, the center for uniform scale.
+  - ⌃/Ctrl snaps while dragging, as with G / R / S.
+- **Local / Global** orientation toggle in the toolbar; the pivot is
+  the object's origin (later: median point of a multi-selection, as
+  Blender's pivot menu).
+- Gizmo drags and G / R / S edit the node's translate / rotate / scale
+  params, set keys when the param is animated (as 2D handles do), and
+  are one undo step per gesture. Linked params (e.g. a Card linked to
+  tracker points) show the gizmo grayed with a tooltip naming the link,
+  and G / R / S say why they can't move it; Unlink makes them editable.
+- Candidate crate: `transform-gizmo-egui` (MIT/Apache, egui gizmos for
+  move/rotate/scale); check that it supports egui 0.37 and draws in our
+  viewport before using it; otherwise write the gizmos ourselves.
 
 **How it's built.**
 - A new `src/gui/viewport3d.rs`: the viewport camera (orbit center,
