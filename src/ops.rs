@@ -76,7 +76,7 @@ impl Kind {
 /// The kind of output `op` makes.
 pub fn output_kind(op: &str) -> Kind {
     match op {
-        "camera" | "card" | "scene" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -159,6 +159,9 @@ pub enum Overlay {
     /// Tracker boxes: each enabled `track<i>` position with the shared
     /// pattern and search box sizes.
     Tracker { pattern: &'static str, search: &'static str },
+    /// A Camera Tracker's solved points, drawn through the frame's solved
+    /// camera, to select and place things on.
+    CameraTracker,
     /// A quad of four Vec2 corners (`to`), and the four it is mapped from.
     CornerPin { to: [&'static str; 4], from: [&'static str; 4] },
 }
@@ -667,6 +670,47 @@ pub static OPS: &[OpInfo] = &[
         overlay: Overlay::None,
         mask_base: None,
         help: "Gathers cameras, cards and other scenes into one scene.",
+    },
+    OpInfo {
+        name: "camera_tracker",
+        label: "Camera Tracker",
+        category: Category::Scene,
+        inputs: &[IN],
+        params: &[
+            fixed!("features", "Features", ParamKind::Int { min: 20, max: 2000 }, 300),
+            fixed!("min_distance", "Feature spacing (px)", ParamKind::Float { min: 2.0, max: 100.0 }, 12.0),
+            fixed!("focal", "Focal length (mm)", ParamKind::Float { min: 1.0, max: 1000.0 }, 35.0),
+            fixed!("film_back", "Film back (mm)", ParamKind::Vec2, [36.0, 24.0]),
+            fixed!("solve_focal", "Solve focal length", ParamKind::Bool, false),
+            fixed!("max_error", "Max error (px)", ParamKind::Float { min: 0.2, max: 5.0 }, 1.0),
+        ],
+        overlay: Overlay::CameraTracker,
+        mask_base: None,
+        help: "Works out the camera's path through the shot, and points in 3D, from features it finds and follows \
+               over the project's frame range (Track & Solve in its panel). It passes its input through; the viewer \
+               shows the solved points, to select and place a Card or a Locator on, or to set the origin, ground and \
+               scale. Export makes a keyed Camera, the point cloud, a Scene and a Scanline Render over the plate. \
+               The focal length is used as given, or as a starting guess with Solve focal length (which needs the camera to move).",
+    },
+    OpInfo {
+        name: "point_cloud",
+        label: "Point Cloud",
+        category: Category::Scene,
+        inputs: &[],
+        params: &[fixed!("points", "Points", ParamKind::Points { stride: 3 }, Vec::<f64>::new())],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Points in 3D (x, y, z), drawn as dots by a Scanline Render: a Camera Tracker's solved points.",
+    },
+    OpInfo {
+        name: "locator",
+        label: "Locator",
+        category: Category::Scene,
+        inputs: &[],
+        params: &[p!("translate", "Translate", ParamKind::Vec3, [0.0, 0.0, 0.0])],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "A point in 3D, drawn as a dot: wire it into a Scene, or link other nodes' params to its Translate.",
     },
     OpInfo {
         name: "scanline_render",
@@ -1249,6 +1293,14 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         }
         "scene" => gather(inputs),
         "scanline_render" => scanline_render(params, inputs),
+        // The solve lives in its params; in the graph the plate passes through.
+        "camera_tracker" => Ok(input(inputs, 0, "camera_tracker")?.clone()),
+        "point_cloud" => {
+            let flat: Vec<f64> = params["points"].as_array().map_or(Vec::new(), |a| a.iter().filter_map(Value::as_f64).collect());
+            let points = flat.as_chunks::<3>().0.iter().map(|c| geom::Vec3::from(*c)).collect();
+            Ok(scene_output(DEFAULT_FORMAT, Scene { points, ..Scene::default() }))
+        }
+        "locator" => Ok(scene_output(DEFAULT_FORMAT, Scene { points: vec![geom::Vec3::from(scene::numbers::<3>(&params["translate"], 0.0))], ..Scene::default() })),
         "tracker" => tracker(params, inputs),
         "corner_pin" => corner_pin(params, inputs),
         "rectangle" | "ellipse" | "polygon" | "roto" => shape_op(op, params, inputs),

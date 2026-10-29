@@ -6,6 +6,7 @@
 //! front end runs it.
 
 use crate::anim;
+use crate::camtrack;
 use crate::graph::{Evaluator, Graph, NodeSpec};
 use crate::image::{Image, Size};
 use crate::ops::{self, EvalContext, OpInfo, ParamKind};
@@ -212,6 +213,87 @@ impl Session {
     pub fn export_tracker(&mut self, id: &str, op: &str, stabilize: bool, linked: bool, name: Option<&str>, input: Option<&str>) -> Result<String> {
         let params = track::export(&self.graph, id, op, stabilize, linked)?;
         self.create_node(op, name, &params, &[input.unwrap_or_default().to_string()])
+    }
+
+    /// Track and solve Camera Tracker `id` over the project's frame range
+    /// (frames of its input), keeping the solution on the node (one undo
+    /// step). Returns a summary.
+    pub fn track_camera(&mut self, id: &str, progress: &Progress) -> Result<Value> {
+        let n = &self.graph.nodes[self.node_index(id)?];
+        if n.op != "camera_tracker" {
+            bail!("'{id}' isn't a Camera Tracker");
+        }
+        let p = ops::params_with_defaults("camera_tracker", &n.params);
+        let settings = camtrack::Settings::from_params(&p, self.graph.project.first_frame, self.graph.project.last_frame);
+        let mut frames = track::input_frames(&self.graph, id)?;
+        let sol = camtrack::run(&mut frames, &settings, progress)?;
+        let summary = solution_summary(&sol, settings.first, settings.last);
+        self.checkpoint();
+        let i = self.node_index(id)?;
+        self.graph.nodes[i].params["solution"] = sol.to_value();
+        Ok(summary)
+    }
+
+    /// Camera Tracker `id`'s solution.
+    pub fn camera_solution(&self, id: &str) -> Result<camtrack::Solution> {
+        let n = &self.graph.nodes[self.node_index(id)?];
+        camtrack::Solution::from_params(&n.params).ok_or_else(|| anyhow!("'{id}' has no solve yet: track it first"))
+    }
+
+    /// Move Camera Tracker `id`'s solve: point `origin` to the origin, the
+    /// plane through points `ground` level at height 0, and points
+    /// `scale.0` and `scale.1` `scale.2` apart (in that order; any may be
+    /// left out). One undo step.
+    pub fn orient_camera(&mut self, id: &str, origin: Option<usize>, ground: Option<&[usize]>, scale: Option<(usize, usize, f64)>) -> Result<()> {
+        let mut sol = self.camera_solution(id)?;
+        if let Some(g) = ground {
+            sol.set_ground(g)?;
+        }
+        if let Some(o) = origin {
+            sol.set_origin(o)?;
+        }
+        if let Some((a, b, d)) = scale {
+            sol.set_scale(a, b, d)?;
+        }
+        self.checkpoint();
+        let i = self.node_index(id)?;
+        self.graph.nodes[i].params["solution"] = sol.to_value();
+        Ok(())
+    }
+
+    /// From Camera Tracker `id`'s solve: a Camera keyed on every solved
+    /// frame, a Point Cloud of the points, a Scene of the two and a Scanline
+    /// Render of it over the tracker's plate. Their names.
+    pub fn export_camera(&mut self, id: &str) -> Result<Value> {
+        let sol = self.camera_solution(id)?;
+        let camera = self.create_node("camera", None, &camtrack::camera_params(&sol), &[])?;
+        let mut cloud = Map::new();
+        cloud.insert("points".into(), json!(sol.points.iter().flatten().collect::<Vec<_>>()));
+        let points = self.create_node("point_cloud", None, &cloud, &[])?;
+        let scene = self.create_node("scene", None, &Map::new(), &[camera.clone(), points.clone()])?;
+        let render = self.create_node("scanline_render", None, &Map::new(), &[scene.clone(), String::new(), id.to_string()])?;
+        Ok(json!({ "camera": camera, "points": points, "scene": scene, "render": render }))
+    }
+
+    /// Place a node on points `ids` of Camera Tracker `id`'s solve: `what`
+    /// is "card" (on their plane, facing the camera of `frame`, sized to
+    /// them, showing `input` if given) or "locator" (at their middle).
+    /// Returns its name.
+    pub fn place_on_points(&mut self, id: &str, ids: &[usize], what: &str, frame: i64, input: Option<&str>, name: Option<&str>) -> Result<String> {
+        let sol = self.camera_solution(id)?;
+        match what {
+            "card" => {
+                let params = camtrack::card_on_points(&sol, ids, frame)?;
+                self.create_node("card", name, &params, &[input.unwrap_or_default().to_string()])
+            }
+            "locator" => {
+                let c = sol.centroid(ids).ok_or_else(|| anyhow!("pick some solved points"))?;
+                let mut params = Map::new();
+                params.insert("translate".into(), json!([c.x, c.y, c.z]));
+                self.create_node("locator", name, &params, &[])
+            }
+            other => bail!("unknown placement '{other}' (card or locator)"),
+        }
     }
 
     /// Remove a node. Ports it fed are reconnected to its first input, so
@@ -527,6 +609,20 @@ pub fn op_schema(info: &OpInfo) -> Value {
         v["plugin"] = json!(lib);
     }
     v
+}
+
+/// What a camera solve came to, for reporting.
+pub fn solution_summary(sol: &camtrack::Solution, first: i64, last: i64) -> Value {
+    let unsolved: Vec<i64> = (first..=last).filter(|f| !sol.frames.contains(f)).collect();
+    let round = |x: f64| (x * 1e4).round() / 1e4;
+    json!({
+        "frames_solved": sol.frames.len(),
+        "unsolved_frames": unsolved,
+        "points": sol.points.len(),
+        "rms_error_px": round(sol.rms),
+        "worst_frame_rms_px": round(sol.frame_rms.iter().copied().fold(0.0, f64::max)),
+        "focal_mm": round(sol.focal),
+    })
 }
 
 /// Size and average/min/max color of an image, for reporting a render

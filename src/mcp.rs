@@ -79,6 +79,28 @@ static TOOLS: &[Tool] = &[
             "name": {"type": "string"},
             "input": {"type": "string"}
         }, "required": ["node"]}),
+    tool!("track_camera", "Camera Tracker: find and follow features over the project's frame range in its input, solve the camera's path and 3D points, and keep the solve on the node. Returns frames solved, points, the reprojection error (px) and the focal length. Takes a while (seconds to minutes).",
+        {"type": "object", "properties": {"node": {"type": "string", "description": "The Camera Tracker node."}}, "required": ["node"]}),
+    tool!("camera_points", "A Camera Tracker's solved points: index, position in 3D, and where each lands in the frame at 'frame' (default: the first solved frame), to pick points for place_on_points or orient_camera.",
+        {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}}, "required": ["node"]}),
+    tool!("orient_camera", "Move a Camera Tracker's solve (arbitrary until then): 'ground' (3+ point indices) becomes level at height 0 with the camera above, 'origin' (a point index) goes to 0,0,0, and 'scale' ({points: [a, b], distance}) sets the distance between two points. Applied in that order; any may be left out.",
+        {"type": "object", "properties": {
+            "node": {"type": "string"},
+            "ground": {"type": "array", "items": {"type": "integer"}},
+            "origin": {"type": "integer"},
+            "scale": {"type": "object", "properties": {"points": {"type": "array", "items": {"type": "integer"}}, "distance": {"type": "number"}}}
+        }, "required": ["node"]}),
+    tool!("export_camera", "From a Camera Tracker's solve, add a Camera keyed on every solved frame, a Point Cloud, a Scene of the two and a Scanline Render of it over the plate. Returns their names.",
+        {"type": "object", "properties": {"node": {"type": "string"}}, "required": ["node"]}),
+    tool!("place_on_points", "Place a node on a Camera Tracker's solved points (indices from camera_points): 'card' (default) lies on the plane through 3+ points (else faces the camera), at their middle, sized to them, showing 'input' if given; 'locator' is a point at their middle to wire into a Scene or link params to. Returns the new node's name.",
+        {"type": "object", "properties": {
+            "node": {"type": "string"},
+            "points": {"type": "array", "items": {"type": "integer"}},
+            "what": {"type": "string", "enum": ["card", "locator"]},
+            "frame": {"type": "integer", "description": "The frame whose camera a card faces (default: the first solved)."},
+            "input": {"type": "string", "description": "An image for the card."},
+            "name": {"type": "string"}
+        }, "required": ["node", "points"]}),
     tool!("connect", "Connect node 'from' to input 'port' (index or label like \"B\"/\"mask\", default 0) of node 'to'.",
         {"type": "object", "properties": {"from": {"type": "string"}, "to": {"type": "string"}, "port": {"type": ["integer", "string"]}}, "required": ["from", "to"]}),
     tool!("disconnect", "Disconnect input 'port' (index or label) of a node.",
@@ -269,6 +291,51 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
                 out["preview_png_base64"] = json!(base64(&preview_png(&img, size)?));
             }
             out
+        }
+        "track_camera" => s.track_camera(str_arg(args, "node")?, progress)?,
+        "camera_points" => {
+            let sol = s.camera_solution(str_arg(args, "node")?)?;
+            let frame = args.get("frame").and_then(Value::as_i64).or_else(|| sol.frames.first().copied()).unwrap_or(1);
+            let cam = sol.camera(frame);
+            let format = crate::image::Size { width: sol.format[0], height: sol.format[1] };
+            let pts: Vec<Value> = sol
+                .points
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let px = cam.as_ref().and_then(|c| c.project(&crate::geom::Vec3::from(*p), format)).map(|(q, _)| [q[0], q[1]]);
+                    json!({"index": i, "position": p, "frame_position": px})
+                })
+                .collect();
+            json!({"frame": frame, "points": pts})
+        }
+        "orient_camera" => {
+            let ids = |k: &str| -> Option<Vec<usize>> { args.get(k)?.as_array().map(|a| a.iter().filter_map(Value::as_u64).map(|v| v as usize).collect()) };
+            let origin = args.get("origin").and_then(Value::as_u64).map(|v| v as usize);
+            let scale = match args.get("scale") {
+                Some(sc) => {
+                    let p: Vec<usize> = sc["points"].as_array().map(|a| a.iter().filter_map(Value::as_u64).map(|v| v as usize).collect()).unwrap_or_default();
+                    let d = sc["distance"].as_f64().ok_or_else(|| anyhow!("scale needs a distance"))?;
+                    if p.len() != 2 {
+                        bail!("scale needs two points");
+                    }
+                    Some((p[0], p[1], d))
+                }
+                None => None,
+            };
+            s.orient_camera(str_arg(args, "node")?, origin, ids("ground").as_deref(), scale)?;
+            ok()
+        }
+        "export_camera" => s.export_camera(str_arg(args, "node")?)?,
+        "place_on_points" => {
+            let node = str_arg(args, "node")?;
+            let ids: Vec<usize> = args.get("points").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(|v| v as usize).collect()).unwrap_or_default();
+            let frame = match args.get("frame").and_then(Value::as_i64) {
+                Some(f) => f,
+                None => s.camera_solution(node)?.frames.first().copied().unwrap_or(1),
+            };
+            let id = s.place_on_points(node, &ids, opt_str(args, "what").unwrap_or("card"), frame, opt_str(args, "input"), opt_str(args, "name"))?;
+            json!({"node": id})
         }
         "render_output" => {
             let node = str_arg(args, "node")?;
@@ -614,6 +681,48 @@ mod tests {
         let pin = call(&mut s, "describe_node", json!({"node": r["structuredContent"]["node"]}))["structuredContent"].clone();
         assert_eq!((pin["op"].as_str(), &pin["params"]["to1"]), (Some("corner_pin"), &json!([10.5, 10.5])));
         assert_eq!(pin["params"]["from1"]["keys"][1], json!([4, [13.5, 9.5]]));
+    }
+
+    /// The camera-tracker tools on a solve put in place by hand: listing
+    /// points, orienting, placing a card and a locator, exporting.
+    #[test]
+    fn camera_tracker_tools() {
+        let mut s = Server::new(Session::default());
+        call(&mut s, "create_node", json!({"op": "constant", "name": "plate", "params": {"width": 96, "height": 54}}));
+        call(&mut s, "create_node", json!({"op": "camera_tracker", "name": "ct", "inputs": ["plate"]}));
+        let r = call(&mut s, "camera_points", json!({"node": "ct"}));
+        assert!(r["isError"] == true && r["content"][0]["text"].as_str().unwrap().contains("track it first"), "{r}");
+        // A 4 × 4 grid of points on the ground 5 below, two cameras above.
+        let points: Vec<[f64; 3]> = (0..16).map(|i| [(i % 4) as f64 - 1.5, -5.0, -10.0 + (i / 4) as f64]).collect();
+        let sol = crate::camtrack::Solution {
+            format: [96, 54], focal: 35.0, film_back: [36.0, 24.0], frames: vec![1, 2],
+            cameras: vec![[0.0, 0.0, 0.0, -20.0, 0.0, 0.0], [0.5, 0.0, 0.0, -20.0, 0.0, 0.0]],
+            points, rms: 0.2, frame_rms: vec![0.2, 0.2],
+        };
+        s.session.graph.nodes[1].params["solution"] = sol.to_value();
+        let r = call(&mut s, "camera_points", json!({"node": "ct", "frame": 2}))["structuredContent"].clone();
+        assert_eq!((r["frame"].as_i64(), r["points"].as_array().unwrap().len()), (Some(2), 16));
+        assert!(r["points"][5]["frame_position"].is_array());
+        let r = call(&mut s, "orient_camera", json!({"node": "ct", "ground": [0, 3, 12, 15], "origin": 0, "scale": {"points": [0, 3], "distance": 6}}));
+        assert_eq!(r["isError"], false, "{r}");
+        let sol = s.session.camera_solution("ct").unwrap();
+        assert!(sol.points.iter().all(|p| p[1].abs() < 1e-9) && sol.points[0].iter().all(|v| v.abs() < 1e-9));
+        assert!(((sol.points[3][0] - sol.points[0][0]).hypot(sol.points[3][2] - sol.points[0][2]) - 6.0).abs() < 1e-9);
+        let card = call(&mut s, "place_on_points", json!({"node": "ct", "points": [5, 6, 9, 10], "input": "plate"}))["structuredContent"]["node"].clone();
+        let c = call(&mut s, "describe_node", json!({"node": card}))["structuredContent"].clone();
+        assert_eq!((c["op"].as_str(), c["inputs"][0]["source"].as_str()), (Some("card"), Some("plate")));
+        assert!(c["params"]["translate"][1].as_f64().unwrap().abs() < 1e-9, "on the ground");
+        let loc = call(&mut s, "place_on_points", json!({"node": "ct", "points": [0], "what": "locator"}))["structuredContent"]["node"].clone();
+        let l = call(&mut s, "describe_node", json!({"node": loc}))["structuredContent"].clone();
+        assert_eq!(l["params"]["translate"], json!([0.0, 0.0, 0.0]));
+        let names = call(&mut s, "export_camera", json!({"node": "ct"}))["structuredContent"].clone();
+        let cam = call(&mut s, "describe_node", json!({"node": names["camera"]}))["structuredContent"].clone();
+        assert_eq!(cam["params"]["translate"]["keys"].as_array().unwrap().len(), 2);
+        let r = call(&mut s, "render_frame", json!({"node": names["render"], "frame": 1}));
+        assert_eq!(r["isError"], false, "{r}");
+        // Tracking needs a moving camera: a still plate can't be solved.
+        let r = call(&mut s, "track_camera", json!({"node": "ct"}));
+        assert_eq!(r["isError"], true, "{r}");
     }
 
     #[test]

@@ -102,6 +102,18 @@ class ArcltTest(unittest.TestCase):
         self.assertEqual(pin["from1"], [10.5, 10.5])
         self.assertEqual(pin["to1"]["keys"][1], [4, [13.5, 9.5]])
 
+    def test_camera_tracker_needs_a_solve(self):
+        # (The solve itself is tested in Rust; here, the wrappers reach it.)
+        arclt.project(first=1, last=4)
+        plate = arclt.create_node("constant", width=64, height=32)
+        ct = arclt.create_node("camera_tracker", plate, name="ct")
+        with self.assertRaises(arclt.ArcltError):
+            ct.camera_points()
+        with self.assertRaises(arclt.ArcltError):
+            ct.track_camera()  # a still, featureless plate can't be solved
+        with self.assertRaises(arclt.ArcltError):
+            ct.place_on_points([0, 1, 2])
+
     def test_view_tools_need_a_gui(self):
         c = arclt.create_node("constant")
         with self.assertRaisesRegex(arclt.ArcltError, "attach_instance"):

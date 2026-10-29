@@ -37,7 +37,7 @@ Last updated 2026-10-29 (session 7; several herdr sessions since, see
   `0.0.x`. Every feature or change that ships bumps the last number (0.0.15
   → 0.0.16 → …) in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.0.35**.
+  in the same commit as the change. Current: **0.0.36**.
 - ~16,200 lines of Rust + Python. Tests: 86 library + 10 CLI + 39 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
   Some tests need ffmpeg (with libx265) and skip without it.
@@ -991,7 +991,33 @@ the second). No PnP: a frame starts from a neighbour's pose. Tests:
 bundle (disturbed solve pulled back; focal from 15 % off with 5 %
 outliers; cameras only), sfm (synthetic 40 frames, focal from 10 % off,
 pure turn refused, rendered + tracked + solved).
-Next: M8, Camera Tracker node + point placement.
+**M8 done (v0.0.36): Camera Tracker node + point placement.**
+`src/camtrack.rs`: `Settings::from_params`, `run(frames, settings,
+&Progress)` (progress = tracked frames then solved, 2n in total;
+cancellable), `Solution {format, focal mm, film_back, frames, cameras
+[tx,ty,tz,rx,ry,rz] scene terms, points, rms, frame_rms}` (serde, kept
+in the node's "solution" param, not a ParamSpec), `camera(frame)`,
+`centroid`, `transform`/`set_origin`/`set_ground`/`set_scale`,
+`fit_plane`, `card_on_points`, `camera_params` (linear keys). CV to
+scene: flip diag(1, −1, −1) on world coords. ops.rs: `camera_tracker`,
+`point_cloud`, `locator`, `Overlay::CameraTracker`. session.rs:
+`track_camera`, `camera_solution`, `orient_camera`, `export_camera`,
+`place_on_points`, `solution_summary`; 5 MCP tools; Python `Node`
+methods. GUI: `src/gui/camera_tracker.rs` (`CamJob` on a thread, joined
+when finished, writes the solution via `doc.set_param`; `export()`
+mirrors `Session::export_camera` with Doc calls); `PointPicker` in
+`Overlays` takes over interaction when a solved camera_tracker is
+selected (press/drag_to pure, tested). Checked in the real GUI: a
+48-frame rendered shot solved via MCP (48/48 frames, 378 points,
+0.046 px rms, 1.2 s); the panel shows the result and the viewer draws
+the solved points over the plate. **Not checked by hand:** selecting
+points with the mouse in the live GUI (logic unit-tested), Place Card /
+locator / origin / ground / scale from the GUI. Follow-ups: a live link
+from a Camera to the solve (export bakes keys), picking over a Scanline
+Render of the scene, solving frames between solved ones when tracks
+allow (unsolved frames are listed), motion blur in Scanline Render.
+Tests: camtrack (orient, cards on points, locked card end to end),
+`mcp::camera_tracker_tools`, the GUI picker, Python wrapper errors.
 M8 now also includes **point placement** (select solved points → Place
 Card here / Place locator; MCP/Python `place_on_points`), user request.
 **M9, the 3D viewport, is specified** in `docs/phase-4-plan.md`

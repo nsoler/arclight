@@ -5,6 +5,7 @@
 
 pub mod anim;
 pub mod bundle;
+pub mod camtrack;
 #[cfg(unix)]
 pub mod bridge;
 pub mod color;

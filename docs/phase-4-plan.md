@@ -2,7 +2,7 @@
 
 Status: **agreed** (2026-10-29). The user chose the proposed option for
 D1–D4; D5 (viewport) and D6 (order) stand as proposed until milestone 9.
-Milestones 1–6 done. The work goes one milestone at a time, as in
+Milestones 1–8 done. The work goes one milestone at a time, as in
 `phase-0.6-plan.md`.
 
 ## Goal
@@ -270,7 +270,23 @@ then poses of in-between frames by PnP and a final pass).
    Huber loss, optional focal. Tests: synthetic shot solved to sub-pixel
    reprojection error and camera path matching ground truth (after a
    similarity alignment); outliers rejected.
-8. **Camera Tracker node.** Params, progress and Cancel in the GUI (like
+8. **Done (2026-10-29).** **Camera Tracker node.** (As built:
+   `src/camtrack.rs` (Settings, run, Solution kept in the node's
+   `solution` param in scene terms with per-frame Camera translate /
+   rotate, set_origin / set_ground / set_scale, fit_plane,
+   card_on_points, camera_params); ops `camera_tracker` (passes its plate
+   through), `point_cloud`, `locator`; Session / MCP `track_camera`,
+   `camera_points`, `orient_camera`, `export_camera`, `place_on_points`
+   and the same in Python; GUI `src/gui/camera_tracker.rs` (panel with
+   Track & Solve on a thread, progress, Stop, summary, Export, Clear
+   solve; viewer point picker over the Camera Tracker with click,
+   ⇧-click and box selection and a floating panel: Place Card here,
+   Place locator, Set origin, Ground plane, Set scale). Export bakes keys
+   (a live link to the solve is a follow-up), and picking works over the
+   Camera Tracker, not yet over a Scanline Render of its scene. Locked-card
+   test: placed on solved floor points, a card stays within 1 px of its
+   floor spot over 24 frames and renders there over the plate.)
+    Params, progress and Cancel in the GUI (like
    the 2D tracker), output scene, bake to a Camera node or link,
    origin / ground / scale tools, error display; MCP and Python
    (`track_camera`, `export_camera`). Test: the synthetic shot through
@@ -299,7 +315,10 @@ Specified 2026-10-29 at the user's request; to be built after M8, in a
 later session.
 
 **What it is.** A mode of the existing Viewer panel (a **2D / 3D**
-toggle in the viewer toolbar, and **Tab** to switch) that shows the
+toggle in the viewer toolbar, and **Tab** to switch, only while the
+pointer is over the Viewer panel, so Tab keeps its usual job elsewhere:
+the node graph, the Properties fields, text entry; user request,
+2026-10-29) that shows the
 scene of the node being viewed, if it outputs or renders one (Camera,
 Card, Scene, Camera Tracker, Scanline Render: its scene input), from a
 free *viewport camera* that belongs to the viewer, not to the graph.

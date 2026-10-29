@@ -57,7 +57,7 @@ impl Xf {
         Xf { img_rect, zoom, warp: None }
     }
 
-    fn screen(&self, p: Vec2) -> Pos2 {
+    pub(crate) fn screen(&self, p: Vec2) -> Pos2 {
         let p = match &self.warp {
             Some(m) => Vec2::from(track::apply(m, p.into())),
             None => p,
@@ -245,6 +245,8 @@ pub struct Overlays {
     /// A node and its input's image, when known: a Transform's layer is
     /// its data window, a picker samples it.
     input: Option<(String, Arc<Image>)>,
+    /// A solved Camera Tracker's points, to select and place things on.
+    picker: crate::camera_tracker::PointPicker,
 }
 
 fn vec2(v: &Value) -> Vec2 {
@@ -266,7 +268,8 @@ fn geo(doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
     let op = &doc.node(id)?.op;
     let at = |name| doc.param_at(id, name, frame);
     Some(match ops::info(op)?.overlay {
-        Overlay::None => return None,
+        // Drawn by its own pass (see `camera_points`).
+        Overlay::None | Overlay::CameraTracker => return None,
         Overlay::Point(param) => Geo::Point { param, value: vec2(&at(param)) },
         Overlay::Pick(param) => Geo::Pick { param },
         Overlay::Transform { translate, rotate, scale, center } => Geo::Transform {
@@ -597,7 +600,7 @@ pub struct Mods {
 impl Overlays {
     /// A handle is being dragged (the viewer shouldn't pan).
     pub fn dragging(&self) -> bool {
-        self.drag.is_some()
+        self.drag.is_some() || self.picker.dragging()
     }
 
     /// Tell the overlays a node's input image (or that none is known).
@@ -666,6 +669,9 @@ impl Overlays {
         self.sync_selection(doc);
         if doc.selected.is_none() {
             self.drag = None;
+            return;
+        }
+        if self.picker.interact(ui, resp, xf, doc, frame) {
             return;
         }
         let (pressed, released, mods) = ui.input(|i| {
@@ -861,6 +867,7 @@ impl Overlays {
     }
 
     pub fn draw(&self, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, size: Vec2, doc: &Doc, frame: i64) {
+        self.picker.draw(painter, xf, doc, frame);
         let Some(id) = doc.selected.as_deref() else { return };
         let Some(g) = self.node_geo(doc, id, frame, size) else { return };
         let xf = &self.drag.as_ref().map_or_else(|| xf.for_node(doc, id, frame), |d| d.xf);

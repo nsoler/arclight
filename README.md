@@ -22,7 +22,7 @@ compositing product.
 
 ## Build
 
-Version **0.0.35** (alpha); see `CHANGELOG.md`.
+Version **0.0.36** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -214,6 +214,9 @@ result is blended back toward the main input (B for merge/keymix) by
 | `card` | 1 | `translate`/`rotate`/`scale` [3], `size` [2] or null | 3D: puts its input image on a flat card (1 wide by default, keeping the image's aspect); outputs a scene |
 | `scene` | 4 scenes | — | 3D: gathers up to four cameras, cards or scenes into one scene |
 | `scanline_render` | scene, camera (scene, optional), background (optional) | `width`, `height` (0 = project format), `samples` (anti-aliasing, n×n per pixel, default 3) | 3D: draws the scene's cards through a camera (the camera input's, else the scene's first) over the background, with a `depth` plane (distance in front of the camera, 0 where empty; see it with the viewer's depth button); perspective-correct textures, cards composited front to back, tracker points as dots |
+| `camera_tracker` | 1 | features, solve settings, focal (known or solved) | 3D: solves a moving camera from the plate (**Track & Solve**, with progress and Stop; the result saves with the node), then **Export** adds a keyed Camera, a Point Cloud, a Scene and a Scanline Render over the plate; with it selected, select solved points in the viewer (click, ⇧-click, drag a box) to **Place Card here** (on the plane through 3+ points, else facing the camera), **Place locator**, or **Set origin**, **Ground plane** and **Set scale** (two points a given distance apart) |
+| `point_cloud` | 0 | points (x, y, z) | 3D: points drawn as dots |
+| `locator` | 0 | `translate` [3] | 3D: a point to wire into a Scene or link params to |
 
 3D nodes (Camera, Card, Scene) build a 3D scene: their blue wires carry
 scenes, not images, and only connect to scene inputs (the node editor,
@@ -314,7 +317,7 @@ arclight mcp --attach [PID]               # drive the newest (or given) running 
 
 Register it with an MCP client, e.g. `claude mcp add arclight -- /path/to/arclight mcp`.
 Tools: `list_ops`, `describe_op`, `get_graph`, `describe_node`, `create_node`,
-`delete_node`, `rename_node`, `set_params`, `set_key`, `export_tracker` (a Tracker's motion as a keyed Transform or Corner Pin), `connect`, `disconnect`,
+`delete_node`, `rename_node`, `set_params`, `set_key`, `export_tracker` (a Tracker's motion as a keyed Transform or Corner Pin), `track_camera`, `camera_points`, `orient_camera`, `export_camera`, `place_on_points` (the Camera Tracker: solve, read the points, set origin/ground/scale, export, place cards and locators), `connect`, `disconnect`,
 `set_project`, `render_frame` (stats, optional file and PNG preview the model can
 see), `render_output`, `probe_media`, `new_graph`, `load_graph`, `save_graph`,
 `undo`, `redo`, `list_plugins`, `list_instances`, `attach_instance`,
@@ -359,7 +362,9 @@ Also: `node`, `nodes`, `delete`, `connect`, `disconnect`, `load`, `new`,
 info), `graph`, `plugins`, `instances`, `detach`, and, when attached,
 `select`, `view(node, frame=None)`, `view_state`. `Node` has `info`,
 `params`, `set`, `input(s)`, `set_input`, `outputs`, `rename`, `render`,
-`select`, `view`, `to_transform` / `to_corner_pin` (for a Tracker).
+`select`, `view`, `to_transform` / `to_corner_pin` (for a Tracker),
+`track_camera`, `camera_points`, `orient_camera`, `export_camera`,
+`place_on_points` (for a Camera Tracker).
 Errors raise `arclt.ArcltError`. Tests:
 `PYTHONPATH=python python3 -m unittest discover -s python/tests`.
 

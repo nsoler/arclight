@@ -4,6 +4,7 @@
 //! Layout: viewer + transport in the center, node graph along the bottom,
 //! properties on the right.
 
+mod camera_tracker;
 mod curve_editor;
 mod doc;
 mod node_editor;

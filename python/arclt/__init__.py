@@ -109,6 +109,39 @@ class Node:
         src = None if input is None else _name(input)
         return Node(_call("export_tracker", node=self._name, op=op, mode=mode, name=name, input=src, linked=linked)["node"])
 
+    def track_camera(self) -> dict:
+        """For a Camera Tracker: follow features over the project's frame
+        range, solve the camera and 3D points, and keep the solve on the
+        node. Returns frames solved, points, error (px) and focal length."""
+        return _call("track_camera", node=self._name)
+
+    def camera_points(self, frame: int | None = None) -> list[dict]:
+        """For a solved Camera Tracker: its points (``index``,
+        ``position`` in 3D, ``frame_position`` in ``frame`` or None)."""
+        return _call("camera_points", node=self._name, frame=frame)["points"]
+
+    def orient_camera(self, ground: list[int] | None = None, origin: int | None = None,
+                      scale: tuple[int, int, float] | None = None) -> "Node":
+        """Move a Camera Tracker's solve: the plane through ``ground``
+        points level at 0, point ``origin`` at 0,0,0, and ``scale`` = (a, b,
+        distance) between two points."""
+        sc = None if scale is None else {"points": [scale[0], scale[1]], "distance": scale[2]}
+        _call("orient_camera", node=self._name, ground=ground, origin=origin, scale=sc)
+        return self
+
+    def export_camera(self) -> dict[str, "Node"]:
+        """From a solved Camera Tracker: a keyed Camera, a Point Cloud, a
+        Scene and a Scanline Render over the plate, by role."""
+        return {k: Node(v) for k, v in _call("export_camera", node=self._name).items()}
+
+    def place_on_points(self, points: list[int], what: str = "card", frame: int | None = None,
+                        input: "Node | str | None" = None, name: str | None = None) -> "Node":
+        """Place a ``"card"`` (on the points' plane, sized to them, showing
+        ``input``) or a ``"locator"`` (at their middle) on a solved Camera
+        Tracker's points."""
+        src = None if input is None else _name(input)
+        return Node(_call("place_on_points", node=self._name, points=points, what=what, frame=frame, input=src, name=name)["node"])
+
     def input(self, port: int | str = 0) -> "Node | None":
         for p in self.info()["inputs"]:
             if p["port"] == port or (isinstance(port, str) and p["label"].lower() == port.lower()):

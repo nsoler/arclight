@@ -7,6 +7,24 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.0.36 — 2026-10-29
+
+- Camera Tracker node (3D): Track & Solve finds and follows features over
+  the project's frame range and solves the camera's path and a cloud of
+  3D points (focal length given, or solved), with progress and Stop; the
+  result (error per frame, points, focal) stays on the node and saves
+  with the project. Export adds a Camera keyed on every frame, a Point
+  Cloud, a Scene and a Scanline Render over the plate. Phase 4
+  milestone 8.
+- Point placement: with a solved Camera Tracker selected, the viewer
+  shows its points; select them (click, Shift-click, drag a box) to Place
+  Card here (on the plane through 3+ points, else facing the camera,
+  sized to them) or Place locator, or to Set origin, Ground plane (level
+  at 0) and Set scale (two points a given distance apart).
+- New Point Cloud and Locator nodes (3D). MCP tools `track_camera`,
+  `camera_points`, `orient_camera`, `export_camera`, `place_on_points`,
+  and the same as Python `Node` methods.
+
 ## 0.0.35 — 2026-10-29
 
 - Help → About is laid out evenly: all text centered, equal margins left

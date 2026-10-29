@@ -64,6 +64,8 @@ pub struct Properties {
     name_error: Option<(String, String)>,
     jobs: HashMap<String, RenderJob>,
     tracks: HashMap<String, TrackJob>,
+    /// Camera Tracker solves, running or done, by node.
+    camera_jobs: HashMap<String, crate::camera_tracker::CamJob>,
     media_info: HashMap<String, String>,
     /// The current frame (keyframes are read and written here).
     frame: i64,
@@ -209,6 +211,7 @@ impl Properties {
                 "media_in" => self.media_in_extras(ui, doc, id),
                 "media_out" => self.media_out_extras(ui, doc, id),
                 "tracker" => self.tracker_extras(ui, doc, id),
+                "camera_tracker" => crate::camera_tracker::panel(ui, doc, id, &mut self.camera_jobs),
                 "corner_pin" => self.corner_pin_extras(ui, doc, id),
                 _ => {}
             }
