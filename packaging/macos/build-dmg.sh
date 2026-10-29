@@ -40,12 +40,13 @@ install -m644 "$repo/examples/media/testsrc.mp4" "$app/Contents/Resources/exampl
 # be read, the full logo from 128 px up.
 iconset="$dist/arclight.iconset"
 rm -rf "$iconset" && mkdir -p "$iconset"
+# (Plain ifs: under set -e, a test that's false inside $(...) or as the
+# last command would end the script.)
 for size in 16 32 128 256 512; do
   for scale in 1 2; do
     px=$((size * scale))
-    src="$repo/assets/arclight-icon.svg"
-    (( px >= 128 )) && src="$repo/assets/arclight.svg"
-    name="icon_${size}x${size}$([[ $scale == 2 ]] && echo @2x).png"
+    if (( px >= 128 )); then src="$repo/assets/arclight.svg"; else src="$repo/assets/arclight-icon.svg"; fi
+    if (( scale == 2 )); then name="icon_${size}x${size}@2x.png"; else name="icon_${size}x${size}.png"; fi
     rsvg-convert -w "$px" -h "$px" "$src" -o "$iconset/$name"
   done
 done
