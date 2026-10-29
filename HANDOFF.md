@@ -1,6 +1,6 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-28 (end of session 6). Read this, then `README.md`
+Last updated 2026-10-28 (session 7). Read this, then `README.md`
 (user-facing features, file format, shortcuts, scripting) and
 `docs/spec-coverage.md` (what the planning docs ask for vs. what exists).
 
@@ -16,7 +16,7 @@ Last updated 2026-10-28 (end of session 6). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~14,400 lines of Rust + Python. Tests: 71 library + 10 CLI + 34 GUI
+- ~14,400 lines of Rust + Python. Tests: 71 library + 10 CLI + 35 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
 - **Release build (end of session 6):** `cargo build --release --workspace`
   and `python/build.sh` were run at the final commit, so
@@ -348,6 +348,14 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   `node_editor.rs` tests gained a `Harness` that drives the editor
   headlessly with egui pointer events (`Context::run_ui`), at a chosen
   zoom: use it for any node-graph gesture.
+- **Session 7, part 1** (user request): ports restyled (`port_dot` +
+  `PortKind`: inputs yellow squares, outputs light green circles; optional
+  inputs hollow). Dragging an output onto a wire (`NodeEditor::input_at`
+  wins first, then `wire_at`, lit while dragging) calls
+  `Doc::merge_into_wire`: a new Merge halfway between the wire's ends, the
+  wire's source into A, the dragged node into B, the Merge into the old
+  port; refused on a cycle. Dragging a node *body* onto a wire still
+  splices it (`insert_on_wire`).
 
 ## Architecture in one page
 

@@ -3,8 +3,8 @@
 //! Inputs sit on a node's left edge, its output on the right. Drag from an
 //! output to an input (or the reverse) to connect; drag a connected input away
 //! to reroute or disconnect. Drop a wire dragged from an output onto another
-//! wire to put the node into it (or, when it can't go in, to feed that
-//! wire's input instead). Inputs are yellow squares, outputs green circles.
+//! wire to join the two with a new Merge (the wire's source into A, the
+//! dragged node into B). Inputs are yellow squares, outputs green circles.
 //! Right-click the canvas, or press Shift+E for a
 //! searchable node browser, to add nodes; over a wire, the new node goes into
 //! it. Drop an unconnected node on a wire to splice it in; shake a node while
@@ -472,9 +472,9 @@ impl NodeEditor {
                         if let Some((dst, i)) = self.input_at(&geo, ptr) {
                             doc.connect(&src, &dst, i);
                         } else if let Some(w) = self.wire_at(doc, ptr, Some(&src)) {
-                            // Onto a wire: into it, or failing that, feed its input.
-                            if !(is_spliceable(doc, &src) && doc.insert_on_wire(&src, &w.src, &w.dst, w.port)) {
-                                doc.connect(&src, &w.dst, w.port);
+                            // Onto a wire: a Merge joins the two there.
+                            if let Some(m) = doc.merge_into_wire(&src, &w.src, &w.dst, w.port) {
+                                doc.selected = Some(m);
                             }
                         }
                     }
@@ -754,12 +754,6 @@ fn is_free(doc: &Doc, id: &str) -> bool {
     !n.inputs.is_empty() && has_output(&n.op) && n.inputs.iter().all(String::is_empty) && !doc.graph.nodes.iter().any(|m| m.inputs.iter().any(|i| i == id))
 }
 
-/// A node whose output can be dropped into a wire: one with an input, the
-/// first of which is free (splicing it in sets that input).
-fn is_spliceable(doc: &Doc, id: &str) -> bool {
-    doc.node(id).is_some_and(|n| n.inputs.first().is_some_and(String::is_empty) && has_output(&n.op))
-}
-
 /// Distance from `p` to the wire drawn from `a` to `b` (see [`bezier`]).
 fn bezier_distance(a: Pos2, b: Pos2, p: Pos2) -> f32 {
     let dx = ((b.x - a.x).abs() * 0.5).max(40.0);
@@ -947,30 +941,37 @@ mod tests {
     }
 
     #[test]
-    fn an_output_dropped_on_a_wire_goes_into_it() {
+    fn an_output_dropped_on_a_wire_merges_into_it() {
         let mut doc = Doc::new(Graph::default(), None);
         let src = doc.add_node("constant", [0.0, 0.0]);
         let blur = doc.add_node("blur", [500.0, 0.0]);
-        let grade = doc.add_node("grade", [250.0, 250.0]);
         let other = doc.add_node("constant", [0.0, 400.0]);
+        let grade = doc.add_node("grade", [250.0, 250.0]);
         doc.connect(&src, &blur, 0);
         let mut h = Harness::new();
         h.frame(&mut doc, vec![]);
-        let mid = |h: &Harness, doc: &Doc| {
-            let b = doc.node(&blur).unwrap();
-            NodeEditor::out_port(h.rect(doc, &b.inputs[0])).lerp(NodeEditor::in_port(h.rect(doc, &blur), 0, b.inputs.len()), 0.5)
+        // The middle of the wire into `dst`'s input `port`.
+        let mid = |h: &Harness, doc: &Doc, dst: &str, port: usize| {
+            let d = doc.node(dst).unwrap();
+            NodeEditor::out_port(h.rect(doc, &d.inputs[port])).lerp(NodeEditor::in_port(h.rect(doc, dst), port, d.inputs.len()), 0.5)
         };
-        // A free node's output spliced in between…
-        let out = NodeEditor::out_port(h.rect(&doc, &grade));
-        let to = mid(&h, &doc);
+        let inputs = |doc: &Doc, id: &str| doc.node(id).unwrap().inputs.clone();
+        // A source's output onto src → blur: a Merge, src into A, it into B.
+        let (out, to) = (NodeEditor::out_port(h.rect(&doc, &other)), mid(&h, &doc, &blur, 0));
         h.drag(&mut doc, out, to);
-        assert_eq!(doc.node(&grade).unwrap().inputs[0], src, "src → grade");
-        assert_eq!(doc.node(&blur).unwrap().inputs[0], grade, "grade → blur");
-        // …and a source, which can't go in, feeds the wire's input instead.
-        let out = NodeEditor::out_port(h.rect(&doc, &other));
-        let to = mid(&h, &doc);
+        let m1 = inputs(&doc, &blur)[0].clone();
+        assert_eq!(doc.node(&m1).unwrap().op, "merge");
+        assert_eq!(inputs(&doc, &m1)[..2], [src.clone(), other.clone()]);
+        // A node with an input works the same, onto the new wire m1 → blur.
+        let (out, to) = (NodeEditor::out_port(h.rect(&doc, &grade)), mid(&h, &doc, &blur, 0));
         h.drag(&mut doc, out, to);
-        assert_eq!(doc.node(&blur).unwrap().inputs[0], other, "other → blur");
+        let m2 = inputs(&doc, &blur)[0].clone();
+        assert_eq!(inputs(&doc, &m2)[..2], [m1.clone(), grade.clone()]);
+        // A node downstream of the wire would close a cycle: nothing changes.
+        let before = doc.graph.nodes.len();
+        let (out, to) = (NodeEditor::out_port(h.rect(&doc, &blur)), mid(&h, &doc, &m1, 0));
+        h.drag(&mut doc, out, to);
+        assert_eq!((doc.graph.nodes.len(), inputs(&doc, &m1)[0].clone()), (before, src.clone()));
     }
 
     #[test]

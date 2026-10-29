@@ -233,6 +233,31 @@ impl Doc {
         true
     }
 
+    /// Bring `node` into the wire from `src` to input `port` of `dst` with a
+    /// new Merge, halfway along the wire: `src` feeds its A, `node` its B,
+    /// and the Merge feeds that port. The Merge's id, or None (changing
+    /// nothing) when `node` has no output, is an end of the wire, or would
+    /// close a cycle.
+    pub fn merge_into_wire(&mut self, node: &str, src: &str, dst: &str, port: usize) -> Option<String> {
+        let ok = node != src
+            && node != dst
+            && self.node(node).is_some_and(|n| n.op != "viewer")
+            && self.node(dst).is_some_and(|n| n.inputs.get(port).is_some_and(|s| s == src))
+            && !self.is_upstream(dst, node);
+        if !ok {
+            return None;
+        }
+        let at = |id: &str| self.node(id).and_then(|n| n.pos).unwrap_or([0.0, 0.0]);
+        let (a, b) = (at(src), at(dst));
+        let merge = self.add_node("merge", [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]);
+        let m = self.node_mut(&merge).unwrap();
+        m.inputs[0] = src.to_string();
+        m.inputs[1] = node.to_string();
+        self.node_mut(dst).unwrap().inputs[port] = merge.clone();
+        self.changed();
+        Some(merge)
+    }
+
     /// Take `node` out of the graph's wires, keeping it: everything it fed
     /// is fed by its first input instead (as when deleting it), and its own
     /// inputs are cleared. False when it had no connections.
