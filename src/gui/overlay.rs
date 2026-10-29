@@ -159,8 +159,10 @@ enum Geo {
     Point { param: &'static str, value: Vec2 },
     Transform {
         names: [&'static str; 3],
-        /// Image center (the pivot) and translate, in image pixels.
+        /// The pivot and translate, in image pixels.
         center: Vec2,
+        /// The center param is unset: the pivot is the layer's center.
+        auto: bool,
         translate: Vec2,
         rotate: f32,
         scale: Vec2,
@@ -246,9 +248,10 @@ fn geo(doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
     Some(match ops::info(op)?.overlay {
         Overlay::None => return None,
         Overlay::Point(param) => Geo::Point { param, value: vec2(&at(param)) },
-        Overlay::Transform { translate, rotate, scale } => Geo::Transform {
+        Overlay::Transform { translate, rotate, scale, center } => Geo::Transform {
             names: [translate, rotate, scale],
-            center: size / 2.0,
+            auto: at(center).is_null(),
+            center: if at(center).is_null() { size / 2.0 } else { vec2(&at(center)) },
             translate: vec2(&at(translate)),
             rotate: num(&at(rotate)),
             scale: vec2(&at(scale)),
@@ -567,9 +570,13 @@ impl Overlays {
     /// data window when known.
     fn node_geo(&self, doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
         let mut g = geo(doc, id, frame, size)?;
-        if let (Geo::Transform { layer, .. }, Some((node, w))) = (&mut g, &self.input_window) {
+        if let (Geo::Transform { layer, center, auto, .. }, Some((node, w))) = (&mut g, &self.input_window) {
             if node == id && !w.is_empty() {
                 *layer = Rect::from_min_max(Pos2::new(w.x0 as f32, w.y0 as f32), Pos2::new(w.x1 as f32, w.y1 as f32));
+                if *auto {
+                    // Where the op pivots (`ops::transform_pivot`).
+                    *center = layer.center().to_vec2();
+                }
             }
         }
         Some(g)
@@ -1407,21 +1414,22 @@ mod tests {
 
     #[test]
     fn the_transform_frame_outlines_its_input_s_data() {
-        // The frame is 200×100 (center 100, 50); the input's data only
-        // (50, 25)–(100, 50). Its top-left corner is then a scale handle…
+        // The frame is 200×100; the input's data only (50, 25)–(100, 50),
+        // which the pivot follows to (75, 37.5). Its top-left corner is
+        // then a scale handle about there…
         let mut d = doc("transform", json!({}));
         let mut ov = Overlays::default();
         ov.set_input_window(Some(("n".into(), IRect::new(50, 25, 100, 50))));
         let part = gesture(&mut ov, &mut d, Pos2::new(50.0, 25.0), Pos2::new(25.0, 12.5), 1, Mods::default());
         assert_eq!(part, Some(Part::Size { x: true, y: true }));
-        assert_eq!(vec2(&d.param("n", "scale")), Vec2::new(1.5, 1.5));
+        assert_eq!(vec2(&d.param("n", "scale")), Vec2::new(2.0, 2.0));
         // …while without it the layer is the whole frame, so a spot like
-        // (30, 20) (clear of the rotation ring) is inside it: a move.
+        // (170, 85) (clear of the rotation ring) is inside it: a move.
         let mut d = doc("transform", json!({}));
-        assert_eq!(drag(&mut d, Pos2::new(30.0, 20.0), Pos2::new(35.0, 20.0), 1), Part::Move);
+        assert_eq!(drag(&mut d, Pos2::new(170.0, 85.0), Pos2::new(175.0, 85.0), 1), Part::Move);
         let mut ov = Overlays::default();
         ov.set_input_window(Some(("n".into(), IRect::new(50, 25, 100, 50))));
-        assert_eq!(gesture(&mut ov, &mut d, Pos2::new(30.0, 20.0), Pos2::new(35.0, 20.0), 1, Mods::default()), None, "outside the small layer");
+        assert_eq!(gesture(&mut ov, &mut d, Pos2::new(170.0, 85.0), Pos2::new(175.0, 85.0), 1, Mods::default()), None, "outside the small layer");
     }
 
     #[test]

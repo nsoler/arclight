@@ -680,8 +680,8 @@ pub fn transform_params(params: &Value, size: [usize; 2], stabilize: bool) -> Re
     if frames.is_empty() {
         bail!("no tracked frames: track first");
     }
-    // Transform turns and scales about the image center, with pixel centers
-    // on integers: half a pixel past the middle in track coordinates.
+    // Turn and scale about the image center, which in track coordinates
+    // (pixel i spanning i..i+1) is half a pixel past the middle.
     let c = [size[0] as f32 / 2.0 + 0.5, size[1] as f32 / 2.0 + 0.5];
     let round = |x: f64| (x * 1e4).round() / 1e4;
     let (mut translate, mut rotate, mut scale) = (Vec::new(), Vec::new(), Vec::new());
@@ -702,6 +702,8 @@ pub fn transform_params(params: &Value, size: [usize; 2], stabilize: bool) -> Re
     let curve = |keys: Vec<Value>| json!({ "keys": keys, "interp": "linear" });
     let mut out = Map::new();
     out.insert("translate".into(), curve(translate));
+    // The pivot used above, whatever the input's data window.
+    out.insert("center".into(), json!(c));
     if kind != Solve::Translate {
         out.insert("rotate".into(), curve(rotate));
     }

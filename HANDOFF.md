@@ -16,7 +16,7 @@ Last updated 2026-10-28 (session 7). Read this, then `README.md`
   commit it, push `wip-ns-effects`, and fast-forward `main` to it and push
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-effects` and both remote branches at the same commit.
-- ~14,400 lines of Rust + Python. Tests: 71 library + 10 CLI + 35 GUI
+- ~14,400 lines of Rust + Python. Tests: 72 library + 10 CLI + 35 GUI
   (`cargo test --release`) and 9 Python (see "Working tips"), all passing.
 - **Release build (end of session 6):** `cargo build --release --workspace`
   and `python/build.sh` were run at the final commit, so
@@ -363,6 +363,18 @@ Built from the planning docs in `../Archlight-Development-Documentationm/`
   size, frame, ms) moves to a second row when it doesn't fit beside the
   controls (`Viewer::status`, width remembered in `status_w`). Checked by
   screenshot with a temporarily widened properties panel.
+- **Session 7, part 4** (user report: a Transform after a shape had its
+  gizmo far from the shape): Transform has a `center` param, default
+  **null** = `ops::transform_pivot` (middle of the input's data window;
+  the frame when it has none). Centers count like shapes do (pixel i spans
+  i..i+1); the op subtracts 0.5. A null default is new: `validate_param`
+  accepts null for such params, the panel shows the auto value (from
+  `Properties::layer`, the App's `probe`) marked "auto", with an **Auto**
+  button once set, and keying an auto value fixes it first. The overlay's
+  `Geo::Transform::auto` takes the probed layer's center. Tracker export
+  writes an explicit `center` (the frame's). Behaviour change: old
+  projects with a rotated/scaled Transform over a *small-window* input
+  (only possible since Phase 0.6) now pivot on that layer.
 
 ## Architecture in one page
 

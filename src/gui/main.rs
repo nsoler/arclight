@@ -712,6 +712,7 @@ impl eframe::App for App {
                 ui.add_space(4.0);
                 ui.heading("Properties");
                 ui.separator();
+                self.props.layer = self.probe.clone();
                 if let Some(f) = self.props.ui(ui, &mut self.doc, self.transport.frame) {
                     self.transport.set_play(Play::Stopped);
                     self.transport.seek(f, &self.doc.graph.project);

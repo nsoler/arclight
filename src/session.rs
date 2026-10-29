@@ -421,6 +421,10 @@ fn param_spec<'a>(info: &'a OpInfo, name: &str) -> Result<&'a ops::ParamSpec> {
 /// (ints rounded, a 3-component color given alpha 1).
 pub fn validate_param(info: &OpInfo, name: &str, value: &Value) -> Result<Value> {
     let spec = param_spec(info, name)?;
+    // Null puts back an automatic default (a Transform's center).
+    if value.is_null() && spec.default_value().is_null() {
+        return Ok(Value::Null);
+    }
     if anim::is_animated(value) {
         if !spec.animatable {
             bail!("'{name}' can't be animated");

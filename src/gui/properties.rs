@@ -60,6 +60,9 @@ pub struct Properties {
     frame: i64,
     /// A frame the user asked to jump to (e.g. "next key").
     seek: Option<i64>,
+    /// The selected Transform and its input's data window, which places
+    /// its automatic center.
+    pub layer: Option<(String, arclight::image::IRect)>,
 }
 
 impl Properties {
@@ -209,8 +212,20 @@ impl Properties {
         });
     }
 
+    /// What an unset param with an automatic default stands for, when
+    /// known: a Transform's center is its input layer's.
+    fn auto_value(&self, id: &str, spec: &ParamSpec) -> Option<Value> {
+        let (_, w) = self.layer.as_ref().filter(|(node, w)| node == id && !w.is_empty())?;
+        (spec.name == "center").then(|| json!([(w.x0 + w.x1) as f32 / 2.0, (w.y0 + w.y1) as f32 / 2.0]))
+    }
+
     fn param_widget(&mut self, ui: &mut egui::Ui, doc: &mut Doc, id: &str, op: &str, spec: &ParamSpec) {
-        let value = doc.param_at(id, spec.name, self.frame);
+        let mut value = doc.param_at(id, spec.name, self.frame);
+        // Unset with an automatic default: show what it stands for.
+        let auto = value.is_null() && spec.default_value().is_null();
+        if auto {
+            value = self.auto_value(id, spec).unwrap_or(Value::Null);
+        }
         let f = |v: &Value, i: usize| v.get(i).and_then(Value::as_f64).unwrap_or(0.0) as f32;
         let new: Option<Value> = match spec.kind {
             ParamKind::Float { min, max } => {
@@ -227,13 +242,26 @@ impl Properties {
                 let speed = if spec.name == "translate" { 1.0 } else { 0.005 };
                 let mut v: Vec<f32> = (0..n).map(|i| f(&value, i)).collect();
                 let mut changed = false;
+                let mut reset = false;
                 ui.horizontal(|ui| {
+                    if auto && value.is_null() {
+                        ui.weak("auto");
+                        return;
+                    }
                     for (i, x) in v.iter_mut().enumerate() {
                         let prefix = ["x ", "y ", "z "][i];
                         let prefix = if n == 3 { ["r ", "g ", "b "][i] } else { prefix };
                         changed |= ui.add(egui::DragValue::new(x).speed(speed).prefix(prefix).max_decimals(4)).changed();
                     }
+                    if auto {
+                        ui.weak("auto").on_hover_text("The input layer's center; edit to set your own");
+                    } else if spec.default_value().is_null() {
+                        reset = ui.small_button("Auto").on_hover_text("Back to the input layer's center").clicked();
+                    }
                 });
+                if reset {
+                    doc.set_param(id, spec.name, Value::Null);
+                }
                 changed.then(|| json!(v))
             }
             ParamKind::Color => {
@@ -342,6 +370,18 @@ impl Properties {
         };
         let resp = resp.on_hover_text(tip);
         if resp.clicked() {
+            // Keying an automatic value fixes it first.
+            if raw.is_null() {
+                let auto = doc
+                    .node(id)
+                    .and_then(|n| ops::info(&n.op))
+                    .and_then(|i| i.params.iter().find(|s| s.name == name))
+                    .and_then(|s| self.auto_value(id, s));
+                match auto {
+                    Some(v) => doc.set_param(id, name, v),
+                    None => return,
+                }
+            }
             if on_key {
                 doc.remove_key(id, name, self.frame);
             } else {

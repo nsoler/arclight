@@ -93,8 +93,9 @@ pub enum Overlay {
     None,
     /// A draggable point bound to a Vec2 param.
     Point(&'static str),
-    /// Move/rotate/scale gizmo about the image center, plus `translate`.
-    Transform { translate: &'static str, rotate: &'static str, scale: &'static str },
+    /// Move/rotate/scale gizmo about `center` (null: the input layer's
+    /// center), plus `translate`.
+    Transform { translate: &'static str, rotate: &'static str, scale: &'static str, center: &'static str },
     /// A box inset from the image edges by four Int params.
     Insets { left: &'static str, top: &'static str, right: &'static str, bottom: &'static str },
     /// A box (or the ellipse inside it) with center, size and rotation params.
@@ -339,11 +340,14 @@ pub static OPS: &[OpInfo] = &[
             p!("translate", "Translate", ParamKind::Vec2, [0.0, 0.0]),
             p!("scale", "Scale", ParamKind::Vec2, [1.0, 1.0]),
             p!("rotate", "Rotate", ParamKind::Float { min: -360.0, max: 360.0 }, 0.0),
+            // Null: the center of the input's data window, so the pivot
+            // follows a shape or moved layer.
+            p!("center", "Center", ParamKind::Vec2, Value::Null),
             MIX,
         ],
-        overlay: Overlay::Transform { translate: "translate", rotate: "rotate", scale: "scale" },
+        overlay: Overlay::Transform { translate: "translate", rotate: "rotate", scale: "scale", center: "center" },
         mask_base: Some(0),
-        help: "Translate, scale and rotate about the image center.",
+        help: "Translate, scale and rotate about the center: by default the middle of the input layer (its data window).",
     },
     OpInfo {
         name: "blur",
@@ -1128,9 +1132,21 @@ fn blend(op: &str, f: Rgba, b: Rgba) -> Result<Rgba> {
 struct Transform {
     translate: [f32; 2],
     scale: [f32; 2],
-    /// Rotation in degrees about the image center; positive turns clockwise
-    /// on screen (image y points down).
+    /// Rotation in degrees about `center`; positive turns clockwise on
+    /// screen (image y points down).
     rotate: f32,
+    /// The pivot; None for the middle of the input's data window.
+    #[serde(default)]
+    center: Option<[f32; 2]>,
+}
+
+/// Where a Transform with no `center` pivots: the middle of `src`'s data
+/// window, or of its frame when it holds no data (pixel i spanning i..i+1,
+/// as shapes and the viewer's handles count).
+pub fn transform_pivot(src: &Image) -> [f32; 2] {
+    let w = src.window();
+    let r = if w.is_empty() { src.frame() } else { w };
+    [(r.x0 + r.x1) as f32 / 2.0, (r.y0 + r.y1) as f32 / 2.0]
 }
 
 /// Affine transform with bilinear resampling. Uses inverse mapping: for each
@@ -1138,9 +1154,9 @@ struct Transform {
 fn transform(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: Transform = parse(params, "transform")?;
     let src = input(inputs, 0, "transform")?;
-    // About the frame's center (pixel centers on integers).
-    let cx = src.format.width as f32 / 2.0;
-    let cy = src.format.height as f32 / 2.0;
+    // About the pivot, given like a shape's center (pixel i spans i..i+1);
+    // here pixel centers are on integers.
+    let [cx, cy] = p.center.unwrap_or_else(|| transform_pivot(src)).map(|v| v - 0.5);
     let theta = -p.rotate.to_radians(); // inverse rotation
     let (s, c) = theta.sin_cos();
     let sx = if p.scale[0] == 0.0 { 1e-6 } else { p.scale[0] };
@@ -1826,7 +1842,7 @@ mod tests {
         let mid = patch(100, 50, 48, 23, 4, 4, [1.0; 4]);
         let big = eval("transform", &json!({ "scale": [500, 500] }), &[Some(&mid), None], &CTX).unwrap();
         assert_eq!(big.window(), IRect::new(-100, -50, 200, 100));
-        let gone = eval("transform", &json!({ "scale": [500, 500] }), &[Some(&red), None], &CTX).unwrap();
+        let gone = eval("transform", &json!({ "scale": [500, 500], "center": [50, 25] }), &[Some(&red), None], &CTX).unwrap();
         assert!(gone.window().is_empty());
         // The tracker's match-move and a corner pin move windows the same way.
         let pin = json!({ "from1": [0, 0], "from2": [100, 0], "from3": [100, 50], "from4": [0, 50],
@@ -1834,6 +1850,29 @@ mod tests {
         let pinned = eval("corner_pin", &pin, &[Some(&red), None], &CTX).unwrap();
         assert_eq!(pinned.at(31, 16), [1.0, 0.0, 0.0, 1.0]);
         assert!(pinned.window().width() < 10, "{:?}", pinned.window());
+    }
+
+    #[test]
+    fn transform_pivots_on_its_layer_unless_given_a_center() {
+        // A 4×4 layer at (10, 10): auto pivots on its middle, (12, 12).
+        let red = patch(100, 50, 10, 10, 4, 4, [1.0, 0.0, 0.0, 1.0]);
+        let turned = eval("transform", &json!({ "rotate": 90, "scale": [2, 2] }), &[Some(&red), None], &CTX).unwrap();
+        let flat = turned.flat();
+        let (mut sum, mut at) = (0.0, [0.0f32; 2]);
+        for (i, p) in flat.pixels.iter().enumerate() {
+            sum += p[3];
+            at[0] += p[3] * (i % 100) as f32;
+            at[1] += p[3] * (i / 100) as f32;
+        }
+        let centroid = [at[0] / sum, at[1] / sum];
+        // Four times the coverage, centered where it was (pixel centers are
+        // on integers here, so the middle of 10..14 is 11.5).
+        assert!((sum - 64.0).abs() < 1.0 && centroid.iter().all(|c| (c - 11.5).abs() < 0.05), "{sum} {centroid:?}");
+        assert_eq!(turned.at(12, 12), [1.0, 0.0, 0.0, 1.0]);
+        // An explicit center: the frame's middle.
+        let framed = eval("transform", &json!({ "scale": [2, 2], "center": [50, 25] }), &[Some(&red), None], &CTX).unwrap();
+        assert_eq!(framed.at(12, 12)[3], 0.0);
+        assert_eq!(framed.at(-24, 1), [1.0, 0.0, 0.0, 1.0]);
     }
 
     #[test]
