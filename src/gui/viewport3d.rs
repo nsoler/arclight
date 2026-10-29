@@ -280,6 +280,96 @@ fn frustum(cam: &geom::Camera, size: f64, aspect: f64) -> (Vec3, [Vec3; 4]) {
     (geom::transform_point(&cam.world, &Vec3::zeros()), [corner(-w, h), corner(w, h), corner(w, -h), corner(-w, -h)])
 }
 
+/// What a click picked.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Hit {
+    /// A card, camera or locator: its node.
+    Object(String),
+    /// Point `.1` of the point cloud (or Camera Tracker) node `.0`.
+    Point(String, usize),
+}
+
+/// How near (screen points) a click must be to a point, locator or camera.
+const PICK_RADIUS: f32 = 7.0;
+
+/// What's under screen point `s` in `scene` seen through `p`: the nearest
+/// point, locator or camera within reach, else the nearest card the ray
+/// through `s` hits. `is_locator` tells a locator's point from a cloud's.
+pub fn pick(scene: &Scene, p: &Projector, s: Pos2, is_locator: &dyn Fn(&str) -> bool) -> Option<Hit> {
+    let mut best: Option<(f32, f64, Hit)> = None;
+    let mut consider = |at: Vec3, hit: Hit| {
+        if let Some((q, depth)) = p.project(at) {
+            let d = q.distance(s);
+            if d <= PICK_RADIUS && best.as_ref().is_none_or(|b| (d, depth) < (b.0, b.1)) {
+                best = Some((d, depth, hit));
+            }
+        }
+    };
+    for (i, pt) in scene.points.iter().enumerate() {
+        let node = scene.point_node(i);
+        consider(*pt, if is_locator(node) { Hit::Object(node.to_string()) } else { Hit::Point(node.to_string(), i) });
+    }
+    for (i, cam) in scene.cameras.iter().enumerate() {
+        consider(geom::transform_point(&cam.world, &Vec3::zeros()), Hit::Object(scene.camera_node(i).to_string()));
+    }
+    if let Some((_, _, hit)) = best {
+        return Some(hit);
+    }
+    // Cards: the nearest the ray hits inside its rectangle.
+    let (o, d) = p.ray(s);
+    scene
+        .cards
+        .iter()
+        .filter_map(|c| {
+            let inv = c.world.try_inverse()?;
+            let (lo, ld) = (geom::transform_point(&inv, &o), inv.fixed_view::<3, 3>(0, 0) * d);
+            if ld.z.abs() < 1e-12 {
+                return None;
+            }
+            let t = -lo.z / ld.z;
+            let hit = lo + ld * t;
+            let inside = hit.x.abs() <= c.size[0] / 2.0 && hit.y.abs() <= c.size[1] / 2.0;
+            // Distance along the world ray, for "nearest".
+            let world_t = (geom::transform_point(&c.world, &hit) - o).dot(&d);
+            (t > 0.0 && inside && world_t > 0.0).then_some((world_t, c.node.clone()))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, n)| Hit::Object(n))
+}
+
+/// What a box from `a` to `b` (screen) holds: objects whose centers fall
+/// inside (cards, cameras, locators) and points.
+pub fn box_pick(scene: &Scene, p: &Projector, a: Pos2, b: Pos2, is_locator: &dyn Fn(&str) -> bool) -> (Vec<String>, Vec<(String, usize)>) {
+    let r = Rect::from_two_pos(a, b);
+    let inside = |x: Vec3| p.project(x).is_some_and(|(q, _)| r.contains(q));
+    let mut objects: Vec<String> = Vec::new();
+    let mut add = |n: &str| {
+        if !n.is_empty() && !objects.iter().any(|o| o == n) {
+            objects.push(n.to_string());
+        }
+    };
+    for c in scene.cards.iter().filter(|c| inside(geom::transform_point(&c.world, &Vec3::zeros()))) {
+        add(&c.node);
+    }
+    for (i, cam) in scene.cameras.iter().enumerate() {
+        if inside(geom::transform_point(&cam.world, &Vec3::zeros())) {
+            add(scene.camera_node(i));
+        }
+    }
+    let mut points = Vec::new();
+    for (i, pt) in scene.points.iter().enumerate() {
+        let node = scene.point_node(i);
+        if inside(*pt) {
+            if is_locator(node) {
+                add(node);
+            } else {
+                points.push((node.to_string(), i));
+            }
+        }
+    }
+    (objects, points)
+}
+
 /// A camera node's path at a graph revision: positions by frame.
 type CameraPath = (String, u64, Vec<(i64, Vec3)>);
 
@@ -341,6 +431,16 @@ pub struct Viewport3d {
     texture: Option<TextureHandle>,
     texture_rect: Option<Rect>,
     error: Option<String>,
+    /// Selected points (of point clouds and Camera Trackers): node, index.
+    pub points: Vec<(String, usize)>,
+    /// A box selection being dragged: screen start and now, and whether it
+    /// adds to the selection.
+    marquee: Option<(Pos2, Pos2, bool)>,
+    message: Option<String>,
+    /// The project the view was last restored from (its path), and
+    /// whether it had a saved view (if not, the first scene is framed).
+    restored: Option<Option<std::path::PathBuf>>,
+    frame_first_scene: bool,
 }
 
 impl Default for Viewport3d {
@@ -361,6 +461,11 @@ impl Default for Viewport3d {
             texture: None,
             texture_rect: None,
             error: None,
+            points: Vec::new(),
+            marquee: None,
+            message: None,
+            restored: None,
+            frame_first_scene: false,
         }
     }
 }
@@ -483,11 +588,12 @@ impl Viewport3d {
     /// its input. `blocked`: a transform gizmo or G / R / S gesture owns the
     /// left button and the keys; navigation still works.
     pub fn ui(&mut self, ui: &mut egui::Ui, rect: Rect, resp: &Response, doc: &mut Doc, frame: i64, blocked: bool) {
+        self.restore(doc);
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, Color32::from_gray(38));
         self.navigate(ui, rect, resp, blocked);
         if !blocked && resp.hovered() {
-            self.keys(ui, rect);
+            self.keys(ui, doc);
         }
         let p = match self.through_camera() {
             Some(cam) => Projector::through(cam, doc.graph.project.format, rect),
@@ -498,8 +604,25 @@ impl Viewport3d {
         };
         self.last = Some(p);
         self.sync(ui.ctx(), doc, frame, &p);
+        if self.frame_first_scene && self.scene.is_some() {
+            self.frame_first_scene = false;
+            self.frame_all();
+        }
+        self.save(doc);
+        if !blocked {
+            self.select(ui, resp, doc, &p);
+        } else {
+            self.marquee = None;
+        }
+        self.context_menu(resp, doc, frame);
         self.draw(ui, &painter, &p, doc, frame);
+        if let Some((a, b, _)) = self.marquee {
+            painter.rect(Rect::from_two_pos(a, b), 0.0, Color32::from_white_alpha(18), Stroke::new(1.0, Color32::from_white_alpha(170)), egui::StrokeKind::Middle);
+        }
         self.nav_gizmo(ui, rect);
+        if let Some(m) = &self.message {
+            painter.text(rect.left_top() + Vec2::new(10.0, 10.0), Align2::LEFT_TOP, m, FontId::proportional(13.0), Color32::from_rgb(110, 200, 120));
+        }
         if let Some(e) = &self.error {
             painter.text(rect.left_bottom() + Vec2::new(10.0, -10.0), Align2::LEFT_BOTTOM, e, FontId::proportional(13.0), Color32::from_rgb(255, 110, 100));
         } else if self.scene.is_none() {
@@ -560,6 +683,162 @@ impl Viewport3d {
         }
     }
 
+    /// Take the view saved with a project when one is opened (or framing
+    /// its first scene, when none was saved).
+    fn restore(&mut self, doc: &Doc) {
+        if self.restored.as_ref() == Some(&doc.path) {
+            return;
+        }
+        self.restored = Some(doc.path.clone());
+        match doc.graph.view.0.get("viewport3d").and_then(|v| serde_json::from_value::<ViewCam>(v.clone()).ok()) {
+            Some(v) => {
+                self.view = v;
+                self.frame_first_scene = false;
+            }
+            None => {
+                self.view = ViewCam::default();
+                self.frame_first_scene = true;
+            }
+        }
+        self.look_through = None;
+    }
+
+    /// Keep the view in the project's saved view state (no edit: it saves
+    /// with the project but isn't undone or marked as a change).
+    fn save(&self, doc: &mut Doc) {
+        let v = serde_json::to_value(self.view).expect("view serializes");
+        if doc.graph.view.0.get("viewport3d") != Some(&v) {
+            doc.graph.view.0.insert("viewport3d".into(), v);
+        }
+    }
+
+    /// Whether node `n` is a Locator (its point is an object, not a point).
+    fn locator(doc: &Doc) -> impl Fn(&str) -> bool + '_ {
+        move |n: &str| doc.node(n).is_some_and(|n| n.op == "locator")
+    }
+
+    /// Left-click picks (⇧ adds or removes), a left-drag from empty space
+    /// box-selects (⇧ adds); clicking empty space deselects.
+    fn select(&mut self, ui: &egui::Ui, resp: &Response, doc: &mut Doc, p: &Projector) {
+        let Some(scene) = self.scene.clone() else { return };
+        let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
+        if self.emulate_three_button && alt {
+            return;
+        }
+        if resp.clicked_by(PointerButton::Primary) {
+            if let Some(s) = resp.interact_pointer_pos() {
+                let hit = pick(&scene, p, s, &Self::locator(doc));
+                self.apply_hit(doc, hit, shift);
+            }
+        }
+        if resp.drag_started_by(PointerButton::Primary) {
+            let start = ui.input(|i| i.pointer.press_origin());
+            if let Some(o) = start.filter(|o| pick(&scene, p, *o, &Self::locator(doc)).is_none()) {
+                self.marquee = Some((o, o, shift));
+            }
+        }
+        if let (Some(m), Some(now)) = (&mut self.marquee, resp.interact_pointer_pos()) {
+            m.1 = now;
+        }
+        if resp.drag_stopped_by(PointerButton::Primary) {
+            if let Some((a, b, add)) = self.marquee.take() {
+                let (objects, points) = box_pick(&scene, p, a, b, &Self::locator(doc));
+                if !add {
+                    self.points.clear();
+                }
+                self.points.extend(points.into_iter().filter(|pt| !self.points.contains(pt)).collect::<Vec<_>>());
+                doc.select_nodes(&objects, add);
+            }
+        }
+    }
+
+    /// Select what a click hit (`add`: toggle it instead), or with nothing
+    /// hit and not adding, nothing.
+    fn apply_hit(&mut self, doc: &mut Doc, hit: Option<Hit>, add: bool) {
+        match (hit, add) {
+            (Some(Hit::Object(n)), false) => {
+                self.points.clear();
+                doc.select_only(&n);
+            }
+            (Some(Hit::Object(n)), true) => doc.toggle_selected(&n),
+            (Some(Hit::Point(n, i)), false) => {
+                self.points = vec![(n, i)];
+            }
+            (Some(Hit::Point(n, i)), true) => match self.points.iter().position(|p| *p == (n.clone(), i)) {
+                Some(k) => {
+                    self.points.remove(k);
+                }
+                None => self.points.push((n, i)),
+            },
+            (None, false) => {
+                self.points.clear();
+                doc.clear_selection();
+            }
+            (None, true) => {}
+        }
+    }
+
+    /// Everything in the scene (A).
+    fn select_everything(&mut self, doc: &mut Doc) {
+        let Some(s) = self.scene.clone() else { return };
+        let is_locator = Self::locator(doc);
+        let mut objects: Vec<String> = s.cards.iter().map(|c| c.node.clone()).chain((0..s.cameras.len()).map(|i| s.camera_node(i).to_string())).collect();
+        self.points.clear();
+        for i in 0..s.points.len() {
+            let n = s.point_node(i);
+            if is_locator(n) {
+                objects.push(n.to_string());
+            } else {
+                self.points.push((n.to_string(), i));
+            }
+        }
+        drop(is_locator);
+        objects.retain(|n| !n.is_empty());
+        objects.dedup();
+        doc.select_nodes(&objects, false);
+    }
+
+    /// The right-click menu: place a Card or a Locator on the selected
+    /// points of a Camera Tracker (M8's placement), and framing.
+    fn context_menu(&mut self, resp: &Response, doc: &mut Doc, frame: i64) {
+        let tracker = self.points.first().map(|p| p.0.clone()).filter(|n| self.points.iter().all(|p| &p.0 == n));
+        let sol = tracker.as_ref().and_then(|n| doc.node(n)).filter(|n| n.op == "camera_tracker").and_then(|n| arclight::camtrack::Solution::from_params(&n.params));
+        let ids: Vec<usize> = self.points.iter().map(|p| p.1).collect();
+        let mut placed: Option<String> = None;
+        resp.context_menu(|ui| {
+            let enabled = sol.is_some();
+            let why = "Select points of a solved Camera Tracker";
+            if ui.add_enabled(enabled, egui::Button::new("Place Card here")).on_disabled_hover_text(why).clicked() {
+                if let (Some(t), Some(sol)) = (&tracker, &sol) {
+                    placed = Some(match crate::camera_tracker::place_card(doc, t, sol, &ids, frame) {
+                        Ok(card) => format!("Added {card}: connect an image to it and add it to a Scene."),
+                        Err(e) => format!("{e:#}"),
+                    });
+                }
+                ui.close();
+            }
+            if ui.add_enabled(enabled, egui::Button::new("Place locator")).on_disabled_hover_text(why).clicked() {
+                if let (Some(t), Some(sol)) = (&tracker, &sol) {
+                    placed = crate::camera_tracker::place_locator(doc, t, sol, &ids).map(|l| format!("Added {l}."));
+                }
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Frame selected (F)").clicked() {
+                let sel = doc.selection();
+                self.frame_selected(Some(&sel));
+                ui.close();
+            }
+            if ui.button("Frame all (Home)").clicked() {
+                self.frame_all();
+                ui.close();
+            }
+        });
+        if placed.is_some() {
+            self.message = placed;
+        }
+    }
+
     /// Leave a look-through for the free camera, where that camera was.
     fn leave_camera(&mut self) {
         let Some(cam) = self.through_camera().cloned() else { return };
@@ -574,13 +853,12 @@ impl Viewport3d {
     }
 
     /// The view keys (see the module notes).
-    fn keys(&mut self, ui: &egui::Ui, rect: Rect) {
+    fn keys(&mut self, ui: &egui::Ui, doc: &mut Doc) {
         use egui::Key;
-        let (pressed, ctrl) = ui.input(|i| {
-            let keys = [Key::Num0, Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Period, Key::Home, Key::F];
-            (keys.into_iter().filter(|k| i.key_pressed(*k)).collect::<Vec<_>>(), i.modifiers.command || i.modifiers.ctrl)
+        let (pressed, ctrl, alt) = ui.input(|i| {
+            let keys = [Key::Num0, Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Period, Key::Home, Key::F, Key::A, Key::Escape];
+            (keys.into_iter().filter(|k| i.key_pressed(*k)).collect::<Vec<_>>(), i.modifiers.command || i.modifiers.ctrl, i.modifiers.alt)
         });
-        let _ = rect;
         for k in pressed {
             match k {
                 Key::Num1 => self.axis(if ctrl { Axis::Back } else { Axis::Front }),
@@ -596,7 +874,20 @@ impl Viewport3d {
                 Key::Num8 => self.step(0.0, 15.0),
                 Key::Num2 => self.step(0.0, -15.0),
                 Key::Home => self.frame_all(),
-                Key::Period | Key::F => self.frame_selected(None),
+                Key::Period | Key::F => {
+                    let sel = doc.selection();
+                    self.frame_selected(Some(&sel));
+                }
+                Key::A if alt => {
+                    self.points.clear();
+                    doc.clear_selection();
+                }
+                Key::A => self.select_everything(doc),
+                // Esc cancels a box first, else deselects.
+                Key::Escape if self.marquee.take().is_none() => {
+                    self.points.clear();
+                    doc.clear_selection();
+                }
                 _ => {}
             }
         }
@@ -641,8 +932,21 @@ impl Viewport3d {
     pub fn frame_selected(&mut self, selected: Option<&[String]>) {
         let Some(s) = self.scene.clone() else { return };
         let sel: Vec<String> = selected.map(<[String]>::to_vec).unwrap_or_default();
+        // Selected objects, and selected points (alone, as a little scene).
+        let mut picked = Scene { points: self.points.iter().filter_map(|(_, i)| s.points.get(*i).copied()).collect(), ..Scene::default() };
         let only = |n: &str| sel.iter().any(|s| s == n);
-        match (!sel.is_empty()).then(|| bounds(&s, Some(&only))).flatten() {
+        picked.cards = s.cards.iter().filter(|c| only(&c.node)).cloned().collect();
+        for (i, c) in s.cameras.iter().enumerate() {
+            if only(s.camera_node(i)) {
+                picked.cameras.push(c.clone());
+            }
+        }
+        for (i, pt) in s.points.iter().enumerate() {
+            if only(s.point_node(i)) {
+                picked.points.push(*pt);
+            }
+        }
+        match bounds(&picked, None) {
             Some((c, r)) => {
                 self.look_through = None;
                 self.view.frame(c, r, self.aspect());
@@ -727,7 +1031,8 @@ impl Viewport3d {
                 line(*pt - Vec3::y() * arm, *pt + Vec3::y() * arm, Stroke::new(1.5, color(Y_COLOR)));
                 line(*pt - Vec3::z() * arm, *pt + Vec3::z() * arm, Stroke::new(1.5, color(Z_COLOR)));
             } else {
-                painter.circle_filled(s, if selected(node) { 2.5 } else { 1.8 }, if selected(node) { SELECTED } else { POINT });
+                let on = self.points.iter().any(|(n, k)| n == node && *k == i);
+                painter.circle_filled(s, if on { 3.0 } else { 1.8 }, if on { SELECTED } else { POINT });
             }
         }
         // Through a camera: its frame, the outside darkened.
@@ -1032,5 +1337,93 @@ mod tests {
             let got = p.project(x).unwrap().0;
             assert!(got.distance(want) < 1e-3, "{got:?} vs {want:?}");
         }
+    }
+
+    /// A camera at the origin looking down −Z, two overlapping cards, a
+    /// cloud of three points, a locator and a scene camera.
+    fn picking_scene() -> (Scene, Projector, Doc) {
+        use arclight::graph::{Graph, NodeSpec};
+        let tex = Arc::new(Image::new(4, 4));
+        let card = |node: &str, z: f64, w: f64| arclight::scene::Card { image: tex.clone(), world: geom::trs([0.0, 0.0, z], [0.0; 3], [1.0; 3]), size: [w, w], node: node.into() };
+        let mut s = Scene {
+            cards: vec![card("far", -10.0, 6.0), card("near", -6.0, 2.0)],
+            points: vec![Vec3::new(2.0, 1.0, -8.0), Vec3::new(-2.0, 1.0, -8.0), Vec3::new(0.0, -1.5, -8.0), Vec3::new(3.0, -1.0, -7.0)],
+            cameras: vec![geom::Camera { world: geom::trs([-2.5, -1.0, -7.0], [0.0; 3], [1.0; 3]), ..geom::Camera::default() }],
+            ..Scene::default()
+        };
+        s.point_nodes = vec!["cloud".into(), "cloud".into(), "cloud".into(), "loc".into()];
+        s.camera_nodes = vec!["cam".into()];
+        let nodes = ["far", "near", "cloud", "loc", "cam"].iter().map(|id| NodeSpec {
+            id: id.to_string(),
+            op: match *id { "loc" => "locator", "cam" => "camera", "cloud" => "point_cloud", _ => "card" }.into(),
+            inputs: vec![],
+            params: serde_json::json!({}),
+            pos: None,
+        });
+        let doc = Doc::new(Graph { nodes: nodes.collect(), ..Default::default() }, None);
+        let p = ViewCam { center: [0.0, 0.0, -8.0], yaw: 0.0, pitch: 0.0, distance: 8.0, ortho: false, auto_ortho: false }.projector(rect());
+        (s, p, doc)
+    }
+
+    #[test]
+    fn clicks_pick_points_objects_and_the_nearer_card() {
+        let (s, p, doc) = picking_scene();
+        let loc = |n: &str| doc.node(n).is_some_and(|n| n.op == "locator");
+        let at = |x: Vec3| p.project(x).unwrap().0;
+        // A click at (or near) a projected point picks it; a locator's
+        // point picks the locator; a camera's apex picks the camera.
+        assert_eq!(pick(&s, &p, at(s.points[1]) + Vec2::new(3.0, -2.0), &loc), Some(Hit::Point("cloud".into(), 1)));
+        assert_eq!(pick(&s, &p, at(s.points[3]), &loc), Some(Hit::Object("loc".into())));
+        assert_eq!(pick(&s, &p, at(Vec3::new(-2.5, -1.0, -7.0)), &loc), Some(Hit::Object("cam".into())));
+        // The middle of the view is on both cards: the nearer wins.
+        assert_eq!(pick(&s, &p, rect().center(), &loc), Some(Hit::Object("near".into())));
+        // Past the near card's edge, on the bigger far one: the far one.
+        assert_eq!(pick(&s, &p, at(Vec3::new(2.6, -2.6, -10.0)), &loc), Some(Hit::Object("far".into())));
+        assert_eq!(pick(&s, &p, Pos2::new(5.0, 5.0), &loc), None);
+        // A box around the left half: the left point, the camera.
+        let (objects, points) = box_pick(&s, &p, Pos2::new(0.0, 0.0), Pos2::new(rect().center().x - 50.0, rect().max.y), &loc);
+        assert_eq!((objects, points), (vec!["cam".to_string()], vec![("cloud".to_string(), 1)]));
+    }
+
+    #[test]
+    fn selection_is_shared_with_the_node_graph() {
+        let (s, _, mut doc) = picking_scene();
+        let mut v = Viewport3d { scene: Some(Arc::new(s)), ..Viewport3d::default() };
+        v.apply_hit(&mut doc, Some(Hit::Object("near".into())), false);
+        assert_eq!(doc.selection(), vec!["near".to_string()]);
+        v.apply_hit(&mut doc, Some(Hit::Object("cam".into())), true);
+        assert!(doc.is_selected("near") && doc.is_selected("cam"));
+        v.apply_hit(&mut doc, Some(Hit::Object("near".into())), true);
+        assert_eq!(doc.selection(), vec!["cam".to_string()], "⇧-click takes it out");
+        v.apply_hit(&mut doc, Some(Hit::Point("cloud".into(), 2)), true);
+        v.apply_hit(&mut doc, Some(Hit::Point("cloud".into(), 0)), true);
+        assert_eq!(v.points, vec![("cloud".to_string(), 2), ("cloud".to_string(), 0)]);
+        // A: everything (objects as nodes, points by index); empty click: nothing.
+        v.select_everything(&mut doc);
+        let mut sel = doc.selection();
+        sel.sort();
+        assert_eq!(sel, vec!["cam", "far", "loc", "near"]);
+        assert_eq!(v.points.len(), 3);
+        v.apply_hit(&mut doc, None, false);
+        assert!(doc.selection().is_empty() && v.points.is_empty());
+    }
+
+    #[test]
+    fn the_view_saves_with_the_project_without_being_an_edit() {
+        use arclight::graph::Graph;
+        let mut doc = Doc::new(Graph::default(), None);
+        let mut v = Viewport3d::default();
+        v.restore(&doc);
+        assert!(v.frame_first_scene, "nothing saved: frame the first scene");
+        v.view.orbit(50.0, 10.0);
+        let before = doc.graph.clone();
+        v.save(&mut doc);
+        assert_eq!(doc.graph, before, "not an edit");
+        assert!(!doc.can_undo());
+        // Saved and loaded back, a new viewport takes it.
+        let loaded: Graph = serde_json::from_str(&doc.graph.to_json()).unwrap();
+        let mut w = Viewport3d::default();
+        w.restore(&Doc::new(loaded, Some("p.json".into())));
+        assert_eq!((w.view, w.frame_first_scene), (v.view, false));
     }
 }

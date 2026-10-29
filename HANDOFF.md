@@ -67,6 +67,16 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
     the view (ortho as a 1000×-away long lens), at half / quarter
     resolution while moving. Not yet: picking / selection (step b),
     viewport-camera persistence, point error coloring.
+  - **0.9.4 (3DWorker step b):** picking and shared selection.
+    `Hit {Object(node), Point(node, index)}`; `pick(scene, projector,
+    pos, is_locator)` (points / locators / camera apexes within 7 px,
+    nearest then nearest in depth; else ray-quad against cards, nearest
+    hit); `box_pick` → (object nodes, points); `Viewport3d.points`
+    (selected (node, index)); `apply_hit` through `Doc::select_only` /
+    `toggle_selected` / `clear_selection`; A = `select_everything`;
+    `context_menu` (Place Card / locator via camera_tracker.rs, now
+    `pub(crate)`; Frame selected / all). Selection is skipped while a
+    gizmo or G/R/S is running.
 - **Next work, in order:** (1) anything from the Mac test; (2) the
   hand checks listed below for session 8's GUI work; (3) **M9, the 3D
   viewport** (fully specified in `docs/phase-4-plan.md`, "Milestone 9 in
@@ -124,7 +134,7 @@ specified) and `docs/spec-coverage.md` (planning docs vs. what exists).
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.3**.
+  in the same commit as the change. Current: **0.9.4**.
 - ~23,200 lines of Rust + Python. Tests: 134 library + 10 CLI + 46 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

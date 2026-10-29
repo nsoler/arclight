@@ -139,7 +139,7 @@ fn export(doc: &mut Doc, id: &str, sol: &Solution) -> String {
 
 /// Add a Card lying on points `ids` of `sol` (Camera Tracker `id`'s),
 /// facing the camera of `frame`. Its name.
-fn place_card(doc: &mut Doc, id: &str, sol: &Solution, ids: &[usize], frame: i64) -> anyhow::Result<String> {
+pub(crate) fn place_card(doc: &mut Doc, id: &str, sol: &Solution, ids: &[usize], frame: i64) -> anyhow::Result<String> {
     let params = camtrack::card_on_points(sol, ids, frame)?;
     let card = doc.add_node("card", spot_below(doc, id));
     for (k, v) in params {
@@ -150,7 +150,7 @@ fn place_card(doc: &mut Doc, id: &str, sol: &Solution, ids: &[usize], frame: i64
 }
 
 /// Add a Locator at the middle of points `ids`. Its name.
-fn place_locator(doc: &mut Doc, id: &str, sol: &Solution, ids: &[usize]) -> Option<String> {
+pub(crate) fn place_locator(doc: &mut Doc, id: &str, sol: &Solution, ids: &[usize]) -> Option<String> {
     let c = sol.centroid(ids)?;
     let loc = doc.add_node("locator", spot_below(doc, id));
     doc.set_param(&loc, "translate", json!([c.x, c.y, c.z]));

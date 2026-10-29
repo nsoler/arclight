@@ -11,6 +11,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.4 — 2026-10-29
+
+- 3D viewport selection, Blender-style: left-click picks a card, camera,
+  locator or tracker point (Shift-click adds or removes), left-drag on
+  empty space box-selects (object centers and points; Shift adds), A
+  selects everything, Alt+A or Esc deselects (Esc first cancels a box).
+  Objects select their nodes, so the node graph and Properties follow
+  (and the viewport highlights what the graph selects); F / . frame the
+  selection. Right-click a Camera Tracker's selected points to Place
+  Card here or Place locator, as in the 2D viewer.
+
 ## 0.9.3 — 2026-10-29
 
 - 3D viewport (in progress): the viewer's 3D mode will show the viewed
