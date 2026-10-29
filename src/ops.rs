@@ -246,7 +246,7 @@ const SHUTTER: ParamKind = ParamKind::Float { min: 0.0, max: 2.0 };
 const SHUTTER_OFFSETS: &[&str] = &["centered", "start", "end"];
 /// Ops with motion blur params: shapes average their coverage, the warps
 /// their output images (see [`eval`]).
-const MOTION_BLUR_OPS: [&str; 6] = ["rectangle", "ellipse", "polygon", "roto", "transform", "corner_pin"];
+const MOTION_BLUR_OPS: [&str; 7] = ["rectangle", "ellipse", "polygon", "roto", "transform", "corner_pin", "tracker"];
 const FILL_RULES: &[&str] = &["non-zero", "even-odd"];
 /// Help text for shape ops: their own sentence plus what they share.
 macro_rules! shape_help {
@@ -688,6 +688,9 @@ pub static OPS: &[OpInfo] = &[
             fixed!("output", "Output", ParamKind::Choice(&["input", "match-move", "stabilize"]), "input"),
             fixed!("solve", "Solve", ParamKind::Choice(SOLVES), "translate, rotate, scale"),
             fixed!("reference_frame", "Reference frame", FRAME, 1),
+            fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
+            fixed!("shutter", "Shutter", SHUTTER, 0.5),
+            fixed!("shutter_offset", "Shutter offset", ParamKind::Choice(SHUTTER_OFFSETS), "centered"),
         ],
         overlay: Overlay::Tracker { pattern: "pattern", search: "search" },
         mask_base: None,
@@ -700,7 +703,8 @@ pub static OPS: &[OpInfo] = &[
                input unchanged, or the solved motion relative to the reference frame applied \
                to it (match-move) or removed from it (stabilize). One track solves translation, \
                and also rotation and scale when Track motion followed them; two or more \
-               solve them from the tracks' positions.",
+               solve them from the tracks' positions. Motion blur (samples per frame, 0 for \
+               off) averages the match-move or stabilize over the shutter.",
     },
     OpInfo {
         name: "corner_pin",
@@ -816,7 +820,7 @@ pub fn resolve_params(op: &str, params: &Value, frame: i64) -> Value {
         add_reference_tracks(params, &mut resolved);
     }
     if MOTION_BLUR_OPS.contains(&op) {
-        add_motion_samples(op, map, frame, &mut resolved);
+        add_motion_samples(op, params, frame, &mut resolved);
     }
     resolved
 }
@@ -841,10 +845,13 @@ fn resolve_at(op: &str, map: &Map<String, Value>, t: f64) -> Value {
 
 /// For an animated shape or warp with motion blur on, its params at each
 /// sample time across the shutter, as `_motion` (also in the cache key).
-fn add_motion_samples(op: &str, map: &Map<String, Value>, frame: i64, out: &mut Value) {
+fn add_motion_samples(op: &str, params: &Value, frame: i64, out: &mut Value) {
+    let Value::Object(map) = params else { return };
     let n = out.get("motion_blur").and_then(Value::as_i64).unwrap_or(0);
     let shutter = out.get("shutter").and_then(Value::as_f64).unwrap_or(0.5);
-    if n < 2 || shutter <= 0.0 {
+    // A Tracker passing its input through has nothing to blur.
+    let still = op == "tracker" && out.get("output").and_then(Value::as_str).is_none_or(|o| o == "input");
+    if n < 2 || shutter <= 0.0 || still {
         return;
     }
     let start = match out.get("shutter_offset").and_then(Value::as_str) {
@@ -852,8 +859,15 @@ fn add_motion_samples(op: &str, map: &Map<String, Value>, frame: i64, out: &mut 
         Some("end") => -shutter,
         _ => -shutter / 2.0,
     };
-    let samples: Vec<Value> =
-        (0..n).map(|i| resolve_at(op, map, frame as f64 + start + shutter * i as f64 / (n - 1) as f64)).collect();
+    let samples: Vec<Value> = (0..n)
+        .map(|i| {
+            let mut p = resolve_at(op, map, frame as f64 + start + shutter * i as f64 / (n - 1) as f64);
+            if op == "tracker" {
+                add_reference_tracks(params, &mut p);
+            }
+            p
+        })
+        .collect();
     out["_motion"] = Value::Array(samples);
 }
 
@@ -971,7 +985,7 @@ fn generate(format: Size, window: IRect, f: impl Fn(i32, i32) -> Rgba + Sync + S
 pub fn eval(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContext) -> Result<Image> {
     let out = match params.get("_motion").and_then(Value::as_array) {
         // A warp with motion blur: its output at each sample, averaged.
-        Some(samples) if matches!(op, "transform" | "corner_pin") => {
+        Some(samples) if matches!(op, "transform" | "corner_pin" | "tracker") => {
             let outs = samples.iter().map(|p| eval_op(op, p, inputs, ctx)).collect::<Result<Vec<_>>>()?;
             average(&outs)
         }
@@ -2289,6 +2303,32 @@ mod tests {
         assert_eq!((steady.at(2, 3)[3]), 1.0, "moved back by the track's motion");
         params["output"] = json!("input");
         assert_eq!(at(5, &params).at(5, 5)[3], 1.0);
+    }
+
+    #[test]
+    fn tracker_motion_blur_matches_a_blurred_exported_transform() {
+        // A 4×4 square, and one track moving 10 px a frame to the right.
+        let src = patch(80, 20, 8, 8, 4, 4, [1.0; 4]);
+        let ctx = EvalContext { frame: 3, write_outputs: false };
+        let mut params = json!({
+            "track1": { "keys": [[1, [10.0, 10.0]], [5, [50.0, 10.0]]], "interp": "linear" },
+            "output": "match-move", "reference_frame": 1, "motion_blur": 16, "shutter": 1.0,
+        });
+        let run = |op: &str, p: &Value| eval(op, &resolve_params(op, p, 3), &[Some(&src), None], &ctx).unwrap();
+        let blurred = run("tracker", &params);
+        let total = |img: &Image| img.flat().pixels.iter().map(|p| p[3]).sum::<f32>();
+        // Moved 20 px by frame 3, smeared 10 px wide: its middle half covered.
+        assert!((blurred.at(30, 10)[3] - 0.4).abs() < 0.06, "{}", blurred.at(30, 10)[3]);
+        assert!((total(&blurred) - 16.0).abs() < 0.5, "{}", total(&blurred));
+        let mut xf = Value::Object(track::transform_params(&params, [80, 20], false).unwrap());
+        xf["motion_blur"] = json!(16);
+        xf["shutter"] = json!(1.0);
+        let exported = run("transform", &xf);
+        let diff = blurred.flat().pixels.iter().zip(&exported.flat().pixels).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0, f32::max);
+        assert!(diff < 2e-3, "off by {diff}");
+        // Passing its input through, there's nothing to sample.
+        params["output"] = json!("input");
+        assert!(resolve_params("tracker", &params, 3).get("_motion").is_none());
     }
 
     #[test]
