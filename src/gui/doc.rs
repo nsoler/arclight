@@ -514,7 +514,7 @@ impl Doc {
     }
 
     /// Is `ancestor` upstream of (or equal to) `node`?
-    fn is_upstream(&self, ancestor: &str, node: &str) -> bool {
+    pub fn is_upstream(&self, ancestor: &str, node: &str) -> bool {
         let mut stack = vec![node.to_string()];
         let mut seen = HashSet::new();
         while let Some(id) = stack.pop() {

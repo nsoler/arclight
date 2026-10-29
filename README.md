@@ -27,7 +27,7 @@ Python wheels). All releases: [Releases](https://github.com/nsoler/arclight/rele
 
 ## Build
 
-Version **0.9.45** (alpha); see `CHANGELOG.md`.
+Version **0.9.46** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -306,6 +306,8 @@ applies everywhere and `mask_invert` does nothing.
 | `camera_tracker` | 1 | features, solve settings, solve mode (auto / free move / tripod), tripod distance, focal (known or solved) | 3D: solves a moving or a tripod (only turning) camera from the plate (**Track & Solve**, with progress and Stop; the result saves with the node), then **Export** adds a keyed Camera, a Point Cloud, a Scene and a Scanline Render over the plate; with it selected, select solved points in the viewer (click, ⇧-click, drag a box) to **Place Card here** (on the plane through 3+ points, else facing the camera), **Place locator**, or **Set origin**, **Ground plane** and **Set scale** (two points a given distance apart) |
 | `point_cloud` | 0 | points (x, y, z) | 3D: points drawn as dots |
 | `locator` | 0 | `translate` [3] | 3D: a point to wire into a Scene or link params to |
+
+In the 3D view, emitters (shape and direction), attractors, vortices and bounce planes are drawn, picked and moved with G / R / S and the gizmos (forces move only); in 2D, an emitter feeding a viewed Particles 2D shows box or point handles in the viewer.
 
 3D nodes (Camera, Card, Scene) build a 3D scene: their blue wires carry
 scenes, not images, and only connect to scene inputs (the node editor,

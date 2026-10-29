@@ -204,7 +204,11 @@ done, M12 lights and M13 particles specified), `docs/help.md` (the in-app help) 
   MCP `particles`, Python `Node.particles`; README / help "Particles".
   Note: the GUI bridge builds a fresh Session per call, so particles via
   an attached GUI re-simulate each call (correct, slower).
-  - Next version: **0.9.46**. Both workers (mathwiz, worker3d) were
+  0.9.46 (MathWiz) M13 (e): `ParticleStream.parts`, viewport3d `Gadget`s
+  (emitter shapes, attractor, vortex, bounce) picked / moved;
+  `gizmo3d::param_for(op, mode)` (forces move only); overlay emitter
+  handles when a Particles 2D is viewed. **M13 done.**
+  - Next version: **0.9.47**. Both workers (mathwiz, worker3d) were
     idle at the end of session 10; nothing uncommitted. (CHANGELOG has one entry per version.)
 - Mac: also ask whether anyone tried an Intel Mac. Mac-only bugs come
   first.
@@ -416,7 +420,7 @@ done, M12 lights and M13 particles specified), `docs/help.md` (the in-app help) 
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.45**.
+  in the same commit as the change. Current: **0.9.46**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

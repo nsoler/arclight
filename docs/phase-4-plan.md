@@ -320,7 +320,7 @@ then poses of in-between frames by PnP and a final pass).
     lights (Ambient, Directional, Point, Spot) with Area lights, lights as
     objects the 3D view can select and move with G / R / S and gizmos, and
     a 2D Light node for lighting flat images.
-13. **Particles**, specified below (added 2026-10-29, user request):
+13. **Particles** — done in 0.9.36–0.9.46; specified below (added 2026-10-29, user request):
     emitters, particle simulation, and particles drawn as sprites, cards,
     primitives or meshes from a file, in 3D scenes and in 2D. After M12,
     so particles can be lit.

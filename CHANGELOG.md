@@ -11,6 +11,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.46 — 2026-10-29
+
+- In the 3D view, particle emitters (their shape and direction),
+  attractors, vortices and bounce planes are drawn, picked and moved
+  with G / R / S and the gizmos (forces move only); in the 2D viewer, an
+  emitter feeding a viewed Particles 2D shows its box or point handles.
+  Completes **M13, particles** (0.9.36–0.9.46).
+
 ## 0.9.45 — 2026-10-29
 
 - MCP / Python: new **particles** tool (`Node.particles(frame, offset,

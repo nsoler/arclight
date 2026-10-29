@@ -316,6 +316,9 @@ fn rot(v: Vec2, deg: f32) -> Vec2 {
 fn geo(doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
     let op = &doc.node(id)?.op;
     let at = |name| doc.param_at(id, name, frame);
+    if op == "particle_emitter" {
+        return emitter_geo(doc, id, frame);
+    }
     Some(match ops::info(op)?.overlay {
         // Drawn by its own pass (see `camera_points`).
         Overlay::None | Overlay::CameraTracker => return None,
@@ -378,6 +381,50 @@ fn geo(doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
             }
         },
     })
+}
+
+/// A Particle Emitter's handles, when it feeds a Particles 2D that's being
+/// viewed (its particles are then frame pixels): a rectangle's, disk's or
+/// line's box (Translate's x, y, Dimensions and Rotate's z), else a point
+/// to move it by.
+fn emitter_geo(doc: &Doc, id: &str, frame: i64) -> Option<Geo> {
+    let viewed = doc.viewed()?;
+    let flat = doc.graph.nodes.iter().any(|n| n.op == "particles_2d" && doc.is_upstream(id, &n.id) && doc.is_upstream(&n.id, &viewed));
+    if !flat {
+        return None;
+    }
+    let at = |name| doc.param_at(id, name, frame);
+    let center = vec2(&at("translate"));
+    let d = vec2(&at("dimensions"));
+    let turn = at("rotate").get(2).map_or(0.0, num);
+    let names = ["translate", "dimensions", "rotate"];
+    Some(match at("shape").as_str() {
+        Some("rectangle") => Geo::Box { names, center, size: d, rotate: turn, ellipse: false },
+        Some("disk") => Geo::Box { names, center, size: Vec2::splat(d.x), rotate: turn, ellipse: true },
+        Some("line") => Geo::Box { names, center, size: Vec2::new(d.x, 1.0), rotate: turn, ellipse: false },
+        _ => Geo::Point { param: "translate", value: center },
+    })
+}
+
+/// Write `v` to `node`'s param `name` at `frame` (see [`Doc::edit_param`]):
+/// into the first components of a longer list (x and y of an emitter's 3D
+/// Translate), or a number into a list's last (an emitter's turn about z).
+fn put(doc: &mut Doc, node: &str, name: &str, frame: i64, v: Value) {
+    let old = doc.param_at(node, name, frame);
+    let v = match (old.as_array(), &v) {
+        (Some(o), Value::Array(n)) if o.len() > n.len() => {
+            let mut o = o.clone();
+            o[..n.len()].clone_from_slice(n);
+            Value::Array(o)
+        }
+        (Some(o), Value::Number(_)) if !o.is_empty() => {
+            let mut o = o.clone();
+            *o.last_mut().unwrap() = v.clone();
+            Value::Array(o)
+        }
+        _ => v,
+    };
+    doc.edit_param(node, name, frame, v);
 }
 
 fn points_stride(op: &str, param: &str) -> usize {
@@ -1275,7 +1322,7 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
         Geo::Pick { .. } => {}
         Geo::Point { param, value } => {
             let v = value + delta;
-            doc.edit_param(&id, param, frame, json!([v.x, v.y]));
+            put(doc, &id, param, frame, json!([v.x, v.y]));
         }
         Geo::CornerPin { names, to, from } => {
             let Part::Corner { i, from: is_from } = drag.part else { return };
@@ -1378,7 +1425,7 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
         Geo::Box { names, center, size, rotate, .. } => match drag.part {
             Part::Move => {
                 let c = center + if shift { constrain(delta) } else { delta };
-                doc.edit_param(&id, names[0], frame, json!([c.x, c.y]));
+                put(doc, &id, names[0], frame, json!([c.x, c.y]));
             }
             Part::Size { x, y } => {
                 // Symmetric about the center: the handle follows the pointer.
@@ -1389,14 +1436,14 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
                     let k = (s.x / size.x.abs().max(1e-3)).max(s.y / size.y.abs().max(1e-3));
                     s = size.abs() * k;
                 }
-                doc.edit_param(&id, names[1], frame, json!([s.x.max(1.0), s.y.max(1.0)]));
+                put(doc, &id, names[1], frame, json!([s.x.max(1.0), s.y.max(1.0)]));
             }
             Part::Rotate => {
                 let mut deg = rotate + turn(drag, p);
                 if shift {
                     deg = (deg / 15.0).round() * 15.0;
                 }
-                doc.edit_param(&id, names[2], frame, json!(deg));
+                put(doc, &id, names[2], frame, json!(deg));
             }
             _ => {}
         },
@@ -1589,6 +1636,36 @@ mod tests {
     }
 
     const SQUARE: [f32; 8] = [50.0, 25.0, 150.0, 25.0, 150.0, 75.0, 50.0, 75.0];
+
+    #[test]
+    fn an_emitter_has_handles_when_its_particles_2d_is_viewed() {
+        let node = |id: &str, op: &str, inputs: &[&str], params: Value| arclight::graph::NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None };
+        let g = Graph {
+            nodes: vec![
+                node("n", "particle_emitter", &["", ""], json!({ "shape": "rectangle", "translate": [100, 50, 7], "dimensions": [40, 20, 3], "rotate": [0, 0, 0] })),
+                node("flat", "particles_2d", &["n", ""], json!({})),
+            ],
+            ..Default::default()
+        };
+        let mut d = Doc::new(g, None);
+        d.selected = Some("n".into());
+        // Not viewed in 2D: no handles.
+        assert!(gesture(&mut Overlays::default(), &mut d, Pos2::new(120.0, 60.0), Pos2::new(130.0, 70.0), 1, Mods::default()).is_none());
+        d.view_node("flat");
+        // A rectangle's box: sizing keeps Dimensions' z, moving Translate's,
+        // turning writes Rotate's z.
+        assert_eq!(drag(&mut d, Pos2::new(120.0, 60.0), Pos2::new(130.0, 70.0), 1), Part::Size { x: true, y: true });
+        assert_eq!(d.param("n", "dimensions"), json!([60.0, 40.0, 3]));
+        assert_eq!(drag(&mut d, Pos2::new(100.0, 50.0), Pos2::new(90.0, 45.0), 1), Part::Move);
+        assert_eq!(d.param("n", "translate"), json!([90.0, 45.0, 7]));
+        assert_eq!(drag(&mut d, Pos2::new(90.0, 45.0 - 20.0 - STEM), Pos2::new(140.0, 45.0), 1), Part::Rotate);
+        let r = d.param("n", "rotate");
+        assert!(r[0] == 0 && r[1] == 0 && (num(&r[2]) - 90.0).abs() < 1e-3, "{r}");
+        // A point emitter moves by its point.
+        d.set_param("n", "shape", json!("point"));
+        assert_eq!(drag(&mut d, Pos2::new(90.0, 45.0), Pos2::new(95.0, 40.0), 1), Part::Point);
+        assert_eq!(d.param("n", "translate"), json!([95.0, 40.0, 7]));
+    }
 
     #[test]
     fn transform_gizmo_moves_rotates_and_scales() {

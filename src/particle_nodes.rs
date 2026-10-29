@@ -305,6 +305,23 @@ pub struct ParticleStream {
     cache: Arc<Mutex<Cache>>,
     pub look: Look,
     pub frame: i64,
+    /// The nodes its system is made of, and which of its emitters and
+    /// modifiers each made (for showing and moving them in 3D).
+    pub parts: Vec<Part>,
+}
+
+/// A node in a particle system: an emitter or a modifier (its index in
+/// the system's list).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Part {
+    pub node: String,
+    pub what: PartOf,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartOf {
+    Emitter(usize),
+    Modifier(usize),
 }
 
 impl std::fmt::Debug for ParticleStream {
@@ -390,7 +407,7 @@ pub fn eval(op: &str, cx: Context, state: &mut ParticleState) -> Result<Output> 
         let (op, own) = (op.to_string(), cx.own.clone());
         move |g: i64| with_defaults(&op, &own(g))
     };
-    let stream = |system: Sampler, look: Look, state: &mut ParticleState| ParticleStream { node: cx.node.to_string(), system, cache: state.cache(cx.node), look, frame: cx.frame };
+    let stream = |system: Sampler, look: Look, parts: Vec<Part>, state: &mut ParticleState| ParticleStream { node: cx.node.to_string(), system, cache: state.cache(cx.node), look, frame: cx.frame, parts };
     let input = |i: usize| cx.inputs.get(i).copied().flatten();
     match op {
         "particle_emitter" => {
@@ -406,12 +423,13 @@ pub fn eval(op: &str, cx: Context, state: &mut ParticleState) -> Result<Output> 
                     preroll: int(&p, "preroll").max(0),
                 }
             });
-            Ok(Output::Stream(stream(system, Look::Points, state)))
+            let parts = vec![Part { node: cx.node.to_string(), what: PartOf::Emitter(0) }];
+            Ok(Output::Stream(stream(system, Look::Points, parts, state)))
         }
         "particle_render" => {
             let up = cx.upstream.ok_or_else(|| anyhow::anyhow!("connect particles to its particles input"))?;
             let look = look(&at_frame, input(1), input(2).and_then(|i| i.scene.as_deref()))?;
-            Ok(Output::Stream(ParticleStream { look, ..stream(up.system.clone(), Look::Points, state) }))
+            Ok(Output::Stream(ParticleStream { look, ..stream(up.system.clone(), Look::Points, up.parts.clone(), state) }))
         }
         "particles_2d" => {
             let up = cx.upstream.ok_or_else(|| anyhow::anyhow!("connect particles to its particles input"))?;
@@ -426,7 +444,10 @@ pub fn eval(op: &str, cx: Context, state: &mut ParticleState) -> Result<Output> 
                 s.modifiers.push(modifier(&op, &own(g)));
                 s
             });
-            Ok(Output::Stream(stream(system, up.look.clone(), state)))
+            let mut parts = up.parts.clone();
+            let index = parts.iter().filter(|p| matches!(p.what, PartOf::Modifier(_))).count();
+            parts.push(Part { node: cx.node.to_string(), what: PartOf::Modifier(index) });
+            Ok(Output::Stream(stream(system, up.look.clone(), parts, state)))
         }
         _ => bail!("'{op}' isn't a particle node"),
     }
@@ -662,6 +683,7 @@ mod tests {
         let end = run("particle_gravity", cx("fall", 10, gravity, &[], &[], Some(&src)), &mut state);
         let ps = end.particles();
         assert_eq!(ps.len(), 12, "frames 5 to 10 at 2 a frame");
+        assert_eq!(end.parts, [Part { node: "emit".into(), what: PartOf::Emitter(0) }, Part { node: "fall".into(), what: PartOf::Modifier(0) }]);
         for p in &ps {
             let t = p.age / 24.0;
             assert!((p.position.y + 5.0 * t * t).abs() < 1e-9, "falling from rest: {p:?}");

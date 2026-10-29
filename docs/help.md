@@ -325,6 +325,13 @@ objects) → a Scanline Render input, or Particles 2D for no camera.
 Particles are simulated only where they're drawn and cached per frame;
 editing a param re-simulates from the first frame it changes.
 
+In the **3D view**, Particle Emitters show their shape and direction,
+Attractors a star (and their reach), Vortices a ring round their axis,
+and Bounce planes a square and normal: click to select, then **G / R /
+S** or the gizmos to place them (Attractor, Vortex and Bounce only
+move). In **2D**, while viewing a Particles 2D, select its Emitter to
+drag its position, size and angle in the viewer.
+
 - **Scanline Render** takes any number of scenes or particle streams:
   connect to its last (empty) input and a new one appears. With a Scanline
   Render selected, a Particle Emitter added from the node browser goes

@@ -29,6 +29,8 @@
 use crate::doc::Doc;
 use crate::worker::{SceneRequest, SceneWorker};
 use arclight::geom::{self, Mat4, Vec3};
+use arclight::particle_nodes::PartOf;
+use arclight::particles::{Effect, Shape};
 use arclight::image::{Image, Size};
 use arclight::scene::Scene;
 use arclight::shade::{Light, LightKind};
@@ -285,6 +287,9 @@ fn bounds(scene: &Scene, only: Option<&dyn Fn(&str) -> bool>) -> Option<(Vec3, f
     for s in scene.particles.iter().filter(|s| keep(&s.node)) {
         pts.extend(s.particles().iter().map(|p| p.position));
     }
+    for g in gadgets(scene).iter().filter(|g| keep(&g.node)) {
+        pts.push(geom::transform_point(&g.world, &Vec3::zeros()));
+    }
     if pts.is_empty() {
         return None;
     }
@@ -376,6 +381,149 @@ fn light_lines(l: &Light, size: f64) -> Vec<(Vec3, Vec3)> {
     }
 }
 
+/// A particle system's emitter or modifier shown in the scene, picked and
+/// moved like other objects through its node.
+#[derive(Clone, Debug)]
+pub struct Gadget {
+    pub node: String,
+    /// Its place: an emitter's transform, a modifier's point.
+    pub world: Mat4,
+    pub kind: GadgetKind,
+}
+
+#[derive(Clone, Debug)]
+pub enum GadgetKind {
+    /// Its shape, and which way particles leave (in the scene).
+    Emitter(Shape, Vec3),
+    Attractor { radius: f64 },
+    Vortex { axis: Vec3, radius: f64 },
+    Bounce { normal: Vec3 },
+}
+
+/// The emitters, attractors, vortices and bounce planes of `scene`'s
+/// particle streams, as their systems are at the streams' frames (each
+/// node once).
+pub fn gadgets(scene: &Scene) -> Vec<Gadget> {
+    let mut out: Vec<Gadget> = Vec::new();
+    for stream in &scene.particles {
+        let system = (stream.system)(stream.frame);
+        for part in &stream.parts {
+            if out.iter().any(|g| g.node == part.node) {
+                continue;
+            }
+            let (world, kind) = match part.what {
+                PartOf::Emitter(i) => {
+                    let Some(e) = system.emitters.get(i) else { continue };
+                    let dir = (e.transform.fixed_view::<3, 3>(0, 0) * e.direction).try_normalize(1e-12).unwrap_or_default();
+                    (e.transform, GadgetKind::Emitter(e.shape.clone(), dir))
+                }
+                PartOf::Modifier(i) => match system.modifiers.get(i).map(|m| &m.effect) {
+                    Some(Effect::Attractor { point, radius, .. }) => (Mat4::new_translation(point), GadgetKind::Attractor { radius: *radius }),
+                    Some(Effect::Vortex { center, axis, radius, .. }) => (Mat4::new_translation(center), GadgetKind::Vortex { axis: axis.try_normalize(1e-12).unwrap_or_else(Vec3::y), radius: *radius }),
+                    Some(Effect::Bounce { point, normal, .. }) => (Mat4::new_translation(point), GadgetKind::Bounce { normal: normal.try_normalize(1e-12).unwrap_or_else(Vec3::y) }),
+                    _ => continue,
+                },
+            };
+            out.push(Gadget { node: part.node.clone(), world, kind });
+        }
+    }
+    out
+}
+
+/// Two unit directions across unit `n`.
+fn across(n: Vec3) -> (Vec3, Vec3) {
+    let u = n.cross(&if n.x.abs() < 0.9 { Vec3::x() } else { Vec3::y() }).normalize();
+    (u, n.cross(&u))
+}
+
+/// A ring of radius `r` about `center` in the plane of `u` and `v`.
+fn ring_lines(center: Vec3, u: Vec3, v: Vec3, r: f64) -> Vec<(Vec3, Vec3)> {
+    let pt = |i: usize| {
+        let a = std::f64::consts::TAU * i as f64 / 32.0;
+        center + (u * a.cos() + v * a.sin()) * r
+    };
+    (0..32).map(|i| (pt(i), pt(i + 1))).collect()
+}
+
+/// An arrow from `from` to `to`.
+fn arrow_lines(from: Vec3, to: Vec3) -> Vec<(Vec3, Vec3)> {
+    let Some(d) = (to - from).try_normalize(1e-12) else { return Vec::new() };
+    let (u, _) = across(d);
+    let back = (from - to) * 0.25;
+    let side = u * back.norm() * 0.5;
+    vec![(from, to), (to, to + back + side), (to, to + back - side)]
+}
+
+/// A gadget's icon as line segments in the scene (`size` across for the
+/// parts without a size of their own):
+/// - an emitter: its shape (a point's small cross, a line, a rectangle, a
+///   disk, a sphere's three rings, a box; a cross for geometry and masks)
+///   and an arrow the way particles leave;
+/// - an attractor: a six-rayed star, and a ring at its reach;
+/// - a vortex: a ring around its axis and an arrow along it;
+/// - a bounce plane: a square in the plane and an arrow out of it.
+pub fn gadget_lines(g: &Gadget, size: f64) -> Vec<(Vec3, Vec3)> {
+    let at = geom::transform_point(&g.world, &Vec3::zeros());
+    let local = |x: f64, y: f64, z: f64| geom::transform_point(&g.world, &Vec3::new(x, y, z));
+    let cross = |r: f64| -> Vec<(Vec3, Vec3)> { [Vec3::x(), Vec3::y(), Vec3::z()].iter().map(|a| (at - a * r, at + a * r)).collect() };
+    match &g.kind {
+        GadgetKind::Emitter(shape, dir) => {
+            let mut out = match shape {
+                Shape::Line { length } => vec![(local(-length / 2.0, 0.0, 0.0), local(length / 2.0, 0.0, 0.0))],
+                Shape::Rect { width, height } => {
+                    let c = [local(-width / 2.0, height / 2.0, 0.0), local(width / 2.0, height / 2.0, 0.0), local(width / 2.0, -height / 2.0, 0.0), local(-width / 2.0, -height / 2.0, 0.0)];
+                    (0..4).map(|i| (c[i], c[(i + 1) % 4])).collect()
+                }
+                Shape::Disk { radius } => ring_local(&g.world, [0, 1], *radius),
+                Shape::Sphere { radius, .. } => [[0, 1], [1, 2], [0, 2]].into_iter().flat_map(|a| ring_local(&g.world, a, *radius)).collect(),
+                Shape::Box { size: b, .. } => {
+                    let corner = |i: usize| local(if i & 1 == 0 { -b.x } else { b.x } / 2.0, if i & 2 == 0 { -b.y } else { b.y } / 2.0, if i & 4 == 0 { -b.z } else { b.z } / 2.0);
+                    (0..8).flat_map(|i| [1, 2, 4].into_iter().filter(move |bit| i & bit == 0).map(move |bit| (i, i | bit))).map(|(i, j)| (corner(i), corner(j))).collect()
+                }
+                _ => cross(size * 0.3),
+            };
+            if *dir != Vec3::zeros() {
+                out.extend(arrow_lines(at, at + dir * size));
+            }
+            out
+        }
+        GadgetKind::Attractor { radius } => {
+            let r = size * 0.4;
+            let d = std::f64::consts::FRAC_1_SQRT_2;
+            let mut out: Vec<(Vec3, Vec3)> = [Vec3::x(), Vec3::y(), Vec3::z(), Vec3::new(d, d, 0.0), Vec3::new(d, -d, 0.0), Vec3::new(0.0, d, d)].iter().map(|a| (at - a * r, at + a * r)).collect();
+            if *radius > 0.0 {
+                out.extend(ring_lines(at, Vec3::x(), Vec3::z(), *radius));
+            }
+            out
+        }
+        GadgetKind::Vortex { axis, radius } => {
+            let (u, v) = across(*axis);
+            let mut out = ring_lines(at, u, v, if *radius > 0.0 { *radius } else { size * 0.6 });
+            out.extend(arrow_lines(at - axis * size * 0.5, at + axis * size));
+            out
+        }
+        GadgetKind::Bounce { normal } => {
+            let (u, v) = across(*normal);
+            let c = [at + (u + v) * size, at + (u - v) * size, at - (u + v) * size, at - (u - v) * size];
+            let mut out: Vec<(Vec3, Vec3)> = (0..4).map(|i| (c[i], c[(i + 1) % 4])).collect();
+            out.extend(arrow_lines(at, at + normal * size));
+            out
+        }
+    }
+}
+
+/// A ring of radius `r` in the plane of local axes `axes` of `world`.
+fn ring_local(world: &Mat4, axes: [usize; 2], r: f64) -> Vec<(Vec3, Vec3)> {
+    let pt = |i: usize| {
+        let a = std::f64::consts::TAU * i as f64 / 32.0;
+        let mut p = Vec3::zeros();
+        p[axes[0]] = a.cos() * r;
+        p[axes[1]] = a.sin() * r;
+        geom::transform_point(world, &p)
+    };
+    (0..32).map(|i| (pt(i), pt(i + 1))).collect()
+}
+
 /// What a click picked.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Hit {
@@ -411,6 +559,9 @@ pub fn pick(scene: &Scene, p: &Projector, s: Pos2, is_locator: &dyn Fn(&str) -> 
     }
     for l in scene.lights.iter().filter(|l| !l.node.is_empty()) {
         consider(l.position(), Hit::Object(l.node.clone()));
+    }
+    for g in gadgets(scene) {
+        consider(geom::transform_point(&g.world, &Vec3::zeros()), Hit::Object(g.node));
     }
     if let Some((_, _, hit)) = best {
         return Some(hit);
@@ -526,6 +677,9 @@ pub fn box_pick(scene: &Scene, p: &Projector, a: Pos2, b: Pos2, is_locator: &dyn
     }
     for l in scene.lights.iter().filter(|l| inside(l.position())) {
         add(&l.node);
+    }
+    for g in gadgets(scene).iter().filter(|g| inside(geom::transform_point(&g.world, &Vec3::zeros()))) {
+        add(&g.node);
     }
     let mut points = Vec::new();
     for (i, pt) in scene.points.iter().enumerate() {
@@ -776,6 +930,8 @@ const POINT: Color32 = Color32::from_rgb(90, 175, 225);
 const MAX_PARTICLE_DOTS: usize = 20_000;
 const SELECTED: Color32 = Color32::from_rgb(255, 160, 40);
 const LIGHT: Color32 = Color32::from_rgb(250, 225, 120);
+/// Particle emitters and forces.
+const GADGET: Color32 = Color32::from_rgb(150, 220, 130);
 
 // `projector`, `has_scene` and `object_world` are the seam for the
 // transform gizmos (gizmo3d.rs) and the viewer.
@@ -815,6 +971,9 @@ impl Viewport3d {
         }
         if let Some(l) = s.lights.iter().find(|l| l.node == node) {
             return Some(l.world);
+        }
+        if let Some(g) = gadgets(s).into_iter().find(|g| g.node == node) {
+            return Some(g.world);
         }
         let i = (0..s.points.len()).find(|&i| s.point_node(i) == node)?;
         Some(Mat4::new_translation(&s.points[i]))
@@ -1167,6 +1326,7 @@ impl Viewport3d {
             .chain(s.meshes.iter().map(|m| m.node.clone()))
             .chain((0..s.cameras.len()).map(|i| s.camera_node(i).to_string()))
             .chain(s.lights.iter().map(|l| l.node.clone()))
+            .chain(gadgets(&s).into_iter().map(|g| g.node))
             .collect();
         self.points.clear();
         for i in 0..s.points.len() {
@@ -1554,6 +1714,17 @@ impl Viewport3d {
                 let on = self.points.iter().any(|(n, k)| n == node && *k == i);
                 let color = scene.point_errors.get(i).copied().filter(|e| *e >= 0.0).map_or(POINT, error_color);
                 painter.circle_filled(s, if on { 3.0 } else { 1.8 }, if on { SELECTED } else { color });
+            }
+        }
+        // Particle emitters, attractors, vortices and bounce planes.
+        for g in gadgets(&scene) {
+            let on = selected(&g.node);
+            let stroke = Stroke::new(if on { 2.0 } else { 1.2 }, if on { SELECTED } else { GADGET });
+            for (a, b) in gadget_lines(&g, size) {
+                line(a, b, stroke);
+            }
+            if let Some((s, _)) = p.project(geom::transform_point(&g.world, &Vec3::zeros())) {
+                painter.circle_filled(s, 2.5, stroke.color);
             }
         }
         // Particles: a dot each in its color (every so many past a cap),
@@ -2236,5 +2407,62 @@ mod tests {
         assert!(good.g() > good.r() && poor.r() > poor.g());
         let mid = error_color(1.0);
         assert!(mid.r() > 200 && mid.g() > 150, "about yellow at a pixel: {mid:?}");
+    }
+
+    #[test]
+    fn particle_emitters_and_forces_are_drawn_picked_and_moved() {
+        use crate::gizmo3d::{tests::front, GestureKey, Input, Mode, Outcome, Transforming};
+        use arclight::graph::{Evaluator, Graph, NodeSpec};
+        let node = |id: &str, op: &str, input: &str, params: serde_json::Value| NodeSpec { id: id.into(), op: op.into(), inputs: vec![input.into()], params, pos: None };
+        let graph = Graph {
+            nodes: vec![
+                node("emit", "particle_emitter", "", json!({ "shape": "box", "dimensions": [1, 1, 1], "translate": [0, 0, -8] })),
+                node("pull", "particle_attractor", "emit", json!({ "position": [2, 1, -8], "radius": 1 })),
+                node("swirl", "particle_vortex", "pull", json!({ "center": [-2, 1, -8] })),
+                node("floor", "particle_bounce", "swirl", json!({ "point": [0, -2, -8] })),
+                node("fall", "particle_gravity", "floor", json!({})),
+            ],
+            ..Default::default()
+        };
+        let mut doc = Doc::new(graph, None);
+        let scene = |doc: &Doc| {
+            let img = Evaluator::new().evaluate(&doc.graph, "fall", &arclight::ops::EvalContext { frame: 1, write_outputs: false }).unwrap();
+            img.scene.as_deref().unwrap().clone()
+        };
+        let s = scene(&doc);
+        let gs = gadgets(&s);
+        let at = |g: &Gadget| geom::transform_point(&g.world, &Vec3::zeros());
+        assert_eq!(gs.iter().map(|g| g.node.as_str()).collect::<Vec<_>>(), ["emit", "pull", "swirl", "floor"], "gravity has nothing to show");
+        assert_eq!(gs.iter().map(at).collect::<Vec<_>>(), [Vec3::new(0.0, 0.0, -8.0), Vec3::new(2.0, 1.0, -8.0), Vec3::new(-2.0, 1.0, -8.0), Vec3::new(0.0, -2.0, -8.0)]);
+        assert_eq!(gadget_lines(&gs[0], 1.0).len(), 12 + 3, "a box's edges and the direction arrow");
+        assert_eq!(gadget_lines(&gs[3], 1.0).len(), 4 + 3, "a square and the normal");
+        // Picked by a click on (or near) each, framed with the rest.
+        let (_, p, _) = picking_scene();
+        let loc = |_: &str| false;
+        for g in &gs {
+            assert_eq!(pick(&s, &p, p.project(at(g)).unwrap().0 + Vec2::new(2.0, 1.0), &loc), Some(Hit::Object(g.node.clone())), "{}", g.node);
+        }
+        let (objects, _) = box_pick(&s, &p, Pos2::new(0.0, 0.0), Pos2::new(rect().center().x - 30.0, rect().max.y), &loc);
+        assert_eq!(objects, ["swirl"]);
+        assert!(bounds(&s, Some(&|n: &str| n == "floor")).is_some_and(|(c, _)| (c - at(&gs[3])).norm() < 1e-9));
+        let v = Viewport3d { scene: Some(Arc::new(s.clone())), ..Viewport3d::default() };
+        assert_eq!(v.object_world("pull"), Some(gs[1].world));
+        // G X 2 Enter moves the attractor's position; it doesn't turn.
+        doc.commit(false);
+        let view = front();
+        let mut g = Transforming::start(&doc, "pull", Mode::Move, &gs[1].world, Pos2::new(400.0, 300.0), 1).unwrap();
+        let keys = vec![GestureKey::Axis(0, false), GestureKey::Digit('2')];
+        g.step(&Input { mouse: Some(Pos2::new(410.0, 300.0)), keys, ..Input::default() }, &view, &mut doc);
+        assert_eq!(g.step(&Input { confirm: true, ..Input::default() }, &view, &mut doc), Outcome::Done);
+        assert_eq!(doc.param("pull", "position"), json!([4.0, 1.0, -8.0]));
+        assert!(Transforming::start(&doc, "pull", Mode::Rotate, &gs[1].world, Pos2::ZERO, 1).err().unwrap().contains("no rotate"));
+        // The emitter turns through its rotate, and the icon follows.
+        let mut r = Transforming::start(&doc, "emit", Mode::Rotate, &gs[0].world, Pos2::new(400.0, 300.0), 1).unwrap();
+        let keys = vec![GestureKey::Axis(1, false), GestureKey::Digit('9'), GestureKey::Digit('0')];
+        r.step(&Input { mouse: Some(Pos2::new(400.0, 300.0)), keys, ..Input::default() }, &view, &mut doc);
+        r.step(&Input { confirm: true, ..Input::default() }, &view, &mut doc);
+        let turned = gadgets(&scene(&doc));
+        assert!((turned[0].world.fixed_view::<3, 3>(0, 0) * Vec3::x() - Vec3::new(0.0, 0.0, -1.0)).norm() < 1e-9, "turned 90° about Y");
+        assert_eq!(at(&turned[1]), Vec3::new(4.0, 1.0, -8.0));
     }
 }

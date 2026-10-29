@@ -494,20 +494,37 @@ pub fn param_of(mode: Mode) -> &'static str {
     }
 }
 
+/// The param `mode` changes on a node of `op`: its translate, rotate or
+/// scale, or a particle force's point (an Attractor's position, a
+/// Vortex's center, a Bounce plane's point), which only moves.
+pub fn param_for(op: &str, mode: Mode) -> &'static str {
+    match (op, mode) {
+        ("particle_attractor", Mode::Move) => "position",
+        ("particle_vortex", Mode::Move) => "center",
+        ("particle_bounce", Mode::Move) => "point",
+        _ => param_of(mode),
+    }
+}
+
+/// The param `mode` changes on `node` (see [`param_for`]).
+pub fn param(doc: &Doc, node: &str, mode: Mode) -> &'static str {
+    param_for(doc.node(node).map_or("", |n| n.op.as_str()), mode)
+}
+
 /// A node's transform at `frame` (defaults for what it lacks).
 pub fn trs_at(doc: &Doc, node: &str, frame: i64) -> Trs {
-    let get = |name: &str, default: [f64; 3]| -> [f64; 3] {
-        let v = doc.param_at(node, name, frame);
+    let get = |mode: Mode, default: [f64; 3]| -> [f64; 3] {
+        let v = doc.param_at(node, param(doc, node, mode), frame);
         std::array::from_fn(|i| v.get(i).and_then(Value::as_f64).unwrap_or(default[i]))
     };
     let d = Trs::default();
-    Trs { translate: get("translate", d.translate), rotate: get("rotate", d.rotate), scale: get("scale", d.scale) }
+    Trs { translate: get(Mode::Move, d.translate), rotate: get(Mode::Rotate, d.rotate), scale: get(Mode::Scale, d.scale) }
 }
 
 /// Why `mode` can't change `node`'s transform, if it can't: it has no such
 /// param (a Locator only moves), or the param is linked.
 pub fn refusal(doc: &Doc, node: &str, mode: Mode) -> Option<String> {
-    let name = param_of(mode);
+    let name = param(doc, node, mode);
     let n = doc.node(node)?;
     let has = arclight::ops::info(&n.op).is_some_and(|i| i.params.iter().any(|p| p.name == name && matches!(p.kind, arclight::ops::ParamKind::Vec3)));
     if !has {
@@ -529,7 +546,7 @@ pub fn reset(doc: &mut Doc, node: &str, mode: Mode, frame: i64) -> Result<(), St
         Mode::Rotate => d.rotate,
         Mode::Scale => d.scale,
     };
-    doc.edit_param(node, param_of(mode), frame, json!(v));
+    doc.edit_param(node, param(doc, node, mode), frame, json!(v));
     Ok(())
 }
 
@@ -628,9 +645,9 @@ impl Member {
         let start = trs_at(doc, node, frame);
         let parent = start.matrix().try_inverse().map_or_else(Mat4::identity, |inv| world * inv);
         let carried = mode != Mode::Move && refusal(doc, node, Mode::Move).is_none();
-        let mut names = vec![param_of(mode)];
+        let mut names = vec![param(doc, node, mode)];
         if carried {
-            names.push("translate");
+            names.push(param(doc, node, Mode::Move));
         }
         let stored = names.into_iter().map(|n| (n, doc.node(node).and_then(|x| x.params.get(n).cloned()))).collect();
         Member { node: node.into(), start, parent, carried, stored, now: start }
@@ -685,7 +702,7 @@ impl Transforming {
             return Err(why);
         }
         let start = trs_at(doc, node, frame);
-        let stored = doc.node(node).and_then(|n| n.params.get(param_of(mode)).cloned());
+        let stored = doc.node(node).and_then(|n| n.params.get(param(doc, node, mode)).cloned());
         Ok(Transforming { node: node.into(), gesture: Gesture::new(mode, start, world, mouse), stored, frame, now: start, by_drag: false, group: Vec::new() })
     }
 
@@ -746,9 +763,10 @@ impl Transforming {
                     Mode::Rotate => t.rotate,
                     Mode::Scale => t.scale,
                 };
-                doc.edit_param(&member.node, param_of(mode), self.frame, json!(own));
+                let (own_name, at_name) = (param(doc, &member.node, mode), param(doc, &member.node, Mode::Move));
+                doc.edit_param(&member.node, own_name, self.frame, json!(own));
                 if member.carried && t.translate != member.now.translate {
-                    doc.edit_param(&member.node, "translate", self.frame, json!(t.translate));
+                    doc.edit_param(&member.node, at_name, self.frame, json!(t.translate));
                 }
                 member.now = t;
             }
@@ -765,13 +783,13 @@ impl Transforming {
             Mode::Rotate => t.rotate,
             Mode::Scale => t.scale,
         };
-        doc.edit_param(&self.node, param_of(self.gesture.mode), self.frame, json!(v));
+        doc.edit_param(&self.node, param(doc, &self.node, self.gesture.mode), self.frame, json!(v));
     }
 
     /// Put the params back as stored when it started.
     fn restore(&self, doc: &mut Doc) {
         if self.group.is_empty() {
-            put_back(doc, &self.node, param_of(self.gesture.mode), &self.stored);
+            put_back(doc, &self.node, param(doc, &self.node, self.gesture.mode), &self.stored);
         }
         for m in &self.group {
             for (name, stored) in &m.stored {
