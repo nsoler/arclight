@@ -239,20 +239,68 @@ pub fn primitive_model(op: &str, p: &Value, texture: Option<&Image>) -> Option<M
 }
 
 /// A light node's light (`op` one of light_ambient, light_directional,
-/// light_point, light_spot), from its resolved params: placed by its
-/// translate and rotate, shining down its −Z.
-pub fn light(op: &str, p: &Value) -> Option<Light> {
+/// light_point, light_spot, light_area), from its resolved params: placed
+/// by its translate and rotate, shining down its −Z, or if `target` (its
+/// Look at input) holds something, turned to aim at that (see [`aim`]).
+/// Exposure (stops) scales the intensity; Enabled off keeps the light in
+/// the scene, drawn but dark.
+pub fn light(op: &str, p: &Value, target: Option<&Scene>) -> Option<Light> {
     let num = |n: &str, d: f64| p[n].as_f64().filter(|v| v.is_finite()).unwrap_or(d);
     let kind = match op {
         "light_ambient" => LightKind::Ambient,
         "light_directional" => LightKind::Directional,
         "light_point" => LightKind::Point,
-        "light_spot" => LightKind::Spot { cone: num("cone", 40.0).clamp(0.0, 179.0), penumbra: num("penumbra", 5.0).max(0.0) },
+        "light_spot" => LightKind::Spot { cone: num("cone", 40.0).clamp(0.0, 179.0), penumbra: num("penumbra", 5.0).max(0.0), falloff: num("falloff", 0.0).max(0.0) },
+        "light_area" => LightKind::Area {
+            size: numbers::<2>(&p["size"], 1.0).map(|v| v.abs()),
+            disk: p["shape"].as_str() == Some("disk"),
+            two_sided: p["two_sided"].as_bool().unwrap_or(false),
+            samples: num("quality", 4.0).round().clamp(1.0, 16.0) as usize,
+        },
         _ => return None,
     };
     let c = numbers::<3>(&p["color"], 1.0).map(|v| v as f32);
-    let world = geom::trs(numbers(&p["translate"], 0.0), numbers(&p["rotate"], 0.0), [1.0; 3]);
-    Some(Light { kind, color: c, intensity: num("intensity", 1.0) as f32, decay: num("decay", 0.0).max(0.0), world, node: String::new() })
+    let at = numbers(&p["translate"], 0.0);
+    let mut world = geom::trs(at, numbers(&p["rotate"], 0.0), [1.0; 3]);
+    if let Some(to) = target.and_then(Scene::aim_point) {
+        world = aim(Vec3::from(at), to).unwrap_or(world);
+    }
+    Some(Light {
+        kind,
+        color: c,
+        intensity: (num("intensity", 1.0) * num("exposure", 0.0).exp2()) as f32,
+        decay: num("decay", 0.0).max(0.0),
+        radius: num("radius", 0.0).max(0.0),
+        enabled: p["enabled"].as_bool().unwrap_or(true),
+        world,
+        node: String::new(),
+    })
+}
+
+/// Placed at `from` with its −Z pointing at `to` and its Y as near up as
+/// that allows (None if they're the same point).
+pub fn aim(from: Vec3, to: Vec3) -> Option<Mat4> {
+    let dir = (to - from).try_normalize(1e-12)?;
+    let up = if dir.y.abs() > 0.999 { -Vec3::z() * dir.y.signum() } else { Vec3::y() };
+    // face_towards turns +Z toward its target, so −Z goes the other way.
+    let r = nalgebra::Rotation3::face_towards(&-dir, &up);
+    Some(Mat4::new_translation(&from) * r.to_homogeneous())
+}
+
+impl Scene {
+    /// Where something aiming at this scene aims: its first camera's
+    /// position, else the middle of its first card, mesh, point (a
+    /// locator) or light.
+    pub fn aim_point(&self) -> Option<Vec3> {
+        let origin = |m: &Mat4| geom::transform_point(m, &Vec3::zeros());
+        self.cameras
+            .first()
+            .map(|c| origin(&c.world))
+            .or_else(|| self.cards.first().map(|c| origin(&c.world)))
+            .or_else(|| self.meshes.first().map(|m| m.bounds().map_or_else(|| origin(&m.world), |(lo, hi)| (lo + hi) / 2.0)))
+            .or_else(|| self.points.first().copied())
+            .or_else(|| self.lights.first().map(Light::position))
+    }
 }
 
 #[cfg(test)]
@@ -304,11 +352,54 @@ mod tests {
         assert_eq!((fill.kind, fill.color, fill.intensity), (LightKind::Ambient, [0.2, 0.3, 0.4], 0.5));
         assert!(sun.kind == LightKind::Directional && (sun.direction() + Vec3::y()).norm() < 1e-12, "turned to shine down");
         assert_eq!((bulb.kind, bulb.position(), bulb.decay), (LightKind::Point, Vec3::new(1.0, 2.0, 3.0), 2.0));
-        assert_eq!(spot.kind, LightKind::Spot { cone: 30.0, penumbra: 4.0 });
+        assert_eq!(spot.kind, LightKind::Spot { cone: 30.0, penumbra: 4.0, falloff: 0.0 });
         // Defaults: white, intensity 1, no falloff.
-        let d = light("light_point", &json!({})).unwrap();
-        assert_eq!((d.color, d.intensity, d.decay), ([1.0; 3], 1.0, 0.0));
-        assert!(light("cube", &json!({})).is_none());
+        let d = light("light_point", &json!({}), None).unwrap();
+        assert_eq!((d.color, d.intensity, d.decay, d.radius, d.enabled), ([1.0; 3], 1.0, 0.0, 0.0, true));
+        assert!(light("cube", &json!({}), None).is_none());
+    }
+
+    /// The Area Light's shape params, and exposure, enabled and radius on
+    /// every light.
+    #[test]
+    fn area_lights_and_the_shared_light_params() {
+        let a = light("light_area", &json!({ "size": [2, 0.5], "shape": "disk", "two_sided": true, "quality": 6 }), None).unwrap();
+        assert_eq!(a.kind, LightKind::Area { size: [2.0, 0.5], disk: true, two_sided: true, samples: 6 });
+        let a = light("light_area", &json!({}), None).unwrap();
+        assert_eq!(a.kind, LightKind::rect([1.0, 1.0]), "a 1 × 1 one-sided rectangle, 4 × 4 samples");
+        let s = light("light_spot", &json!({ "intensity": 3, "exposure": 2, "enabled": false, "radius": 0.25, "falloff": 1.5 }), None).unwrap();
+        assert_eq!((s.intensity, s.enabled, s.radius), (12.0, false, 0.25), "two stops up: four times");
+        assert!(matches!(s.kind, LightKind::Spot { falloff: 1.5, .. }));
+        assert_eq!(light("light_point", &json!({ "exposure": -1 }), None).unwrap().intensity, 0.5);
+    }
+
+    /// A light with something in its Look at input turns to aim at it,
+    /// whatever its Rotate; without, Rotate turns it.
+    #[test]
+    fn lights_look_at_their_target() {
+        use crate::graph::{Evaluator, Graph};
+        use crate::ops::EvalContext;
+        let g: Graph = serde_json::from_value(json!({ "nodes": [
+            { "id": "loc", "op": "locator", "params": { "translate": [3, 0, 0] } },
+            { "id": "cam", "op": "camera", "params": { "translate": [0, 0, 10] } },
+            { "id": "spot", "op": "light_spot", "params": { "translate": [0, 4, 0], "rotate": [0, 45, 0] }, "inputs": ["loc"] },
+            { "id": "panel", "op": "light_area", "params": { "translate": [0, 0, 0] }, "inputs": ["cam"] },
+            { "id": "free", "op": "light_spot", "params": { "rotate": [-90, 0, 0] } },
+            { "id": "all", "op": "scene", "inputs": ["spot", "panel", "free", ""] },
+        ] })).unwrap();
+        let mut ev = Evaluator::new();
+        let out = ev.evaluate(&g, "all", &EvalContext { frame: 1, write_outputs: false }).unwrap();
+        let s = out.scene.as_ref().unwrap();
+        assert_eq!(s.describe(), "0 cameras, 0 cards, 3 lights", "the targets aren't in the lights' scenes");
+        let dir = |i: usize| s.lights[i].direction();
+        assert!((dir(0) - Vec3::new(3.0, -4.0, 0.0) / 5.0).norm() < 1e-9, "{}", dir(0));
+        assert!(s.lights[0].axis(1).y > 0.0, "kept upright");
+        assert!((dir(1) - Vec3::z()).norm() < 1e-9 && (s.lights[1].position()).norm() < 1e-12);
+        assert!((dir(2) + Vec3::y()).norm() < 1e-9);
+        // Straight down still works (up can't be Y there).
+        let m = aim(Vec3::new(0.0, 5.0, 0.0), Vec3::zeros()).unwrap();
+        assert!((Light::new(LightKind::Point, m).direction() + Vec3::y()).norm() < 1e-9);
+        assert!(aim(Vec3::zeros(), Vec3::zeros()).is_none());
     }
 
     /// Camera and Card nodes make scenes, a Scene node gathers them, and

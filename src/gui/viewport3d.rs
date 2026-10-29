@@ -297,17 +297,18 @@ fn frustum(cam: &geom::Camera, size: f64, aspect: f64) -> (Vec3, [Vec3; 4]) {
 
 /// A light's icon as line segments in the scene, `size` across (none for
 /// ambient light, drawn as a ring instead):
-/// - point: a star of eight rays round it;
+/// - point: a star of eight rays round it (and a ring its radius across
+///   if it has one);
 /// - spot: a cone `2 size` long down its −Z, a ring at the cone's edge, a
 ///   second inside where the penumbra starts, and four sides;
 /// - directional: three parallel arrows down its −Z;
-/// - area: its rectangle and an arrow out of its middle the way it shines.
+/// - area: its rectangle or disk and an arrow out of its middle the way it
+///   shines (both ways if two-sided).
 fn light_lines(l: &Light, size: f64) -> Vec<(Vec3, Vec3)> {
     let at = l.position();
     let dir = l.direction();
     // Two directions across the light's axis (its own X and Y).
-    let axis = |k: usize| -> Vec3 { l.world.fixed_view::<3, 1>(0, k).into_owned().try_normalize(1e-12).unwrap_or(if k == 0 { Vec3::x() } else { Vec3::y() }) };
-    let (u, v) = (axis(0), axis(1));
+    let (u, v) = (l.axis(0), l.axis(1));
     let ring = |center: Vec3, r: f64| -> Vec<(Vec3, Vec3)> {
         let pt = |i: usize| {
             let a = std::f64::consts::TAU * i as f64 / 24.0;
@@ -324,9 +325,13 @@ fn light_lines(l: &Light, size: f64) -> Vec<(Vec3, Vec3)> {
         LightKind::Point => {
             let r = size * 0.5;
             let d = std::f64::consts::FRAC_1_SQRT_2;
-            [u, v, dir, (u + v) * d, (u - v) * d, (u + dir) * d, (v + dir) * d, (u - dir) * d].iter().map(|a| (at - a * r, at + a * r)).collect()
+            let mut out: Vec<(Vec3, Vec3)> = [u, v, dir, (u + v) * d, (u - v) * d, (u + dir) * d, (v + dir) * d, (u - dir) * d].iter().map(|a| (at - a * r, at + a * r)).collect();
+            if l.radius > 0.0 {
+                out.extend(ring(at, l.radius));
+            }
+            out
         }
-        LightKind::Spot { cone, penumbra } => {
+        LightKind::Spot { cone, penumbra, .. } => {
             let len = size * 2.0;
             let end = at + dir * len;
             let half = (cone / 2.0).clamp(0.0, 89.0).to_radians();
@@ -347,11 +352,18 @@ fn light_lines(l: &Light, size: f64) -> Vec<(Vec3, Vec3)> {
             }
             out
         }
-        LightKind::Area { size: wh } => {
+        LightKind::Area { size: wh, disk, two_sided, .. } => {
             let c = |x: f64, y: f64| geom::transform_point(&l.world, &Vec3::new(x * wh[0] / 2.0, y * wh[1] / 2.0, 0.0));
-            let k = [c(-1.0, 1.0), c(1.0, 1.0), c(1.0, -1.0), c(-1.0, -1.0)];
-            let mut out: Vec<(Vec3, Vec3)> = (0..4).map(|i| (k[i], k[(i + 1) % 4])).collect();
+            let outline: Vec<Vec3> = if disk {
+                (0..24).map(|i| std::f64::consts::TAU * i as f64 / 24.0).map(|a| c(a.cos(), a.sin())).collect()
+            } else {
+                vec![c(-1.0, 1.0), c(1.0, 1.0), c(1.0, -1.0), c(-1.0, -1.0)]
+            };
+            let mut out: Vec<(Vec3, Vec3)> = (0..outline.len()).map(|i| (outline[i], outline[(i + 1) % outline.len()])).collect();
             out.extend(arrow(at, at + dir * size));
+            if two_sided {
+                out.extend(arrow(at, at - dir * size));
+            }
             out
         }
     }
@@ -1730,9 +1742,9 @@ mod tests {
         let light = |node: &str, kind: LightKind, t: [f64; 3], r: [f64; 3]| Light { node: node.into(), ..Light::new(kind, geom::trs(t, r, [1.0; 3])) };
         s.lights = vec![
             light("bulb", LightKind::Point, [1.0, 2.0, -6.0], [0.0; 3]),
-            light("spot", LightKind::Spot { cone: 60.0, penumbra: 10.0 }, [-1.5, 2.0, -7.0], [-90.0, 0.0, 0.0]),
+            light("spot", LightKind::Spot { cone: 60.0, penumbra: 10.0, falloff: 0.0 }, [-1.5, 2.0, -7.0], [-90.0, 0.0, 0.0]),
             light("sun", LightKind::Directional, [3.0, 3.0, -9.0], [-45.0, 0.0, 0.0]),
-            light("panel", LightKind::Area { size: [2.0, 1.0] }, [-3.0, -1.5, -8.0], [0.0, 0.0, 0.0]),
+            light("panel", LightKind::rect([2.0, 1.0]), [-3.0, -1.5, -8.0], [0.0, 0.0, 0.0]),
             light("fill", LightKind::Ambient, [0.0, 3.5, -8.0], [0.0; 3]),
         ];
         // A click on (or near) each light picks it, over the cards behind.
@@ -1764,7 +1776,7 @@ mod tests {
         assert!(radii[24..].iter().all(|r| (r - 2.0 * 20f64.to_radians().tan()).abs() < 1e-9));
         assert!(cone[48..].iter().all(|(a, b)| *a == apex && (b - apex).normalize().dot(&-Vec3::y()) > 0.8));
         // A hard-edged spot has no inner ring.
-        assert_eq!(light_lines(&Light { kind: LightKind::Spot { cone: 60.0, penumbra: 0.0 }, ..s.lights[1].clone() }, 1.0).len(), 24 + 4);
+        assert_eq!(light_lines(&Light { kind: LightKind::Spot { cone: 60.0, penumbra: 0.0, falloff: 0.0 }, ..s.lights[1].clone() }, 1.0).len(), 24 + 4);
         // Directional: three arrows, their shafts parallel to the light.
         let sun = light_lines(&s.lights[2], 1.0);
         let dir = s.lights[2].direction();

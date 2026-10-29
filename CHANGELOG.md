@@ -11,6 +11,18 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.35 — 2026-10-29
+
+- New **Area Light** node: a rectangle or disk, Size across, optionally
+  Two-sided, sampled over a Quality × Quality grid (default 4×4) for
+  soft light and broad highlights. Spot lights gain a **Falloff**
+  exponent; point and spot lights gain **Radius** (a soft size). Every
+  light gains **Exposure** (stops) and **Enabled**. Directional, point,
+  spot and area lights get an optional **look at** input: wire a
+  Locator, Card or Camera in and the light aims at it. The 3D view draws
+  disk area lights, two-sided arrows and a point light's radius ring
+  (M12 step a).
+
 ## 0.9.34 — 2026-10-29
 
 - Node graph keys with the pointer over the graph: **Tab** opens the node

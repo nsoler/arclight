@@ -9,7 +9,9 @@
 //!
 //! Lights are placed like other 3D nodes, by a world matrix: a light sits
 //! at its translation and points down its −Z. Intensity falls off with
-//! distance `d` as `1 / d^decay` (0 none, 1 linear, 2 physical).
+//! distance `d` as `1 / d^decay` (0 none, 1 linear, 2 physical). Lights
+//! with a size (an area light, or a point or spot with a radius) are
+//! sampled at a grid of points over it, each a share of the light.
 
 use crate::geom::{Mat4, Vec3};
 use crate::mesh::{Material, Shading};
@@ -25,11 +27,20 @@ pub enum LightKind {
     Point,
     /// From a point, down −Z within a cone `cone` degrees across, its edge
     /// softened over the last `penumbra` degrees (from each side's edge
-    /// inward).
-    Spot { cone: f64, penumbra: f64 },
-    /// From a rectangle `size` across in the light's XY plane, facing −Z
-    /// (sampled at a 4 × 4 grid of points).
-    Area { size: [f64; 2] },
+    /// inward), and dimmed toward the edge by the cosine from the axis to
+    /// the power `falloff` (0: even across).
+    Spot { cone: f64, penumbra: f64, falloff: f64 },
+    /// From a rectangle `size` across in the light's XY plane (or the
+    /// ellipse inside it, if `disk`), facing −Z (and +Z too if
+    /// `two_sided`), sampled at a `samples` × `samples` grid of points.
+    Area { size: [f64; 2], disk: bool, two_sided: bool, samples: usize },
+}
+
+impl LightKind {
+    /// A one-sided 4 × 4-sampled rectangle `size` across.
+    pub fn rect(size: [f64; 2]) -> LightKind {
+        LightKind::Area { size, disk: false, two_sided: false, samples: 4 }
+    }
 }
 
 /// A light in the scene.
@@ -37,22 +48,30 @@ pub enum LightKind {
 pub struct Light {
     pub kind: LightKind,
     /// Color (linear) and how strong: the light reaching a surface facing
-    /// it one unit away is `color × intensity`.
+    /// it one unit away is `color × intensity` (exposure included).
     pub color: [f32; 3],
     pub intensity: f32,
     /// Falloff exponent with distance.
     pub decay: f64,
+    /// A point or spot light's soft size: it shines from a disk this
+    /// radius, turned to face the lit point (0: a true point).
+    pub radius: f64,
+    /// Off, it lights nothing (but is still drawn and picked in 3D).
+    pub enabled: bool,
     /// Placement: position its translation, pointing down its −Z.
     pub world: Mat4,
     /// The node it came from (for per-light passes; "" if none).
     pub node: String,
 }
 
+/// The samples of a light with a size: a 4 × 4 grid.
+const SOFT_SAMPLES: usize = 4;
+
 impl Light {
     /// A light of `kind` placed by `world`, white, intensity 1, physical
-    /// (quadratic) falloff.
+    /// (quadratic) falloff, no radius, on.
     pub fn new(kind: LightKind, world: Mat4) -> Light {
-        Light { kind, color: [1.0; 3], intensity: 1.0, decay: 2.0, world, node: String::new() }
+        Light { kind, color: [1.0; 3], intensity: 1.0, decay: 2.0, radius: 0.0, enabled: true, world, node: String::new() }
     }
 
     pub fn position(&self) -> Vec3 {
@@ -65,6 +84,11 @@ impl Light {
         d.try_normalize(1e-300).unwrap_or(-Vec3::z())
     }
 
+    /// The light's own X or Y axis in the world (unit).
+    pub fn axis(&self, k: usize) -> Vec3 {
+        self.world.fixed_view::<3, 1>(0, k).into_owned().try_normalize(1e-300).unwrap_or(if k == 0 { Vec3::x() } else { Vec3::y() })
+    }
+
     /// The light arriving at `p` from point `from` (a direction to the light
     /// and the strength, color aside), with falloff.
     fn reaching(&self, from: Vec3, p: &Vec3) -> Option<(Vec3, f64)> {
@@ -73,42 +97,73 @@ impl Light {
         (d > 1e-12).then(|| (to / d, self.intensity as f64 / d.powf(self.decay)))
     }
 
+    /// The light from its position at `p`, or with a radius, from a grid
+    /// of points over a disk that wide facing `p`, each a share of it.
+    fn sampled(&self, p: &Vec3) -> Vec<(Vec3, f64)> {
+        let at = self.position();
+        if self.radius <= 0.0 {
+            return self.reaching(at, p).into_iter().collect();
+        }
+        let Some(w) = (p - at).try_normalize(1e-12) else { return Vec::new() };
+        let u = w.cross(&if w.x.abs() < 0.9 { Vec3::x() } else { Vec3::y() }).normalize();
+        let v = w.cross(&u);
+        let share = 1.0 / (SOFT_SAMPLES * SOFT_SAMPLES) as f64;
+        grid(SOFT_SAMPLES)
+            .filter_map(|(x, y)| {
+                let [dx, dy] = disk(x, y);
+                self.reaching(at + (u * dx + v * dy) * self.radius, p).map(|(l, e)| (l, e * share))
+            })
+            .collect()
+    }
+
     /// Where the light comes from at `p`: (unit direction to it, strength)
-    /// pairs, color aside; empty for ambient light.
+    /// pairs, color aside; empty for ambient light or when it's off.
     fn arriving(&self, p: &Vec3) -> Vec<(Vec3, f64)> {
+        if !self.enabled {
+            return Vec::new();
+        }
         match self.kind {
             LightKind::Ambient => Vec::new(),
             LightKind::Directional => vec![(-self.direction(), self.intensity as f64)],
-            LightKind::Point => self.reaching(self.position(), p).into_iter().collect(),
-            LightKind::Spot { cone, penumbra } => {
-                let Some((l, e)) = self.reaching(self.position(), p) else { return Vec::new() };
-                let angle = (-l).angle(&self.direction()).to_degrees();
+            LightKind::Point => self.sampled(p),
+            LightKind::Spot { cone, penumbra, falloff } => {
+                let Some(to) = (p - self.position()).try_normalize(1e-12) else { return Vec::new() };
+                let cos = to.dot(&self.direction()).clamp(-1.0, 1.0);
+                let angle = cos.acos().to_degrees();
                 let edge = cone / 2.0;
                 let soft = penumbra.clamp(0.0, edge);
-                let k = if angle >= edge {
+                let mut k = if angle >= edge {
                     0.0
                 } else if angle <= edge - soft {
                     1.0
                 } else {
                     smoothstep((edge - angle) / soft)
                 };
-                if k > 0.0 { vec![(l, e * k)] } else { Vec::new() }
+                if falloff > 0.0 {
+                    k *= cos.max(0.0).powf(falloff);
+                }
+                if k <= 0.0 {
+                    return Vec::new();
+                }
+                let mut out = self.sampled(p);
+                out.iter_mut().for_each(|s| s.1 *= k);
+                out
             }
-            LightKind::Area { size } => {
-                // A grid of points over the rectangle, each a sixteenth of
+            LightKind::Area { size, disk: round, two_sided, samples } => {
+                // A grid of points over the shape, each an equal share of
                 // the light, weighted by how squarely the light faces p.
-                const N: usize = 4;
+                let n = samples.max(1);
                 let facing = self.direction();
-                let mut out = Vec::with_capacity(N * N);
-                for j in 0..N {
-                    for i in 0..N {
-                        let (x, y) = ((i as f64 + 0.5) / N as f64 - 0.5, (j as f64 + 0.5) / N as f64 - 0.5);
-                        let at = crate::geom::transform_point(&self.world, &Vec3::new(x * size[0], y * size[1], 0.0));
-                        if let Some((l, e)) = self.reaching(at, p) {
-                            let cos = facing.dot(&-l);
-                            if cos > 0.0 {
-                                out.push((l, e * cos / (N * N) as f64));
-                            }
+                let share = 1.0 / (n * n) as f64;
+                let mut out = Vec::with_capacity(n * n);
+                for (x, y) in grid(n) {
+                    let [x, y] = if round { disk(x, y) } else { [x, y] };
+                    let at = crate::geom::transform_point(&self.world, &Vec3::new(x * size[0] / 2.0, y * size[1] / 2.0, 0.0));
+                    if let Some((l, e)) = self.reaching(at, p) {
+                        let cos = facing.dot(&-l);
+                        let cos = if two_sided { cos.abs() } else { cos };
+                        if cos > 0.0 {
+                            out.push((l, e * cos * share));
                         }
                     }
                 }
@@ -116,6 +171,22 @@ impl Light {
             }
         }
     }
+}
+
+/// The middles of an `n` × `n` grid of cells over the square −1 to 1.
+fn grid(n: usize) -> impl Iterator<Item = (f64, f64)> {
+    (0..n * n).map(move |k| ((2.0 * (k % n) as f64 + 1.0) / n as f64 - 1.0, (2.0 * (k / n) as f64 + 1.0) / n as f64 - 1.0))
+}
+
+/// Square point (`x`, `y`), −1 to 1, onto the unit disk, keeping equal
+/// areas equal (Shirley and Chiu's concentric map).
+fn disk(x: f64, y: f64) -> [f64; 2] {
+    use std::f64::consts::FRAC_PI_4;
+    if x == 0.0 && y == 0.0 {
+        return [0.0, 0.0];
+    }
+    let (r, phi) = if x.abs() > y.abs() { (x, FRAC_PI_4 * y / x) } else { (y, 2.0 * FRAC_PI_4 - FRAC_PI_4 * x / y) };
+    [r * phi.cos(), r * phi.sin()]
 }
 
 /// 0 to 1 smoothly over `t` = 0 to 1.
@@ -176,7 +247,7 @@ pub fn light(hit: &Hit, material: &Material, albedo: [f32; 3], light: &Light) ->
     }
     let tint = |k: f64| -> [f32; 3] { std::array::from_fn(|c| light.color[c] * k as f32) };
     if light.kind == LightKind::Ambient {
-        let e = tint(light.intensity as f64);
+        let e = tint(if light.enabled { light.intensity as f64 } else { 0.0 });
         out.ambient = std::array::from_fn(|c| albedo[c] * e[c]);
         return out;
     }
@@ -300,7 +371,7 @@ mod tests {
     fn a_spot_lights_its_cone_with_a_soft_edge() {
         // A spot 1 above the floor pointing down, 60° across, the last 10°
         // soft; no falloff.
-        let mut spot = placed(LightKind::Spot { cone: 60.0, penumbra: 10.0 }, [0.0, 1.0, 0.0], [-90.0, 0.0, 0.0]);
+        let mut spot = placed(LightKind::Spot { cone: 60.0, penumbra: 10.0, falloff: 0.0 }, [0.0, 1.0, 0.0], [-90.0, 0.0, 0.0]);
         spot.decay = 0.0;
         let at = |spot: &Light, deg: f64| {
             let x = deg.to_radians().tan();
@@ -316,7 +387,7 @@ mod tests {
         assert!(at(&spot, 22.0) > at(&spot, 25.0) && at(&spot, 25.0) > at(&spot, 28.0) && at(&spot, 28.0) > 0.0);
         assert!(at(&spot, 30.0) < 1e-12 && at(&spot, 45.0) == 0.0);
         // A hard edge with no penumbra.
-        spot.kind = LightKind::Spot { cone: 60.0, penumbra: 0.0 };
+        spot.kind = LightKind::Spot { cone: 60.0, penumbra: 0.0, falloff: 0.0 };
         assert!((at(&spot, 29.9) - 1.0).abs() < 1e-6 && at(&spot, 30.1) == 0.0);
     }
 
@@ -332,13 +403,91 @@ mod tests {
         }
         assert!((lit(2.0, 1.0) - 1.0).abs() < 1e-6, "one unit away: the intensity");
         // An area light far away is nearly a point light facing the floor.
-        let mut area = placed(LightKind::Area { size: [1.0, 1.0] }, [0.0, 50.0, 0.0], [-90.0, 0.0, 0.0]);
+        let mut area = placed(LightKind::rect([1.0, 1.0]), [0.0, 50.0, 0.0], [-90.0, 0.0, 0.0]);
         area.intensity = 2500.0;
         let a = shade(&floor(), &lambert(), [1.0; 3], &[area.clone()]).diffuse[0];
         assert!((a - 1.0).abs() < 1e-3, "{a}");
         // Turned away, it gives nothing.
         area.world = geom::trs([0.0, 50.0, 0.0], [90.0, 0.0, 0.0], [1.0; 3]);
         assert_eq!(shade(&floor(), &lambert(), [1.0; 3], &[area]).diffuse[0], 0.0);
+    }
+
+    /// An area light 1 × 1, 2 above the floor, facing down, with physical
+    /// falloff, at Quality `samples`.
+    fn panel(disk: bool, two_sided: bool, samples: usize) -> Light {
+        let mut l = placed(LightKind::Area { size: [1.0, 1.0], disk, two_sided, samples }, [0.0, 2.0, 0.0], [-90.0, 0.0, 0.0]);
+        l.intensity = 4.0;
+        l
+    }
+
+    #[test]
+    fn an_area_light_matches_a_dense_reference() {
+        let lit = |l: &Light, x: f64| {
+            let hit = Hit { position: Vec3::new(x, 0.0, 0.3), ..floor() };
+            shade(&hit, &lambert(), [1.0; 3], std::slice::from_ref(l)).diffuse[0] as f64
+        };
+        for disk in [false, true] {
+            let reference = panel(disk, false, 128);
+            for x in [0.0, 0.5, 1.0, 2.0, 4.0] {
+                let (got, want) = (lit(&panel(disk, false, 4), x), lit(&reference, x));
+                assert!(((got - want) / want).abs() < 0.01, "disk {disk}, x {x}: {got} vs {want}");
+            }
+        }
+        // Under its middle, nearly a point light of the same intensity 2
+        // away (a little less: its edges are further and slanted); a disk,
+        // smaller than the square, a little more.
+        let (square, round) = (lit(&panel(false, false, 64), 0.0), lit(&panel(true, false, 64), 0.0));
+        assert!(square < 1.0 && square > 0.85 && round > square && round < 1.0, "{square} {round}");
+        // Turned over, one-sided gives nothing and two-sided the same.
+        let mut flipped = panel(false, true, 4);
+        flipped.world = geom::trs([0.0, 2.0, 0.0], [90.0, 0.0, 0.0], [1.0; 3]);
+        assert!((lit(&flipped, 0.5) - lit(&panel(false, false, 4), 0.5)).abs() < 1e-6);
+        flipped.kind = LightKind::Area { size: [1.0, 1.0], disk: false, two_sided: false, samples: 4 };
+        assert_eq!(lit(&flipped, 0.5), 0.0);
+    }
+
+    #[test]
+    fn falloff_dims_a_spot_toward_its_edge() {
+        let mut spot = placed(LightKind::Spot { cone: 90.0, penumbra: 0.0, falloff: 2.0 }, [0.0, 1.0, 0.0], [-90.0, 0.0, 0.0]);
+        spot.decay = 0.0;
+        let at = |deg: f64| {
+            let hit = Hit { position: Vec3::new(deg.to_radians().tan(), 0.0, 0.0), ..floor() };
+            shade(&hit, &lambert(), [1.0; 3], std::slice::from_ref(&spot)).diffuse[0] as f64 / deg.to_radians().cos()
+        };
+        // cos² of the angle from the axis.
+        assert!((at(0.0) - 1.0).abs() < 1e-6);
+        assert!((at(30.0) - 0.75).abs() < 1e-6 && (at(44.0) - 44f64.to_radians().cos().powi(2)).abs() < 1e-6, "{}", at(30.0));
+    }
+
+    #[test]
+    fn a_radius_softens_the_highlight_not_the_light() {
+        let shiny = Material { shading: Shading::Blinn, specular: [1.0; 3], roughness: 0.1, ..Material::default() };
+        let bulb = |radius: f64| Light { radius, decay: 2.0, ..placed(LightKind::Point, [0.0, 4.0, 0.0], [0.0; 3]) };
+        // Seen from the mirror direction of the light, then off it.
+        let seen = |l: &Light, x: f64| {
+            let hit = Hit { position: Vec3::new(x, 0.0, 0.0), normal: Vec3::y(), view: Vec3::new(-x, 4.0, 0.0).normalize() };
+            shade(&hit, &shiny, [0.5; 3], std::slice::from_ref(l))
+        };
+        let (sharp, soft) = (bulb(0.0), bulb(0.5));
+        let d = |l: &Light| seen(l, 0.0).diffuse[0];
+        assert!(((d(&soft) - d(&sharp)) / d(&sharp)).abs() < 0.02, "the diffuse barely changes: {} {}", d(&soft), d(&sharp));
+        let s = |l: &Light, x: f64| seen(l, x).specular[0];
+        assert!(s(&soft, 0.0) < s(&sharp, 0.0), "a lower peak");
+        assert!(s(&soft, 0.6) > s(&sharp, 0.6) && s(&soft, 1.0) > 1.5 * s(&sharp, 1.0), "spread wider");
+        // A soft spot keeps its cone.
+        let spot = Light { radius: 0.5, decay: 0.0, ..placed(LightKind::Spot { cone: 40.0, penumbra: 0.0, falloff: 0.0 }, [0.0, 1.0, 0.0], [-90.0, 0.0, 0.0]) };
+        let lit = |deg: f64| shade(&Hit { position: Vec3::new(deg.to_radians().tan(), 0.0, 0.0), ..floor() }, &lambert(), [1.0; 3], std::slice::from_ref(&spot)).diffuse[0];
+        assert!(lit(19.0) > 0.5 && lit(21.0) == 0.0);
+    }
+
+    #[test]
+    fn a_light_off_lights_nothing() {
+        let sun = placed(LightKind::Directional, [0.0; 3], [-90.0, 0.0, 0.0]);
+        let off = Light { enabled: false, ..sun.clone() };
+        let amb = Light { enabled: false, ..placed(LightKind::Ambient, [0.0; 3], [0.0; 3]) };
+        let s = shade(&floor(), &lambert(), [1.0; 3], &[off.clone(), amb]);
+        assert_eq!(s.total(), [0.0; 3], "still a lit scene, only dark");
+        assert!(close(shade(&floor(), &lambert(), [1.0; 3], &[off, sun]).diffuse, [1.0; 3]));
     }
 
     #[test]
@@ -349,7 +498,7 @@ mod tests {
             Light { color: [0.2, 0.2, 0.3], ..placed(LightKind::Ambient, [0.0; 3], [0.0; 3]) },
             Light { intensity: 3.0, ..placed(LightKind::Point, [1.0, 2.0, 0.5], [0.0; 3]) },
             placed(LightKind::Directional, [0.0; 3], [-60.0, 20.0, 0.0]),
-            placed(LightKind::Spot { cone: 90.0, penumbra: 20.0 }, [-1.0, 3.0, 0.0], [-75.0, -20.0, 0.0]),
+            placed(LightKind::Spot { cone: 90.0, penumbra: 20.0, falloff: 0.0 }, [-1.0, 3.0, 0.0], [-75.0, -20.0, 0.0]),
         ];
         lights[1].node = "key".into();
         let hit = Hit { view: Vec3::new(0.3, 1.0, 0.4).normalize(), ..floor() };

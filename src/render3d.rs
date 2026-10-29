@@ -1218,7 +1218,7 @@ mod tests {
 
     /// A light of `op` from `params`, named `node`.
     fn light(op: &str, params: serde_json::Value, node: &str) -> Light {
-        Light { node: node.into(), ..crate::scene::light(op, &params).unwrap() }
+        Light { node: node.into(), ..crate::scene::light(op, &params, None).unwrap() }
     }
 
     const LIGHTING: Passes = Passes { diffuse: true, specular: true, emission: true, ambient: true, lights: true, ..Passes::NONE };

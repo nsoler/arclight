@@ -76,7 +76,7 @@ impl Kind {
 /// The kind of output `op` makes.
 pub fn output_kind(op: &str) -> Kind {
     match op {
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "light_ambient" | "light_directional" | "light_point" | "light_spot" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -244,6 +244,11 @@ const SURFACE_COLOR: ParamSpec = p!("color", "Color", ParamKind::Color, [1.0, 1.
 const LIGHT_COLOR: ParamSpec = p!("color", "Color", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]);
 const LIGHT_INTENSITY: ParamSpec = p!("intensity", "Intensity", ParamKind::Float { min: 0.0, max: 100.0 }, 1.0);
 const LIGHT_DECAY: ParamSpec = p!("decay", "Decay", ParamKind::Float { min: 0.0, max: 3.0 }, 0.0);
+const LIGHT_EXPOSURE: ParamSpec = p!("exposure", "Exposure (stops)", ParamKind::Float { min: -10.0, max: 10.0 }, 0.0);
+const LIGHT_ENABLED: ParamSpec = fixed!("enabled", "Enabled", ParamKind::Bool, true);
+const LIGHT_RADIUS: ParamSpec = p!("radius", "Radius (soft size)", ParamKind::Float { min: 0.0, max: 100.0 }, 0.0);
+/// A light's optional target: it aims at whatever this scene holds first.
+const LOOK_AT: Port = scene_in("look at");
 /// How a 3D object takes light (see [`crate::shade`]).
 const SHADING: ParamSpec = fixed!("shading", "Shading", ParamKind::Choice(&["unlit", "lambert", "blinn"]), "lambert");
 const SPECULAR: ParamSpec = p!("specular", "Specular", ParamKind::Float { min: 0.0, max: 1.0 }, 0.0);
@@ -864,53 +869,86 @@ pub static OPS: &[OpInfo] = &[
         label: "Ambient Light",
         category: Category::Scene,
         inputs: &[],
-        params: &[LIGHT_COLOR, LIGHT_INTENSITY],
+        params: &[LIGHT_ENABLED, LIGHT_COLOR, LIGHT_INTENSITY, LIGHT_EXPOSURE],
         overlay: Overlay::None,
         mask_base: None,
         help: "Light from everywhere, evenly: lights the dark sides of Lambert and Blinn objects as much as the \
-               lit ones (Color × Intensity of their color). Outputs a scene holding it; with no lights in a scene, \
-               everything renders unlit.",
+               lit ones (Color × Intensity × 2^Exposure of their color). Outputs a scene holding it; with no lights in a \
+               scene, everything renders unlit (a light that isn't Enabled still counts, but adds nothing).",
     },
     OpInfo {
         name: "light_directional",
         label: "Directional Light",
         category: Category::Scene,
-        inputs: &[],
-        params: &[PLACE_T, PLACE_R, LIGHT_COLOR, LIGHT_INTENSITY],
+        inputs: &[LOOK_AT],
+        params: &[LIGHT_ENABLED, PLACE_T, PLACE_R, LIGHT_COLOR, LIGHT_INTENSITY, LIGHT_EXPOSURE],
         overlay: Overlay::None,
         mask_base: None,
         help: "Parallel light, as from the sun, shining down its −Z axis as Rotate turns it (Translate only places it \
-               in the 3D view); the same strength everywhere. Outputs a scene holding it.",
+               in the 3D view); the same strength everywhere. With a scene in Look at (a Locator, Card, Camera…) it \
+               aims at that instead. Exposure brightens it in stops. Outputs a scene holding it.",
     },
     OpInfo {
         name: "light_point",
         label: "Point Light",
         category: Category::Scene,
-        inputs: &[],
-        params: &[PLACE_T, LIGHT_COLOR, LIGHT_INTENSITY, LIGHT_DECAY],
+        inputs: &[LOOK_AT],
+        params: &[LIGHT_ENABLED, PLACE_T, LIGHT_COLOR, LIGHT_INTENSITY, LIGHT_EXPOSURE, LIGHT_DECAY, LIGHT_RADIUS],
         overlay: Overlay::None,
         mask_base: None,
         help: "Light from a point, every way. Decay is how it fades with distance d: Intensity / d^Decay \
-               (0: not at all, 1: linearly, 2: as real light does). Outputs a scene holding it.",
+               (0: not at all, 1: linearly, 2: as real light does). Radius gives it a soft size: it shines from a ball \
+               that big, for broader highlights. Outputs a scene holding it.",
     },
     OpInfo {
         name: "light_spot",
         label: "Spot Light",
         category: Category::Scene,
-        inputs: &[],
+        inputs: &[LOOK_AT],
         params: &[
+            LIGHT_ENABLED,
             PLACE_T,
             PLACE_R,
             LIGHT_COLOR,
             LIGHT_INTENSITY,
+            LIGHT_EXPOSURE,
             LIGHT_DECAY,
             p!("cone", "Cone angle", ParamKind::Float { min: 0.0, max: 179.0 }, 40.0),
             p!("penumbra", "Penumbra", ParamKind::Float { min: 0.0, max: 90.0 }, 5.0),
+            p!("falloff", "Falloff exponent", ParamKind::Float { min: 0.0, max: 100.0 }, 0.0),
+            LIGHT_RADIUS,
         ],
         overlay: Overlay::None,
         mask_base: None,
         help: "Light from a point down its −Z axis, within a cone Cone angle degrees across, its edge softened over \
-               Penumbra degrees; fading with distance by Decay (as a Point Light). Outputs a scene holding it.",
+               Penumbra degrees and dimmed toward it by the cosine from the axis to the power Falloff exponent; fading \
+               with distance by Decay and softened by Radius (as a Point Light). With a scene in Look at it aims at \
+               that instead of turning by Rotate. Outputs a scene holding it.",
+    },
+    OpInfo {
+        name: "light_area",
+        label: "Area Light",
+        category: Category::Scene,
+        inputs: &[LOOK_AT],
+        params: &[
+            LIGHT_ENABLED,
+            PLACE_T,
+            PLACE_R,
+            LIGHT_COLOR,
+            LIGHT_INTENSITY,
+            LIGHT_EXPOSURE,
+            LIGHT_DECAY,
+            fixed!("shape", "Shape", ParamKind::Choice(&["rectangle", "disk"]), "rectangle"),
+            p!("size", "Size", ParamKind::Vec2, [1.0, 1.0]),
+            fixed!("two_sided", "Two-sided", ParamKind::Bool, false),
+            fixed!("quality", "Quality", ParamKind::Int { min: 1, max: 16 }, 4),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Light from a rectangle (or a disk) Size across, shining down its −Z axis (both ways if Two-sided), for soft \
+               light and broad highlights. Intensity is the whole light's, shared over a Quality × Quality grid of points \
+               on it (more is smoother and slower); each point fades with distance by Decay and lights more squarely in \
+               front. With a scene in Look at it aims at that. Outputs a scene holding it.",
     },
     OpInfo {
         name: "scene",
@@ -1599,8 +1637,9 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
             Ok(scene_output(texture.map_or(DEFAULT_FORMAT, |t| t.format), Scene { meshes: vec![model], ..Scene::default() }))
         }
         "read_geo" => read_geo(params),
-        "light_ambient" | "light_directional" | "light_point" | "light_spot" => {
-            let light = scene::light(op, params).context("unknown light")?;
+        "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => {
+            let target = inputs.first().copied().flatten().and_then(|t| t.scene.as_deref());
+            let light = scene::light(op, params, target).context("unknown light")?;
             Ok(scene_output(DEFAULT_FORMAT, Scene { lights: vec![light], ..Scene::default() }))
         }
         "scanline_render" => scanline_render(params, inputs),

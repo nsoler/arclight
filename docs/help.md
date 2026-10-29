@@ -21,6 +21,8 @@ selected node in **Properties** on the right. On macOS, ⌘ stands for Ctrl.
 
 **Fit** (top-right corner of the Node Graph) or **F** with the pointer over it frames every node and backdrop.
 
+Over the Node Graph: **Tab** opens the node browser at the pointer (like right-click); **Shift+R**, **Shift+T**, **Shift+M** add a Media In, Transform or Merge there, into the wire under the pointer (or the selected wire), else after the selected node.
+
 A node's inputs are yellow squares (hollow when optional); a **mask**
 input is violet and labelled **mask**.
 
@@ -235,11 +237,26 @@ selected object.
 
 - **Ambient Light** (everywhere, evenly), **Directional Light** (parallel,
   like the sun, down its −Z as Rotate turns it), **Point Light** (from a
-  point) and **Spot Light** (a cone, **Cone angle** across, soft over
-  **Penumbra** degrees) each have **Color** and **Intensity**; point and
-  spot lights fade with distance by **Decay** (0 not at all, 2 as real
-  light does).
-- Wire them into a Scene like objects. Without any lights, everything
+  point), **Spot Light** (a cone) and **Area Light** (a glowing rectangle
+  or disk) each have **Color**, **Intensity** and **Exposure** (in stops:
+  +1 doubles it), and **Enabled** (off, the light stays in the 3D view but
+  lights nothing).
+- Point, spot and area lights fade with distance by **Decay** (0 not at
+  all, 1 linearly, 2 as real light does).
+- **Spot Light:** **Cone angle** across, its edge soft over **Penumbra**
+  degrees; **Falloff exponent** dims it from the middle toward the edge
+  (0: even across).
+- **Radius** (point and spot) gives the light a soft size: highlights get
+  broader and softer.
+- **Area Light:** **Shape** (rectangle or disk) **Size** across, shining
+  down its −Z (both ways if **Two-sided**). Its Intensity is shared over a
+  **Quality** × **Quality** grid of points on it: more is smoother, and
+  slower.
+- **Look at:** wire a Locator, Card, Camera (any scene) into a light's
+  **look at** input and the light aims at it (its first camera, card,
+  mesh, locator or light), whatever its Rotate; move the target and the
+  light follows. The target isn't added to the light's scene.
+- Wire lights into a Scene like objects. Without any lights, everything
   renders unlit (as cards always do); with lights, Lambert and Blinn objects
   are lit and unlit ones and cards keep their color.
 

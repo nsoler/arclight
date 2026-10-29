@@ -133,7 +133,12 @@ done, M12 lights and M13 particles specified), `docs/help.md` (the in-app help) 
   (MathWiz); the user wants the release only after both.** 0.9.34
   (MathWiz): node graph hotkeys (`NodeEditor::hotkeys`: Tab browser,
   ⇧R Media In, ⇧T Transform, ⇧M Merge, only over the graph).
-  - Next version: **0.9.35**. Both workers (mathwiz, worker3d) were
+  0.9.35 (3DWorker) M12 (a): `light_area` node (`LightKind::Area {size,
+  disk, two_sided, samples}`), Spot `falloff`, `Light.radius / enabled`,
+  exposure folded into intensity; `look at` input (target's first
+  camera, card, mesh bounds centre, point, then light; up = Y). Old
+  light params missing = old behaviour.
+  - Next version: **0.9.36**. Both workers (mathwiz, worker3d) were
     idle at the end of session 10; nothing uncommitted. (CHANGELOG has one entry per version.)
 - Mac: also ask whether anyone tried an Intel Mac. Mac-only bugs come
   first.
@@ -345,7 +350,7 @@ done, M12 lights and M13 particles specified), `docs/help.md` (the in-app help) 
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.34**.
+  in the same commit as the change. Current: **0.9.35**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.
