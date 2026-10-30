@@ -12,6 +12,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.18 — 2026-10-30
+
+- Fixed: a Scanline Render whose saved params leave out some settings (a
+  hand-written or script-made graph) rendered without motion blur or the
+  motion pass's next frame.
+
 ## 0.10.17 — 2026-10-30
 
 - The Camera Tracker's **point picking also works over a Scanline Render**

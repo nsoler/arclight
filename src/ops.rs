@@ -3055,11 +3055,13 @@ pub fn blur_jitter(params: &Value) -> bool {
 /// The frames besides its own (offsets from it) whose inputs a node of `op`
 /// with (resolved) `params` needs too (see [`scanline_render_frames`]): a
 /// Scanline Render's next with the motion pass, and with motion blur
-/// those round its shutter. Ascending.
+/// those round its shutter. Ascending. Params left out count as their
+/// defaults.
 pub fn other_frames(op: &str, params: &Value) -> Vec<i64> {
     if op != "scanline_render" {
         return Vec::new();
     }
+    let params = &params_with_defaults(op, params);
     let mut out = Vec::new();
     if params["passes"].as_array().is_some_and(|a| a.iter().any(|v| v == "motion")) {
         out.push(1);

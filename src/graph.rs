@@ -1037,4 +1037,24 @@ mod tests {
         assert_eq!(now, all(&stream(&mut Evaluator::new(), &g, 20)));
         assert_ne!(now, all(&fresh));
     }
+
+    /// A Scanline Render whose params leave out what it doesn't change
+    /// (samples, width…) still blurs: the frames round its shutter count
+    /// its params' defaults.
+    #[test]
+    fn a_sparse_scanline_render_still_blurs() {
+        let g: Graph = serde_json::from_value(serde_json::json!({ "project": { "first_frame": 1, "last_frame": 5, "fps": 24, "format": { "width": 64, "height": 40 } }, "nodes": [
+            { "id": "plate", "op": "checkerboard", "params": { "width": 64, "height": 40, "size": 4 } },
+            { "id": "card", "op": "card", "inputs": ["plate"], "params": { "size": [4, 2.5], "translate": { "keys": [[1, [-1, 0, -5]], [5, [3, 0, -5]]], "interp": "linear" } } },
+            { "id": "cam", "op": "camera" },
+            { "id": "set", "op": "scene", "inputs": ["card", "cam"] },
+            { "id": "sharp", "op": "scanline_render", "inputs": ["set", "", ""] },
+            { "id": "blurred", "op": "scanline_render", "inputs": ["set", "", ""], "params": { "motion_blur": 4, "shutter": 1.0 } },
+        ] })).unwrap();
+        let ctx = EvalContext { frame: 3, write_outputs: false };
+        let mut ev = Evaluator::new();
+        let (a, b) = (ev.evaluate(&g, "sharp", &ctx).unwrap(), ev.evaluate(&g, "blurred", &ctx).unwrap());
+        let diff = a.pixels.iter().zip(&b.pixels).flat_map(|(p, q)| (0..4).map(move |c| (p[c] - q[c]).abs())).fold(0.0, f32::max);
+        assert!(diff > 0.05, "{diff}");
+    }
 }
