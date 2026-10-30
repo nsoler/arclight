@@ -163,8 +163,9 @@ committed and pushed by the master.
   splats over or under the render; it's what makes CG inside a capture
   look right.
 - **Coordinate conventions:** captures are usually Y-down or Z-up
-  (COLMAP / OpenCV); Read Splat needs an "Up axis" / "Flip Y" choice and
-  a sensible default.
+  (COLMAP / OpenCV); Read Splat has an Up axis choice, defaulting to -y
+  (Y down) since 0.10.14 (user, 2026-10-30), with `.spz` read turned
+  into the same Y down.
 - **Memory:** a 6 M-splat degree-3 capture is ~1.5 GB as f32; the SH
   degree cap reads less, and S5 may store the SH rest as f16.
 - **Lighting:** splats are self-lit; relighting them is research, not

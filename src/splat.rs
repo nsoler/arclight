@@ -259,6 +259,32 @@ fn unit(q: [f32; 4]) -> [f32; 4] {
     if len > 1e-12 { q.map(|c| c / len) } else { [1.0, 0.0, 0.0, 0.0] }
 }
 
+/// The signs a 180° turn about X (y → −y, z → −z) gives the SH rest
+/// coefficients, in order: each basis function's parity in y and z.
+const TURN_X_SH: [f32; 15] = [-1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0];
+
+/// One splat turned 180° about X: Y up to Y down and back (its own
+/// inverse), its color's view directions with it.
+fn turn_x(position: &mut [f32; 3], rotation: &mut [f32; 4], sh: &mut [f32]) {
+    position[1] = -position[1];
+    position[2] = -position[2];
+    rotation[2] = -rotation[2];
+    rotation[3] = -rotation[3];
+    for (coef, sign) in sh.as_chunks_mut::<3>().0.iter_mut().skip(1).zip(TURN_X_SH) {
+        coef.iter_mut().for_each(|c| *c *= sign);
+    }
+}
+
+/// `splats` turned 180° about X ([`turn_x`]).
+fn turned_x(splats: &Splats) -> Splats {
+    let (mut positions, mut rotations, mut sh) = ((*splats.positions).clone(), (*splats.rotations).clone(), (*splats.sh).clone());
+    let stride = splats.sh_stride();
+    for ((p, q), c) in positions.iter_mut().zip(rotations.iter_mut()).zip(sh.chunks_exact_mut(stride)) {
+        turn_x(p, q, c);
+    }
+    Splats { positions: Arc::new(positions), rotations: Arc::new(rotations), sh: Arc::new(sh), ..splats.clone() }
+}
+
 /// Read the splats in a `.splat` file (antimatter15's web viewer format,
 /// as many tools export: 32 bytes a splat, no header: position and linear
 /// scale as f32 × 3, color and opacity as 8-bit RGBA, rotation as 8-bit w,
@@ -310,8 +336,9 @@ const SPZ_COLOR_SCALE: f32 = 0.15;
 /// Read the splats in a `.spz` file (Niantic's compressed format, version 2
 /// or 3: gzip'd; positions in 24-bit fixed point; opacity, color, scale
 /// and SH in 8 bits; rotations in 3 bytes, or 4 in version 3), their colors
-/// at most SH degree `max_degree`. Its axes are Arclight's (right, up,
-/// back): Up axis y.
+/// at most SH degree `max_degree`. Its axes are right, up, back; it's
+/// turned 180° about X into the Y down of .ply captures, so it reads
+/// upright with Read Splat's default Up axis, -y.
 pub fn read_spz(path: &Path, max_degree: u8) -> Result<Splats> {
     use rayon::prelude::*;
     let file = std::fs::File::open(path).with_context(|| format!("can't read {}", path.display()))?;
@@ -372,13 +399,9 @@ pub fn read_spz(path: &Path, max_degree: u8) -> Result<Splats> {
             let mut sh: Vec<f32> = [c[0], c[1], c[2]].iter().map(|&c| (c as f32 / 255.0 - 0.5) / SPZ_COLOR_SCALE).collect();
             // Coefficient by coefficient, R, G, B (as ours).
             sh.extend(block(5, i)[..keep * 3].iter().map(|&v| (v as f32 - 128.0) / 128.0));
-            (
-                [fixed(0), fixed(1), fixed(2)],
-                [s[0], s[1], s[2]].map(|v| (v as f32 / 16.0 - 10.0).exp()),
-                unit([xyzw[3], xyzw[0], xyzw[1], xyzw[2]]),
-                block(1, i)[0] as f32 / 255.0,
-                sh,
-            )
+            let (mut position, mut rotation) = ([fixed(0), fixed(1), fixed(2)], unit([xyzw[3], xyzw[0], xyzw[1], xyzw[2]]));
+            turn_x(&mut position, &mut rotation, &mut sh);
+            (position, [s[0], s[1], s[2]].map(|v| (v as f32 / 16.0 - 10.0).exp()), rotation, block(1, i)[0] as f32 / 255.0, sh)
         })
         .collect();
     Ok(from_parts(
@@ -391,9 +414,11 @@ pub fn read_spz(path: &Path, max_degree: u8) -> Result<Splats> {
     ))
 }
 
-/// Write `splats` (their own space) as a `.spz` file of `version` 2 or 3
-/// ([`read_spz`]), positions with 12 fractional bits.
+/// Write `splats` (their own space, Y down as [`read_spz`] gives it) as a
+/// `.spz` file of `version` 2 or 3, turned back to its Y up, positions
+/// with 12 fractional bits.
 pub fn write_spz(path: &Path, splats: &Splats, version: u32) -> Result<()> {
+    let splats = &turned_x(splats);
     let n = splats.len();
     let rest = sh_coeffs(splats.sh_degree) - 1;
     let byte = |v: f32| v.round().clamp(0.0, 255.0) as u8;
@@ -839,6 +864,24 @@ mod tests {
             assert!(same_turn(&back.rotations, &s.rotations, if version == 3 { 5e-5 } else { 2e-3 }), "v{version}");
             assert_eq!(read_file(&path, 0).unwrap().sh_degree, 0);
         }
+        // In the file, Y up: the Y-down splats' first y (fixed point,
+        // 12 fractional bits) turned back over.
+        let path = dir.join("turned.spz");
+        write_spz(&path, &turned_x(&s), 3).unwrap();
+        let mut data = Vec::new();
+        flate2::read::GzDecoder::new(std::fs::File::open(&path).unwrap()).read_to_end(&mut data).unwrap();
+        let y = (i32::from_le_bytes([0, data[19], data[20], data[21]]) >> 8) as f32 / 4096.0;
+        assert!((y - s.positions[0][1]).abs() < 1.0 / 4096.0, "{y} vs {}", s.positions[0][1]);
+        // Turned, a splat looks from the turned view as it did from the
+        // view before (every degree's signs).
+        let mut full = three();
+        full.sh_degree = 3;
+        full.sh = Arc::new((0..3 * 16 * 3).map(|k| ((k * 37 % 23) as f32 / 23.0 - 0.5) * 0.4).collect());
+        let turned = turned_x(&full);
+        for d in [[0.0, 0.0, 1.0], [0.6, 0.0, 0.8], [0.48, 0.6, 0.64], [-0.36, -0.48, 0.8]] {
+            let (a, b) = (turned.color(1, [d[0], -d[1], -d[2]]), full.color(1, d));
+            assert!(a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-6), "from {d:?}: {a:?} vs {b:?}");
+        }
         // Broken: a .splat of the wrong size, a .spz that isn't gzip'd, or
         // isn't one, or of another version.
         std::fs::write(dir.join("bad.splat"), [0u8; 33]).unwrap();
@@ -912,23 +955,25 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/geo/splats.ply")
     }
 
-    /// Write examples/geo/splats.ply (run by hand: `cargo test --release
-    /// --lib write_the_sample_capture -- --ignored`).
+    /// Write examples/geo/splats.ply, Y down as captures are (run by hand:
+    /// `cargo test --release --lib write_the_sample_capture -- --ignored`).
     #[test]
     #[ignore]
     fn write_the_sample_capture() {
-        write_ply(&sample_path(), &sample()).unwrap();
+        write_ply(&sample_path(), &turned_x(&sample())).unwrap();
     }
 
-    /// The committed sample reads as written.
+    /// The committed sample reads as written: Y down, the ball below the
+    /// ground.
     #[test]
     fn the_sample_capture_reads() {
         let s = Splats::read(&sample_path(), 3).unwrap();
-        let made = sample();
+        let made = turned_x(&sample());
         assert_eq!((s.len(), s.sh_degree), (320, 1));
         assert!(s.positions.iter().zip(made.positions.iter()).all(|(a, b)| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-6)));
+        assert!(s.sh.iter().zip(made.sh.iter()).all(|(a, b)| (a - b).abs() < 1e-6) && s.rotations.iter().zip(made.rotations.iter()).all(|(a, b)| (0..4).all(|k| (a[k] - b[k]).abs() < 1e-6)));
         let (lo, hi) = s.bounds().unwrap();
-        assert!(lo.y.abs() < 1e-6 && (hi.y - 2.0).abs() < 0.01 && hi.x < 2.0 && lo.x > -2.0, "{lo} {hi}");
+        assert!(hi.y.abs() < 1e-6 && (lo.y + 2.0).abs() < 0.01 && hi.x < 2.0 && lo.x > -2.0, "{lo} {hi}");
         // Read once: the second time from the cache.
         assert!(Arc::ptr_eq(&s, &Splats::read(&sample_path(), 3).unwrap()));
         assert!(!Arc::ptr_eq(&s, &Splats::read(&sample_path(), 0).unwrap()), "another cap, another read");

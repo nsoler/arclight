@@ -12,6 +12,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.14 — 2026-10-30
+
+- Read Splat's Up axis defaults to -y (Y down, Z forward), the way most
+  captures come (COLMAP / INRIA `.ply`, and `.splat` converted from
+  them), so they read upright. `.spz` files (natively Y up) are now read
+  turned into the same Y down, and written back the same way, so every
+  format reads upright by default. Projects saved before keep their Up
+  axis; a graph file written by hand with no `up` key now reads Y down.
+  The sample `examples/geo/splats.ply` is now Y down too.
+
 ## 0.10.13 — 2026-10-30
 
 - **Splats render 2–2.5× faster** (Dev2, splat plan S5): 1 M at

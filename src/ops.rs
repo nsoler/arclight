@@ -281,7 +281,7 @@ const MASK_CHANNEL: ParamSpec = fixed!("mask_channel", "Mask channel", ParamKind
 const MASK_INVERT: ParamSpec = fixed!("mask_invert", "Invert mask", ParamKind::Bool, false);
 /// A 3D object's placement (as Card's) and a primitive's color.
 /// Read Splat's Up axis: the capture's up as it is, Z-up, or Y down (Z
-/// forward, as COLMAP / OpenCV).
+/// forward, as COLMAP / OpenCV; the default).
 const SPLAT_UPS: &[&str] = &["y", "z", "-y"];
 /// The scene a splat editing node changes (everything else passed on).
 const SPLATS_IN: Port = Port { label: "scene", optional: false, kind: Kind::Scene };
@@ -994,7 +994,7 @@ pub static OPS: &[OpInfo] = &[
         inputs: &[],
         params: &[
             fixed!("file", "File", ParamKind::Path { save: false }, ""),
-            fixed!("up", "Up axis", ParamKind::Choice(SPLAT_UPS), "y"),
+            fixed!("up", "Up axis", ParamKind::Choice(SPLAT_UPS), "-y"),
             PLACE_T,
             PLACE_R,
             PLACE_S,
@@ -1006,9 +1006,9 @@ pub static OPS: &[OpInfo] = &[
         mask_base: None,
         help: "Reads a Gaussian splat capture: a 3D Gaussian Splatting .ply file, as Postshot, Polycam, Luma, Nerfstudio, \
                gsplat and the INRIA code export it, a .splat file (the antimatter15 web format: one color per splat) or a \
-               .spz file (Niantic's compressed format, versions 2 and 3; already Y up). Up axis says which way is up in the capture: y (as Arclight, the \
-               default), z (Z-up tools), or -y (Y down, Z forward: captures straight from COLMAP / OpenCV, which then \
-               look upside down). Translate, Rotate and Scale then place it. Opacity fades every splat. Color detail \
+               .spz file (Niantic's compressed format, versions 2 and 3; read Y down like the others). Up axis says which way is up in the \
+               capture: -y (Y down, Z forward, the default: captures from COLMAP / OpenCV, as most .ply and .splat files and every .spz \
+               are), y (already Y up, as Arclight), or z (Z-up tools). Translate, Rotate and Scale then place it. Opacity fades every splat. Color detail \
                keeps the color's change with the viewing angle up to that spherical-harmonics degree (0: one color per \
                splat, the quickest; 3: all of it). Holdout draws nothing but hides what's behind the splats, as a holdout mesh \
                does. Outputs a scene holding the capture.",
@@ -3237,7 +3237,7 @@ fn read_splat(params: &Value) -> Result<Image> {
     let degree = params["sh_degree"].as_i64().unwrap_or(3).clamp(0, 3) as u8;
     let read = Splats::read(std::path::Path::new(file), degree)?;
     // Its up to +Y: Z-up turns −90° about X; Y-down (Z forward) 180°.
-    let up = match params["up"].as_str().unwrap_or("y") {
+    let up = match params["up"].as_str().unwrap_or("-y") {
         "z" => geom::Mat4::new(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
         "-y" => geom::Mat4::new(1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
         _ => geom::Mat4::identity(),
@@ -3491,9 +3491,12 @@ mod tests {
         let scene = |p: Value| eval("read_splat", &p, &[], &CTX).unwrap().scene.clone().unwrap();
         let s = scene(json!({ "file": file }));
         let g = &s.splats[0];
-        assert_eq!((s.splats.len(), g.len(), g.sh_degree, g.world), (1, 320, 1, crate::geom::Mat4::identity()));
+        assert_eq!((s.splats.len(), g.len(), g.sh_degree), (1, 320, 1));
         let at = |p: Value, v: [f64; 3]| crate::geom::transform_point(&scene(p).splats[0].world, &crate::geom::Vec3::from(v));
-        // Up: Z-up's +Z and COLMAP's −Y come out as +Y; placed after.
+        // Up: by default COLMAP's −Y (Z forward) comes out as +Y, as do
+        // Z-up's +Z and, as it is, y's; placed after.
+        assert!((at(json!({ "file": file }), [0.0, -1.0, 0.0]) - crate::geom::Vec3::y()).norm() < 1e-12 && (at(json!({ "file": file }), [0.0, 0.0, 1.0]) + crate::geom::Vec3::z()).norm() < 1e-12);
+        assert_eq!(scene(json!({ "file": file, "up": "y" })).splats[0].world, crate::geom::Mat4::identity());
         assert!((at(json!({ "file": file, "up": "z" }), [0.0, 0.0, 1.0]) - crate::geom::Vec3::y()).norm() < 1e-12);
         assert!((at(json!({ "file": file, "up": "-y" }), [0.0, -1.0, 0.0]) - crate::geom::Vec3::y()).norm() < 1e-12);
         assert!((at(json!({ "file": file, "up": "-y", "translate": [5, 0, 0] }), [0.0, 0.0, 1.0]) - crate::geom::Vec3::new(5.0, 0.0, -1.0)).norm() < 1e-12, "Z forward: toward the default camera");
@@ -3503,6 +3506,19 @@ mod tests {
         assert!(std::sync::Arc::ptr_eq(&g.positions, &faded.splats[0].positions) && std::sync::Arc::ptr_eq(&g.opacity, &scene(json!({ "file": file })).splats[0].opacity));
         assert_eq!(scene(json!({ "file": file, "sh_degree": 0 })).splats[0].sh_degree, 0);
         assert!(!g.holdout && scene(json!({ "file": file, "holdout": true })).splats[0].holdout);
+        // The sample, upright by default: its ball above the ground.
+        let (lo, hi) = (0..g.len()).map(|i| crate::geom::transform_point(&g.world, &crate::geom::Vec3::from(g.positions[i].map(f64::from)))).fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p.y), hi.max(p.y)));
+        assert!(lo.abs() < 1e-6 && (hi - 2.0).abs() < 0.01, "{lo} {hi}");
+        // The same as .spz (natively Y up), by default, lands where the
+        // .ply does.
+        let spz = std::env::temp_dir().join(format!("arclight_read_splat_{}.spz", std::process::id()));
+        crate::splat::write_spz(&spz, g, 3).unwrap();
+        let other = scene(json!({ "file": spz.to_str().unwrap() }));
+        let o = &other.splats[0];
+        let world = |s: &crate::splat::Splats, i: usize| crate::geom::transform_point(&s.world, &crate::geom::Vec3::from(s.positions[i].map(f64::from)));
+        assert!((0..g.len()).all(|i| (world(o, i) - world(g, i)).norm() < 1e-3), "the .spz and the .ply agree");
+        assert!((0..g.len()).all(|i| (0..3).all(|k| (o.color(i, [0.0, 0.6, 0.8])[k] - g.color(i, [0.0, 0.6, 0.8])[k]).abs() < 0.01)), "colors too");
+        std::fs::remove_file(&spz).ok();
         assert!(eval("read_splat", &json!({}), &[], &CTX).err().unwrap().to_string().contains("no file"));
         assert!(eval("read_splat", &json!({ "file": "/no/such.ply" }), &[], &CTX).is_err());
     }

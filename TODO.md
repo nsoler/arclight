@@ -7,9 +7,9 @@ they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
-- [ ] 0.10.2–0.10.13: Splat Crop (drag its box in 3D), Splat Color, .splat /
+- [ ] 0.10.2–0.10.14: Splat Crop (drag its box in 3D), Splat Color, .splat /
       .spz files; Read Splat a real capture (.ply from Postshot /
-      Polycam / Luma…; try Up axis -y if it's upside down), render it
+      Polycam / Luma…; Up axis now defaults to -y (0.10.14)), render it
       with a card in front / behind, the 3D view's dots then full render,
       F, click to select
 - [ ] 0.9.65–0.9.68: Edit ▸ Preferences (scale, theme, snap, straight
@@ -68,8 +68,7 @@ Phase 10: 0.10.x on branch `wip-ns-splats` (started 0.10.0).
 - [x] S5 (0.10.12–0.10.13): `.splat` / `.spz` readers, 2–2.5× faster
       rendering, a per-view cache
 - [ ] Splat follow-ups: a GPU path (with the wgpu item); SOG / compressed
-      PLY if asked; Read Splat's Up axis default (y today; most COLMAP
-      captures need -y: ask the user)
+      PLY if asked (Up axis now defaults to -y: 0.10.14)
 
 ## 3D and rendering
 

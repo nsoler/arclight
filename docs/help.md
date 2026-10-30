@@ -272,8 +272,9 @@ selected object.
   Niantic's compressed `.spz`; `.ply` as Postshot,
   Polycam, Luma, Nerfstudio, gsplat and the INRIA 3DGS code export it:
   binary or ASCII, color detail up to spherical-harmonics degree 3), with
-  **Up axis** (as is, Z-up, or Y-down for COLMAP captures, which
-  otherwise look upside down), Translate / Rotate / Scale, **Opacity** and
+  **Up axis** (Y down, Z forward, the default, as COLMAP / INRIA
+  `.ply` and `.splat` captures come and `.spz` is read; y for captures
+  already Y up; z for Z-up tools), Translate / Rotate / Scale, **Opacity** and
   a **Color detail** cap (lower is faster). A sample is in
   `examples/geo/splats.ply`. Splats render in Scanline Render with the
   rest of the scene: in front of, behind or through cards and meshes by
