@@ -20,10 +20,8 @@ done), `docs/help.md` (the in-app help) and
   (the Python `.so` is 0.9.46). Both workers idle; nothing uncommitted.
 - **Latest release: v0.9.48** (marked **Latest**;
   github.com/nsoler/arclight/releases/latest): Linux x86_64 tarball,
-  macOS universal DMG, `arclt` wheels + sdist (the DMG / wheels
-  workflows were still running at this update: check with `gh release
-  view v0.9.48` that all five assets are there; rerun a macOS job that
-  wasn't acquired). Earlier: v0.9.47, v0.9.46, v0.9.33, v0.9.32,
+  macOS universal DMG, `arclt` wheels + sdist (both workflows passed,
+  all five assets checked). Earlier: v0.9.47, v0.9.46, v0.9.33, v0.9.32,
   v0.9.31, v0.9.30, v0.9.27, v0.9.11. The stray v0.9.7 draft release was deleted
   at the user's request (the published v0.9.7 release and tag remain).
 - **Ask the user first:** how 0.9.34–0.9.48 test (0.9.48: motion blur, Lit / Solid view, and the camera setup now placed before the Viewer — the user hand-tested the 0.9.30 setup and asked for that, so ask if it now feels right; 0.9.47: Card Opacity, frame size labels, square About logo); node graph Tab /
