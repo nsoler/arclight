@@ -1,6 +1,6 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-29, end of session 11 (herdr multi-agent sessions:
+Last updated 2026-10-29, end of session 11 (after v0.9.48) (herdr multi-agent sessions:
 one master + workers; see "Several agent sessions" below). Read this,
 then `README.md` (user-facing features, file format, shortcuts,
 scripting, the "3D view" section), `docs/phase-4-plan.md` (3D plan: M1–M13
@@ -15,27 +15,30 @@ done), `docs/help.md` (the in-app help) and
   (the Python `.so` is 0.9.46). Both workers idle; nothing uncommitted.
 - **Latest release: v0.9.48** (marked **Latest**;
   github.com/nsoler/arclight/releases/latest): Linux x86_64 tarball,
-  macOS universal DMG, `arclt` wheels + sdist (both workflows passed,
-  all five assets checked). Earlier: v0.9.47, v0.9.46, v0.9.33, v0.9.32,
+  macOS universal DMG, `arclt` wheels + sdist (the DMG / wheels
+  workflows were still running at this update: check with `gh release
+  view v0.9.48` that all five assets are there; rerun a macOS job that
+  wasn't acquired). Earlier: v0.9.47, v0.9.46, v0.9.33, v0.9.32,
   v0.9.31, v0.9.30, v0.9.27, v0.9.11. The stray v0.9.7 draft release was deleted
   at the user's request (the published v0.9.7 release and tag remain).
-- **Ask the user first:** how 0.9.34–0.9.48 test (0.9.48: motion blur, Lit / Solid view, camera setup before the Viewer; 0.9.47: Card Opacity, frame size labels, square About logo); node graph Tab /
+- **Ask the user first:** how 0.9.34–0.9.48 test (0.9.48: motion blur, Lit / Solid view, and the camera setup now placed before the Viewer — the user hand-tested the 0.9.30 setup and asked for that, so ask if it now feels right; 0.9.47: Card Opacity, frame size labels, square About logo); node graph Tab /
   ⇧R / ⇧T / ⇧M; Area Light, falloff, radius, exposure, Look at; light
   handles and Look through selected (0); shadows and the shadow pass;
   Light 2D; particles (Emitter → forces → Particle Render → Scanline
   Render's growable inputs, Particles 2D, dots and gizmos in the 3D
   view). Then the older open questions below.
-- **Known limits (M13):** animated geometry emitters re-simulate from
-  scratch; particles have no motion vectors; sprite texture is one image
+- **Known limits:** animated geometry emitters re-simulate from
+  scratch; sprite texture is one image
   (no sequence input); the GUI bridge re-simulates particles per MCP
-  call. Shadows cost time (soft spot + 6×6 area ≈ 3.5× unshadowed).
-- **Next (no plan yet; ask the user):** M12/M13 follow-ups above
-  (motion vectors for particles, a sprite sequence input, reusing the
-  GUI's evaluator in the MCP bridge); an Opacity on Read Geo to fade file
+  call. Shadows cost time (soft spot + 6×6 area ≈ 3.5× unshadowed);
+  motion blur costs about one render per sample (8 samples ≈ 8×).
+- **Next (no plan yet; ask the user):** motion blur follow-ups
+  (per-pixel time jitter against banding at low samples, acceleration in
+  particle streaks, blur in the 3D view preview); particle follow-ups (a
+  sprite sequence input, reusing the GUI's evaluator in the MCP bridge); an Opacity on Read Geo to fade file
   materials without Override material (3DWorker's suggestion); saving
   view preferences (e.g. Show frame size) between runs (eframe
-  persistence is off); the M9 leftover (true ortho texture path); the
-  viewport's solid view lit by scene lights; newer clippy flags old code
+  persistence is off); the M9 leftover (true ortho texture path); newer clippy flags old code
   (graph.rs `from_str` naming, plugins/example `chunks_exact`), harmless
   but could be tidied; other items under "Next steps".
 - **0.9.47 (after M12 / M13, user requests):** Card **Opacity**
