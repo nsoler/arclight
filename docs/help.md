@@ -274,8 +274,12 @@ selected object.
   **Up axis** (as is, Z-up, or Y-down for COLMAP captures, which
   otherwise look upside down), Translate / Rotate / Scale, **Opacity** and
   a **Color detail** cap (lower is faster). A sample is in
-  `examples/geo/splats.ply`. (Rendering it in Scanline Render and the 3D
-  view is coming next.)
+  `examples/geo/splats.ply`. Splats render in Scanline Render with the
+  rest of the scene: in front of, behind or through cards and meshes by
+  depth; holdouts cut them out. They light themselves (no shadows from
+  Arclight's lights); depth is where they become half opaque. In the 3D
+  view they show as dots at their centers (the full render while settled
+  comes later).
 - **Read Geo** reads an OBJ file (with its MTL colors and textures) or a
   glTF file (.gltf, .glb).
 - Each has Translate / Rotate / Scale, like a Card; wire them into a Scene

@@ -12,6 +12,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.3 — 2026-10-30
+
+- **Scanline Render draws Gaussian splats** (Dev2, splat plan S1): a CPU
+  3DGS rasterizer (EWA projection, view-dependent color up to degree 3,
+  16×16 tiles sorted by depth, front-to-back blend) mixed per pixel with
+  cards and meshes in depth order: see-through surfaces blend with
+  splats, opaque ones and holdouts cut them; depth is where the splats
+  get half opaque. 1 M splats at 1920×1080 render in about 0.4 s. The 3D
+  view shows splat centers as dots in their color (up to 300 k per set).
+
 ## 0.10.2 — 2026-10-30
 
 - **Read Splat** (Dev1, splat plan S1): reads a Gaussian splat capture

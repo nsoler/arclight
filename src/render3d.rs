@@ -28,6 +28,7 @@ use std::borrow::Cow;
 
 mod particles;
 mod shadow;
+mod splats;
 
 /// A triangle mesh to draw, in its own space, placed by `world`, colored
 /// by `color` times its texture (if any).
@@ -438,7 +439,8 @@ fn render_cell(scene: &Scene, cam: &Camera, format: Size, samples: usize, backgr
     // their velocities (the next frame's own may be others).
     let next_objects = next.filter(|_| objects.is_some() && passes.motion).and_then(|(n, _)| particles::with_objects(&Scene { particles: scene.particles.iter().map(|s| s.shifted(1.0)).collect(), ..n.clone() }));
     let next = next.map(|(n, c)| (next_objects.as_ref().unwrap_or(n), c));
-    let out = draw_passes(&surfaces(scene), &scene.lights, &scene.points, cam, format, samples, passes, next, cell);
+    let splats = splats::prepare(&scene.splats, cam, format);
+    let out = draw_passes(&surfaces(scene), &scene.lights, &scene.points, cam, format, samples, passes, next, cell, splats.as_ref());
     let mut out = match background {
         Some(bg) => over_background(out, bg),
         None => out,
@@ -631,13 +633,13 @@ fn preview_cell(scene: &Scene, cam: &Camera, format: Size, preview: Preview, cel
     match preview {
         Preview::Lit { shadows } if !scene.lights.is_empty() => {
             let lights: Vec<Light> = scene.lights.iter().map(|l| Light { shadows: l.shadows && shadows, ..l.clone() }).collect();
-            draw_passes(&surfs, &lights, &[], cam, format, 1, Passes::DEPTH, None, cell)
+            draw_passes(&surfs, &lights, &[], cam, format, 1, Passes::DEPTH, None, cell, None)
         }
         _ => {
             for s in surfs.iter_mut().skip(scene.cards.len()) {
                 s.headlight = true;
             }
-            draw_passes(&surfs, &[], &[], cam, format, 1, Passes::DEPTH, None, cell)
+            draw_passes(&surfs, &[], &[], cam, format, 1, Passes::DEPTH, None, cell, None)
         }
     }
 }
@@ -700,7 +702,7 @@ fn slot(k: &mut usize, on: bool, n: usize) -> usize {
 /// `format`, with depth (see [`render`]).
 #[cfg(test)]
 fn draw(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, samples: usize) -> Image {
-    draw_passes(surfs, &[], points, cam, format, samples, Passes::DEPTH, None, None)
+    draw_passes(surfs, &[], points, cam, format, samples, Passes::DEPTH, None, None, None)
 }
 
 /// The object nodes of `surfs` in order (each once, unnamed ones left out):
@@ -717,7 +719,7 @@ fn object_nodes<'a>(surfs: &[Surface<'a>]) -> Vec<&'a str> {
 
 /// [`draw`] writing `passes` (see [`render_passes`]).
 #[allow(clippy::too_many_arguments)]
-fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes, next: Option<(&Scene, &Camera)>, cell: Option<Cell>) -> Image {
+fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes, next: Option<(&Scene, &Camera)>, cell: Option<Cell>, splats: Option<&splats::Prepared>) -> Image {
     let n = samples.clamp(1, 16);
     // With the motion pass: each surface's vertices a frame later (the
     // surface at the same place in the next frame's list, if it's from the
@@ -775,10 +777,12 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
         .enumerate()
         .for_each(|(y, ((crow, drow), xrow))| {
             let row = &rows[y];
-            if row.is_empty() || cell.is_some_and(|c| y % c.side != c.y) {
+            if (row.is_empty() && splats.is_none()) || cell.is_some_and(|c| y % c.side != c.y) {
                 return;
             }
-            let y = y as i32;
+            let (yu, y) = (y, y as i32);
+            // The splats at the current pixel, nearest first.
+            let mut frags: Vec<splats::Fragment> = Vec::new();
             let mut hits: Vec<Hit> = Vec::new();
             let mut mattes = vec![0.0f32; nodes.len()];
             // Each hit's light in parts (and per light), when those passes
@@ -796,9 +800,26 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                     next += 1;
                 }
                 here.retain(|&i| tris[i as usize].bounds.x1 > xi);
-                if here.is_empty() || cell.is_some_and(|c| x % c.side != c.x) {
+                if cell.is_some_and(|c| x % c.side != c.x) {
                     continue;
                 }
+                if let Some(sp) = splats {
+                    sp.fragments(x, yu, &mut frags);
+                }
+                // The splats alone, where a sample meets no surface.
+                let alone = (!frags.is_empty()).then(|| blend_alone(&frags));
+                if here.is_empty() {
+                    if let Some((acc, median)) = alone {
+                        *out = acc;
+                        if let Some(d) = median {
+                            *dout = d as f32;
+                        }
+                    }
+                    continue;
+                }
+                // Where the samples' blends first got half opaque (with
+                // splats: their depth), nearest.
+                let mut median: Option<f64> = None;
                 let mut sum = [0.0f32; 4];
                 // The nearest surface seen at least half opaque, for depth
                 // and the other nearest-sample passes, and the nearest
@@ -860,15 +881,42 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                             hits.push(Hit { depth: d, tri: ti as usize, bary, color });
                         }
                         if hits.is_empty() {
+                            if let Some((acc, m)) = alone {
+                                (0..4).for_each(|c| sum[c] += acc[c]);
+                                median = nearer(median, m);
+                            }
                             continue;
                         }
                         let mut order: Vec<usize> = (0..hits.len()).collect();
                         order.sort_by(|&a, &b| hits[a].depth.total_cmp(&hits[b].depth).then(hits[a].tri.cmp(&hits[b].tri)));
-                        // Front to back, premultiplied; a holdout takes its
-                        // share of what's left without adding to it.
+                        // Front to back, premultiplied, with the splats in
+                        // depth order among them; a holdout takes its share
+                        // of what's left without adding to it.
                         let mut acc = [0.0f32; 4];
                         let mut held = 0.0f32;
-                        for &hi in &order {
+                        let mut half: Option<f64> = None;
+                        let (mut oi, mut fi) = (0, 0);
+                        loop {
+                            let splat_next = match (order.get(oi), frags.get(fi)) {
+                                (None, None) => break,
+                                (Some(&hi), Some(f)) => f.depth < hits[hi].depth,
+                                (h, _) => h.is_none(),
+                            };
+                            if splat_next {
+                                let f = frags[fi];
+                                fi += 1;
+                                let k = 1.0 - acc[3] - held;
+                                (0..4).for_each(|c| acc[c] += f.color[c] * k);
+                                if half.is_none() && acc[3] >= 0.5 {
+                                    half = Some(f.depth);
+                                }
+                                if acc[3] + held >= 1.0 {
+                                    break;
+                                }
+                                continue;
+                            }
+                            let hi = order[oi];
+                            oi += 1;
                             let hit = &hits[hi];
                             let surf = tris[hit.tri].surf;
                             let seen = if hit.color[3] >= 0.5 { &mut nearest } else { &mut faint };
@@ -897,10 +945,14 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                                     }
                                 }
                             }
+                            if half.is_none() && acc[3] >= 0.5 {
+                                half = Some(hit.depth);
+                            }
                             if acc[3] + held >= 1.0 {
                                 break;
                             }
                         }
+                        median = nearer(median, half);
                         (0..4).for_each(|c| sum[c] += acc[c]);
                     }
                 }
@@ -920,8 +972,16 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                         (0..3).for_each(|c| px[shadow_at + c] = shadow_sum[c] * norm);
                     }
                 }
+                // With splats here, depth is where the blend got half
+                // opaque; else (and for the other passes) the surface's.
+                let median = median.filter(|_| !frags.is_empty());
+                if let Some(d) = median {
+                    *dout = d as f32;
+                }
                 let Some(hit) = nearest.or(faint) else { continue };
-                *dout = hit.depth as f32;
+                if median.is_none() {
+                    *dout = hit.depth as f32;
+                }
                 let px = &mut xrow[x * stride..x * stride + k];
                 let t = &tris[hit.tri];
                 let at = |f: fn(&Vert) -> Vec3| t.v.iter().zip(&hit.bary).map(|(v, b)| f(v) * *b).sum::<Vec3>();
@@ -1008,6 +1068,29 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
         ["R", "G", "B"].iter().enumerate().for_each(|(c, ch)| plane(format!("shadow.{ch}"), shadow_at + c));
     }
     out
+}
+
+/// Splat fragments `frags` (nearest first) blended front to back, and the
+/// depth where they first got half opaque.
+fn blend_alone(frags: &[splats::Fragment]) -> (Rgba, Option<f64>) {
+    let mut acc = [0.0f32; 4];
+    let mut half = None;
+    for f in frags {
+        let k = 1.0 - acc[3];
+        (0..4).for_each(|c| acc[c] += f.color[c] * k);
+        if half.is_none() && acc[3] >= 0.5 {
+            half = Some(f.depth);
+        }
+    }
+    (acc, half)
+}
+
+/// The nearer of two depths, either maybe missing.
+fn nearer(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
 }
 
 /// `fg` (frame-sized) over `bg`: the union of both windows. Each of the

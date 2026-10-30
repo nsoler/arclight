@@ -848,6 +848,18 @@ fn icon_size(scene: &Scene) -> f64 {
     bounds(scene, None).map_or(1.0, |(_, r)| (r * 0.08).max(0.15))
 }
 
+/// Splat set `s`'s dots in the 3D view: each center (in the scene) and its
+/// color seen from any side (the SH's first term), every so many past
+/// [`MAX_SPLAT_DOTS`].
+fn splat_dots(s: &arclight::splat::Splats) -> impl Iterator<Item = (Vec3, Color32)> + '_ {
+    let every = s.len().div_ceil(MAX_SPLAT_DOTS).max(1);
+    (0..s.len()).step_by(every).filter(move |&i| s.sh.len() >= (i + 1) * s.sh_stride()).map(move |i| {
+        let at = geom::transform_point(&s.world, &Vec3::from(s.positions[i].map(f64::from)));
+        let [r, g, b] = arclight::splat::sh_color(&s.sh_of(i)[..3], 0, [0.0, 0.0, 1.0]).map(|c| c.clamp(0.0, 1.0));
+        (at, egui::Rgba::from_rgb(r, g, b).into())
+    })
+}
+
 /// Where particle `pt` is at each of `times` (frames on from its frame, at
 /// `fps`), as a render's motion blur moves it (see [`Particle::moved`]).
 /// Empty without times.
@@ -1048,6 +1060,8 @@ const MAX_EDGES: usize = 40_000;
 const POINT: Color32 = Color32::from_rgb(90, 175, 225);
 /// The most particles drawn as dots per stream (past it, every so many).
 const MAX_PARTICLE_DOTS: usize = 20_000;
+/// The most splats drawn as dots per set (past it, every so many).
+const MAX_SPLAT_DOTS: usize = 300_000;
 const SELECTED: Color32 = Color32::from_rgb(255, 160, 40);
 const LIGHT: Color32 = Color32::from_rgb(250, 225, 120);
 /// Particle emitters and forces.
@@ -1942,6 +1956,21 @@ impl Viewport3d {
                 painter.circle_filled(s, 1.6, color);
             }
         }
+        // Splats: a dot at each center in its color (every so many past a
+        // cap), as one mesh (there can be hundreds of thousands).
+        let mut dots = egui::Mesh::default();
+        for set in &scene.splats {
+            let on = selected(&set.node);
+            for (at, color) in splat_dots(set) {
+                let Some((s, _)) = p.project(at) else { continue };
+                if p.rect.contains(s) {
+                    dots.add_colored_rect(Rect::from_center_size(s, Vec2::splat(if on { 2.6 } else { 1.8 })), if on { SELECTED } else { color });
+                }
+            }
+        }
+        if !dots.is_empty() {
+            painter.add(egui::Shape::mesh(dots));
+        }
         // Through a camera: its frame, the outside darkened.
         if let Some(f) = p.frame {
             let dim = Color32::from_black_alpha(150);
@@ -2154,6 +2183,26 @@ mod tests {
 
     fn rect() -> Rect {
         Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(800.0, 450.0))
+    }
+
+    #[test]
+    fn splats_show_as_dots_in_their_color_decimated_past_a_cap() {
+        use arclight::splat::{dc_of, Splats};
+        let n = 700_000;
+        let s = Splats {
+            positions: Arc::new((0..n).map(|i| [i as f32, 0.0, 0.0]).collect()),
+            scales: Arc::new(vec![[0.1; 3]; n]),
+            rotations: Arc::new(vec![[1.0, 0.0, 0.0, 0.0]; n]),
+            opacity: Arc::new(vec![1.0; n]),
+            sh: Arc::new([1.0, 0.5, 0.0].map(dc_of).repeat(n)),
+            sh_degree: 0,
+            world: geom::trs([0.0, 0.0, -5.0], [0.0; 3], [1.0; 3]),
+            node: "splat1".into(),
+        };
+        let dots: Vec<(Vec3, Color32)> = splat_dots(&s).collect();
+        assert_eq!(dots.len(), 700_000usize.div_ceil(3), "every third");
+        assert_eq!(dots[1].0, Vec3::new(3.0, 0.0, -5.0), "placed in the scene");
+        assert_eq!(dots[0].1, Color32::from(egui::Rgba::from_rgb(1.0, 0.5, 0.0)));
     }
 
     #[test]
