@@ -31,6 +31,7 @@ __all__ = [
     "save", "load", "new", "render", "pixels", "to_numpy", "ops", "op_info", "project",
     "undo", "redo", "metadata", "graph", "plugins", "instances", "attach", "detach",
     "select", "view", "view_state", "Backdrop", "backdrops", "backdrop", "create_backdrop",
+    "set_positions", "layout",
 ]
 
 
@@ -83,6 +84,16 @@ class Node:
 
     def __setitem__(self, param: str, value: Any) -> None:
         self.set(**{param: value})
+
+    @property
+    def pos(self) -> list[float] | None:
+        """Its place in the node editor, [x, y] (top-left corner), or None
+        while unplaced (a GUI then puts it beside what feeds it)."""
+        return self.info()["pos"]
+
+    @pos.setter
+    def pos(self, value: list[float]) -> None:
+        _call("set_node_position", node=self._name, pos=value)
 
     def set(self, **params: Any) -> "Node":
         """Set several params as one undo step."""
@@ -243,11 +254,26 @@ class Node:
         return hash(self._name)
 
 
-def create_node(op: str, *inputs: "Node | str | None", name: str | None = None, **params: Any) -> Node:
+def create_node(op: str, *inputs: "Node | str | None", name: str | None = None, pos: list[float] | None = None,
+                **params: Any) -> Node:
     """Add a node of type ``op``. Positional ``inputs`` connect ports in order
-    (``None`` skips a port); keyword arguments set params."""
+    (``None`` skips a port); ``pos`` places it in the node editor; other
+    keyword arguments set params."""
     ins = ["" if i is None else _name(i) for i in inputs]
-    return Node(_call("create_node", op=op, name=name, params=params, inputs=ins)["node"])
+    return Node(_call("create_node", op=op, name=name, params=params, inputs=ins, pos=pos)["node"])
+
+
+def set_positions(positions: "dict[Node | str, list[float]]") -> None:
+    """Move several nodes in the node editor as one undo step:
+    ``{node: [x, y]}`` (top-left corners; nodes are 150 x 46)."""
+    _call("set_node_position", positions={_name(n): p for n, p in positions.items()})
+
+
+def layout(all: bool = False) -> dict[str, list[float]]:
+    """Place the nodes with no position (``all``: every node) as the node
+    editor does: a column per depth from the sources, left to right.
+    Returns every node's position."""
+    return _call("layout_nodes", all=all)["positions"]
 
 
 class Backdrop:

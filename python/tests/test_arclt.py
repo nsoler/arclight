@@ -118,6 +118,24 @@ class ArcltTest(unittest.TestCase):
         with self.assertRaisesRegex(arclt.ArcltError, "no backdrop"):
             box.title
 
+    def test_node_positions(self):
+        plate = arclt.create_node("constant", name="plate", pos=[0, 0])
+        soft = arclt.create_node("blur", plate)
+        look = arclt.create_node("grade", soft)
+        self.assertEqual((plate.pos, soft.pos), ([0, 0], None))
+        laid = arclt.layout()
+        self.assertGreater(laid[look.name][0], laid[soft.name][0])
+        soft.pos = [300, 0]
+        arclt.set_positions({plate: [-300, 0], look.name: [600, 0]})
+        self.assertEqual((plate.pos, soft.pos, look.pos), ([-300, 0], [300, 0], [600, 0]))
+        self.assertEqual(arclt.create_backdrop(soft, look).nodes(), [soft, look])
+        arclt.undo()
+        arclt.undo()
+        self.assertEqual(soft.pos, [300, 0])
+        self.assertNotEqual(plate.pos, [-300, 0])
+        with self.assertRaisesRegex(arclt.ArcltError, "nope"):
+            arclt.set_positions({"nope": [0, 0]})
+
     def test_errors_raise_arclt_error(self):
         c = arclt.create_node("constant")
         with self.assertRaisesRegex(arclt.ArcltError, "no param"):

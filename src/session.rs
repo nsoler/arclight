@@ -177,6 +177,7 @@ impl Session {
             "inputs": inputs,
             "outputs": outputs,
             "params": ops::params_with_defaults(&n.op, &n.params),
+            "pos": n.pos,
         }))
     }
 
@@ -186,10 +187,19 @@ impl Session {
     /// validated and merged over the op's defaults; `inputs` connect ports in
     /// order (empty strings leave a port unconnected).
     pub fn create_node(&mut self, op: &str, id: Option<&str>, params: &Map<String, Value>, inputs: &[String]) -> Result<String> {
+        self.create_node_at(op, id, params, inputs, None)
+    }
+
+    /// [`Session::create_node`] at `pos` in the node editor (None: the GUI
+    /// places it, beside what feeds it).
+    pub fn create_node_at(&mut self, op: &str, id: Option<&str>, params: &Map<String, Value>, inputs: &[String], pos: Option<[f32; 2]>) -> Result<String> {
+        if let Some(p) = pos {
+            check_pos(p)?;
+        }
         let info = op_info(op)?;
         let id = match id {
             Some(id) => {
-                check_id(id).map_err(|_| anyhow!("invalid backdrop name '{id}': use letters, digits, '_', '-' or '.'"))?;
+                check_id(id)?;
                 if self.node(id).is_some() {
                     bail!("'{id}' is already used");
                 }
@@ -226,7 +236,7 @@ impl Session {
         let mut node_inputs = inputs.to_vec();
         node_inputs.resize(info.inputs.len(), String::new());
         self.checkpoint();
-        self.graph.nodes.push(NodeSpec { id: id.clone(), op: op.to_string(), inputs: node_inputs, params: values, pos: None });
+        self.graph.nodes.push(NodeSpec { id: id.clone(), op: op.to_string(), inputs: node_inputs, params: values, pos });
         Ok(id)
     }
 
@@ -556,7 +566,7 @@ impl Session {
     pub fn create_backdrop(&mut self, id: Option<&str>, edit: &BackdropEdit) -> Result<String> {
         let id = match id {
             Some(id) => {
-                check_id(id)?;
+                check_id(id).map_err(|_| anyhow!("invalid backdrop name '{id}': use letters, digits, '_', '-' or '.'"))?;
                 if self.graph.backdrop(id).is_some() {
                     bail!("a backdrop '{id}' already exists");
                 }
@@ -630,6 +640,37 @@ impl Session {
             b.font_size = f;
         }
         Ok(())
+    }
+
+    // -- node positions -----------------------------------------------------
+
+    /// Move nodes in the node editor (one undo step): each `(id, [x, y])`,
+    /// the node's top-left corner.
+    pub fn set_node_positions(&mut self, positions: &[(String, [f32; 2])]) -> Result<()> {
+        let mut at = Vec::with_capacity(positions.len());
+        for (id, p) in positions {
+            check_pos(*p)?;
+            at.push((self.node_index(id)?, *p));
+        }
+        if at.iter().any(|&(i, p)| self.graph.nodes[i].pos != Some(p)) {
+            self.checkpoint();
+            for (i, p) in at {
+                self.graph.nodes[i].pos = Some(p);
+            }
+        }
+        Ok(())
+    }
+
+    /// Lay out the nodes with no position (`all`: every node) as the node
+    /// editor does a graph without positions: a column per depth from the
+    /// sources, left to right. One undo step.
+    pub fn layout_nodes(&mut self, all: bool) {
+        let mut g = self.graph.clone();
+        g.layout(all);
+        if g != self.graph {
+            self.checkpoint();
+            self.graph = g;
+        }
     }
 
     // -- rendering ----------------------------------------------------------
@@ -890,6 +931,13 @@ pub fn backdrop_color(v: &Value) -> Result<[f32; 3]> {
         Ok(c) if c.iter().all(|x| (0.0..=1.0).contains(x)) => Ok(c),
         _ => bail!("'color' must be {names}, an index 0-7 or [r, g, b] with each 0-1"),
     }
+}
+
+fn check_pos(p: [f32; 2]) -> Result<()> {
+    if !p.iter().all(|v| v.is_finite()) {
+        bail!("a position must be two finite numbers");
+    }
+    Ok(())
 }
 
 fn check_id(id: &str) -> Result<()> {
@@ -1225,5 +1273,40 @@ mod tests {
         s.delete_backdrop(&id).unwrap();
         assert_eq!((s.graph.backdrops.len(), s.graph.nodes.len()), (1, 3));
         assert!(s.delete_backdrop(&id).is_err());
+    }
+
+    #[test]
+    fn node_positions_set_lay_out_and_undo() {
+        let mut s = Session::default();
+        let a = s.create_node_at("constant", None, &Map::new(), &[], Some([10.0, 20.0])).unwrap();
+        assert_eq!(s.describe_node(&a).unwrap()["pos"], json!([10.0, 20.0]));
+        let b = s.create_node("blur", None, &Map::new(), std::slice::from_ref(&a)).unwrap();
+        let c = s.create_node("grade", None, &Map::new(), std::slice::from_ref(&b)).unwrap();
+        assert_eq!(s.describe_node(&b).unwrap()["pos"], Value::Null);
+        assert!(s.create_node_at("constant", None, &Map::new(), &[], Some([f32::NAN, 0.0])).is_err());
+        // Unplaced ones only, by depth; then all.
+        s.layout_nodes(false);
+        let pos = |s: &Session, id: &str| s.node(id).unwrap().pos.unwrap();
+        assert_eq!(pos(&s, &a), [10.0, 20.0]);
+        assert!(pos(&s, &c)[0] > pos(&s, &b)[0] && pos(&s, &b)[0] > 0.0);
+        s.layout_nodes(true);
+        assert_eq!(pos(&s, &a), [0.0, 0.0]);
+        // Many at once, one step; a bad one moves none.
+        let depth = s.undo.len();
+        let moves = [(a.clone(), [0.0, 0.0]), (b.clone(), [300.0, 0.0]), (c.clone(), [600.0, 0.0])];
+        s.set_node_positions(&moves).unwrap();
+        assert_eq!(s.undo.len(), depth + 1);
+        s.set_node_positions(&moves).unwrap();
+        assert_eq!(s.undo.len(), depth + 1, "no move, no step");
+        assert!(s.set_node_positions(&[(a.clone(), [5.0, 5.0]), ("nope".into(), [0.0, 0.0])]).is_err());
+        assert_eq!((pos(&s, &a), s.undo.len()), ([0.0, 0.0], depth + 1));
+        // Placed, a backdrop fits just the nodes asked for.
+        let bd = s.create_backdrop(None, &BackdropEdit { around: Some(vec![b.clone(), c.clone()]), ..Default::default() }).unwrap();
+        assert_eq!(s.backdrops()[0]["nodes"], json!([b, c]));
+        assert!(s.undo() && s.undo());
+        assert!(s.graph.backdrop(&bd).is_none() && pos(&s, &c) != [600.0, 0.0]);
+        // Bad names say what they name.
+        assert!(s.create_node("constant", Some("a b"), &Map::new(), &[]).unwrap_err().to_string().contains("node name"));
+        assert!(s.create_backdrop(Some("a b"), &BackdropEdit { around: Some(vec![a]), ..Default::default() }).unwrap_err().to_string().contains("backdrop name"));
     }
 }

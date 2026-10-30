@@ -354,6 +354,44 @@ impl Graph {
         (1..).map(|i| format!("backdrop{i}")).find(|id| self.backdrop(id).is_none()).expect("ids run out")
     }
 
+    /// Place nodes in the node editor: those with no position (`all`: every
+    /// node) go in a column per depth from the sources, left to right, one
+    /// row per node down each column.
+    pub fn layout(&mut self, all: bool) {
+        if all {
+            for n in &mut self.nodes {
+                n.pos = None;
+            }
+        }
+        if self.nodes.iter().all(|n| n.pos.is_some()) {
+            return;
+        }
+        let mut depth: HashMap<String, usize> = HashMap::new();
+        // Longest-path depth; bounded passes so a malformed cyclic file can't hang.
+        for _ in 0..self.nodes.len() {
+            let mut changed = false;
+            for n in &self.nodes {
+                let d = n.inputs.iter().filter_map(|i| depth.get(i)).map(|d| d + 1).max().unwrap_or(0);
+                if depth.get(&n.id) != Some(&d) {
+                    depth.insert(n.id.clone(), d);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut rows: HashMap<usize, usize> = HashMap::new();
+        for n in &mut self.nodes {
+            if n.pos.is_none() {
+                let col = depth.get(&n.id).copied().unwrap_or(0);
+                let row = rows.entry(col).or_insert(0);
+                n.pos = Some([col as f32 * (NODE_W + 50.0), *row as f32 * (NODE_H + 40.0)]);
+                *row += 1;
+            }
+        }
+    }
+
     pub fn node(&self, id: &str) -> Option<&NodeSpec> {
         self.nodes.iter().find(|n| n.id == id)
     }

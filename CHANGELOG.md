@@ -12,6 +12,19 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.28 — 2026-10-30
+
+- **Scripts place nodes in the node editor**: the MCP tool
+  `set_node_position` moves one node or many at once, as one undo step;
+  `layout_nodes` lays out the unplaced nodes (or all) by depth, left to
+  right, as the editor does for a graph without positions; `create_node`
+  takes a `pos`. In Python: `Node.pos`, `arclt.set_positions()`,
+  `arclt.layout()` and `create_node(..., pos=)`. Placed this way,
+  backdrops made around nodes fit headless too. Moves show in an
+  attached GUI and undo there.
+- Fixed: the error for a bad node name in `create_node` called it a
+  backdrop name, and the reverse (0.10.24).
+
 ## 0.10.27 — 2026-10-30
 
 - The `arclt` source package (sdist) leaves out the repo's `examples/`

@@ -11,7 +11,7 @@ use arclight::graph::{Backdrop, Graph, NodeSpec};
 pub use arclight::graph::{NODE_H, NODE_W};
 use arclight::ops;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 /// Undo steps kept unless the preferences say otherwise.
@@ -932,39 +932,7 @@ impl Doc {
     /// Place nodes that have no position (e.g. from a hand-written JSON
     /// graph): one column per depth from the sources, left to right.
     pub fn auto_layout(&mut self) {
-        if self.graph.nodes.iter().all(|n| n.pos.is_some()) {
-            return;
-        }
-        let mut depth: HashMap<String, usize> = HashMap::new();
-        // Longest-path depth; bounded passes so a malformed cyclic file can't hang.
-        for _ in 0..self.graph.nodes.len() {
-            let mut changed = false;
-            for n in &self.graph.nodes {
-                let d = n
-                    .inputs
-                    .iter()
-                    .filter_map(|i| depth.get(i))
-                    .map(|d| d + 1)
-                    .max()
-                    .unwrap_or(0);
-                if depth.get(&n.id) != Some(&d) {
-                    depth.insert(n.id.clone(), d);
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-        let mut rows: HashMap<usize, usize> = HashMap::new();
-        for n in &mut self.graph.nodes {
-            if n.pos.is_none() {
-                let col = depth.get(&n.id).copied().unwrap_or(0);
-                let row = rows.entry(col).or_insert(0);
-                n.pos = Some([col as f32 * (NODE_W + 50.0), *row as f32 * (NODE_H + 40.0)]);
-                *row += 1;
-            }
-        }
+        self.graph.layout(false);
     }
 }
 

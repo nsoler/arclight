@@ -60,8 +60,17 @@ static TOOLS: &[Tool] = &[
             "op": {"type": "string"},
             "name": {"type": "string", "description": "Node name; defaults to op + number."},
             "params": {"type": "object"},
-            "inputs": {"type": "array", "items": {"type": "string"}}
+            "inputs": {"type": "array", "items": {"type": "string"}},
+            "pos": {"type": "array", "items": {"type": "number"}, "description": "[x, y] in the node editor (top-left corner); default: a GUI places it beside what feeds it."}
         }, "required": ["op"]}),
+    tool!("set_node_position", "Move nodes in the node editor (one undo step): 'node' to 'pos' [x, y] (top-left corner; nodes are 150 x 46), or many at once with 'positions' {node: [x, y], ...}.",
+        {"type": "object", "properties": {
+            "node": {"type": "string"},
+            "pos": {"type": "array", "items": {"type": "number"}},
+            "positions": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "number"}}}
+        }}),
+    tool!("layout_nodes", "Lay out the nodes with no position, or with 'all' every node, as the node editor does a graph without positions: a column per depth from the sources, left to right (one undo step).",
+        {"type": "object", "properties": {"all": {"type": "boolean"}}}),
     tool!("delete_node", "Remove a node; nodes it fed are reconnected to its first input.",
         {"type": "object", "properties": {"node": {"type": "string"}}, "required": ["node"]}),
     tool!("rename_node", "Rename a node, updating connections.",
@@ -207,6 +216,11 @@ fn obj_arg(args: &Value, name: &str) -> Result<Map<String, Value>> {
     }
 }
 
+/// A node editor position, [x, y].
+fn pos_value(v: &Value) -> Result<[f32; 2]> {
+    serde_json::from_value(v.clone()).map_err(|_| anyhow!("a position must be [x, y]"))
+}
+
 /// Tools about a window's view state (selection, viewer, playhead). Only a
 /// GUI answers them; the headless session refuses them.
 pub fn is_gui_tool(tool: &str) -> bool {
@@ -254,8 +268,30 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
                 None | Some(Value::Null) => Vec::new(),
                 Some(v) => serde_json::from_value(v.clone()).context("'inputs' must be a list of node names")?,
             };
-            let id = s.create_node(str_arg(args, "op")?, opt_str(args, "name"), &obj_arg(args, "params")?, &inputs)?;
+            let pos = match args.get("pos") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(pos_value(v)?),
+            };
+            let id = s.create_node_at(str_arg(args, "op")?, opt_str(args, "name"), &obj_arg(args, "params")?, &inputs, pos)?;
             json!({"node": id})
+        }
+        "set_node_position" => {
+            let mut moves = Vec::new();
+            if let Some(node) = opt_str(args, "node") {
+                moves.push((node.to_string(), pos_value(args.get("pos").ok_or_else(|| anyhow!("missing 'pos' for '{node}'"))?)?));
+            }
+            for (node, p) in obj_arg(args, "positions")? {
+                moves.push((node, pos_value(&p)?));
+            }
+            if moves.is_empty() {
+                bail!("give 'node' and 'pos', or 'positions'");
+            }
+            s.set_node_positions(&moves)?;
+            ok()
+        }
+        "layout_nodes" => {
+            s.layout_nodes(args.get("all").and_then(Value::as_bool).unwrap_or(false));
+            json!({"positions": s.graph.nodes.iter().map(|n| (n.id.clone(), json!(n.pos))).collect::<Map<String, Value>>()})
         }
         "delete_node" => {
             s.delete_node(str_arg(args, "node")?)?;
@@ -781,6 +817,38 @@ mod tests {
         ] {
             let r = call(&mut s, tool, args);
             assert!(r["isError"] == true && r["content"][0]["text"].as_str().unwrap().contains(says), "{tool}: {r}");
+        }
+    }
+
+    /// Node positions through MCP: given when made, moved one or many at
+    /// once, laid out.
+    #[test]
+    fn node_positions_through_mcp() {
+        let mut s = Server::new(Session::default());
+        let ok = |r: Value| {
+            assert_eq!(r["isError"], false, "{r}");
+            r["structuredContent"].clone()
+        };
+        ok(call(&mut s, "create_node", json!({"op": "constant", "name": "plate", "pos": [0, 0]})));
+        ok(call(&mut s, "create_node", json!({"op": "blur", "name": "soft", "inputs": ["plate"]})));
+        ok(call(&mut s, "create_node", json!({"op": "grade", "name": "look", "inputs": ["soft"]})));
+        let laid = ok(call(&mut s, "layout_nodes", json!({})))["positions"].clone();
+        assert_eq!(laid["plate"], json!([0.0, 0.0]));
+        assert!(laid["look"][0].as_f64() > laid["soft"][0].as_f64());
+        ok(call(&mut s, "set_node_position", json!({"node": "plate", "pos": [-200, 50]})));
+        ok(call(&mut s, "set_node_position", json!({"positions": {"soft": [100, 50], "look": [400, 50]}})));
+        let n = ok(call(&mut s, "describe_node", json!({"node": "look"})));
+        assert_eq!(n["pos"], json!([400.0, 50.0]));
+        ok(call(&mut s, "create_backdrop", json!({"around": ["soft", "look"]})));
+        assert_eq!(ok(call(&mut s, "list_backdrops", json!({})))["backdrops"][0]["nodes"], json!(["soft", "look"]));
+        for (args, says) in [
+            (json!({}), "'positions'"),
+            (json!({"node": "plate"}), "'pos'"),
+            (json!({"node": "plate", "pos": [1]}), "[x, y]"),
+            (json!({"positions": {"nope": [0, 0]}}), "nope"),
+        ] {
+            let r = call(&mut s, "set_node_position", args);
+            assert!(r["isError"] == true && r["content"][0]["text"].as_str().unwrap().contains(says), "{r}");
         }
     }
 
