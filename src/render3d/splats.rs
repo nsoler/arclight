@@ -46,13 +46,18 @@ struct Projected {
     depth: f32,
     color: [f32; 3],
     opacity: f32,
+    /// Which set it's from, and which splat of it.
+    set: u32,
+    src: u32,
 }
 
-/// One splat's share at a pixel: its depth and premultiplied color.
+/// One splat's share at a pixel: its depth, premultiplied color, and which
+/// of the view's splats it is (for [`Prepared::set_of`], normals, motion).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Fragment {
     pub depth: f64,
     pub color: Rgba,
+    pub splat: u32,
 }
 
 /// A view's splats, projected, binned into tiles and sorted by depth.
@@ -63,6 +68,14 @@ pub(super) struct Prepared {
     ranges: Vec<(u32, u32)>,
     /// Splat indices, by tile then nearest first.
     order: Vec<u32>,
+    /// Per set: its node, and whether it's a holdout.
+    nodes: Vec<String>,
+    holdout: Vec<bool>,
+    /// Per splat, when asked for: its normal (see
+    /// [`add_normals`](Prepared::add_normals)), and how far its center
+    /// moves on the frame by the next frame.
+    normals: Vec<[f32; 3]>,
+    motion: Vec<[f32; 2]>,
 }
 
 /// Rotation matrix of quaternion `q` (w, x, y, z; normalized here).
@@ -91,7 +104,7 @@ fn linear(m: &Mat4) -> nalgebra::Matrix3<f64> {
 /// Splat `i` of `s` seen through `cam` in a frame of `format` (`to_cam`:
 /// its space to the camera's; `eye_own`: the camera in its space), or None
 /// if it doesn't show.
-fn project(s: &Splats, i: usize, cam: &Camera, format: Size, to_cam: &Mat4, eye_own: &Vec3) -> Option<Projected> {
+fn project(s: &Splats, i: usize, cam: &Camera, format: Size, to_cam: &Mat4, eye_own: &Vec3, set: usize) -> Option<Projected> {
     let opacity = s.opacity[i];
     if opacity < ALPHA_MIN {
         return None;
@@ -123,7 +136,7 @@ fn project(s: &Splats, i: usize, cam: &Camera, format: Size, to_cam: &Mat4, eye_
     }
     let dir = (pos - eye_own).try_normalize(1e-300).map_or([0.0, 0.0, 1.0], |d| [d.x as f32, d.y as f32, d.z as f32]);
     let color = s.color(i, dir);
-    Some(Projected { center: center.map(|v| v as f32), conic: [(c / det) as f32, (-b / det) as f32, (a / det) as f32], depth: depth as f32, color, opacity: opacity.min(ALPHA_MAX) })
+    Some(Projected { center: center.map(|v| v as f32), conic: [(c / det) as f32, (-b / det) as f32, (a / det) as f32], depth: depth as f32, color, opacity: opacity.min(ALPHA_MAX), set: set as u32, src: i as u32 })
 }
 
 /// `sets` seen through `cam` in a frame of `format`, ready to blend; None
@@ -133,13 +146,14 @@ pub(super) fn prepare(sets: &[Arc<Splats>], cam: &Camera, format: Size) -> Optio
     let eye = geom::transform_point(&cam.world, &Vec3::zeros());
     let splats: Vec<Projected> = sets
         .iter()
-        .flat_map(|s| {
+        .enumerate()
+        .flat_map(|(k, s)| {
             let to_cam = view * s.world;
             let own = s.world.try_inverse().unwrap_or_else(Mat4::identity);
             let eye_own = geom::transform_point(&own, &eye);
             let n = s.positions.len().min(s.scales.len()).min(s.rotations.len()).min(s.opacity.len());
             let n = n.min(s.sh.len() / s.sh_stride().max(1));
-            (0..n).into_par_iter().filter_map(|i| project(s, i, cam, format, &to_cam, &eye_own)).collect::<Vec<_>>()
+            (0..n).into_par_iter().filter_map(|i| project(s, i, cam, format, &to_cam, &eye_own, k)).collect::<Vec<_>>()
         })
         .collect();
     if splats.is_empty() {
@@ -172,7 +186,9 @@ pub(super) fn prepare(sets: &[Arc<Splats>], cam: &Camera, format: Size) -> Optio
         start = end;
     }
     let order = keys.into_iter().map(|k| k.1).collect();
-    Some(Prepared { splats, tiles_x, ranges, order })
+    let nodes = sets.iter().map(|s| s.node.clone()).collect();
+    let holdout = sets.iter().map(|s| s.holdout).collect();
+    Some(Prepared { splats, tiles_x, ranges, order, nodes, holdout, normals: Vec::new(), motion: Vec::new() })
 }
 
 impl Prepared {
@@ -194,12 +210,78 @@ impl Prepared {
             if alpha < ALPHA_MIN {
                 continue;
             }
-            out.push(Fragment { depth: s.depth as f64, color: [s.color[0] * alpha, s.color[1] * alpha, s.color[2] * alpha, alpha] });
+            out.push(Fragment { depth: s.depth as f64, color: [s.color[0] * alpha, s.color[1] * alpha, s.color[2] * alpha, alpha], splat: i });
             through *= 1.0 - alpha;
             if through < T_MIN {
                 break;
             }
         }
+    }
+
+    /// The sets' nodes, in order.
+    pub(super) fn nodes(&self) -> &[String] {
+        &self.nodes
+    }
+
+    /// Which set splat `i` (as in a [`Fragment`]) is from.
+    pub(super) fn set_of(&self, i: u32) -> usize {
+        self.splats[i as usize].set as usize
+    }
+
+    /// Whether set `k` is a holdout.
+    pub(super) fn holdout(&self, k: usize) -> bool {
+        self.holdout[k]
+    }
+
+    /// Each splat's normal (for the N pass): its shortest axis in the scene
+    /// (through the placement's inverse transpose, as normals go), turned
+    /// toward the camera at `cam`.
+    pub(super) fn add_normals(&mut self, sets: &[Arc<Splats>], cam: &Camera) {
+        let eye = geom::transform_point(&cam.world, &Vec3::zeros());
+        let normal_of: Vec<nalgebra::Matrix3<f64>> = sets.iter().map(|s| linear(&s.world).try_inverse().unwrap_or_else(nalgebra::Matrix3::identity).transpose()).collect();
+        self.normals = self
+            .splats
+            .par_iter()
+            .map(|p| {
+                let (s, i) = (&sets[p.set as usize], p.src as usize);
+                let sc = s.scales[i];
+                let k = (0..3).min_by(|&a, &b| sc[a].total_cmp(&sc[b])).unwrap_or(2);
+                let n = normal_of[p.set as usize] * rotation(s.rotations[i]).column(k);
+                let at = geom::transform_point(&s.world, &Vec3::from(s.positions[i].map(f64::from)));
+                let n = n.try_normalize(1e-300).unwrap_or_else(Vec3::z);
+                let n = if n.dot(&(eye - at)) < 0.0 { -n } else { n };
+                [n.x as f32, n.y as f32, n.z as f32]
+            })
+            .collect();
+    }
+
+    /// Each splat's motion on the frame (for the motion pass): where its
+    /// center lands a frame later (its set placed as in `next`'s sets, if
+    /// the same set is there in the same place in the list, else as now;
+    /// seen through `next`'s camera) less where it is now; 0 if it goes
+    /// behind the camera.
+    pub(super) fn add_motion(&mut self, sets: &[Arc<Splats>], next: Option<(&[Arc<Splats>], &Camera)>, cam: &Camera, format: Size) {
+        let (later, next_cam) = next.unwrap_or((sets, cam));
+        let worlds: Vec<Mat4> = sets.iter().enumerate().map(|(k, s)| later.get(k).filter(|l| l.node == s.node && l.len() == s.len()).map_or(s.world, |l| l.world)).collect();
+        let view = next_cam.view();
+        self.motion = self
+            .splats
+            .par_iter()
+            .map(|p| {
+                let s = &sets[p.set as usize];
+                let at = geom::transform_point(&(view * worlds[p.set as usize]), &Vec3::from(s.positions[p.src as usize].map(f64::from)));
+                next_cam.project_camera(&at, format).map_or([0.0; 2], |(q, _)| [q[0] as f32 - p.center[0], q[1] as f32 - p.center[1]])
+            })
+            .collect();
+    }
+
+    /// Splat `i`'s normal and motion, if worked out.
+    pub(super) fn normal(&self, i: u32) -> Option<[f32; 3]> {
+        self.normals.get(i as usize).copied()
+    }
+
+    pub(super) fn motion(&self, i: u32) -> Option<[f32; 2]> {
+        self.motion.get(i as usize).copied()
     }
 
     /// How many splats show (after culling).
@@ -234,8 +316,8 @@ mod tests {
             sh: Arc::new(each.iter().flat_map(|s| s.3.map(dc_of)).collect()),
             sh_degree: 0,
             world: Mat4::identity(),
-            node: "splat1".into(),
             holdout: false,
+            node: "splat1".into(),
         })
     }
 
@@ -357,6 +439,82 @@ mod tests {
         let blur = Blur { times: Blur::times(0.0, 1.0, 4), frames: vec![(0, &sc, camera()), (1, &sc, moved)], jitter: false };
         let smear = render_preview_blurred(&sc, &camera(), FMT, Preview::Solid, Some(&blur));
         assert!(smear.at(64, 32)[1] < sharp.at(64, 32)[1] - 0.1, "{:?} {:?}", smear.at(64, 32), sharp.at(64, 32));
+    }
+
+    /// Splats over a card, with every pass: mattes add up to alpha, the
+    /// light passes to the picture (splats are emission), and depth, P, N,
+    /// id and motion come from the splats where they're half opaque.
+    #[test]
+    fn splat_passes_add_up_over_a_card() {
+        use super::super::{render_motion, Passes};
+        let red = Image::filled(8, 8, [1.0, 0.0, 0.0, 1.0]);
+        let card = Card { node: "card".into(), ..Card::new(Arc::new(red), geom::trs([0.0, 0.0, -10.0], [0.0; 3], [1.0; 3]), [40.0, 20.0]) };
+        // A flat splat (thin along z: its normal is ±z) 6 away, and a
+        // faint one beside it.
+        let mut s = (*splats(&[([0.0, 0.0, -6.0], 1.0, 0.9, [0.0, 0.0, 1.0]), ([2.4, 0.0, -6.0], 0.6, 0.3, [0.0, 1.0, 0.0])])).clone();
+        s.scales = Arc::new(vec![[1.0, 1.0, 0.01], [0.6, 0.6, 0.01]]);
+        s.node = "cap".into();
+        let sc = Scene { cards: vec![card], splats: vec![Arc::new(s.clone())], ..Scene::default() };
+        // A frame later the capture has moved 1 to the right.
+        let moved = Splats { world: geom::trs([1.0, 0.0, 0.0], [0.0; 3], [1.0; 3]), ..s };
+        let next = Scene { splats: vec![Arc::new(moved)], ..sc.clone() };
+        let names = ["depth", "P", "N", "motion", "id", "mattes", "diffuse", "specular", "emission", "ambient"];
+        let out = render_motion(&sc, &camera(), FMT, 2, None, Passes::from_names(names), Some((&next, &camera())));
+        let plane = |n: &str, x: i32, y: i32| out.plane_at(n, x, y);
+        let mut worst = (0.0f32, 0.0f32);
+        for y in 0..FMT.height as i32 {
+            for x in 0..FMT.width as i32 {
+                let p = out.at(x, y);
+                let mattes = plane("matte.cap", x, y) + plane("matte.card", x, y);
+                worst.0 = worst.0.max((mattes - p[3]).abs());
+                for (c, ch) in ["R", "G", "B"].iter().enumerate() {
+                    let parts: f32 = ["diffuse", "specular", "emission", "ambient"].iter().map(|n| plane(&format!("{n}.{ch}"), x, y)).sum();
+                    worst.1 = worst.1.max((parts - p[c]).abs());
+                }
+            }
+        }
+        assert!(worst.0 < 1e-4 && worst.1 < 1e-4, "mattes off by {}, light passes by {}", worst.0, worst.1);
+        // At the middle: the splat's share, over the card's.
+        let (m, c) = (plane("matte.cap", 64, 32), plane("matte.card", 64, 32));
+        assert!(m > 0.85 && (c - (1.0 - m)).abs() < 1e-4, "{m} {c}");
+        assert!((plane("depth", 64, 32) - 6.0).abs() < 1e-4);
+        let p = camera().unproject([64.5, 32.5], 6.0, FMT);
+        assert!((plane("P.x", 64, 32) as f64 - p.x).abs() < 1e-4 && (plane("P.z", 64, 32) + 6.0).abs() < 1e-4);
+        assert!((plane("N.z", 64, 32) - 1.0).abs() < 1e-4, "facing the camera");
+        let f = camera().focal_pixels(FMT) as f32;
+        assert!((plane("motion.u", 64, 32) - f / 6.0).abs() < 1e-3 && plane("motion.v", 64, 32).abs() < 1e-3, "{}", plane("motion.u", 64, 32));
+        // id: the objects are the surfaces' nodes, then the splat sets'.
+        assert_eq!((plane("id", 64, 32), plane("id", 4, 4)), (2.0, 1.0));
+        // Where the faint splat is, the card still gives depth and id.
+        let fx = 64 + (2.4 * f as f64 / 6.0) as i32;
+        assert!(plane("matte.cap", fx, 32) > 0.05 && (plane("depth", fx, 32) - 10.0).abs() < 1e-4 && plane("id", fx, 32) == 1.0);
+    }
+
+    #[test]
+    fn holdout_splats_cut_what_is_behind() {
+        let red = Image::filled(8, 8, [1.0, 0.0, 0.0, 1.0]);
+        let card = Card::new(Arc::new(red), geom::trs([0.0, 0.0, -10.0], [0.0; 3], [1.0; 3]), [40.0, 20.0]);
+        let s = Splats { holdout: true, ..(*splats(&[([0.0, 0.0, -6.0], 1.0, 0.99, [0.0, 0.0, 1.0])])).clone() };
+        let out = render(&Scene { cards: vec![card], splats: vec![Arc::new(s)], ..Scene::default() }, &camera(), FMT, 1, None);
+        let p = out.at(64, 32);
+        assert!(p[3] < 0.05 && p[2] == 0.0, "the card cut, nothing blue: {p:?}");
+        assert_eq!(out.at(4, 4), [1.0, 0.0, 0.0, 1.0], "the card elsewhere");
+    }
+
+    /// A Read Splat moving across the shutter smears, as other objects do.
+    #[test]
+    fn moving_splats_blur() {
+        use super::super::{render_blurred, Blur, Passes};
+        let s = splats(&[([0.0, 0.0, -10.0], 0.3, 0.99, [1.0; 3])]);
+        let now = scene(s.clone());
+        let later = scene(Arc::new(Splats { world: geom::trs([2.0, 0.0, 0.0], [0.0; 3], [1.0; 3]), ..(*s).clone() }));
+        let blur = Blur { times: Blur::times(0.0, 1.0, 16), frames: vec![(0, &now, camera()), (1, &later, camera())], jitter: true };
+        let sharp = render(&now, &camera(), FMT, 1, None);
+        let soft = render_blurred(&now, &camera(), FMT, 1, None, Passes::DEPTH, None, Some(&blur));
+        let row = |img: &Image| (0..128).filter(|&x| img.at(x, 32)[3] > 0.05).count();
+        assert!(row(&soft) > row(&sharp) + 6, "{} vs {}", row(&soft), row(&sharp));
+        let total = |img: &Image| img.pixels.iter().map(|p| p[3]).sum::<f32>();
+        assert!((total(&soft) - total(&sharp)).abs() < 0.05 * total(&sharp), "{} vs {}", total(&soft), total(&sharp));
     }
 
     #[test]

@@ -12,6 +12,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.8 — 2026-10-30
+
+- **Splats in Scanline Render's passes** (Dev2, splat plan S3): depth
+  and P where they become half opaque, N from the strongest splat's flat
+  side, motion from the capture's and camera's moves, an id and a matte
+  per Read Splat (mattes still add up to alpha), and the emission light
+  pass (the light passes still add up to the picture). Holdout Read
+  Splats cut out what's behind them; an animated Read Splat motion-blurs.
+
 ## 0.10.7 — 2026-10-30
 
 - **Splat Crop** (Dev1, splat plan S4): keeps a Gaussian splat capture's

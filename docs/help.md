@@ -276,8 +276,12 @@ selected object.
   a **Color detail** cap (lower is faster). A sample is in
   `examples/geo/splats.ply`. Splats render in Scanline Render with the
   rest of the scene: in front of, behind or through cards and meshes by
-  depth; holdouts cut them out. They light themselves (no shadows from
-  Arclight's lights); depth is where they become half opaque. In the 3D
+  depth; holdouts cut them out, and **Holdout** on a Read Splat makes it
+  cut out what's behind it. They light themselves (no shadows from
+  Arclight's lights). In the passes: depth and P where a capture becomes
+  half opaque, N from the strongest splat (its flat side), motion, an id
+  and a matte per Read Splat, and emission; no uv. An animated Read Splat
+  motion-blurs. In the 3D
   view they show as dots while you orbit and render in full a moment
   after you stop (a selected capture shows its box); click near a splat (its center) to select its Read Splat,
   and **F** frames splats too.

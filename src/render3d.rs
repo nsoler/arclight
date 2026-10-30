@@ -439,7 +439,15 @@ fn render_cell(scene: &Scene, cam: &Camera, format: Size, samples: usize, backgr
     // their velocities (the next frame's own may be others).
     let next_objects = next.filter(|_| objects.is_some() && passes.motion).and_then(|(n, _)| particles::with_objects(&Scene { particles: scene.particles.iter().map(|s| s.shifted(1.0)).collect(), ..n.clone() }));
     let next = next.map(|(n, c)| (next_objects.as_ref().unwrap_or(n), c));
-    let splats = splats::prepare(&scene.splats, cam, format);
+    let mut splats = splats::prepare(&scene.splats, cam, format);
+    if let Some(sp) = &mut splats {
+        if passes.normal {
+            sp.add_normals(&scene.splats, cam);
+        }
+        if passes.motion {
+            sp.add_motion(&scene.splats, next.map(|(n, c)| (&n.splats[..], c)), cam, format);
+        }
+    }
     let out = draw_passes(&surfaces(scene), &scene.lights, &scene.points, cam, format, samples, passes, next, cell, splats.as_ref());
     let mut out = match background {
         Some(bg) => over_background(out, bg),
@@ -753,8 +761,16 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
     let eye = geom::transform_point(&cam.world, &Vec3::zeros());
     let frame = IRect::frame(format);
     let (w, h) = (format.width, format.height);
-    let nodes = object_nodes(surfs);
+    // Objects (for id and mattes): the surfaces' nodes, then the splat
+    // sets' (by set).
+    let mut nodes = object_nodes(surfs);
+    for n in splats.map_or(&[][..], |sp| sp.nodes()) {
+        if !n.is_empty() && !nodes.contains(&n.as_str()) {
+            nodes.push(n);
+        }
+    }
     let object: Vec<Option<usize>> = surfs.iter().map(|s| nodes.iter().position(|n| *n == s.node)).collect();
+    let splat_object: Vec<Option<usize>> = splats.map_or(&[][..], |sp| sp.nodes()).iter().map(|s| nodes.iter().position(|n| n == s)).collect();
     let (light_names, light_of) = light_nodes(lights);
     // Per pixel, the extra channels, as asked for: P (3), N (3), uv (2), id,
     // a matte per node, the four lighting parts (3 each), each light node
@@ -788,8 +804,10 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                 return;
             }
             let (yu, y) = (y, y as i32);
-            // The splats at the current pixel, nearest first.
+            // The splats at the current pixel, nearest first, and their
+            // mattes blended alone.
             let mut frags: Vec<splats::Fragment> = Vec::new();
+            let mut alone_mattes = vec![0.0f32; if passes.mattes { nodes.len() } else { 0 }];
             let mut hits: Vec<Hit> = Vec::new();
             let mut mattes = vec![0.0f32; nodes.len()];
             // Each hit's light in parts (and per light), when those passes
@@ -813,20 +831,14 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                 if let Some(sp) = splats {
                     sp.fragments(x, yu, &mut frags);
                 }
-                // The splats alone, where a sample meets no surface.
-                let alone = (!frags.is_empty()).then(|| blend_alone(&frags));
-                if here.is_empty() {
-                    if let Some((acc, median)) = alone {
-                        *out = acc;
-                        if let Some(d) = median {
-                            *dout = d as f32;
-                        }
-                    }
+                if here.is_empty() && frags.is_empty() {
                     continue;
                 }
-                // Where the samples' blends first got half opaque (with
-                // splats: their depth), nearest.
-                let mut median: Option<f64> = None;
+                // The splats alone, where a sample meets no surface.
+                let alone = splats.filter(|_| !frags.is_empty()).map(|sp| blend_alone(&frags, sp, &splat_object, &mut alone_mattes));
+                // Where the samples' blends first got half opaque (and the
+                // splat there, if it was one), nearest.
+                let mut median: Option<(f64, Option<u32>)> = None;
                 let mut sum = [0.0f32; 4];
                 // The nearest surface seen at least half opaque, for depth
                 // and the other nearest-sample passes, and the nearest
@@ -888,9 +900,11 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                             hits.push(Hit { depth: d, tri: ti as usize, bary, color });
                         }
                         if hits.is_empty() {
-                            if let Some((acc, m)) = alone {
-                                (0..4).for_each(|c| sum[c] += acc[c]);
-                                median = nearer(median, m);
+                            if let Some(a) = &alone {
+                                (0..4).for_each(|c| sum[c] += a.acc[c]);
+                                median = nearer(median, a.half.map(|(d, i)| (d, Some(i))));
+                                mattes.iter_mut().zip(&alone_mattes).for_each(|(m, a)| *m += a);
+                                (0..3).for_each(|c| part_sum[2][c] += a.emission[c]);
                             }
                             continue;
                         }
@@ -901,7 +915,7 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                         // of what's left without adding to it.
                         let mut acc = [0.0f32; 4];
                         let mut held = 0.0f32;
-                        let mut half: Option<f64> = None;
+                        let mut half: Option<(f64, Option<u32>)> = None;
                         let (mut oi, mut fi) = (0, 0);
                         loop {
                             let splat_next = match (order.get(oi), frags.get(fi)) {
@@ -909,13 +923,13 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                                 (Some(&hi), Some(f)) => f.depth < hits[hi].depth,
                                 (h, _) => h.is_none(),
                             };
-                            if splat_next {
+                            if let (true, Some(sp)) = (splat_next, splats) {
                                 let f = frags[fi];
                                 fi += 1;
-                                let k = 1.0 - acc[3] - held;
-                                (0..4).for_each(|c| acc[c] += f.color[c] * k);
+                                let m = if passes.mattes { &mut mattes[..] } else { &mut [][..] };
+                                add_splat(&f, sp, &splat_object, &mut acc, &mut held, m, &mut part_sum[2]);
                                 if half.is_none() && acc[3] >= 0.5 {
-                                    half = Some(f.depth);
+                                    half = Some((f.depth, Some(f.splat)));
                                 }
                                 if acc[3] + held >= 1.0 {
                                     break;
@@ -953,7 +967,7 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                                 }
                             }
                             if half.is_none() && acc[3] >= 0.5 {
-                                half = Some(hit.depth);
+                                half = Some((hit.depth, None));
                             }
                             if acc[3] + held >= 1.0 {
                                 break;
@@ -979,11 +993,37 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                         (0..3).for_each(|c| px[shadow_at + c] = shadow_sum[c] * norm);
                     }
                 }
+                if passes.mattes {
+                    let px = &mut xrow[x * stride..x * stride + k];
+                    for (o, m) in mattes.iter().enumerate() {
+                        px[matte_at + o] = m * norm;
+                    }
+                }
                 // With splats here, depth is where the blend got half
                 // opaque; else (and for the other passes) the surface's.
                 let median = median.filter(|_| !frags.is_empty());
-                if let Some(d) = median {
+                if let Some((d, splat)) = median {
                     *dout = d as f32;
+                    // Got half opaque at a splat: P there, the rest from
+                    // the splat that gives the most.
+                    if let (Some(sp), Some(_)) = (splats, splat) {
+                        let px = &mut xrow[x * stride..x * stride + k];
+                        let top = alone.as_ref().and_then(|a| a.dominant).or(splat).unwrap_or(0);
+                        if passes.position {
+                            let p = cam.unproject([xi as f64 + 0.5, y as f64 + 0.5], d, format);
+                            px[p_at..p_at + 3].copy_from_slice(&[p.x as f32, p.y as f32, p.z as f32]);
+                        }
+                        if let Some(nv) = sp.normal(top).filter(|_| passes.normal) {
+                            px[n_at..n_at + 3].copy_from_slice(&nv);
+                        }
+                        if let Some(m) = sp.motion(top).filter(|_| passes.motion) {
+                            px[motion_at..motion_at + 2].copy_from_slice(&m);
+                        }
+                        if passes.id {
+                            px[id_at] = splat_object[sp.set_of(top)].map_or(0.0, |o| (o + 1) as f32);
+                        }
+                        continue;
+                    }
                 }
                 let Some(hit) = nearest.or(faint) else { continue };
                 if median.is_none() {
@@ -1016,11 +1056,6 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                 }
                 if passes.id {
                     px[id_at] = object[t.surf].map_or(0.0, |o| (o + 1) as f32);
-                }
-                if passes.mattes {
-                    for (o, m) in mattes.iter().enumerate() {
-                        px[matte_at + o] = m * norm;
-                    }
                 }
             }
         });
@@ -1077,25 +1112,60 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
     out
 }
 
-/// Splat fragments `frags` (nearest first) blended front to back, and the
-/// depth where they first got half opaque.
-fn blend_alone(frags: &[splats::Fragment]) -> (Rgba, Option<f64>) {
-    let mut acc = [0.0f32; 4];
-    let mut half = None;
-    for f in frags {
-        let k = 1.0 - acc[3];
-        (0..4).for_each(|c| acc[c] += f.color[c] * k);
-        if half.is_none() && acc[3] >= 0.5 {
-            half = Some(f.depth);
-        }
-    }
-    (acc, half)
+/// Splat fragments alone, blended: see [`blend_alone`].
+struct Alone {
+    /// The blend (premultiplied), and what of it is emission (all of it).
+    acc: Rgba,
+    emission: [f32; 3],
+    /// Where it first got half opaque, and the splat there.
+    half: Option<(f64, u32)>,
+    /// The splat giving the most to it.
+    dominant: Option<u32>,
 }
 
-/// The nearer of two depths, either maybe missing.
-fn nearer(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+/// Splat fragments `frags` (nearest first, from `sp`) blended front to
+/// back, their sets' shares put in `mattes` (by object, `object` by set;
+/// empty: no mattes).
+fn blend_alone(frags: &[splats::Fragment], sp: &splats::Prepared, object: &[Option<usize>], mattes: &mut [f32]) -> Alone {
+    mattes.iter_mut().for_each(|m| *m = 0.0);
+    let (mut acc, mut held, mut emission) = ([0.0f32; 4], 0.0f32, [0.0f32; 3]);
+    let (mut half, mut dominant) = (None, None::<(f32, u32)>);
+    for f in frags {
+        let share = f.color[3] * (1.0 - acc[3] - held);
+        if dominant.is_none_or(|d| share > d.0) {
+            dominant = Some((share, f.splat));
+        }
+        add_splat(f, sp, object, &mut acc, &mut held, mattes, &mut emission);
+        if half.is_none() && acc[3] >= 0.5 {
+            half = Some((f.depth, f.splat));
+        }
+    }
+    Alone { acc, emission, half, dominant: dominant.map(|d| d.1) }
+}
+
+/// Splat fragment `f` (from `sp`) into a front-to-back blend `acc`
+/// (premultiplied) with `held` taken by holdouts so far: its share to its
+/// set's object in `mattes` (if there), and, unless it's a holdout's, to
+/// `acc` and `emission`.
+fn add_splat(f: &splats::Fragment, sp: &splats::Prepared, object: &[Option<usize>], acc: &mut Rgba, held: &mut f32, mattes: &mut [f32], emission: &mut [f32; 3]) {
+    let k = 1.0 - acc[3] - *held;
+    let set = sp.set_of(f.splat);
+    if let Some(m) = object[set].and_then(|o| mattes.get_mut(o)) {
+        *m += f.color[3] * k;
+    }
+    if sp.holdout(set) {
+        *held += f.color[3] * k;
+    } else {
+        (0..4).for_each(|c| acc[c] += f.color[c] * k);
+        (0..3).for_each(|c| emission[c] += f.color[c] * k);
+    }
+}
+
+/// The nearer of two depths (each with what's there), either maybe
+/// missing.
+fn nearer<T>(a: Option<(f64, T)>, b: Option<(f64, T)>) -> Option<(f64, T)> {
     match (a, b) {
-        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), Some(b)) => Some(if b.0 < a.0 { b } else { a }),
         (a, b) => a.or(b),
     }
 }
