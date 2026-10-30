@@ -115,8 +115,7 @@ Phase 10: 0.10.x on branch `wip-ns-splats` (started 0.10.0).
 
 ## Housekeeping
 
-- [ ] Tidy the clippy warnings newer toolchains raise on old code
-      (`graph.rs` `from_str` naming, `plugins/example` `chunks_exact`)
+- [x] Clippy clean across the workspace (0.10.29)
 
 ## Not planned (on purpose)
 

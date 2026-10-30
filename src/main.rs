@@ -9,6 +9,7 @@ use arclight::ops::EvalContext;
 use arclight::render::{self, Progress};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use std::str::FromStr;
 
 #[derive(Parser)]
 #[command(
@@ -207,6 +208,7 @@ fn demo_graph(out: &std::path::Path) -> String {
 mod tests {
     use arclight::color;
     use arclight::graph::Graph;
+    use std::str::FromStr;
 
     fn approx(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4

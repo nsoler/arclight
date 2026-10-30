@@ -12,6 +12,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.29 — 2026-10-30
+
+- Internal: `cargo clippy` is clean across the workspace (`Graph`
+  implements `FromStr`; the example plugin walks pixels with
+  `as_chunks`).
+
 ## 0.10.28 — 2026-10-30
 
 - **Scripts place nodes in the node editor**: the MCP tool

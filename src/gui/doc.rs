@@ -940,6 +940,7 @@ impl Doc {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::str::FromStr;
 
     #[test]
     fn a_selection_holds_several_nodes_beside_the_primary() {

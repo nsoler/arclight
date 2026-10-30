@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 
 /// One node in the graph.
@@ -242,6 +243,15 @@ pub struct Graph {
     pub view: ViewState,
 }
 
+impl FromStr for Graph {
+    type Err = anyhow::Error;
+
+    /// A graph from its JSON.
+    fn from_str(text: &str) -> Result<Graph> {
+        serde_json::from_str(text).context("parsing graph JSON")
+    }
+}
+
 /// View settings saved with a project that aren't part of its content:
 /// they always compare equal, so changing them is no edit (no undo step,
 /// no unsaved-changes mark) and undo leaves them alone.
@@ -335,10 +345,6 @@ impl Graph {
             }
         });
         self.project.folder = Some(folder);
-    }
-
-    pub fn from_str(text: &str) -> Result<Graph> {
-        serde_json::from_str(text).context("parsing graph JSON")
     }
 
     pub fn to_json(&self) -> String {
