@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use arclight::ops::EvalContext;
 use std::collections::VecDeque;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 /// Memory budget for finished viewer frames (`frame_cache_mb` in settings).
@@ -43,12 +43,15 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub fn spawn(repaint: eframe::egui::Context) -> Worker {
+    /// A worker evaluating with `eval` (shared with the app bridge's calls,
+    /// see [`crate::bridge_calls`]: each holds it for one evaluation at a
+    /// time).
+    pub fn spawn(repaint: eframe::egui::Context, eval: Arc<Mutex<Evaluator>>) -> Worker {
         let (req_tx, req_rx) = channel::<Request>();
         let (resp_tx, resp_rx) = channel::<Response>();
         std::thread::Builder::new()
             .name("arclight-eval".into())
-            .spawn(move || run(req_rx, resp_tx, repaint))
+            .spawn(move || run(req_rx, resp_tx, repaint, eval))
             .expect("spawn eval thread");
         Worker { tx: req_tx, rx: resp_rx }
     }
@@ -96,8 +99,8 @@ fn size_of_image(img: &Image) -> usize {
     img.bytes()
 }
 
-fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Context) {
-    let mut eval = Evaluator::new();
+fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Context, eval: Arc<Mutex<Evaluator>>) {
+    let evaluate = |graph: &Graph, target: &str, ctx: &EvalContext| eval.lock().unwrap_or_else(|e| e.into_inner()).evaluate(graph, target, ctx);
     let mut frames = FrameCache { entries: VecDeque::new(), bytes: 0 };
     // Probed inputs by cache key, so frames served from the frame cache
     // needn't render the input again. Kept small: they're whole images.
@@ -114,7 +117,7 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
             Ok(key) => match frames.get(key) {
                 Some(img) => Ok(img),
                 None => {
-                    let r = eval.evaluate(&req.graph, &req.target, &ctx);
+                    let r = evaluate(&req.graph, &req.target, &ctx);
                     if let Ok(img) = &r {
                         frames.insert(key, img.clone());
                     }
@@ -126,7 +129,7 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
         let probe = req.probe.and_then(|(node, input)| {
             let key = Evaluator::key(&req.graph, &input, &ctx).ok()?;
             if !probed.contains_key(&key) {
-                let img = eval.evaluate(&req.graph, &input, &ctx).ok()?;
+                let img = evaluate(&req.graph, &input, &ctx).ok()?;
                 if probed.len() >= 8 {
                     probed.clear();
                 }

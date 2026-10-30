@@ -407,6 +407,10 @@ GUI also listens on a local socket (`bridge.rs`), so scripts and AI agents can
 **attach** to it and edit the open project live. Their edits land in the GUI's
 undo history. Renders they request run in the background. The menu bar
 shows their progress and a Cancel button, and the window stays usable.
+Other tools share the window's caches and particle simulations (a later frame
+steps on rather than re-simulating) and run in order in the background, each
+seeing the last one's edits; a call that would overwrite an edit made in the
+window meanwhile is refused. Renders still use their own copy.
 
 ### MCP server (AI agents)
 

@@ -5,6 +5,7 @@
 //! properties on the right.
 
 mod camera_tracker;
+mod bridge_calls;
 mod curve_editor;
 mod dialogs;
 mod doc;
@@ -23,13 +24,13 @@ mod worker;
 use arclight::bridge;
 use arclight::config::ViewPrefs;
 use arclight::graph::{Graph, NodeError};
-use arclight::session::Session;
 use arclight::image::Image;
 use curve_editor::CurveEditor;
 use doc::Doc;
 use eframe::egui::{self, Key, KeyboardShortcut, Modifiers};
 use node_editor::NodeEditor;
 use properties::Properties;
+use bridge_calls::{BridgeCalls, Call};
 use script_jobs::ScriptJobs;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -163,6 +164,12 @@ struct App {
     bridge: Option<bridge::Server>,
     /// Bridged renders running on worker threads.
     scripts: ScriptJobs,
+    /// Other bridged graph tools, run off the UI thread one at a time (the
+    /// next waits in `bridge_queue`, so it sees the edits of the one in
+    /// flight), with the document's revision when each was sent.
+    calls: BridgeCalls,
+    bridge_queue: std::collections::VecDeque<bridge::Pending>,
+    in_flight: Option<(bridge::Pending, u64)>,
     /// Unsaved changes were dealt with; let the next close request through.
     closing: bool,
     /// The question about unsaved changes being asked, if any.
@@ -191,6 +198,8 @@ impl App {
         let mut transport = Transport::default();
         transport.frame = doc.graph.project.first_frame;
         let prefs = ViewPrefs::load(&ViewPrefs::path());
+        // The viewer's evaluator, which bridged calls share (see bridge_calls).
+        let eval = Arc::new(std::sync::Mutex::new(arclight::graph::Evaluator::new()));
         let mut viewer = Viewer::default();
         apply_prefs(&prefs, &mut viewer);
         // Until a project's own is restored (so the first frames don't
@@ -204,7 +213,7 @@ impl App {
             viewer,
             transport,
             props: Properties::default(),
-            worker: Worker::spawn(ctx),
+            worker: Worker::spawn(ctx.clone(), eval.clone()),
             requested: None,
             image: None,
             probe: None,
@@ -222,6 +231,9 @@ impl App {
             prefs_path: std::env::var_os("ARCLIGHT_SCREENSHOT").is_none().then(ViewPrefs::path),
             bridge,
             scripts: ScriptJobs::default(),
+            calls: BridgeCalls::spawn(eval, move || ctx.request_repaint()),
+            bridge_queue: Default::default(),
+            in_flight: None,
             closing: false,
             ask: None,
             file: None,
@@ -279,11 +291,21 @@ impl App {
         })
     }
 
-    /// Run tool calls that arrived over the bridge. Renders go to worker
-    /// threads (on a snapshot of the graph); everything else runs here.
+    /// Run tool calls that arrived over the bridge, in order. Renders go
+    /// to worker threads (on a snapshot of the graph) and other graph tools
+    /// to the bridge call thread (one at a time); view tools and undo /
+    /// redo run here.
     fn handle_bridge(&mut self, ctx: &egui::Context) {
         let Some(server) = &self.bridge else { return };
-        for req in server.poll() {
+        self.bridge_queue.extend(server.poll());
+        if let Some(done) = self.calls.poll() {
+            if let Some((req, revision)) = self.in_flight.take() {
+                let result = self.finish_call(&req.tool, done, revision).map_err(|e| format!("{e:#}"));
+                req.reply(result);
+            }
+        }
+        while self.in_flight.is_none() {
+            let Some(req) = self.bridge_queue.pop_front() else { break };
             if arclight::mcp::is_render_tool(&req.tool) {
                 let (tool, args) = (req.tool.clone(), req.arguments.clone());
                 let wake = ctx.clone();
@@ -297,42 +319,55 @@ impl App {
                 );
                 continue;
             }
-            let result = self.bridge_call(&req.tool, &req.arguments).map_err(|e| format!("{e:#}"));
-            req.reply(result);
+            match self.bridge_call(&req.tool, &req.arguments) {
+                Some(result) => req.reply(result.map_err(|e| format!("{e:#}"))),
+                None => self.in_flight = Some((req, self.doc.revision)),
+            }
         }
     }
 
-    /// Apply one bridged tool to the document: the tool runs on a session
-    /// over a copy of the graph, and a changed graph comes back as one undo step.
-    fn bridge_call(&mut self, tool: &str, args: &Value) -> anyhow::Result<Value> {
+    /// Run one bridged tool: the view tools and undo / redo here (Some
+    /// result); any other goes to the bridge call thread on a copy of the
+    /// graph (None: see [`App::finish_call`]).
+    fn bridge_call(&mut self, tool: &str, args: &Value) -> Option<anyhow::Result<Value>> {
         if arclight::mcp::is_gui_tool(tool) {
-            return self.view_call(tool, args);
+            return Some(self.view_call(tool, args));
         }
         match tool {
             "undo" | "redo" => {
                 self.doc.commit(false);
                 let able = if tool == "undo" { self.doc.can_undo() } else { self.doc.can_redo() };
                 if tool == "undo" { self.undo() } else { self.redo() }
-                return Ok(json!({ if tool == "undo" { "undone" } else { "redone" }: able }));
+                return Some(Ok(json!({ if tool == "undo" { "undone" } else { "redone" }: able })));
             }
             "load_graph" | "new_graph" if self.doc.dirty => {
-                anyhow::bail!("the Arclight window has unsaved changes; save them first (save_graph)")
+                return Some(Err(anyhow::anyhow!("the Arclight window has unsaved changes; save them first (save_graph)")));
             }
             _ => {}
         }
-        let mut session = Session::new(self.doc.graph.clone());
-        session.path = self.doc.path.clone();
-        session.dirty = self.doc.dirty;
-        let out = arclight::mcp::call_tool(&mut session, tool, args)?;
+        self.calls.send(Call { tool: tool.to_string(), args: args.clone(), graph: self.doc.graph.clone(), path: self.doc.path.clone(), dirty: self.doc.dirty });
+        None
+    }
+
+    /// Apply a finished bridged tool to the document (sent at `revision`):
+    /// a changed graph comes back as one undo step. If the window's graph
+    /// was edited meanwhile, a change is refused rather than undoing that
+    /// edit.
+    fn finish_call(&mut self, tool: &str, done: bridge_calls::Done, revision: u64) -> anyhow::Result<Value> {
+        let out = done.result.map_err(|e| anyhow::anyhow!(e))?;
+        let edited = self.doc.revision != revision;
         match tool {
-            "load_graph" | "new_graph" => self.load(Doc::new(session.graph, session.path)),
+            "load_graph" | "new_graph" if edited => anyhow::bail!("the graph was edited in the Arclight window while {tool} ran; call it again"),
+            "load_graph" | "new_graph" => self.load(Doc::new(done.graph, done.path)),
             "save_graph" => {
-                self.doc.path = session.path;
-                self.doc.dirty = false;
+                self.doc.path = done.path;
+                // (What was saved is the graph as the call found it.)
+                self.doc.dirty = edited;
             }
-            _ if session.graph != self.doc.graph => {
+            _ if done.changed && edited => anyhow::bail!("the graph was edited in the Arclight window while {tool} ran; nothing changed, call it again"),
+            _ if done.changed => {
                 self.doc.commit(false);
-                self.doc.graph = session.graph;
+                self.doc.graph = done.graph;
                 if self.doc.selected.as_ref().is_some_and(|id| self.doc.node(id).is_none()) {
                     self.doc.selected = None;
                 }
@@ -1230,6 +1265,42 @@ fn starter_graph() -> Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Bridged calls run off the UI thread, in order (each seeing the last
+    /// one's edit), and an edit made in the window meanwhile isn't undone.
+    #[test]
+    fn bridged_calls_run_in_order_off_the_ui_thread() {
+        let dir = std::env::temp_dir().join(format!("arclight-gui-bridge-test-{}", std::process::id()));
+        std::env::set_var("XDG_RUNTIME_DIR", &dir);
+        let graph: Graph = serde_json::from_value(json!({ "nodes": [{ "id": "emit", "op": "particle_emitter", "params": { "rate": 20 } }] })).unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::new(ctx.clone(), Doc::new(graph, None));
+        let inst = app.bridge.as_ref().expect("a bridge").instance.clone();
+        let client = std::thread::spawn(move || {
+            let set = bridge::call(&inst, "set_params", &json!({ "node": "emit", "params": { "rate": 5 } }));
+            let read = bridge::call(&inst, "describe_node", &json!({ "node": "emit" }));
+            let parts = bridge::call(&inst, "particles", &json!({ "node": "emit", "frame": 10 }));
+            (set, read, parts)
+        });
+        while !client.is_finished() {
+            app.handle_bridge(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let (set, read, parts) = client.join().unwrap();
+        assert!(set.is_ok(), "{set:?}");
+        assert_eq!(read.unwrap()["params"]["rate"], 5.0, "the next call sees the edit");
+        assert!(parts.unwrap()["total"].as_u64() > Some(0));
+        assert_eq!((app.doc.node("emit").unwrap().params["rate"].clone(), app.doc.can_undo()), (json!(5.0), true));
+        // A change sent before an edit in the window is refused.
+        let stale = app.doc.revision - 1;
+        let mut other = app.doc.graph.clone();
+        other.nodes.clear();
+        let done = bridge_calls::Done { result: Ok(json!({})), graph: other, changed: true, path: None };
+        assert!(app.finish_call("delete_node", done, stale).unwrap_err().to_string().contains("edited in the Arclight window"));
+        assert!(app.doc.node("emit").is_some());
+        drop(app);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn view_prefs_come_from_the_viewer_and_set_it_up() {

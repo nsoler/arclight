@@ -11,6 +11,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.63 — 2026-10-29
+
+- **Calls through an attached GUI share its evaluator** (Dev2): MCP /
+  Python calls to a running window now run off its UI thread and share
+  the viewer's evaluator, so particles and other reads reuse what the
+  window has already rendered and simulated (a later frame steps on
+  rather than re-simulating). Calls run in order, each seeing the last
+  one's edits; one that would overwrite an edit made in the window
+  meanwhile is refused. Renders still use their own copy.
+
 ## 0.9.62 — 2026-10-29
 
 - **Particle Render sprites can play an image sequence** (Dev1): set

@@ -16,12 +16,14 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 const UNDO_LIMIT: usize = 200;
 /// The most particles one [`Session::particles`] call returns (page
 /// through more with its offset).
 pub const MAX_PARTICLES: usize = 100_000;
+/// About how long [`Session::particles`] simulates at a time.
+const PARTICLE_RUN: std::time::Duration = std::time::Duration::from_millis(30);
 
 pub struct Session {
     pub graph: Graph,
@@ -29,7 +31,8 @@ pub struct Session {
     pub path: Option<PathBuf>,
     /// Edited since the last load or save.
     pub dirty: bool,
-    eval: Evaluator,
+    /// Its own, or one shared with others (see [`Session::sharing`]).
+    eval: Arc<Mutex<Evaluator>>,
     undo: Vec<Graph>,
     redo: Vec<Graph>,
 }
@@ -42,9 +45,16 @@ impl Default for Session {
 
 impl Session {
     pub fn new(graph: Graph) -> Session {
+        Session::sharing(graph, Arc::default())
+    }
+
+    /// A session over `graph` that evaluates with `eval`, sharing its
+    /// caches (and particle simulations) with whatever else uses it: the
+    /// GUI's viewer, for calls over its bridge.
+    pub fn sharing(graph: Graph, eval: Arc<Mutex<Evaluator>>) -> Session {
         let mut graph = graph;
         normalize(&mut graph);
-        Session { graph, path: None, dirty: false, eval: Evaluator::new(), undo: Vec::new(), redo: Vec::new() }
+        Session { graph, path: None, dirty: false, eval, undo: Vec::new(), redo: Vec::new() }
     }
 
     pub fn open(path: &Path) -> Result<Session> {
@@ -480,7 +490,8 @@ impl Session {
     /// Render node `id` at `frame`. Results are cached between calls.
     pub fn render(&mut self, id: &str, frame: i64) -> Result<Arc<Image>> {
         let ctx = EvalContext { frame, write_outputs: false };
-        Ok(self.eval.evaluate(&self.graph, id, &ctx)?)
+        let mut eval = self.eval.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(eval.evaluate(&self.graph, id, &ctx)?)
     }
 
     /// What node `id`'s 3D scene holds at `frame`: its cameras, cards,
@@ -556,6 +567,21 @@ impl Session {
         let streams = img.scene.as_ref().map(|s| s.particles.clone()).unwrap_or_default();
         if streams.is_empty() {
             bail!("'{id}' passes on no particles (connect it after a Particle Emitter)");
+        }
+        // Simulated up to `frame` a short run at a time (as many frames as
+        // take about PARTICLE_RUN), so a viewer sharing the simulation (the
+        // GUI's, over its bridge) waits for one run at most, not the whole way.
+        for st in &streams {
+            let (mut g, mut run) = (self.graph.project.first_frame, 1);
+            while g + 1 < frame {
+                g = (g + run).min(frame - 1);
+                let t = std::time::Instant::now();
+                st.particles_at(g);
+                let took = t.elapsed();
+                run = if took > PARTICLE_RUN { (run / 2).max(1) } else if took < PARTICLE_RUN / 4 { run * 2 } else { run };
+                // (Long enough for a waiting viewer to take its turn.)
+                std::thread::sleep(std::time::Duration::from_micros(500));
+            }
         }
         let all: Vec<(usize, crate::particles::Particle)> = streams.iter().enumerate().flat_map(|(k, st)| st.particles().into_iter().map(move |p| (k, p))).collect();
         let total = all.len();

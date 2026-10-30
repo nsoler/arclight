@@ -4,9 +4,9 @@
 //! and records itself in the instance registry (`instances/<pid>.json` next to
 //! it). Clients send one JSON object per line, `{"tool": ..., "arguments": ...}`
 //! — the same tools [`crate::mcp`] serves — and get back `{"ok": result}` or
-//! `{"error": message}`. The GUI applies the call on its own thread through a
-//! [`crate::session::Session`] over its document, so edits land in its undo
-//! history like any other.
+//! `{"error": message}`. The GUI runs the calls in order, each through a
+//! [`crate::session::Session`] over its document (off its UI thread, sharing
+//! its viewer's evaluator), so edits land in its undo history like any other.
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
