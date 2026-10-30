@@ -487,6 +487,23 @@ sun coming from one side.
   distance** away, as they have no depth. Cards still go on them; setting
   the scale only changes the sphere's size.
 
+## Preferences
+
+**Edit ▸ Preferences** (**Ctrl/⌘+,**) holds your settings, kept in
+`~/.config/arclight/settings.json` (still fine to edit by hand; keys it
+doesn't know are kept). **Apply**, **OK**, **Cancel**, **Reset to
+defaults**.
+
+- **General:** plugin folders, the played-frame cache (MB) and the MCP
+  `--http` address (these take effect at the next start).
+- **Interface:** scale, theme (follow the system, dark or light),
+  snapping nodes to the graph's grid, curved or straight wires.
+- **Files and safety:** **Autosave** every N minutes (0: off) writes
+  unsaved changes to `<project file>.autosave` beside the project (an
+  unsaved project's to `~/.local/state/arclight/autosave/`), never over
+  the project, and removes it when you save; **File ▸ Open Recent** shows
+  the last N projects; **Undo levels**; the folders file dialogs start in.
+
 ## Undo
 
 **⌘Z** undoes, **⇧⌘Z** redoes.

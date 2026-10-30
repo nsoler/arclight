@@ -13,6 +13,7 @@ mod gizmo3d;
 mod help;
 mod node_editor;
 mod overlay;
+mod preferences;
 mod project_settings;
 mod properties;
 mod script_jobs;
@@ -22,7 +23,7 @@ mod viewport3d;
 mod worker;
 
 use arclight::bridge;
-use arclight::config::ViewPrefs;
+use arclight::config::{RecentFiles, Settings, ViewPrefs};
 use arclight::graph::{Graph, NodeError};
 use arclight::image::Image;
 use curve_editor::CurveEditor;
@@ -54,6 +55,7 @@ const SELECT_ALL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, K
 const GROUP: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::G);
 const UNGROUP: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::G);
 const PROJECT_SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::P);
+const PREFERENCES: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
 
 fn main() -> eframe::Result {
     arclight::plugin::init();
@@ -159,6 +161,21 @@ struct App {
     /// (None: not saved, as for screenshot runs).
     prefs: ViewPrefs,
     prefs_path: Option<PathBuf>,
+    /// The user's settings (Edit ▸ Preferences), and where they're saved
+    /// (None: not, as for screenshot runs).
+    settings: Settings,
+    settings_path: Option<PathBuf>,
+    preferences: preferences::Preferences,
+    /// File ▸ Open Recent, and where it's kept (None: not, as above).
+    recent: RecentFiles,
+    recent_path: Option<PathBuf>,
+    /// When unsaved changes were last copied aside (or the app started),
+    /// and the graph copied (see [`App::autosave`]).
+    autosaved: (std::time::Instant, String),
+    /// The points-per-pixel when a new interface scale was set, until it
+    /// changes (a frame or so later): then the views fit again, framed at
+    /// the new size.
+    rescale: Option<f32>,
     /// Socket that MCP servers and Python scripts (`arclt.attach()`) drive
     /// this window through.
     bridge: Option<bridge::Server>,
@@ -191,6 +208,7 @@ struct App {
 
 impl App {
     fn new(ctx: egui::Context, doc: Doc) -> App {
+        let ctx_for_settings = ctx.clone();
         let wake = ctx.clone();
         let bridge = bridge::Server::start(move || wake.request_repaint())
             .inspect_err(|e| eprintln!("arclight-gui: scripting bridge disabled: {e:#}"))
@@ -198,6 +216,14 @@ impl App {
         let mut transport = Transport::default();
         transport.frame = doc.graph.project.first_frame;
         let prefs = ViewPrefs::load(&ViewPrefs::path());
+        let screenshot_run = std::env::var_os("ARCLIGHT_SCREENSHOT").is_some();
+        let recent_path = (!screenshot_run).then(RecentFiles::path);
+        let mut recent = recent_path.as_deref().map(RecentFiles::load).unwrap_or_default();
+        let settings = Settings::load();
+        if let (Some(path), Some(file)) = (&recent_path, &doc.path) {
+            recent.add(file, settings.files.recent_count);
+            let _ = recent.save(path);
+        }
         // The viewer's evaluator, which bridged calls share (see bridge_calls).
         let eval = Arc::new(std::sync::Mutex::new(arclight::graph::Evaluator::new()));
         let mut viewer = Viewer::default();
@@ -205,7 +231,7 @@ impl App {
         // Until a project's own is restored (so the first frames don't
         // read as a change and save the defaults over them).
         viewer.viewport3d.view = viewer.viewport3d.new_view;
-        App {
+        let mut app = App {
             doc,
             editor: NodeEditor::default(),
             curves: CurveEditor::default(),
@@ -229,6 +255,13 @@ impl App {
             }),
             prefs,
             prefs_path: std::env::var_os("ARCLIGHT_SCREENSHOT").is_none().then(ViewPrefs::path),
+            settings,
+            settings_path: (!screenshot_run).then(Settings::path),
+            preferences: Default::default(),
+            recent,
+            recent_path,
+            autosaved: (std::time::Instant::now(), String::new()),
+            rescale: None,
             bridge,
             scripts: ScriptJobs::default(),
             calls: BridgeCalls::spawn(eval, move || ctx.request_repaint()),
@@ -242,7 +275,78 @@ impl App {
             help: help::Help::default(),
             project_settings: Default::default(),
             logo: None,
+        };
+        app.apply_settings(&ctx_for_settings);
+        app
+    }
+
+    /// Make the settings take effect: the interface's scale, theme, grid
+    /// and wires, and where file dialogs start.
+    fn apply_settings(&mut self, ctx: &egui::Context) {
+        let ui = &self.settings.interface;
+        let scale = ui.ui_scale.clamp(0.5, 3.0);
+        if scale != ctx.zoom_factor() {
+            self.rescale = Some(ctx.pixels_per_point());
+            ctx.set_zoom_factor(scale);
         }
+        ctx.set_theme(match ui.theme.as_str() {
+            "dark" => egui::ThemePreference::Dark,
+            "light" => egui::ThemePreference::Light,
+            _ => egui::ThemePreference::System,
+        });
+        self.editor.snap_to_grid = ui.snap_to_grid;
+        self.editor.straight_wires = ui.wire_style == "straight";
+        let f = &self.settings.files;
+        dialogs::set_folders(dialogs::Folders { project: f.project_dir.clone(), read: f.read_dir.clone(), write: f.write_dir.clone() });
+        self.recent.paths.truncate(f.recent_count);
+    }
+
+    /// Settings from the Preferences window: kept, saved and applied.
+    fn set_settings(&mut self, ctx: &egui::Context, settings: Settings) {
+        self.settings = settings;
+        if let Some(path) = &self.settings_path {
+            if let Err(e) = self.settings.save_to(path) {
+                self.status = Some(format!("saving {}: {e}", path.display()));
+            }
+        }
+        self.apply_settings(ctx);
+        self.save_recent();
+    }
+
+    /// `file` at the top of File ▸ Open Recent.
+    fn remember(&mut self, file: &std::path::Path) {
+        self.recent.add(file, self.settings.files.recent_count);
+        self.save_recent();
+    }
+
+    fn save_recent(&self) {
+        if let Some(path) = &self.recent_path {
+            if let Err(e) = self.recent.save(path) {
+                eprintln!("arclight-gui: can't save {}: {e}", path.display());
+            }
+        }
+    }
+
+    /// Every Files ▸ Autosave minutes, copy unsaved changes aside (see
+    /// [`autosave_path`]), never over the project itself.
+    fn autosave(&mut self, ctx: &egui::Context) {
+        let minutes = self.settings.files.autosave_minutes;
+        if minutes == 0 || !self.doc.dirty || self.screenshot.is_some() {
+            return;
+        }
+        let every = std::time::Duration::from_secs(minutes as u64 * 60);
+        let since = self.autosaved.0.elapsed();
+        if since < every {
+            ctx.request_repaint_after(every - since);
+            return;
+        }
+        let json = self.doc.graph.to_json();
+        if json != self.autosaved.1 {
+            if let Err(e) = write_autosave(self.doc.path.as_deref(), &json) {
+                eprintln!("arclight-gui: autosave failed: {e:#}");
+            }
+        }
+        self.autosaved = (std::time::Instant::now(), json);
     }
 
     /// `select_node`, `view_node`, `get_view`: the window's view state.
@@ -401,6 +505,10 @@ impl App {
     }
 
     fn load(&mut self, doc: Doc) {
+        if let Some(path) = doc.path.clone() {
+            self.remember(&path);
+        }
+        self.autosaved = (std::time::Instant::now(), String::new());
         self.transport = Transport::default();
         self.transport.frame = doc.graph.project.first_frame;
         self.doc = doc;
@@ -437,6 +545,19 @@ impl App {
         }
     }
 
+    /// Open the project at `path` (File ▸ Open Recent), asking about
+    /// unsaved changes first.
+    fn open_path(&mut self, path: PathBuf) {
+        if self.doc.dirty {
+            self.ask = Some(Ask::Discard(Then::Load(path)));
+            return;
+        }
+        match Graph::from_file(&path) {
+            Ok(g) => self.load(Doc::new(g, Some(path))),
+            Err(e) => self.status = Some(format!("{e:#}")),
+        }
+    }
+
     fn open(&mut self) {
         if self.doc.dirty {
             self.ask = Some(Ask::Discard(Then::Open));
@@ -451,8 +572,8 @@ impl App {
             return;
         }
         self.file = match what {
-            FileFor::Open => dialogs::pick(what, dialogs::filter(dialogs::new(), "Arclight graph", &["json"])),
-            FileFor::SaveAs => dialogs::save(what, dialogs::filter(dialogs::new(), "Arclight graph", &["json"]).set_file_name("comp.json")),
+            FileFor::Open => dialogs::pick_project(what, dialogs::filter(dialogs::new(), "Arclight graph", &["json"])),
+            FileFor::SaveAs => dialogs::save_project(what, dialogs::filter(dialogs::new(), "Arclight graph", &["json"]).set_file_name("comp.json")),
             FileFor::Import => dialogs::pick(what, dialogs::new()),
         };
     }
@@ -501,6 +622,9 @@ impl App {
     fn write(&mut self, path: PathBuf) {
         match std::fs::write(&path, self.doc.graph.to_json()) {
             Ok(()) => {
+                // Its autosave is behind it now.
+                let _ = std::fs::remove_file(autosave_path(Some(&path)));
+                self.remember(&path);
                 self.doc.path = Some(path);
                 self.doc.dirty = false;
                 self.status = None;
@@ -595,6 +719,9 @@ impl App {
         }
         if ctx.input_mut(|i| i.consume_shortcut(&PROJECT_SETTINGS)) {
             self.project_settings.open(&self.doc);
+        }
+        if ctx.input_mut(|i| i.consume_shortcut(&PREFERENCES)) {
+            self.preferences.show(&self.settings);
         }
         if ctx.text_edit_focused() {
             // Let the focused text field use ⌘Z for its own text undo.
@@ -904,6 +1031,24 @@ impl App {
                     ui.close();
                     self.open();
                 }
+                let recent = self.recent.paths.clone();
+                ui.add_enabled_ui(!recent.is_empty(), |ui| {
+                    ui.menu_button("Open Recent", |ui| {
+                        for path in &recent {
+                            let name = path.file_name().map_or_else(|| path.to_string_lossy(), |n| n.to_string_lossy());
+                            if ui.button(name).on_hover_text(path.to_string_lossy()).clicked() {
+                                ui.close();
+                                self.open_path(path.clone());
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Clear the list").clicked() {
+                            ui.close();
+                            self.recent.paths.clear();
+                            self.save_recent();
+                        }
+                    });
+                });
                 if ui.add_enabled(!dialogs::busy(), egui::Button::new("Import media…")).clicked() {
                     ui.close();
                     self.choose(FileFor::Import);
@@ -984,6 +1129,11 @@ impl App {
                     self.doc.view_node(sel.as_deref().unwrap());
                     ui.close();
                 }
+                ui.separator();
+                if ui.add(egui::Button::new("Preferences…").shortcut_text(ui.ctx().format_shortcut(&PREFERENCES))).clicked() {
+                    self.preferences.show(&self.settings);
+                    ui.close();
+                }
             });
             ui.menu_button("View", |ui| {
                 if ui.button("Fit viewer").clicked() {
@@ -1062,6 +1212,37 @@ impl App {
     }
 }
 
+/// Where the autosave of the project saved at `project` goes: beside it
+/// as `<name>.autosave` (never the project itself), or for one not saved
+/// yet, `Untitled.autosave` in the state dir.
+fn autosave_path(project: Option<&std::path::Path>) -> PathBuf {
+    match project.and_then(|p| Some((p.parent()?, p.file_name()?))) {
+        Some((dir, name)) => dir.join(format!("{}.autosave", name.to_string_lossy())),
+        None => arclight::config::state_dir().join("autosave").join("Untitled.autosave"),
+    }
+}
+
+/// Write `json` as the autosave of the project at `project` (see
+/// [`autosave_path`]), whole or not at all; where that can't be written
+/// (a read-only folder), in the state dir under the project's name.
+fn write_autosave(project: Option<&std::path::Path>, json: &str) -> std::io::Result<PathBuf> {
+    let write = |path: PathBuf| -> std::io::Result<PathBuf> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let tmp = path.with_extension("autosave.tmp");
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(path)
+    };
+    let path = autosave_path(project);
+    debug_assert!(project.is_none_or(|p| p != path), "never over the project");
+    write(path).or_else(|e| match project.and_then(|p| p.file_name()) {
+        Some(name) => write(arclight::config::state_dir().join("autosave").join(format!("{}.autosave", name.to_string_lossy()))),
+        None => Err(e),
+    })
+}
+
 /// What the File menu's file dialog is choosing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FileFor {
@@ -1117,11 +1298,20 @@ impl eframe::App for App {
         self.update_title(&ctx);
         self.maybe_screenshot(&ctx);
         self.save_prefs();
+        self.autosave(&ctx);
+        if self.rescale.is_some_and(|before| before != ctx.pixels_per_point()) {
+            self.rescale = None;
+            self.editor.fit();
+            self.viewer.fit();
+        }
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         self.about_dialog(&ctx);
         self.help.ui(&ctx);
         self.project_settings.ui(&ctx, &mut self.doc);
+        if let Some(settings) = self.preferences.ui(&ctx) {
+            self.set_settings(&ctx, settings);
+        }
         self.ask_ui(&ctx);
         egui::Panel::right("properties")
             .default_size(380.0)
@@ -1265,6 +1455,29 @@ fn starter_graph() -> Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An autosave goes beside the project as <name>.autosave, never over
+    /// it; one not saved yet in the state dir; a folder it can't write to
+    /// sends it to the state dir under the project's name.
+    #[test]
+    fn autosaves_go_beside_the_project_never_over_it() {
+        let dir = std::env::temp_dir().join(format!("arclight_autosave_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let project = dir.join("comp.json");
+        std::fs::write(&project, "the project").unwrap();
+        assert_eq!(autosave_path(Some(&project)), dir.join("comp.json.autosave"));
+        assert_eq!(write_autosave(Some(&project), "{\"nodes\": []}").unwrap(), dir.join("comp.json.autosave"));
+        assert_eq!(std::fs::read_to_string(&project).unwrap(), "the project");
+        assert_eq!(std::fs::read_to_string(dir.join("comp.json.autosave")).unwrap(), "{\"nodes\": []}");
+        assert!(!dir.join("comp.json.autosave.tmp").exists() && !dir.join("comp.autosave.tmp").exists());
+        assert!(autosave_path(None).starts_with(arclight::config::state_dir()));
+        let gone = dir.join("no such folder").join("x").join("shot.json");
+        let fallback = arclight::config::state_dir().join("autosave").join("shot.json.autosave");
+        let _ = std::fs::write(dir.join("no such folder"), "a file, so no folder can be made here");
+        assert_eq!(write_autosave(Some(&gone), "{}").unwrap(), fallback);
+        std::fs::remove_file(&fallback).ok();
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// Bridged calls run off the UI thread, in order (each seeing the last
     /// one's edit), and an edit made in the window meanwhile isn't undone.

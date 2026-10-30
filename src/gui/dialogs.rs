@@ -9,12 +9,40 @@
 //! One at a time: [`busy`] says one is open. Dialogs are built by [`new`],
 //! which makes them belong to the app's window (see [`set_parent`]), so the
 //! system shows them over it. Add file-type filters with [`filter`], which
-//! matches extensions in either case.
+//! matches extensions in either case. They start in the folders the
+//! preferences give ([`set_folders`]): [`pick`] where files are read from,
+//! [`save`] where they're written, [`pick_project`] / [`save_project`]
+//! where projects are.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::Mutex;
+
+/// Where dialogs start (None: wherever the system likes).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Folders {
+    pub project: Option<PathBuf>,
+    pub read: Option<PathBuf>,
+    pub write: Option<PathBuf>,
+}
+
+static FOLDERS: Mutex<Folders> = Mutex::new(Folders { project: None, read: None, write: None });
+
+/// Start dialogs in `folders` from now on.
+pub fn set_folders(folders: Folders) {
+    *FOLDERS.lock().unwrap_or_else(|e| e.into_inner()) = folders;
+}
+
+/// `d` starting in the folder `which` picks, if it's set and exists.
+fn in_folder(d: rfd::FileDialog, which: fn(&Folders) -> &Option<PathBuf>) -> rfd::FileDialog {
+    let folders = FOLDERS.lock().unwrap_or_else(|e| e.into_inner());
+    match which(&folders).as_ref().filter(|p| p.is_dir()) {
+        Some(dir) => d.set_directory(dir),
+        None => d,
+    }
+}
 
 /// A dialog is open.
 static OPEN: AtomicBool = AtomicBool::new(false);
@@ -110,14 +138,33 @@ pub fn start<T>(what: T, show: impl FnOnce() -> Option<PathBuf> + Send + 'static
     Some(Pending { what, answer })
 }
 
-/// Choose a file to open with dialog `d`.
+/// Choose a file to read with dialog `d` (starting in the read folder).
 pub fn pick<T>(what: T, d: rfd::FileDialog) -> Option<Pending<T>> {
+    let d = in_folder(d, |f| &f.read);
     start(what, move || d.pick_file())
 }
 
-/// Choose where to save with dialog `d`.
+/// Choose where to write with dialog `d` (starting in the write folder).
 pub fn save<T>(what: T, d: rfd::FileDialog) -> Option<Pending<T>> {
+    let d = in_folder(d, |f| &f.write);
     start(what, move || d.save_file())
+}
+
+/// Choose a project to open with dialog `d` (in the projects folder).
+pub fn pick_project<T>(what: T, d: rfd::FileDialog) -> Option<Pending<T>> {
+    let d = in_folder(d, |f| &f.project);
+    start(what, move || d.pick_file())
+}
+
+/// Choose where to save a project with dialog `d` (in the projects folder).
+pub fn save_project<T>(what: T, d: rfd::FileDialog) -> Option<Pending<T>> {
+    let d = in_folder(d, |f| &f.project);
+    start(what, move || d.save_file())
+}
+
+/// Choose a folder with dialog `d`.
+pub fn pick_folder<T>(what: T, d: rfd::FileDialog) -> Option<Pending<T>> {
+    start(what, move || d.pick_folder())
 }
 
 #[cfg(test)]

@@ -11,6 +11,19 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.65 — 2026-10-29
+
+- **Preferences** (Dev1): **Edit ▸ Preferences** (Ctrl/⌘+,), saved in
+  settings.json: General (plugin folders, frame cache, MCP address),
+  Interface (scale; theme: follow the system, dark or light; snap nodes
+  to the grid; curved or straight wires) and Files and safety (autosave
+  every N minutes to `<project>.autosave` beside the project, never over
+  it; how many recent projects; undo levels; the folders project, media
+  and render dialogs start in). **File ▸ Open Recent** lists recent
+  projects. Apply, OK, Cancel and Reset to defaults; without settings
+  Arclight works as before. Also fixed: at a non-1 interface scale the
+  node graph could open fitted off-screen.
+
 ## 0.9.64 — 2026-10-29
 
 - **Particle Emitter on animated geometry steps on frame by frame**

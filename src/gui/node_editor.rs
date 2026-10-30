@@ -98,6 +98,10 @@ pub struct NodeEditor {
     zoom: f32,
     wire: Option<Wire>,
     fit_pending: bool,
+    /// The editor's size when the view was last fitted, while it hasn't
+    /// been moved since: a new size (the window's real one after the first
+    /// frames, a new interface scale, a resize) fits it again.
+    fitted_size: Option<Vec2>,
     browser: Option<Browser>,
     /// The wire a node added from the menu or browser goes into.
     target_wire: Option<WireRef>,
@@ -118,6 +122,10 @@ pub struct NodeEditor {
     /// A wire's right-click menu: the wire, and where it opened (screen).
     wire_menu: Option<(WireRef, Pos2)>,
     pub rect: Rect,
+    /// Moved nodes land on the grid (Preferences ▸ Interface).
+    pub snap_to_grid: bool,
+    /// Wires drawn straight rather than curved (Preferences ▸ Interface).
+    pub straight_wires: bool,
 }
 
 /// The zoom and pan framing `bounds` (graph coordinates) centered in a
@@ -187,6 +195,7 @@ impl Default for NodeEditor {
             zoom: 1.0,
             wire: None,
             fit_pending: true,
+            fitted_size: None,
             browser: None,
             target_wire: None,
             drop_wire: None,
@@ -197,6 +206,8 @@ impl Default for NodeEditor {
             title_edit: None,
             wire_menu: None,
             rect: Rect::NOTHING,
+            snap_to_grid: false,
+            straight_wires: false,
         }
     }
 }
@@ -297,6 +308,7 @@ impl NodeEditor {
             return;
         }
         self.pan = self.rect.size() / 2.0 - node.center().to_vec2() * self.zoom;
+        self.fitted_size = None;
     }
 
     /// The middle of the view, in graph coordinates (where a node added from
@@ -524,11 +536,15 @@ impl NodeEditor {
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, Color32::from_gray(30));
 
-        if self.fit_pending {
+        if self.fit_pending || self.fitted_size.is_some_and(|s| s != rect.size()) {
             self.fit_to(doc);
         }
         let minimap = self.minimap_rect(doc);
+        let view = (self.zoom, self.pan);
         self.navigate(ui, &bg, minimap);
+        if (self.zoom, self.pan) != view {
+            self.fitted_size = None;
+        }
         self.draw_grid(&painter);
 
         let mods = ui.input(|i| i.modifiers);
@@ -592,7 +608,7 @@ impl NodeEditor {
                     let picked = doc.selected_wire.as_ref().is_some_and(|(s, d, p)| s == src && *d == n.id && *p == i);
                     let plain = if is_scene(doc, src) { Stroke::new(wire_stroke.width, SCENE_COLOR) } else { wire_stroke };
                     let stroke = if on || picked { Stroke::new(3.0 * self.zoom.sqrt().max(1.0), SELECTED) } else { plain };
-                    painter.add(bezier(a, b, stroke));
+                    painter.add(bezier(a, b, stroke, self.straight_wires));
                 }
             }
         }
@@ -637,6 +653,14 @@ impl NodeEditor {
                 }
             }
             if resp.drag_stopped() {
+                // The node held lands on the grid, the others moved with it.
+                if self.snap_to_grid {
+                    if let Some([x, y]) = doc.node(id).and_then(|n| n.pos) {
+                        let moving = doc.selection();
+                        let alone = moving.len() <= 1;
+                        doc.move_nodes(if alone { std::slice::from_ref(id) } else { &moving }, [snap(x) - x, snap(y) - y]);
+                    }
+                }
                 if let Some(w) = self.drop_wire.take().filter(|w| fits_between(doc, id, &w.src, &w.dst, w.port)) {
                     doc.insert_on_wire(id, &w.src, &w.dst, w.port);
                 }
@@ -695,7 +719,7 @@ impl NodeEditor {
             let lit = self.input_at(&geo, ptr).is_none().then(|| self.wire_at(doc, ptr, Some(src))).flatten();
             if let Some(w) = lit {
                 if let (Some(from), Some(to)) = (rect_of(&w.src), geo.iter().find(|g| g.0 == w.dst)) {
-                    painter.add(bezier(Self::out_port(from), Self::in_port(to.2, w.port, to.3), Stroke::new(3.0, Color32::from_rgb(250, 190, 70))));
+                    painter.add(bezier(Self::out_port(from), Self::in_port(to.2, w.port, to.3), Stroke::new(3.0, Color32::from_rgb(250, 190, 70)), self.straight_wires));
                 }
             }
         }
@@ -707,8 +731,8 @@ impl NodeEditor {
             if let Some(a) = anchor {
                 let s = Stroke::new(2.0, Color32::from_rgb(240, 170, 60));
                 match wire {
-                    Wire::FromOutput(_) => painter.add(bezier(a, ptr, s)),
-                    Wire::FromInput(..) => painter.add(bezier(ptr, a, s)),
+                    Wire::FromOutput(_) => painter.add(bezier(a, ptr, s, self.straight_wires)),
+                    Wire::FromInput(..) => painter.add(bezier(ptr, a, s, self.straight_wires)),
                 };
             }
         }
@@ -978,7 +1002,7 @@ impl NodeEditor {
             let Some(to) = rect_of(&n.id) else { continue };
             for (i, src) in n.inputs.iter().enumerate() {
                 let Some(from) = rect_of(src).filter(|_| skip != Some(src.as_str()) && skip != Some(n.id.as_str())) else { continue };
-                let d = bezier_distance(Self::out_port(from), Self::in_port(to, i, n.inputs.len()), p);
+                let d = bezier_distance(Self::out_port(from), Self::in_port(to, i, n.inputs.len()), p, self.straight_wires);
                 if d < WIRE_GRAB && best.as_ref().is_none_or(|b| d < b.0) {
                     best = Some((d, WireRef { src: src.clone(), dst: n.id.clone(), port: i }));
                 }
@@ -1078,6 +1102,7 @@ impl NodeEditor {
             return;
         }
         (self.zoom, self.pan) = fit_view(content_bounds(doc), self.rect.size());
+        self.fitted_size = Some(self.rect.size());
     }
 
     /// The Fit button in the top-right corner: frames every node, as F does.
@@ -1092,7 +1117,7 @@ impl NodeEditor {
     }
 
     fn draw_grid(&self, painter: &egui::Painter) {
-        let step = 40.0 * self.zoom;
+        let step = GRID * self.zoom;
         if step < 8.0 {
             return;
         }
@@ -1189,8 +1214,24 @@ impl NodeEditor {
     }
 }
 
-fn bezier(a: Pos2, b: Pos2, stroke: Stroke) -> CubicBezierShape {
-    let dx = ((b.x - a.x).abs() * 0.5).max(40.0);
+/// The node graph's grid spacing (graph units; lines through 0).
+const GRID: f32 = 40.0;
+
+/// `v` on the nearest grid line.
+fn snap(v: f32) -> f32 {
+    (v / GRID).round() * GRID
+}
+
+/// How far a wire from `a` to `b` leaves and enters its ports level
+/// (none when `straight`).
+fn reach(a: Pos2, b: Pos2, straight: bool) -> f32 {
+    if straight { 0.0 } else { ((b.x - a.x).abs() * 0.5).max(40.0) }
+}
+
+/// The wire from `a` to `b`: a curve leaving and entering level, or a
+/// straight line.
+fn bezier(a: Pos2, b: Pos2, stroke: Stroke, straight: bool) -> CubicBezierShape {
+    let dx = reach(a, b, straight);
     CubicBezierShape::from_points_stroke(
         [a, a + Vec2::new(dx, 0.0), b - Vec2::new(dx, 0.0), b],
         false,
@@ -1226,8 +1267,8 @@ fn is_free(doc: &Doc, id: &str) -> bool {
 }
 
 /// Distance from `p` to the wire drawn from `a` to `b` (see [`bezier`]).
-fn bezier_distance(a: Pos2, b: Pos2, p: Pos2) -> f32 {
-    let dx = ((b.x - a.x).abs() * 0.5).max(40.0);
+fn bezier_distance(a: Pos2, b: Pos2, p: Pos2, straight: bool) -> f32 {
+    let dx = reach(a, b, straight);
     let [c1, c2] = [a + Vec2::new(dx, 0.0), b - Vec2::new(dx, 0.0)];
     let at = |t: f32| {
         let u = 1.0 - t;
@@ -1576,9 +1617,17 @@ mod tests {
     fn wire_distance_follows_the_curve() {
         let (a, b) = (Pos2::new(0.0, 0.0), Pos2::new(200.0, 100.0));
         // The curve passes through its midpoint (by symmetry).
-        assert!(bezier_distance(a, b, Pos2::new(100.0, 50.0)) < 0.5);
-        assert!(bezier_distance(a, b, Pos2::new(100.0, 80.0)) > 10.0);
-        assert!(bezier_distance(a, b, a) < 1e-3);
+        assert!(bezier_distance(a, b, Pos2::new(100.0, 50.0), false) < 0.5);
+        assert!(bezier_distance(a, b, Pos2::new(100.0, 80.0), false) > 10.0);
+        assert!(bezier_distance(a, b, a, false) < 1e-3);
+        // Straight: along the line; a point near the curve's bend is off it.
+        assert!(bezier_distance(a, b, Pos2::new(50.0, 25.0), true) < 1e-3);
+        assert!(bezier_distance(a, b, Pos2::new(38.9, 6.1), false) < 1.0 && bezier_distance(a, b, Pos2::new(38.9, 6.1), true) > 10.0);
+    }
+
+    #[test]
+    fn snapping_lands_on_the_drawn_grid() {
+        assert_eq!([snap(0.0), snap(19.0), snap(21.0), snap(-21.0), snap(118.0)], [0.0, 0.0, 40.0, -40.0, 120.0]);
     }
 
     #[test]
