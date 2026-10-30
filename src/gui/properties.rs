@@ -478,13 +478,18 @@ impl Properties {
     /// The formula text field, with completions for the word at the
     /// cursor (functions, `frame`/`time`/…, node names, then a node's
     /// params and components) in a list under it: ↑/↓ pick, Tab or a click
-    /// takes one. True when the user is done with the field (Enter or
-    /// focus elsewhere).
+    /// takes one (a plain Tab: ⇧Tab moves focus back, as elsewhere). True
+    /// when the user is done with the field (Enter or focus elsewhere).
     fn formula_field(&mut self, ui: &mut egui::Ui, doc: &Doc, field: egui::Id, buf: &mut String) -> bool {
         let ctx = ui.ctx().clone();
         let focused = ctx.memory(|m| m.has_focus(field));
         let cursor = egui::text_edit::TextEditState::load(&ctx, field).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index.0);
         let mut take = None;
+        // The code editor field keeps Tab from moving focus: move it back
+        // by hand.
+        if focused && ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab)) {
+            ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::Previous));
+        }
         if let (true, Some(c)) = (focused, cursor) {
             let n = completions(buf, c, doc).1.len();
             if n > 0 {
@@ -495,7 +500,7 @@ impl Properties {
                     if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
                         self.formula_pick = (self.formula_pick + n - 1) % n;
                     }
-                    if i.consume_key(egui::Modifiers::NONE, egui::Key::Tab) {
+                    if crate::consume_plain(i, egui::Key::Tab) {
                         take = Some(self.formula_pick.min(n - 1));
                     }
                 });
@@ -1622,6 +1627,42 @@ mod tests {
         // In the middle of the text, up to the cursor.
         let (start, list) = completions("cos(fr) + 1", 6, &d);
         assert_eq!((start, list[0].insert.as_str()), (4, "frame"));
+    }
+
+    /// Tab takes the picked completion; ⇧Tab takes none and moves focus
+    /// back (the field keeps Tab from moving it).
+    #[test]
+    fn only_a_plain_tab_completes_a_formula() {
+        let doc = Doc::new(Graph::default(), None);
+        let ctx = egui::Context::default();
+        let mut props = Properties::default();
+        let field = egui::Id::unique("formula");
+        let mut buf = "fr".to_string();
+        let tab = |modifiers| egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers };
+        let mut frame = |buf: &mut String, events: Vec<egui::Event>| {
+            let mut before = false;
+            let _ = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                before = ui.button("before").has_focus();
+                props.formula_field(ui, &doc, field, buf);
+            });
+            (before, ctx.memory(|m| m.has_focus(field)))
+        };
+        let focus = |ctx: &egui::Context| {
+            ctx.memory_mut(|m| m.request_focus(field));
+            let mut state = egui::text_edit::TextEditState::load(ctx, field).unwrap_or_default();
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(2))));
+            state.store(ctx, field);
+        };
+        focus(&ctx);
+        frame(&mut buf, vec![]);
+        frame(&mut buf, vec![]);
+        frame(&mut buf, vec![tab(egui::Modifiers::SHIFT)]);
+        assert_eq!(frame(&mut buf, vec![]), (true, false), "focus went to the widget before it");
+        assert_eq!(buf, "fr", "and nothing was completed");
+        focus(&ctx);
+        frame(&mut buf, vec![]);
+        frame(&mut buf, vec![tab(egui::Modifiers::NONE)]);
+        assert!(buf.starts_with("frame"), "{buf}");
     }
 
     /// Every function the help and completions offer is one formulas know.

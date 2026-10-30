@@ -57,11 +57,27 @@ const UNGROUP: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(
 const PROJECT_SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::P);
 const PREFERENCES: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
 
+/// The player and edit keys (`App::shortcuts`) pressed this frame: with no
+/// modifier, the arrows also with ⌥ (key to key). Over the 3D view, Home
+/// and F are its own (frame everything, the selection).
+fn player_keys(i: &egui::InputState, over_3d: bool) -> Vec<Key> {
+    use Key::*;
+    [Space, L, J, K, ArrowRight, ArrowLeft, Home, End, Delete, Backspace, V, F]
+        .into_iter()
+        .filter(|&k| pressed_with(i, k, Modifiers::NONE) || matches!(k, ArrowLeft | ArrowRight) && pressed_with(i, k, Modifiers::ALT))
+        .filter(|k| !(over_3d && matches!(k, Home | F)))
+        .collect()
+}
+
+/// `key` was pressed (or repeated) with exactly `modifiers` held.
+fn pressed_with(i: &egui::InputState, key: Key, modifiers: Modifiers) -> bool {
+    i.events.iter().any(|e| matches!(e, egui::Event::Key { key: k, pressed: true, modifiers: m, .. } if *k == key && m.matches_exact(modifiers)))
+}
+
 /// Take `key` pressed with no modifier at all. egui's `consume_key` ignores
 /// an extra Shift or Alt, so `Modifiers::NONE` there takes Shift+Tab too.
 fn consume_plain(i: &mut egui::InputState, key: Key) -> bool {
-    let plain = i.events.iter().any(|e| matches!(e, egui::Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.matches_exact(Modifiers::NONE)));
-    plain && i.consume_key(Modifiers::NONE, key)
+    pressed_with(i, key, Modifiers::NONE) && i.consume_key(Modifiers::NONE, key)
 }
 
 fn main() -> eframe::Result {
@@ -907,7 +923,9 @@ impl App {
             self.editor.open_browser(ctx.input(|i| i.pointer.hover_pos()));
         }
         let project = self.doc.graph.project.clone();
-        let pressed = |k: Key| ctx.input(|i| i.key_pressed(k) && !i.modifiers.command);
+        let over_3d = over_viewer && self.viewer.mode3d;
+        let taken = ctx.input(|i| player_keys(i, over_3d));
+        let pressed = |k: Key| taken.contains(&k);
         let t = &mut self.transport;
         if pressed(Key::Space) {
             t.set_play(if t.play == Play::Stopped { Play::Forward } else { Play::Stopped });
@@ -968,8 +986,7 @@ impl App {
             }
         }
         if pressed(Key::F) {
-            let ptr = ctx.input(|i| i.pointer.hover_pos());
-            if ptr.is_some_and(|p| self.viewer.rect.contains(p)) {
+            if over_viewer {
                 self.viewer.fit();
             } else if self.tab == BottomTab::Curves {
                 self.curves.fit();
@@ -1636,6 +1653,27 @@ fn starter_graph() -> Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The player and edit keys need no modifier (⇧Space isn't Space), but
+    /// ⌥ with an arrow; Home and F over the 3D view are left to it.
+    #[test]
+    fn player_keys_take_no_modifier_and_leave_the_3d_view_its_own() {
+        let keys = |key, modifiers, over_3d| {
+            let ctx = egui::Context::default();
+            let mut taken = vec![];
+            let event = egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+            let _ = ctx.run_ui(egui::RawInput { events: vec![event], ..Default::default() }, |ui| taken = ui.input(|i| player_keys(i, over_3d)));
+            taken
+        };
+        for k in [Key::Space, Key::L, Key::Delete, Key::Home, Key::F, Key::ArrowLeft] {
+            assert_eq!(keys(k, Modifiers::NONE, false), [k]);
+            assert!(keys(k, Modifiers::SHIFT, false).is_empty() && keys(k, Modifiers::COMMAND, false).is_empty(), "{k:?}");
+        }
+        assert_eq!(keys(Key::ArrowRight, Modifiers::ALT, false), [Key::ArrowRight]);
+        assert!(keys(Key::Space, Modifiers::ALT, false).is_empty() && keys(Key::Home, Modifiers::ALT, false).is_empty());
+        assert!(keys(Key::Home, Modifiers::NONE, true).is_empty() && keys(Key::F, Modifiers::NONE, true).is_empty());
+        assert_eq!(keys(Key::End, Modifiers::NONE, true), [Key::End], "End still goes to the last frame");
+    }
 
     /// Tab over the viewer toggles 2D / 3D; Shift+Tab (or Alt / Ctrl+Tab)
     /// is left alone and kept for whoever wants it.

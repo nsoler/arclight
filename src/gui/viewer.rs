@@ -226,7 +226,7 @@ impl Viewer {
                     if i.consume_key(Modifiers::ALT, k) {
                         Some((m, true))
                     } else {
-                        i.consume_key(Modifiers::NONE, k).then_some((m, false))
+                        crate::consume_plain(i, k).then_some((m, false))
                     }
                 })
             });

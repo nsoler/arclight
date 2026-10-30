@@ -12,6 +12,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.25 — 2026-10-30
+
+- Player and edit keys (Space, J / K / L, arrows, Home / End, Delete, V,
+  F) no longer fire with Shift or Alt held (Alt+arrows still jumps
+  between keys), and the viewer's G / R / S gestures need no modifier.
+- Home and F over the 3D view only frame the view: Home no longer also
+  jumps to the first frame.
+- In a formula field, Shift+Tab moves focus back instead of taking the
+  completion; Tab still takes it.
+
 ## 0.10.24 — 2026-10-30
 
 - **Backdrops from scripts**: MCP tools `list_backdrops`,

@@ -212,7 +212,7 @@ orthographic.
 | **0** | Through the selected camera, spot light or area light, else the scene camera (its frame outlined, outside darkened); again to come back out. Also **View ▸ Look through selected** |
 | **2** / **4** / **6** / **8** | Orbit 15° down / left / right / up |
 | **.** or **F** | Frame the selection |
-| **Home** | Frame everything |
+| **Home** | Frame everything (over the 3D view it doesn't jump to the first frame) |
 | **`** (backtick) | A pie of views: point at one and click, or let go of the key |
 | **Z** | Meshes solid (lit from the view) or as wireframes |
 | **⇧Z** | Solid (lit from the view) or Lit (by the scene's lights) |
