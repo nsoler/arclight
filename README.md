@@ -423,7 +423,7 @@ arclight mcp --attach [PID]               # drive the newest (or given) running 
 Register it with an MCP client, e.g. `claude mcp add arclight -- /path/to/arclight mcp`.
 Tools: `list_ops`, `describe_op`, `get_graph`, `describe_node`, `create_node`,
 `delete_node`, `rename_node`, `set_params`, `set_key`, `export_tracker` (a Tracker's motion as a keyed Transform or Corner Pin), `track_camera`, `camera_points`, `orient_camera`, `export_camera`, `place_on_points` (the Camera Tracker: solve, read the points, set origin/ground/scale, export, place cards and locators), `scene_objects` (what a 3D node's scene holds: cameras, cards, meshes, and lights with their type, world position and direction, color, intensity and settings), `particles` (a particle node's particles at a frame: ids, positions, velocities, ages, lives, sizes, colors, in pages of up to 100000), `connect`, `disconnect`,
-`set_project`, `render_frame` (stats, optional file and PNG preview the model can
+`set_project` (incl. `folder`: relative paths are in it), `render_frame` (stats, optional file and PNG preview the model can
 see), `render_output`, `probe_media`, `new_graph`, `load_graph`, `save_graph`,
 `undo`, `redo`, `list_plugins`, `list_instances`, `attach_instance`,
 `detach_instance`. A few tools only work on an attached GUI: `select_node`

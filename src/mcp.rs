@@ -113,9 +113,9 @@ static TOOLS: &[Tool] = &[
         {"type": "object", "properties": {"from": {"type": "string"}, "to": {"type": "string"}, "port": {"type": ["integer", "string"]}}, "required": ["from", "to"]}),
     tool!("disconnect", "Disconnect input 'port' (index or label) of a node.",
         {"type": "object", "properties": {"node": {"type": "string"}, "port": {"type": ["integer", "string"]}}, "required": ["node", "port"]}),
-    tool!("set_project", "Set the timeline (first/last frame, fps) and the format: the frame size (width, height) of sources whose own size is 0, the default.",
+    tool!("set_project", "Set the timeline (first/last frame, fps), the format: the frame size (width, height) of sources whose own size is 0, the default, and the project's folder (\"\" for none: then the folder its file is in). File paths given relative (in params) are in the folder; saved, the files in it are written relative to it so the whole folder can move.",
         {"type": "object", "properties": {"first_frame": {"type": "integer"}, "last_frame": {"type": "integer"}, "fps": {"type": "number"},
-            "width": {"type": "integer"}, "height": {"type": "integer"}}}),
+            "width": {"type": "integer"}, "height": {"type": "integer"}, "folder": {"type": "string"}}}),
     tool!("render_frame", "Render a node at a frame. Returns its frame size, data window ([x0, y0, x1, y1]: where pixels are stored) and mean/min/max color over the frame; 'path' also writes the image (.exr keeps float); 'preview' returns a PNG.",
         {"type": "object", "properties": {
             "node": {"type": "string"},
@@ -280,6 +280,9 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
                 }
             };
             s.set_project(int("first_frame"), int("last_frame"), args.get("fps").and_then(Value::as_f64), format)?;
+            if let Some(folder) = opt_str(args, "folder") {
+                s.set_folder(Some(Path::new(folder)))?;
+            }
             json!(s.graph.project)
         }
         "render_frame" => {
@@ -657,6 +660,44 @@ mod tests {
 
     fn call(server: &mut Server, name: &str, args: Value) -> Value {
         rpc(server, 1, "tools/call", json!({"name": name, "arguments": args}))["result"].clone()
+    }
+
+    /// Through MCP as in the GUI: with a project folder, paths given
+    /// relative are in it; saved, they're relative to it (and the folder to
+    /// the file in it); the whole folder moved and loaded, renders read and
+    /// write there.
+    #[test]
+    fn a_project_folder_moves_whole_through_mcp() {
+        let tmp = std::env::temp_dir().join(format!("arclight_mcp_folder_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let (show, moved) = (tmp.join("show"), tmp.join("moved/show"));
+        std::fs::create_dir_all(show.join("plates")).unwrap();
+        crate::image::Image::filled(4, 2, [0.25, 0.5, 0.75, 1.0]).write(&show.join("plates/bg.0001.png")).unwrap();
+        let mut s = Server::new(Session::default());
+        let ok = |r: Value| assert_eq!(r["isError"], false, "{r}");
+        ok(call(&mut s, "set_project", json!({"folder": show, "first_frame": 1, "last_frame": 1})));
+        ok(call(&mut s, "create_node", json!({"op": "read", "name": "plate", "params": {"path": "plates/bg.####.png"}})));
+        ok(call(&mut s, "create_node", json!({"op": "media_out", "name": "out", "inputs": ["plate"], "params": {"path": "renders/comp.####.png", "first_frame": 1, "last_frame": 1}})));
+        let graph = call(&mut s, "get_graph", json!({}))["structuredContent"]["graph"].clone();
+        assert_eq!(graph["nodes"][0]["params"]["path"], show.join("plates/bg.####.png").to_string_lossy().as_ref(), "kept whole");
+        ok(call(&mut s, "save_graph", json!({"path": show.join("comp.json")})));
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(show.join("comp.json")).unwrap()).unwrap();
+        assert_eq!((&saved["project"]["folder"], &saved["nodes"][0]["params"]["path"], &saved["nodes"][1]["params"]["path"]), (&json!("."), &json!("plates/bg.####.png"), &json!("renders/comp.####.png")));
+        std::fs::create_dir_all(moved.parent().unwrap()).unwrap();
+        std::fs::rename(&show, &moved).unwrap();
+        let mut s = Server::new(Session::default());
+        ok(call(&mut s, "load_graph", json!({"path": moved.join("comp.json")})));
+        ok(call(&mut s, "render_output", json!({"node": "out"})));
+        ok(call(&mut s, "render_frame", json!({"node": "plate", "frame": 1, "path": "renders/still.png"})));
+        assert!(moved.join("renders/comp.0001.png").exists() && moved.join("renders/still.png").exists());
+        assert!(!show.exists());
+        // No folder: cleared, the file's own folder counts for paths given.
+        ok(call(&mut s, "set_project", json!({"folder": ""})));
+        ok(call(&mut s, "set_params", json!({"node": "plate", "params": {"path": "plates/bg.####.png"}})));
+        let graph = call(&mut s, "get_graph", json!({}))["structuredContent"]["graph"].clone();
+        assert_eq!(graph["project"].get("folder"), None);
+        assert_eq!(graph["nodes"][0]["params"]["path"], moved.join("plates/bg.####.png").to_string_lossy().as_ref());
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]

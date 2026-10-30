@@ -125,6 +125,12 @@ you choose another; or none), and **Folder** in Project Settings changes
 it (Browse…). File dialogs for media (Read, Media In, Read Geo, Import)
 and outputs (Write, Media Out) start there; without one, in the folder
 the project file is in.
+Files inside the project's folder are saved relative to it (and the
+folder relative to the project file, when the file is in it), so you can
+move or copy the whole folder and open it elsewhere. A path you type
+relative, in a File field or through MCP / Python, means relative to the
+project's folder; File fields show paths in the folder relative to it
+(hover for the full path).
 
 **File ▸ Project Settings…** (**⇧⌘P**) sets the project's frame size, frame
 rate and frame range. Pick a format (HD, UHD, 2K or 4K DCI, 720p, PAL,

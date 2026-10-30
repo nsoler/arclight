@@ -12,7 +12,7 @@ use crate::image::{Image, Size};
 use crate::ops::{self, EvalContext, OpInfo, ParamKind};
 use crate::render::{self, Progress};
 use crate::track;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -90,7 +90,8 @@ impl Session {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent).ok();
         }
-        std::fs::write(&path, self.graph.to_json()).with_context(|| format!("writing {}", path.display()))?;
+        // Files in the project's folder relative to it (see Graph::save).
+        self.graph.save(&path)?;
         self.path = Some(path.clone());
         self.dirty = false;
         Ok(path)
@@ -203,6 +204,10 @@ impl Session {
         }
         for (name, v) in params {
             values[name.as_str()] = validate_param(info, name, v)?;
+        }
+        // A file given relative: in the project's folder.
+        if let Some(values) = values.as_object_mut() {
+            self.graph.project.resolve_paths(self.path.as_deref(), op, values);
         }
         if inputs.len() > info.inputs.len() {
             bail!("'{op}' has {} input(s), got {}", info.inputs.len(), inputs.len());
@@ -374,10 +379,12 @@ impl Session {
     pub fn set_params(&mut self, id: &str, params: &Map<String, Value>) -> Result<()> {
         let i = self.node_index(id)?;
         let info = op_info(&self.graph.nodes[i].op)?;
-        let checked = params
+        let mut checked = params
             .iter()
             .map(|(k, v)| Ok((k.clone(), validate_param(info, k, v)?)))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Map<String, Value>>>()?;
+        // A file given relative: in the project's folder.
+        self.graph.project.resolve_paths(self.path.as_deref(), &self.graph.nodes[i].op.clone(), &mut checked);
         self.checkpoint();
         let node = &mut self.graph.nodes[i];
         if !node.params.is_object() {
@@ -447,6 +454,20 @@ impl Session {
             .iter()
             .position(|p| p.label.eq_ignore_ascii_case(label))
             .ok_or_else(|| anyhow!("'{id}' has no input '{label}'"))
+    }
+
+    /// Give the project a folder (None: none, so the folder its file is
+    /// in counts). One given relative is relative to where the project's
+    /// file is (else the working directory). Undoable.
+    pub fn set_folder(&mut self, folder: Option<&Path>) -> Result<()> {
+        let base = self.path.as_deref().and_then(|f| std::path::absolute(f).ok()?.parent().map(Path::to_path_buf));
+        let folder = match folder.filter(|f| !f.as_os_str().is_empty()) {
+            Some(f) if f.is_relative() => Some(std::path::absolute(base.map_or_else(|| f.to_path_buf(), |b| b.join(f)))?),
+            f => f.map(Path::to_path_buf),
+        };
+        self.checkpoint();
+        self.graph.project.folder = folder;
+        Ok(())
     }
 
     pub fn set_project(&mut self, first: Option<i64>, last: Option<i64>, fps: Option<f64>, format: Option<Size>) -> Result<()> {
@@ -609,9 +630,12 @@ impl Session {
 
     /// Render node `id` at `frame` and write it to `path` (EXR keeps float;
     /// other formats are 8-bit sRGB).
+    /// Render node `id` at `frame` into the file at `path` (given relative:
+    /// in the project's folder).
     pub fn render_to_file(&mut self, id: &str, frame: i64, path: &Path) -> Result<Arc<Image>> {
+        let path = PathBuf::from(self.graph.project.resolve_path(self.path.as_deref(), &path.to_string_lossy()));
         let img = self.render(id, frame)?;
-        img.write(path)?;
+        img.write(&path)?;
         Ok(img)
     }
 

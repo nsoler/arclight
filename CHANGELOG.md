@@ -11,6 +11,18 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.68 — 2026-10-29
+
+- **Relative media paths: a project folder can move** (Dev1): projects
+  with a folder save the files in it (plates, geometry, renders) relative
+  to it, and the folder relative to the project file when it's inside,
+  so the whole folder can be moved or copied to another machine and
+  opened as it was. Files elsewhere stay absolute; projects without a
+  folder save exactly as before. A path typed relative (in a node's File
+  field, or over MCP / Python, including render_frame's path) is in the
+  project's folder; File fields show paths in the folder relative to it.
+  MCP set_project takes "folder".
+
 ## 0.9.67 — 2026-10-29
 
 - **Project folder** (Dev1): File ▸ New asks for the new project's name

@@ -60,6 +60,38 @@ impl Project {
     pub fn folder_for(&self, file: Option<&Path>) -> Option<std::path::PathBuf> {
         self.folder.clone().or_else(|| std::path::absolute(file?).ok()?.parent().map(Path::to_path_buf))
     }
+
+    /// A file path someone gave (in a param) as the graph keeps it: one
+    /// given relative to the project's folder (see
+    /// [`folder_for`](Self::folder_for), the project saved at `file`) made
+    /// whole; others as they are.
+    pub fn resolve_path(&self, file: Option<&Path>, path: &str) -> String {
+        match self.folder_for(file) {
+            Some(folder) if !path.is_empty() && Path::new(path).is_relative() => clean(&folder.join(path)).to_string_lossy().into_owned(),
+            _ => path.to_string(),
+        }
+    }
+
+    /// [`resolve_path`](Self::resolve_path)'s way back, for showing a path:
+    /// one in the project's folder relative to it; others as they are.
+    pub fn relative_path(&self, file: Option<&Path>, path: &str) -> String {
+        let Some(folder) = self.folder_for(file) else { return path.to_string() };
+        match Path::new(path).strip_prefix(&folder) {
+            Ok(rel) if Path::new(path).is_absolute() && !rel.as_os_str().is_empty() => rel.to_string_lossy().into_owned(),
+            _ => path.to_string(),
+        }
+    }
+
+    /// [`resolve_path`](Self::resolve_path) for `op`'s file params among
+    /// `params` (plain text ones).
+    pub fn resolve_paths(&self, file: Option<&Path>, op: &str, params: &mut serde_json::Map<String, Value>) {
+        let Some(info) = ops::info(op) else { return };
+        for spec in info.params.iter().filter(|s| matches!(s.kind, ops::ParamKind::Path { .. })) {
+            if let Some(Value::String(p)) = params.get_mut(spec.name) {
+                *p = self.resolve_path(file, p);
+            }
+        }
+    }
 }
 
 fn default_format() -> Size {
@@ -69,6 +101,43 @@ fn default_format() -> Size {
 impl Default for Project {
     fn default() -> Self {
         Project { first_frame: 1, last_frame: 100, fps: 24.0, format: ops::DEFAULT_FORMAT, folder: None }
+    }
+}
+
+/// `path` made absolute against the working directory, `.` and `..`
+/// taken out (without looking at the disk).
+fn absolute(path: &Path) -> std::path::PathBuf {
+    clean(&std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()))
+}
+
+/// `path` with `.` and `..` taken out, as far as it can be.
+fn clean(path: &Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut out = std::path::PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir if matches!(out.components().next_back(), Some(Component::Normal(_))) => {
+                out.pop();
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Call `f` on every file path in `nodes`' params (their ops' Path
+/// params given as plain text; empty ones left out).
+fn for_each_path(nodes: &mut [NodeSpec], mut f: impl FnMut(&mut String)) {
+    for n in nodes {
+        let Some(info) = ops::info(&n.op) else { continue };
+        for spec in info.params.iter().filter(|s| matches!(s.kind, ops::ParamKind::Path { .. })) {
+            if let Some(Value::String(p)) = n.params.get_mut(spec.name) {
+                if !p.is_empty() {
+                    f(p);
+                }
+            }
+        }
     }
 }
 
@@ -196,10 +265,57 @@ fn node_err(node: &str, message: impl Into<String>) -> NodeError {
 }
 
 impl Graph {
+    /// The graph saved at `path`, its paths as [`save`](Self::save) wrote
+    /// them made whole again: a folder given relative to the file, and
+    /// files given relative to the folder.
     pub fn from_file(path: &Path) -> Result<Graph> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading graph {}", path.display()))?;
-        Self::from_str(&text)
+        let mut g = Self::from_str(&text)?;
+        g.resolve_paths(path);
+        Ok(g)
+    }
+
+    /// Save it at `path` (see [`to_json_at`](Self::to_json_at)).
+    pub fn save(&self, path: &Path) -> Result<()> {
+        std::fs::write(path, self.to_json_at(Some(path))).with_context(|| format!("writing {}", path.display()))
+    }
+
+    /// Its JSON as saved at `file` (None: not in a file, as an autosave of
+    /// an unsaved project). With a project folder, the files under it
+    /// (read, written) are given relative to it, and the folder relative
+    /// to the file when the file is in it, so the whole folder can move:
+    /// [`from_file`](Self::from_file) makes them whole again. Files
+    /// elsewhere stay absolute; without a folder nothing changes.
+    pub fn to_json_at(&self, file: Option<&Path>) -> String {
+        let Some(folder) = self.project.folder.as_deref().map(absolute) else { return self.to_json() };
+        let mut g = self.clone();
+        for_each_path(&mut g.nodes, |p| {
+            let abs = absolute(Path::new(p.as_str()));
+            let rel = abs.strip_prefix(&folder).ok().filter(|r| !r.as_os_str().is_empty());
+            *p = rel.unwrap_or(&abs).to_string_lossy().into_owned();
+        });
+        let file_dir = file.map(absolute).and_then(|f| f.parent().map(Path::to_path_buf));
+        g.project.folder = Some(match file_dir.as_deref().and_then(|d| d.strip_prefix(&folder).ok()) {
+            // The file is inside it: up from the file's folder to it.
+            Some(down) => down.components().fold(std::path::PathBuf::from("."), |up, _| if up == Path::new(".") { "..".into() } else { up.join("..") }),
+            None => folder,
+        });
+        g.to_json()
+    }
+
+    /// Make the paths [`to_json_at`](Self::to_json_at) shortened, for a
+    /// graph read from `file`, whole again.
+    fn resolve_paths(&mut self, file: &Path) {
+        let Some(folder) = self.project.folder.clone() else { return };
+        let file_dir = absolute(file).parent().map(Path::to_path_buf).unwrap_or_default();
+        let folder = clean(&file_dir.join(folder));
+        for_each_path(&mut self.nodes, |p| {
+            if Path::new(p.as_str()).is_relative() {
+                *p = clean(&folder.join(p.as_str())).to_string_lossy().into_owned();
+            }
+        });
+        self.project.folder = Some(folder);
     }
 
     pub fn from_str(text: &str) -> Result<Graph> {
@@ -637,6 +753,96 @@ fn node_key(node: &NodeSpec, params: &Value, keys: &HashMap<&str, u64>, ctx: &Ev
 
 #[cfg(test)]
 mod tests {
+    /// A project folder with its plates, geometry and renders, saved, moved
+    /// whole and opened again: what's in it is found where it went (read
+    /// and written there); what's elsewhere stays put; a project without a
+    /// folder saves and loads as it always did.
+    #[test]
+    fn a_project_folder_moves_whole() {
+        use serde_json::json;
+        let tmp = std::env::temp_dir().join(format!("arclight_folder_move_{}", std::process::id()));
+        let (before, after) = (tmp.join("show_v1"), tmp.join("moved/show_v2"));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(before.join("plates")).unwrap();
+        std::fs::create_dir_all(before.join("renders")).unwrap();
+        std::fs::create_dir_all(before.join("scripts")).unwrap();
+        Image::filled(4, 2, [0.25, 0.5, 0.75, 1.0]).write(&before.join("plates/bg.0001.png")).unwrap();
+        let outside = tmp.join("library/logo.png");
+        std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
+        Image::filled(2, 2, [1.0; 4]).write(&outside).unwrap();
+        let node = |id: &str, op: &str, inputs: &[&str], params: Value| NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None };
+        let at = |dir: &Path, rel: &str| dir.join(rel).to_string_lossy().into_owned();
+        let mut g = Graph::default();
+        g.project.folder = Some(before.clone());
+        g.nodes = vec![
+            node("plate", "read", &[], json!({ "path": at(&before, "plates/bg.####.png") })),
+            node("logo", "read", &[], json!({ "path": outside.to_string_lossy() })),
+            node("geo", "read_geo", &[], json!({ "file": at(&before, "geo/../geo/set.obj") })),
+            node("out", "write", &["plate"], json!({ "path": at(&before, "renders/comp.####.png") })),
+        ];
+        // Saved in the folder's scripts/: relative there and to the folder.
+        let file = before.join("scripts/comp.json");
+        g.save(&file).unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(saved["project"]["folder"], "..");
+        let paths: Vec<&Value> = saved["nodes"].as_array().unwrap().iter().map(|n| n["params"].get("path").unwrap_or(&n["params"]["file"])).collect();
+        assert_eq!(paths, [&json!("plates/bg.####.png"), &json!(outside.to_string_lossy()), &json!("geo/set.obj"), &json!("renders/comp.####.png")]);
+        // Moved whole: found in its new place.
+        std::fs::create_dir_all(after.parent().unwrap()).unwrap();
+        std::fs::rename(&before, &after).unwrap();
+        let back = Graph::from_file(&after.join("scripts/comp.json")).unwrap();
+        assert_eq!(back.project.folder.as_deref(), Some(after.as_path()));
+        assert_eq!(back.nodes[0].params["path"], at(&after, "plates/bg.####.png"));
+        assert_eq!(back.nodes[1].params["path"], outside.to_string_lossy().as_ref(), "outside: as it was");
+        assert_eq!(back.nodes[2].params["file"], at(&after, "geo/set.obj"));
+        // Rendered there: the plate read from the moved folder, written into it.
+        let ctx = EvalContext { frame: 1, write_outputs: true };
+        Evaluator::new().evaluate(&back, "out", &ctx).unwrap();
+        let out = Image::read(&after.join("renders/comp.0001.png")).unwrap();
+        assert!((out.at(1, 1)[2] - 0.75).abs() < 0.01, "{:?}", out.at(1, 1));
+        assert!(!before.exists());
+        // Saved again where it is: the same file.
+        let again = after.join("scripts/again.json");
+        back.save(&again).unwrap();
+        assert_eq!(std::fs::read_to_string(&again).unwrap(), std::fs::read_to_string(after.join("scripts/comp.json")).unwrap());
+        // Saved outside its folder: the folder absolute, the files still
+        // relative to it.
+        let elsewhere = tmp.join("elsewhere.json");
+        back.save(&elsewhere).unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&elsewhere).unwrap()).unwrap();
+        assert_eq!(saved["project"]["folder"], after.to_string_lossy().as_ref());
+        assert_eq!(Graph::from_file(&elsewhere).unwrap(), back);
+        // No folder: as before, byte for byte.
+        let mut plain = back.clone();
+        plain.project.folder = None;
+        plain.save(&elsewhere).unwrap();
+        assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), plain.to_json());
+        assert_eq!(Graph::from_file(&elsewhere).unwrap(), plain);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// A path given relative means relative to the project's folder.
+    #[test]
+    fn relative_paths_given_are_in_the_project_folder() {
+        let mut p = Project::default();
+        assert_eq!(p.resolve_path(None, "plates/a.exr"), "plates/a.exr", "no folder: as given");
+        assert_eq!(p.resolve_path(Some(Path::new("/shows/a/comp.json")), "plates/a.exr"), "/shows/a/plates/a.exr");
+        p.folder = Some("/shows/b".into());
+        assert_eq!(p.resolve_path(Some(Path::new("/x/comp.json")), "../b/plates/./a.####.exr"), "/shows/b/plates/a.####.exr");
+        assert_eq!(p.resolve_path(None, "/abs/a.exr"), "/abs/a.exr");
+        assert_eq!(p.resolve_path(None, ""), "");
+        // Shown the other way.
+        assert_eq!(p.relative_path(None, "/shows/b/plates/a.####.exr"), "plates/a.####.exr");
+        assert_eq!(p.relative_path(None, "/shows/bb/a.exr"), "/shows/bb/a.exr", "a folder named alike isn't it");
+        assert_eq!(p.relative_path(None, "/elsewhere/a.exr"), "/elsewhere/a.exr");
+        for typed in ["plates/a.exr", "/elsewhere/a.exr", "a"] {
+            assert_eq!(p.relative_path(None, &p.resolve_path(None, typed)), typed, "what's typed shows as typed");
+        }
+        let mut params = serde_json::json!({ "path": "out/r.####.png", "fit": "none" }).as_object().unwrap().clone();
+        p.resolve_paths(None, "write", &mut params);
+        assert_eq!(params["path"], "/shows/b/out/r.####.png");
+    }
+
     /// A project's folder: saved when it has one, missing from older
     /// files (which load without), else the folder of its file.
     #[test]

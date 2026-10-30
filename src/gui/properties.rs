@@ -701,7 +701,11 @@ impl Properties {
                 out
             }
             ParamKind::Path { save } => {
-                let mut s = value.as_str().unwrap_or("").to_string();
+                // Shown relative to the project's folder when it's in it; typed
+                // relative, it's in the folder.
+                let project = &doc.graph.project;
+                let full = value.as_str().unwrap_or("").to_string();
+                let mut s = project.relative_path(doc.path.as_deref(), &full);
                 let mut out = None;
                 ui.horizontal(|ui| {
                     let browse = ui.add_enabled(!dialogs::busy(), egui::Button::new("Browse…")).on_disabled_hover_text("A file dialog is open");
@@ -715,10 +719,13 @@ impl Properties {
                             dialogs::pick(what, dialogs::filter(dialogs::new(), "Images & video", READ_EXTS))
                         };
                     }
-                    let resp = ui.add(egui::TextEdit::singleline(&mut s).desired_width(f32::INFINITY));
+                    let mut resp = ui.add(egui::TextEdit::singleline(&mut s).desired_width(f32::INFINITY));
+                    if s != full {
+                        resp = resp.on_hover_text(&full);
+                    }
                     if resp.changed() {
                         self.media_info.remove(id);
-                        out = Some(json!(s));
+                        out = Some(json!(project.resolve_path(doc.path.as_deref(), &s)));
                     }
                 });
                 out

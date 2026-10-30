@@ -374,7 +374,7 @@ impl App {
             ctx.request_repaint_after(every - since);
             return;
         }
-        let json = self.doc.graph.to_json();
+        let json = self.doc.graph.to_json_at(self.doc.path.as_deref());
         if json != self.autosaved.1 {
             if let Err(e) = write_autosave(self.doc.path.as_deref(), &json) {
                 eprintln!("arclight-gui: autosave failed: {e:#}");
@@ -744,7 +744,8 @@ impl App {
 
     /// Save the project to `path`.
     fn write(&mut self, path: PathBuf) {
-        match std::fs::write(&path, self.doc.graph.to_json()) {
+        // Files in the project's folder relative to it (see Graph::save).
+        match self.doc.graph.save(&path) {
             Ok(()) => {
                 // Its autosave is behind it now.
                 let _ = std::fs::remove_file(autosave_path(Some(&path)));
@@ -753,7 +754,7 @@ impl App {
                 self.doc.dirty = false;
                 self.status = None;
             }
-            Err(e) => self.status = Some(format!("saving {}: {e}", path.display())),
+            Err(e) => self.status = Some(format!("{e:#}")),
         }
     }
 
