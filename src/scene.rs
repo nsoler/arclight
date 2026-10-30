@@ -42,8 +42,10 @@ pub struct Card {
     pub image: Arc<Image>,
     pub world: Mat4,
     pub size: [f64; 2],
-    /// Whether it blocks lights that cast shadows (where its image is
-    /// mostly opaque).
+    /// How opaque it is (0 to 1): its image, all channels, times this.
+    pub opacity: f32,
+    /// Whether it blocks lights that cast shadows (as much as it is
+    /// opaque).
     pub casts_shadows: bool,
     /// The Card node it came from ("" until tagged).
     pub node: String,
@@ -96,9 +98,10 @@ impl Model {
 }
 
 impl Card {
-    /// `image` on a card `size` across placed by `world`, casting shadows.
+    /// `image` on a card `size` across placed by `world`, opaque, casting
+    /// shadows.
     pub fn new(image: Arc<Image>, world: Mat4, size: [f64; 2]) -> Card {
-        Card { image, world, size, casts_shadows: true, node: String::new() }
+        Card { image, world, size, opacity: 1.0, casts_shadows: true, node: String::new() }
     }
 
     /// The four corners in scene space: top left, top right, bottom right,
@@ -199,13 +202,15 @@ pub fn camera(p: &Value) -> Camera {
 }
 
 /// A Card node's card showing `image`. With no `size` (null), it is 1 wide
-/// and as high as the image's frame aspect makes it.
+/// and as high as the image's frame aspect makes it; Opacity (missing: 1)
+/// scales the image.
 pub fn card(p: &Value, image: &Image) -> Card {
     let size = match p["size"].as_array() {
         Some(_) => numbers::<2>(&p["size"], 1.0),
         None => [1.0, image.format.height as f64 / image.format.width.max(1) as f64],
     };
-    Card { casts_shadows: p["casts_shadows"].as_bool().unwrap_or(true), ..Card::new(Arc::new(image.clone()), placement(p), size) }
+    let opacity = p["opacity"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) as f32;
+    Card { opacity, casts_shadows: p["casts_shadows"].as_bool().unwrap_or(true), ..Card::new(Arc::new(image.clone()), placement(p), size) }
 }
 
 /// The surface look a primitive's params give: Color (straight RGBA), and

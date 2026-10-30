@@ -11,6 +11,20 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.47 — 2026-10-29
+
+- Card has an **Opacity** (0–1, animatable): a faded card blends with
+  what's behind it, nearest first, and in the 3D view. Shadows are as
+  strong as their caster is opaque (opacity × alpha, also for
+  see-through meshes and soft-alpha textures), and depth / P / N / uv /
+  motion / id passes come from the nearest surface at least half opaque
+  (3DWorker).
+- The 2D viewer labels the frame's corners with its size, Nuke-style
+  (0,0 under the bottom-left corner, W,H over the top-right, from the
+  image's format); **View ▸ Show frame size** turns it off. The About
+  logo shows square and undistorted (it was being squeezed
+  horizontally) (MathWiz).
+
 ## 0.9.46 — 2026-10-29
 
 - In the 3D view, particle emitters (their shape and direction),

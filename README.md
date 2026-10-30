@@ -27,7 +27,7 @@ Python wheels). All releases: [Releases](https://github.com/nsoler/arclight/rele
 
 ## Build
 
-Version **0.9.46** (alpha); see `CHANGELOG.md`.
+Version **0.9.47** (alpha); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -293,7 +293,7 @@ applies everywhere and `mask_invert` does nothing.
 | `media_out` | 1 | `path`, `first_frame`, `last_frame`, `fps`, `dpx` (DPX encoding), `codec` (`auto`/`H.264 8-bit`/`HEVC 10-bit`/`ProRes 422 HQ 10-bit`/`ProRes 4444 + alpha`) | renders a range to a sequence or a video; `auto` = ProRes 422 HQ for `.mov`, H.264 otherwise; ProRes needs `.mov`/`.mkv`; the 10-bit codecs are fed 16-bit frames, ProRes 4444 keeps alpha |
 | `viewer` | 1 | — | pass-through; marks what the GUI viewer shows |
 | `camera` | 0 | `focal` (mm), `film_back` [2] (mm), `translate`/`rotate`/`scale` [3], `near`, `far` | 3D: outputs a scene holding a camera (right-handed, Y up, looking down −Z; rotate in degrees, X then Y then Z) |
-| `card` | 1 | `translate`/`rotate`/`scale` [3], `size` [2] or null, `casts_shadows` | 3D: puts its input image on a flat card (1 wide by default, keeping the image's aspect); outputs a scene |
+| `card` | 1 | `translate`/`rotate`/`scale` [3], `size` [2] or null, `opacity` (0–1, animatable), `casts_shadows` | 3D: puts its input image on a flat card (1 wide by default, keeping the image's aspect), faded by Opacity (its shadow too, as strong as the card is opaque); outputs a scene |
 | `cube` / `sphere` / `cylinder` / `plane` | 0–1 (`texture`) | `translate`/`rotate`/`scale` [3], size (or `radius` / `height`), `segments`, `caps` (cylinder), `color`, `shading` (unlit / lambert / blinn), `specular`, `roughness`, `emission`, `holdout`, `casts_shadows`, `receives_shadows` | 3D: a primitive mesh, colored or textured by its optional input, lit by the scene's lights (none: unlit); outputs a scene |
 | `read_geo` | 0 | `file`, `translate`/`rotate`/`scale` [3], `override_material` with `shading`, `specular`, `roughness`, `emission`; `holdout`, `casts_shadows`, `receives_shadows` | 3D: imports a mesh: `.obj` (with its `.mtl` materials) or glTF `.gltf` / `.glb` (node transforms applied, PBR materials mapped); outputs a scene |
 | `light_ambient` / `light_directional` / `light_point` / `light_spot` / `light_area` | 0–1 (`look at`, a scene; not ambient) | `enabled`, `color`, `intensity`, `exposure` (stops), `shadows` (cast shadows, off by default) and `shadow_softness` (texels; not ambient); `translate` (not ambient), `rotate` (directional, spot, area), `decay` (point, spot, area), `radius` soft size (point, spot), `cone`, `penumbra`, `falloff` (spot), `shape` rectangle/disk, `size`, `two_sided`, `quality` (area: a quality × quality sample grid) | 3D: a light shining down its −Z (point: every way; ambient: from everywhere; area: from a rectangle or disk), aimed at what's in `look at` if wired; outputs a scene |

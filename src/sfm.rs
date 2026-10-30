@@ -643,13 +643,7 @@ mod tests {
         use crate::scene::{Card, Scene};
         use std::sync::Arc;
         let fmt = Size { width: 480, height: 270 };
-        let card = |seed: u64, t: [f64; 3], r: [f64; 3], size: [f64; 2]| Card {
-            image: Arc::new(blob_texture(2500, 768, 768, seed)),
-            world: geom::trs(t, r, [1.0; 3]),
-            size,
-            casts_shadows: true,
-            node: String::new(),
-        };
+        let card = |seed: u64, t: [f64; 3], r: [f64; 3], size: [f64; 2]| Card::new(Arc::new(blob_texture(2500, 768, 768, seed)), geom::trs(t, r, [1.0; 3]), size);
         let scene = Scene {
             cards: vec![
                 card(1, [0.0, 0.0, -14.0], [0.0; 3], [30.0, 30.0]),

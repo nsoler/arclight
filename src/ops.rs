@@ -831,12 +831,14 @@ pub static OPS: &[OpInfo] = &[
             p!("scale", "Scale", ParamKind::Vec3, [1.0, 1.0, 1.0]),
             // Null: 1 wide, as high as the image's aspect makes it.
             p!("size", "Size", ParamKind::Vec2, Value::Null),
+            p!("opacity", "Opacity", OPACITY, 1.0),
             CASTS_SHADOWS,
         ],
         overlay: Overlay::None,
         mask_base: None,
         help: "Puts its image on a flat card in 3D, centered on its origin and facing +Z, Size wide and high \
-               (by default 1 wide, keeping the image's aspect), then scaled, rotated and moved. \
+               (by default 1 wide, keeping the image's aspect), then scaled, rotated and moved. Opacity \
+               fades the whole card (its shadow too), e.g. clouds at different depths. \
                Outputs a scene holding the card.",
     },
     OpInfo {

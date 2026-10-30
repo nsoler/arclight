@@ -86,6 +86,9 @@ choose in Properties:
   Transform's gizmo, shape boxes and vertices, tracker boxes, corner pins,
   a Light 2D's position, aim, cone and softness).
   **⌘**-click (or **⌘**-drag) in a Keyer picks the screen color.
+- **View ▸ Show frame size**: labels the viewed frame's bottom-left
+  corner 0,0 and its top-right corner with its width,height (the image's
+  format); on by default.
 
 ## Player
 
@@ -241,6 +244,10 @@ selected object.
   **Specular** is how strong, **Roughness** how broad). **Emission** is
   light of their own. Read Geo uses the file's materials unless **Override
   material** is on.
+- **Opacity** on a Card fades the whole card (e.g. clouds at lower opacity
+  at different depths); see-through cards and meshes (a mesh's opacity is
+  its **Color**'s alpha) blend with what's behind them, nearest first,
+  whatever order they're wired in. The 3D view shows it too.
 
 ### Lights
 
@@ -271,7 +278,9 @@ selected object.
   the shadow falls from what casts it, and an area light's shadows are
   soft by themselves (each of its Quality × Quality points casts its own).
   Each object has **Casts shadows** and **Receives shadows** (a Card only
-  casts, where its image is mostly opaque); turn one off to keep, say, a
+  casts). A shadow is as strong as what casts it is opaque: a 30% opacity
+  card casts a 30% shadow, where its image is solid, and none where it is
+  clear; turn one off to keep, say, a
   background plate from shadowing the scene. Shadows are off until you
   turn them on, so older projects render as before.
 - Scripts and AI agents (MCP, Python) make lights with **create_node**
@@ -298,7 +307,9 @@ color).
   **P**, **N**, **uv**, **motion**, **id**, **mattes** (a **matte.<node>**
   for each object, adding up to the picture's alpha) and the lighting
   passes. Depth, P, N, uv, motion and id come from the nearest surface in
-  each pixel, so they aren't blurred across edges.
+  each pixel that is at least half opaque there (where only fainter ones
+  are, the nearest of those), so they aren't blurred across edges and a
+  faint card in front doesn't take them from what shows through it.
 - **motion** (`motion.u`, `motion.v`) is how far, in pixels (right and
   down), what each pixel shows moves by the next frame, with the camera's
   move and the objects' own animation: for motion blur in 2D.

@@ -2,14 +2,14 @@
 //! exposure, extra planes (depth) as gray, and a float pixel readout under
 //! the cursor. Pixels stored past
 //! the frame (overscan) show dimmed, and a data window smaller or larger than
-//! the frame is outlined.
+//! the frame is outlined. The frame's corners can be labeled with its size.
 
 use crate::doc::Doc;
 use crate::gizmo3d::{self, Handle, Layout, Mode, Space, Tool, Transforming};
 use crate::overlay::{Overlays, Xf};
 use arclight::color;
 use arclight::ops;
-use arclight::image::{IRect, Image, Plane};
+use arclight::image::{IRect, Image, Plane, Size};
 use eframe::egui::{
     self, Align2, Color32, ColorImage, FontId, Pos2, Rect, Sense, Stroke, TextureHandle,
     TextureOptions, Vec2,
@@ -46,6 +46,12 @@ const SCENE_3D: Color32 = Color32::from_rgb(90, 175, 235);
 const PULSE_SECONDS: f64 = 4.0;
 const HINT_SECONDS: f64 = 7.0;
 const HINT_3D: &str = "3D view: Tab switches 2D / 3D (pointer over the viewer)";
+/// The frame size labels' text, and their gap from the frame's corners
+/// (points).
+const FRAME_SIZE_FONT: f32 = 11.0;
+const FRAME_SIZE_GAP: f32 = 3.0;
+/// The height a label takes past the frame, with the gap (points).
+const FRAME_SIZE_ROOM: f32 = FRAME_SIZE_FONT + 2.0 * FRAME_SIZE_GAP;
 
 pub struct Viewer {
     texture: Option<TextureHandle>,
@@ -94,6 +100,8 @@ pub struct Viewer {
     /// the 3D view shows from this time: after a first 3D setup.
     pulse_until: f64,
     hint_since: Option<f64>,
+    /// Labeling the frame's corners with its size (View > Show frame size).
+    pub show_frame_size: bool,
     pub rect: Rect,
 }
 
@@ -131,6 +139,7 @@ impl Default for Viewer {
             has_scene: false,
             pulse_until: 0.0,
             hint_since: None,
+            show_frame_size: true,
             rect: Rect::NOTHING,
         }
     }
@@ -362,7 +371,9 @@ impl Viewer {
         let size = Vec2::new(img.format.width as f32, img.format.height as f32);
 
         if self.fit_pending {
-            let s = (rect.width() / size.x).min(rect.height() / size.y) * 0.95;
+            // Room above and below for the frame size labels.
+            let room = if self.show_frame_size { 2.0 * FRAME_SIZE_ROOM } else { 0.0 };
+            let s = (rect.width() / size.x).min((rect.height() - room).max(1.0) / size.y) * 0.95;
             self.zoom = s.max(1e-3);
             self.pan = Vec2::ZERO;
             self.fit_pending = false;
@@ -415,6 +426,11 @@ impl Viewer {
             let r = on_screen(window);
             let ring = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
             painter.add(egui::Shape::dashed_line(&ring, egui::Stroke::new(1.0, Color32::from_rgb(120, 170, 220)), 6.0, 4.0));
+        }
+        if self.show_frame_size {
+            for (pos, align, text) in frame_size_labels(img_rect, img.format) {
+                painter.text(pos, align, text, FontId::proportional(FRAME_SIZE_FONT), Color32::from_gray(120));
+            }
         }
         self.overlays.draw(ui, &painter, &xf(self), size, doc, frame);
         // A 3D scene has no pixels: say what's in it instead.
@@ -689,6 +705,18 @@ impl Viewer {
 /// premultiplied, i.e. over black; overscan (past the frame) is dimmed.
 /// With `step` > 1, each texel is the mean of a `step`×`step` block, for
 /// images larger than a texture can be.
+/// The frame's size labels (Nuke's): "0,0" just below its bottom-left
+/// corner and "W,H" just above its top-right one (each within the frame's
+/// width), for a frame of `format` drawn at `frame` on screen; each a
+/// position, the text's anchor there, and the text.
+fn frame_size_labels(frame: Rect, format: Size) -> [(Pos2, Align2, String); 2] {
+    let gap = Vec2::new(0.0, FRAME_SIZE_GAP);
+    [
+        (frame.left_bottom() + gap, Align2::LEFT_TOP, "0,0".into()),
+        (frame.right_top() - gap, Align2::RIGHT_BOTTOM, format!("{},{}", format.width, format.height)),
+    ]
+}
+
 fn to_color_image(img: &Image, region: IRect, channel: Channel, exposure: f32, step: usize) -> ColorImage {
     let gain = 2f32.powf(exposure);
     let (tw, th) = (region.width().div_ceil(step).max(1), region.height().div_ceil(step).max(1));
@@ -788,6 +816,23 @@ pub fn scene_of(doc: &Doc, node: &str) -> Option<String> {
 mod tests {
     use super::*;
     use arclight::graph::Graph;
+
+    #[test]
+    fn the_frame_size_labels_sit_outside_its_corners_at_any_zoom() {
+        let canvas = Rect::from_min_size(Pos2::new(100.0, 50.0), Vec2::new(800.0, 600.0));
+        let format = Size { width: 3840, height: 2160 };
+        for (zoom, pan) in [(0.2, Vec2::ZERO), (1.0, Vec2::new(-300.0, 120.0)), (8.0, Vec2::new(40.0, -10.0))] {
+            // The frame on screen as the viewer draws it.
+            let frame = Rect::from_center_size(canvas.center() + pan, Vec2::new(3840.0, 2160.0) * zoom);
+            let [(p0, a0, t0), (p1, a1, t1)] = frame_size_labels(frame, format);
+            assert_eq!((t0.as_str(), t1.as_str()), ("0,0", "3840,2160"));
+            // Under the bottom-left corner, over the top-right one, the
+            // same few points away whatever the zoom.
+            assert_eq!((p0, a0), (frame.left_bottom() + Vec2::new(0.0, FRAME_SIZE_GAP), Align2::LEFT_TOP));
+            assert_eq!((p1, a1), (frame.right_top() - Vec2::new(0.0, FRAME_SIZE_GAP), Align2::RIGHT_BOTTOM));
+        }
+        assert!(Viewer::default().show_frame_size, "on by default");
+    }
 
     #[test]
     fn a_first_3d_setup_switches_to_3d_and_says_how() {

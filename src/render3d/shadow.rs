@@ -12,7 +12,10 @@
 //! each tap bilinear); a point or spot light with a radius widens the
 //! filter by how far the point is behind its blocker (the penumbra a light
 //! that wide casts), found by averaging the blockers near it first.
-//! A card's transparent parts (alpha under a half) don't cast.
+//! A caster less than opaque (its texture's alpha times its opacity) lets
+//! the rest through: those parts are kept per texel as layers, and a point
+//! behind them takes the product of what each passes (a 30% card casts a
+//! 30% shadow, two make 51%).
 //!
 //! The point looked up is moved off its surface toward the light by about
 //! a texel, so a surface doesn't shadow itself.
@@ -47,6 +50,18 @@ struct Map {
     /// A texel's width at one unit away (perspective), or in scene units
     /// (directional).
     texel: f64,
+    /// The less than opaque casters, if any.
+    layers: Option<Layers>,
+}
+
+/// The casters a map's texels see through: per texel, `frags[start[i] ..
+/// start[i + 1]]`, nearest first, each its distance and how much light it
+/// lets through; and the nearest caster of any kind, for the penumbra's
+/// blocker search.
+struct Layers {
+    start: Vec<u32>,
+    frags: Vec<(f32, f32)>,
+    nearest: Vec<f32>,
 }
 
 impl Map {
@@ -54,7 +69,9 @@ impl Map {
     fn draw(surfs: &[Surface], cam: Camera, res: usize, along: Option<Vec3>, texel: f64) -> Map {
         let origin = geom::transform_point(&cam.world, &Vec3::zeros());
         let size = Size { width: res, height: res };
-        let mut map = Map { cam, res, depth: vec![f32::INFINITY; res * res], along, origin, texel };
+        let mut map = Map { cam, res, depth: vec![f32::INFINITY; res * res], along, origin, texel, layers: None };
+        // The less than opaque: (texel, distance, surface, alpha).
+        let mut faint: Vec<(u32, f32, u32, f32)> = Vec::new();
         for t in triangles(surfs, &map.cam, size, None) {
             let s = &surfs[t.surf];
             if !s.casts || s.holdout {
@@ -63,19 +80,47 @@ impl Map {
             for y in t.bounds.y0.max(0)..t.bounds.y1.min(res as i32) {
                 for x in t.bounds.x0.max(0)..t.bounds.x1.min(res as i32) {
                     let Some((_, b)) = t.cover([x as f64 + 0.5, y as f64 + 0.5], map.cam.near, map.cam.far) else { continue };
-                    if s.texture.is_some() && surface_color(s, t.uv(&b))[3] < 0.5 {
+                    let a = surface_color(s, t.uv(&b))[3];
+                    if a <= 0.0 {
                         continue;
                     }
                     let p: Vec3 = t.v.iter().zip(&b).map(|(v, w)| v.world * *w).sum();
                     let k = map.key(&p) as f32;
-                    let d = &mut map.depth[y as usize * res + x as usize];
-                    if k < *d {
-                        *d = k;
+                    let i = y as usize * res + x as usize;
+                    if a < 1.0 {
+                        faint.push((i as u32, k, t.surf as u32, a));
+                    } else if k < map.depth[i] {
+                        map.depth[i] = k;
                     }
                 }
             }
         }
+        if !faint.is_empty() {
+            faint.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+            // One layer where two triangles of a surface meet.
+            faint.dedup_by(|b, a| a.0 == b.0 && a.2 == b.2 && (a.1 - b.1).abs() <= 1e-6 * a.1.abs());
+            let mut start = vec![0u32; res * res + 1];
+            for f in &faint {
+                start[f.0 as usize + 1] += 1;
+            }
+            for i in 0..res * res {
+                start[i + 1] += start[i];
+            }
+            let mut nearest = map.depth.clone();
+            for f in &faint {
+                let n = &mut nearest[f.0 as usize];
+                *n = n.min(f.1);
+            }
+            map.layers = Some(Layers { start, frags: faint.iter().map(|f| (f.1, 1.0 - f.3)).collect(), nearest });
+        }
         map
+    }
+
+    /// How much light the less than opaque casters at texel `i` nearer
+    /// than `key` let through.
+    fn through(&self, i: usize, key: f32) -> f32 {
+        let Some(l) = &self.layers else { return 1.0 };
+        l.frags[l.start[i] as usize..l.start[i + 1] as usize].iter().take_while(|f| f.0 < key).map(|f| f.1).product()
     }
 
     /// How far `p` is from the light, as the map measures it.
@@ -97,11 +142,13 @@ impl Map {
         Some(q)
     }
 
+    fn index(&self, x: i64, y: i64) -> Option<usize> {
+        (x >= 0 && y >= 0 && x < self.res as i64 && y < self.res as i64).then(|| y as usize * self.res + x as usize)
+    }
+
+    /// The nearest caster at a texel, opaque or not.
     fn at(&self, x: i64, y: i64) -> f32 {
-        if x < 0 || y < 0 || x >= self.res as i64 || y >= self.res as i64 {
-            return f32::INFINITY;
-        }
-        self.depth[y as usize * self.res + x as usize]
+        self.index(x, y).map_or(f32::INFINITY, |i| self.layers.as_ref().map_or(self.depth[i], |l| l.nearest[i]))
     }
 
     /// How lit (0 to 1) a point `key` away is at texel position `q`: the
@@ -110,7 +157,11 @@ impl Map {
         let (x, y) = (q[0] - 0.5, q[1] - 0.5);
         let (x0, y0) = (x.floor(), y.floor());
         let (fx, fy) = ((x - x0) as f32, (y - y0) as f32);
-        let lit = |dx: i64, dy: i64| if self.at(x0 as i64 + dx, y0 as i64 + dy) < key { 0.0 } else { 1.0 };
+        let lit = |dx: i64, dy: i64| match self.index(x0 as i64 + dx, y0 as i64 + dy) {
+            Some(i) if self.depth[i] < key => 0.0,
+            Some(i) => self.through(i, key),
+            None => 1.0,
+        };
         (lit(0, 0) * (1.0 - fx) + lit(1, 0) * fx) * (1.0 - fy) + (lit(0, 1) * (1.0 - fx) + lit(1, 1) * fx) * fy
     }
 

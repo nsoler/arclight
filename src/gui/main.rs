@@ -90,6 +90,20 @@ fn app_icon() -> egui::IconData {
     egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() }
 }
 
+/// The square region of a `size` (pixels) texture centered on `uv` (a
+/// region of it, as fractions) and just holding it, kept inside the texture
+/// where it fits: drawn in a square, `uv` shows whole and unstretched.
+fn square_uv(uv: egui::Rect, size: egui::Vec2) -> egui::Rect {
+    let px = uv.size() * size;
+    let side = px.x.max(px.y);
+    let half = egui::vec2(side, side) / size / 2.0;
+    // Slid back inside the texture (when it's big enough for the square).
+    let lo = |c: f32, h: f32| if 2.0 * h <= 1.0 { c.clamp(h, 1.0 - h) } else { c };
+    let c = uv.center();
+    let c = egui::pos2(lo(c.x, half.x), lo(c.y, half.y));
+    egui::Rect::from_center_size(c, half * 2.0)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BottomTab {
     Graph,
@@ -751,10 +765,12 @@ impl App {
         let modal = egui::Modal::new(egui::Id::unique("about")).frame(frame).show(ctx, |ui| {
             ui.set_width(300.0);
             ui.vertical_centered(|ui| {
-                // The artwork 160 px wide, in its own proportions.
+                // The artwork in a 160 px square, centered in its own
+                // proportions. (egui would keep the whole texture's aspect,
+                // whatever the uv: the box is given exactly.)
                 let side = 160.0;
-                let [w, h] = (logo.size_vec2() * uv.size()).into();
-                ui.add(egui::Image::new(&logo).uv(uv).fit_to_exact_size(egui::vec2(side, side * h / w)));
+                let uv = square_uv(uv, logo.size_vec2());
+                ui.add(egui::Image::new(&logo).uv(uv).maintain_aspect_ratio(false).fit_to_exact_size(egui::vec2(side, side)));
                 ui.add_space(8.0);
                 ui.heading("Arclight Compositor");
                 ui.add_space(6.0);
@@ -893,6 +909,8 @@ impl App {
                     self.editor.fit();
                     ui.close();
                 }
+                ui.checkbox(&mut self.viewer.show_frame_size, "Show frame size")
+                    .on_hover_text("Label the viewed frame's corners with its size: 0,0 bottom-left, width,height top-right");
                 ui.separator();
                 let scene = self.viewer.viewport3d.has_scene();
                 let look = egui::Button::new("Look through selected").shortcut_text("0");
@@ -1138,4 +1156,29 @@ fn starter_graph() -> Graph {
         .unwrap();
     }
     g
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_about_logo_shows_square_and_whole() {
+        let size = egui::vec2(256.0, 256.0);
+        // Wider than tall artwork, as the bundled one is.
+        let art = egui::Rect::from_min_max(egui::pos2(10.0 / 256.0, 40.0 / 256.0), egui::pos2(246.0 / 256.0, 220.0 / 256.0));
+        let uv = square_uv(art, size);
+        let px = uv.size() * size;
+        assert!((px.x - px.y).abs() < 1e-3 && (px.x - 236.0).abs() < 1e-3, "square, just holding the art: {px:?}");
+        assert!(uv.contains_rect(art) && (uv.center() - art.center()).length() < 1e-6, "whole and centered");
+        // Near an edge it slides back inside the texture.
+        let edge = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 0.25));
+        let uv = square_uv(edge, size);
+        assert!(uv.min.y >= 0.0 && uv.max.y <= 1.0 + 1e-6 && uv.contains_rect(edge), "{uv:?}");
+        // The bundled icon's square region too.
+        let icon = app_icon();
+        let uv = square_uv(art, egui::vec2(icon.width as f32, icon.height as f32));
+        let px = uv.size() * egui::vec2(icon.width as f32, icon.height as f32);
+        assert!((px.x - px.y).abs() < 1e-3);
+    }
 }

@@ -13,7 +13,8 @@
 //! transparent parts show what's behind. Where two triangles of one
 //! surface meet, a sample on the shared edge counts once. The samples'
 //! mean is the pixel, over the background. Depth is the nearest covered
-//! sample's distance in front of the camera, 0 where nothing is. Points
+//! sample's distance in front of the camera (of a surface at least half
+//! opaque, where there is one), 0 where nothing is. Points
 //! draw as one-pixel dots.
 
 use crate::color::{self, Rgba};
@@ -60,7 +61,8 @@ pub(crate) struct Surface<'a> {
 }
 
 /// Card `card` as two triangles (top left, top right, bottom right; top
-/// left, bottom right, bottom left).
+/// left, bottom right, bottom left), its image (premultiplied) times its
+/// opacity.
 fn card_surface(card: &crate::scene::Card) -> Surface<'_> {
     let [w, h] = card.size.map(|v| v / 2.0);
     Surface {
@@ -69,7 +71,7 @@ fn card_surface(card: &crate::scene::Card) -> Surface<'_> {
         normals: Cow::Owned(vec![Vec3::z(); 4]),
         uvs: Cow::Owned(vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]),
         triangles: Cow::Owned(vec![[0, 1, 2], [0, 2, 3]]),
-        color: [1.0; 4],
+        color: [card.opacity; 4],
         texture: Some(&card.image),
         wrap: false,
         v_up: false,
@@ -384,7 +386,10 @@ impl Passes {
 
 /// [`render`] writing `passes`: depth, `P`, `N`, `uv` and `id` from the
 /// nearest surface any sample sees in each pixel (averaging them across an
-/// edge would make values no surface has), mattes as coverage (adding up,
+/// edge would make values no surface has) that is at least half opaque
+/// there (its texture's alpha times its opacity), or where none is, the
+/// nearest fainter one (so a faint card in front doesn't take them from
+/// what shows through it); mattes as coverage (adding up,
 /// with the other objects', to the beauty's alpha). Over a background,
 /// where the render shows nothing each pass is the background's plane of
 /// that name, if it has one; its other planes are kept.
@@ -585,9 +590,10 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                     continue;
                 }
                 let mut sum = [0.0f32; 4];
-                // The nearest surface seen, for depth and the other
-                // nearest-sample passes.
-                let mut nearest: Option<Hit> = None;
+                // The nearest surface seen at least half opaque, for depth
+                // and the other nearest-sample passes, and the nearest
+                // fainter one (used where nothing more opaque is).
+                let (mut nearest, mut faint): (Option<Hit>, Option<Hit>) = (None, None);
                 mattes.iter_mut().for_each(|m| *m = 0.0);
                 let mut part_sum = [[0.0f32; 3]; 4];
                 let mut shadow_sum = [0.0f32; 3];
@@ -652,8 +658,9 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                         for &hi in &order {
                             let hit = &hits[hi];
                             let surf = tris[hit.tri].surf;
-                            if hit.color[3] > 0.0 && nearest.is_none_or(|h| hit.depth < h.depth) {
-                                nearest = Some(*hit);
+                            let seen = if hit.color[3] >= 0.5 { &mut nearest } else { &mut faint };
+                            if hit.color[3] > 0.0 && seen.is_none_or(|h| hit.depth < h.depth) {
+                                *seen = Some(*hit);
                             }
                             let k = 1.0 - acc[3] - held;
                             if let Some(o) = object[surf].filter(|_| passes.mattes) {
@@ -700,7 +707,7 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                         (0..3).for_each(|c| px[shadow_at + c] = shadow_sum[c] * norm);
                     }
                 }
-                let Some(hit) = nearest else { continue };
+                let Some(hit) = nearest.or(faint) else { continue };
                 *dout = hit.depth as f32;
                 let px = &mut xrow[x * stride..x * stride + k];
                 let t = &tris[hit.tri];
@@ -1332,6 +1339,58 @@ mod tests {
         // Shadows off on the light (the default): none.
         let (scene, cam) = shadow_scene(light("light_directional", json!({ "rotate": [-90, 0, -45] }), "sun"));
         assert!(floor_at(&render(&scene, &cam, SHADOW_FMT, 1, None), &cam, -1.0, 0.0).0 > 0.3);
+    }
+
+    #[test]
+    fn a_cards_opacity_fades_it_and_its_shadow() {
+        use serde_json::json;
+        let red = Image::filled(4, 4, [1.0, 0.0, 0.0, 1.0]);
+        let o = crate::scene::card(&json!({ "opacity": 0.5 }), &red).opacity;
+        assert!(o == 0.5 && crate::scene::card(&json!({}), &red).opacity == 1.0, "{o}");
+        // Half a red card over blue: half of each.
+        let faded = |img: &Image, z: f64, size: f64, opacity: f32| Card { opacity, ..card(img.clone(), [0.0, 0.0, z], [0.0; 3], [size, size]) };
+        let blue = Image::filled(64, 32, [0.0, 0.0, 1.0, 1.0]);
+        let out = render(&Scene { cards: vec![faded(&red, -5.0, 20.0, 0.5)], ..Scene::default() }, &camera(), FMT, 1, Some(&blue));
+        assert_eq!(out.at(32, 16), [0.5, 0.0, 0.5, 1.0]);
+        // The 3D view's preview shows it faded too.
+        assert_eq!(render_preview(&Scene { cards: vec![faded(&red, -5.0, 20.0, 0.5)], ..Scene::default() }, &camera(), FMT).at(32, 16), [0.5, 0.0, 0.0, 0.5]);
+        // Two half cards stack front to back in either order.
+        let green = Image::filled(4, 4, [0.0, 1.0, 0.0, 1.0]);
+        let (front, back) = (faded(&red, -3.0, 20.0, 0.5), faded(&green, -6.0, 40.0, 0.5));
+        for cards in [vec![front.clone(), back.clone()], vec![back.clone(), front.clone()]] {
+            assert_eq!(render(&Scene { cards, ..Scene::default() }, &camera(), FMT, 1, None).at(32, 16), [0.5, 0.25, 0.0, 0.75]);
+        }
+        // The data passes skip a card under half opaque for what shows
+        // through it; alone, it has them.
+        let depth_at = |cards: Vec<Card>| render_passes(&Scene { cards, ..Scene::default() }, &camera(), FMT, 1, None, Passes::DEPTH).plane_at("depth", 32, 16);
+        assert_eq!(depth_at(vec![faded(&red, -3.0, 20.0, 0.3), faded(&green, -6.0, 40.0, 1.0)]), 6.0);
+        assert_eq!(depth_at(vec![faded(&red, -3.0, 20.0, 0.5), faded(&green, -6.0, 40.0, 1.0)]), 3.0);
+        assert_eq!(depth_at(vec![faded(&red, -3.0, 20.0, 0.3)]), 3.0);
+        // Its shadow is as strong as it is opaque (opacity times its
+        // image's alpha), and two let through the product of theirs: under
+        // a sun and a point light, at a floor point inside the card's shadow.
+        let sun = light("light_directional", json!({ "rotate": [-90, 0, -45], "shadows": true, "shadow_softness": 0 }), "sun");
+        let bulb = light("light_point", json!({ "translate": [0, 3, 0], "shadows": true, "shadow_softness": 0 }), "bulb");
+        for (l, at) in [(&sun, (-1.0, 0.0)), (&bulb, (0.65, 0.0))] {
+            let lit = |scene: &Scene| {
+                let (scene, cam) = (scene.clone(), shadow_scene(l.clone()).1);
+                let full = floor_at(&render(&Scene { lights: vec![Light { shadows: false, ..l.clone() }], ..scene.clone() }, &cam, SHADOW_FMT, 1, None), &cam, at.0, at.1).0;
+                floor_at(&render(&scene, &cam, SHADOW_FMT, 1, None), &cam, at.0, at.1).0 / full
+            };
+            let (mut scene, _) = shadow_scene(l.clone());
+            scene.cards[0].opacity = 0.3;
+            assert!((lit(&scene) - 0.7).abs() < 1e-3, "{}: {}", l.node, lit(&scene));
+            scene.cards[0].opacity = 1.0;
+            scene.cards[0].image = Arc::new(Image::filled(4, 4, [0.4; 4]));
+            assert!((lit(&scene) - 0.6).abs() < 1e-3, "{}: {}", l.node, lit(&scene));
+            if l.node == "sun" {
+                // A second 30% card higher up whose shadow lands there too
+                // (and that the camera doesn't see the point through).
+                scene.cards[0] = Card { opacity: 0.3, ..card(Image::filled(4, 4, [1.0; 4]), [0.0, 1.0, 0.0], [-90.0, 0.0, 0.0], [1.0, 1.0]) };
+                scene.cards.push(Card { opacity: 0.3, ..card(Image::filled(4, 4, [1.0; 4]), [1.0, 2.0, 0.0], [-90.0, 0.0, 0.0], [1.0, 1.0]) });
+                assert!((lit(&scene) - 0.49).abs() < 1e-3, "two: {}", lit(&scene));
+            }
+        }
     }
 
     #[test]

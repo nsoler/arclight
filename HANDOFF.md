@@ -9,16 +9,16 @@ done), `docs/help.md` (the in-app help) and
 
 ## Start here (next session)
 
-- **State:** version **0.9.46** on branch **`wip-ns-3dwork`**, merged to
+- **State:** version **0.9.47** on branch **`wip-ns-3dwork`**, merged to
   `main`; **M12 (lights) and M13 (particles) are DONE**. The local build
-  (`target/release`) and the Python `.so` are 0.9.46, so the Omarchy
-  launcher runs 0.9.46. Both workers idle; nothing uncommitted.
-- **Latest release: v0.9.46** (marked **Latest**;
+  (`target/release`) is 0.9.47, so the Omarchy launcher runs 0.9.47
+  (the Python `.so` is 0.9.46). Both workers idle; nothing uncommitted.
+- **Latest release: v0.9.47** (marked **Latest**;
   github.com/nsoler/arclight/releases/latest): Linux x86_64 tarball,
-  macOS universal DMG, `arclt` wheels + sdist. Earlier: v0.9.33, v0.9.32,
+  macOS universal DMG, `arclt` wheels + sdist. Earlier: v0.9.46, v0.9.33, v0.9.32,
   v0.9.31, v0.9.30, v0.9.27, v0.9.11. The stray v0.9.7 draft release was deleted
   at the user's request (the published v0.9.7 release and tag remain).
-- **Ask the user first:** how 0.9.34–0.9.46 test: node graph Tab /
+- **Ask the user first:** how 0.9.34–0.9.47 test (0.9.47: Card Opacity, frame size labels, square About logo); node graph Tab /
   ⇧R / ⇧T / ⇧M; Area Light, falloff, radius, exposure, Look at; light
   handles and Look through selected (0); shadows and the shadow pass;
   Light 2D; particles (Emitter → forces → Particle Render → Scanline
@@ -31,21 +31,16 @@ done), `docs/help.md` (the in-app help) and
 - **Next (no plan yet):** M12/M13 follow-ups above; the M9 leftover
   (true ortho texture path), the viewport's solid view lit by scene
   lights; other items under "Next steps". Ask the user what's next.
-- **In progress at this update (session 11, after v0.9.46):** three user
-  requests, to be committed as 0.9.47+, then **test, merge and release
-  as usual** (user asked) and stop:
-  (1) **Card Opacity** (3DWorker: ops.rs, scene.rs, render3d.rs,
-  render3d/shadow.rs, viewport3d.rs preview, README, help): 0–1 slider,
-  premultiplied multiply, shadows scale with opacity, maybe Opacity on
-  mesh nodes too; old projects unchanged.
-  (2) **Viewer frame size labels** (MathWiz: gui/viewer.rs, gui/main.rs):
-  dim "0,0" outside the format's bottom-left and "W,H" outside its
-  top-right, 2D only, View ▸ Show frame size (session-only toggle).
-  (3) **About logo shown square** (MathWiz: main.rs about_dialog): a
-  square box with the whole art centered, not stretched; MathWiz is
-  checking whether today's dialog actually distorts it (the art's opaque
-  bounds are wider than tall) — tell the user what was found.
-  If the tree has uncommitted edits in those files, they're these.
+- **0.9.47 (after M12 / M13, user requests):** Card **Opacity**
+  (3DWorker; `Card.opacity`, surface color [opacity;4]; data passes take
+  the nearest hit with alpha × opacity ≥ 0.5, else the nearest; shadows
+  let through 1 − alpha × opacity, faint casters kept per texel as
+  layers in shadow.rs — semi-transparent meshes and soft-alpha cards now
+  cast partial shadows; no separate Opacity on mesh nodes, Color alpha
+  is theirs); viewer frame size labels + View ▸ Show frame size
+  (session-only) and a square, undistorted About logo (`square_uv`;
+  egui's Image kept the whole texture's aspect and squeezed it)
+  (MathWiz). Released as v0.9.47.
 - **M12 (lights), done 0.9.35–0.9.43:** Area Light, falloff, radius,
   exposure / enabled, look at (0.9.35, 3DWorker); 3D view handles + Look
   through selected (0.9.37); Light 2D engine (0.9.38, MathWiz) and node
@@ -224,7 +219,7 @@ done), `docs/help.md` (the in-app help) and
   (emitter shapes, attractor, vortex, bounce) picked / moved;
   `gizmo3d::param_for(op, mode)` (forces move only); overlay emitter
   handles when a Particles 2D is viewed. **M13 done.**
-  - Next version: **0.9.47**. Both workers (mathwiz, worker3d) were
+  - Next version: **0.9.48**. Both workers (mathwiz, worker3d) were
     idle at the end of session 10; nothing uncommitted. (CHANGELOG has one entry per version.)
 - Mac: also ask whether anyone tried an Intel Mac. Mac-only bugs come
   first.
@@ -436,7 +431,7 @@ done), `docs/help.md` (the in-app help) and
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.46**.
+  in the same commit as the change. Current: **0.9.47**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.
