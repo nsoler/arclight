@@ -124,6 +124,37 @@ mod tests {
         assert_eq!(at40.result.unwrap(), fresh);
     }
 
+    /// A Scanline Render of particles at a late frame simulates them a
+    /// run at a time, not inside its evaluation: the viewer gets the
+    /// evaluator between runs and sees the simulation going on.
+    #[test]
+    fn a_late_render_of_particles_lets_the_viewer_in() {
+        let g: Graph = serde_json::from_value(json!({ "nodes": [
+            { "id": "emit", "op": "particle_emitter", "params": { "rate": 200, "speed": 2, "life": 1000 } },
+            { "id": "fall", "op": "particle_gravity", "inputs": ["emit"], "params": {} },
+            { "id": "scene", "op": "scene", "inputs": ["fall"], "params": {} },
+            { "id": "cam", "op": "camera", "params": {} },
+            { "id": "render", "op": "scanline_render", "inputs": ["scene", "cam"], "params": { "width": 32, "height": 32, "samples": 1 } },
+        ] }))
+        .unwrap();
+        let eval = Arc::new(Mutex::new(Evaluator::new()));
+        let calls = BridgeCalls::spawn(eval.clone(), || {});
+        calls.send(Call { tool: "render_frame".into(), args: json!({ "node": "render", "frame": 300 }), graph: g.clone(), path: None, dirty: false });
+        // What the viewer finds each time it gets the evaluator.
+        let mut seen = std::collections::BTreeSet::new();
+        let done = loop {
+            if let Ok(done) = calls.rx.try_recv() {
+                break done;
+            }
+            let img = eval.lock().unwrap().evaluate(&g, "fall", &EvalContext { frame: 1, write_outputs: false }).unwrap();
+            seen.insert(img.scene.as_ref().unwrap().particles[0].steps());
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert!(done.result.is_ok(), "{:?}", done.result);
+        let between = seen.iter().filter(|&&n| n > 0 && n < 299).count();
+        assert!(between >= 2, "the viewer got in during the simulation: {seen:?}");
+    }
+
     #[test]
     fn edits_come_back_with_the_graph() {
         let calls = BridgeCalls::spawn(Arc::default(), || {});

@@ -317,6 +317,9 @@ pub struct ParticleStream {
     pub node: String,
     pub system: Sampler,
     cache: Arc<Mutex<Cache>>,
+    /// Another evaluator's cache for the same node, read (never written)
+    /// to go on from what it has simulated (see [`ParticleState::borrowing`]).
+    base: Option<Arc<Mutex<Cache>>>,
     pub look: Look,
     pub frame: i64,
     /// The nodes its system is made of, and which of its emitters and
@@ -376,8 +379,18 @@ impl ParticleStream {
     /// The particles at frame `f`.
     pub fn particles_at(&self, f: i64) -> Vec<Particle> {
         let system = self.system.clone();
+        let params = move |g: i64| system(g);
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-        cache.frame(&move |g: i64| system(g), f).to_vec()
+        // More than a step to go: take what the base has that still stands
+        // for this system, if it's further on.
+        let held = cache.latest(f);
+        if let (Some(base), true) = (&self.base, held.is_none_or(|h| h + 1 < f)) {
+            let found = base.lock().unwrap_or_else(|e| e.into_inner()).standing(&params, f);
+            if let Some((at, state)) = found.filter(|(at, _)| held.is_none_or(|h| *at > h)) {
+                cache.start_from(&params, at, state);
+            }
+        }
+        cache.frame(&params, f).to_vec()
     }
 
     /// Frames simulated in its cache so far.
@@ -402,6 +415,8 @@ pub struct ParticleState {
     caches: HashMap<String, Arc<Mutex<Cache>>>,
     /// Per emitter, the shapes made from its input, by the input's key.
     shapes: HashMap<String, HashMap<u64, Shape>>,
+    /// Another state's caches, read to go on from (see `borrowing`).
+    base: HashMap<String, Arc<Mutex<Cache>>>,
 }
 
 impl ParticleState {
@@ -409,10 +424,19 @@ impl ParticleState {
         self.caches.entry(node.to_string()).or_default().clone()
     }
 
+    /// A state of its own that goes on from what this one has simulated,
+    /// where that still stands for its graph, without ever changing this
+    /// one's caches (a render alongside the viewer's simulation). Shapes
+    /// are shared too: a mesh shape compares equal only to itself.
+    pub fn borrowing(&self) -> ParticleState {
+        ParticleState { caches: HashMap::new(), shapes: self.shapes.clone(), base: self.caches.clone() }
+    }
+
     /// Forget nodes not in `keep`.
     pub fn retain(&mut self, keep: impl Fn(&str) -> bool) {
         self.caches.retain(|k, _| keep(k));
         self.shapes.retain(|k, _| keep(k));
+        self.base.retain(|k, _| keep(k));
     }
 }
 
@@ -516,7 +540,7 @@ pub fn eval(op: &str, cx: Context, state: &mut ParticleState) -> Result<Output> 
         let (op, own) = (op.to_string(), cx.own.clone());
         move |g: i64| with_defaults(&op, &own(g))
     };
-    let stream = |system: Sampler, look: Look, parts: Vec<Part>, state: &mut ParticleState| ParticleStream { node: cx.node.to_string(), system, cache: state.cache(cx.node), look, frame: cx.frame, parts, shift: 0.0 };
+    let stream = |system: Sampler, look: Look, parts: Vec<Part>, state: &mut ParticleState| ParticleStream { node: cx.node.to_string(), system, cache: state.cache(cx.node), base: state.base.get(cx.node).cloned(), look, frame: cx.frame, parts, shift: 0.0 };
     let input = |i: usize| cx.inputs.get(i).copied().flatten();
     match op {
         "particle_emitter" => {

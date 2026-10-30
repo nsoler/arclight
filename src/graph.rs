@@ -514,6 +514,14 @@ impl Evaluator {
         Self::default()
     }
 
+    /// A new evaluator that goes on from the particle simulations this one
+    /// holds, where they still stand for the graph it's given, but never
+    /// changes them (see [`particle_nodes::ParticleState::borrowing`]): a
+    /// render alongside the viewer's, without re-simulating or holding it.
+    pub fn borrowing_particles(&self) -> Evaluator {
+        Evaluator { particles: self.particles.borrowing(), ..Self::default() }
+    }
+
     /// Render `target` (and whatever it depends on) at `ctx.frame`.
     pub fn evaluate(
         &mut self,
@@ -1099,6 +1107,62 @@ mod tests {
         assert_eq!(edited.steps() - before, 3, "frames 18 to 20 again");
         assert_eq!(now, all(&stream(&mut Evaluator::new(), &g, 20)));
         assert_ne!(now, all(&fresh));
+    }
+
+    /// An evaluator borrowing another's particle simulations takes the
+    /// frames that still stand for its graph and simulates only the rest,
+    /// in caches of its own: the other's are never changed.
+    #[test]
+    fn a_borrowed_simulation_is_gone_on_from_never_changed() {
+        use serde_json::json;
+        let node = |id: &str, op: &str, inputs: &[&str], params: Value| NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None };
+        let slide = |keys: Value| json!({ "translate": { "keys": keys, "interp": "linear" }, "size": [1, 1] });
+        let graph = |slide_keys: Value, fall: f64| {
+            let nodes = vec![
+                node("plate", "constant", &[], json!({ "width": 4, "height": 4 })),
+                node("geo", "card", &["plate"], slide(slide_keys)),
+                node("emit", "particle_emitter", &["geo", ""], json!({ "shape": "geometry surface", "rate": 5, "speed": 0, "life": 1000, "seed": 3 })),
+                node("fall", "particle_gravity", &["emit"], json!({ "acceleration": [0, -fall, 0] })),
+            ];
+            Graph { nodes, ..Graph::default() }
+        };
+        let g = graph(json!([[1, [-4, 0, -5]], [17, [4, 0, -5]]]), 1.0);
+        let ctx = |frame: i64| EvalContext { frame, write_outputs: false };
+        let stream = |ev: &mut Evaluator, g: &Graph, frame: i64| ev.evaluate(g, "fall", &ctx(frame)).unwrap().scene.as_ref().unwrap().particles[0].clone();
+        let all = |s: &particle_nodes::ParticleStream| format!("{:?}", s.particles());
+        // The viewer's simulation, shown up to frame 20.
+        let mut viewer = Evaluator::new();
+        for f in 1..=20 {
+            stream(&mut viewer, &g, f).particles();
+        }
+        let shown = all(&stream(&mut viewer, &g, 20));
+        let steps = stream(&mut viewer, &g, 20).steps();
+        let untouched = |viewer: &mut Evaluator| {
+            let s = stream(viewer, &g, 20);
+            assert_eq!((all(&s), s.steps()), (shown.clone(), steps), "the viewer's simulation as it was, nothing to simulate again");
+        };
+        // The same graph: nothing simulated again, then on from there.
+        let mut same = viewer.borrowing_particles();
+        let s = stream(&mut same, &g, 20);
+        assert_eq!((all(&s), s.steps()), (shown.clone(), 0));
+        let s = stream(&mut same, &g, 22);
+        let on = all(&s);
+        assert_eq!((on, s.steps()), (all(&stream(&mut Evaluator::new(), &g, 22)), 2));
+        untouched(&mut viewer);
+        // The card moving on after frame 17 here: frames 18 to 20 only.
+        let later = graph(json!([[1, [-4, 0, -5]], [17, [4, 0, -5]], [20, [4, 3, -5]]]), 1.0);
+        let s = stream(&mut viewer.borrowing_particles(), &later, 20);
+        let got = all(&s);
+        assert_eq!((got, s.steps()), (all(&stream(&mut Evaluator::new(), &later, 20)), 3));
+        untouched(&mut viewer);
+        // Stronger gravity, so no frame stands: all of it, as from scratch.
+        let other = graph(json!([[1, [-4, 0, -5]], [17, [4, 0, -5]]]), 5.0);
+        let s = stream(&mut viewer.borrowing_particles(), &other, 20);
+        let fresh = stream(&mut Evaluator::new(), &other, 20);
+        let got = all(&s);
+        assert_eq!((got, s.steps()), (all(&fresh), fresh.steps()));
+        assert_ne!(all(&s), shown);
+        untouched(&mut viewer);
     }
 
     /// A Scanline Render whose params leave out what it doesn't change

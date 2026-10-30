@@ -37,6 +37,12 @@ struct MediaOut {
 /// Render the frame range of `media_out` node `out_id` to its file(s).
 /// Returns the number of frames written.
 pub fn render_media_out(graph: &Graph, out_id: &str, progress: &Progress) -> Result<i64> {
+    render_media_out_with(graph, out_id, progress, Evaluator::new())
+}
+
+/// [`render_media_out`] with `eval` (say one going on from the viewer's
+/// particle simulations, see [`Evaluator::borrowing_particles`]).
+pub fn render_media_out_with(graph: &Graph, out_id: &str, progress: &Progress, mut eval: Evaluator) -> Result<i64> {
     let Some(node) = graph.node(out_id) else {
         bail!("no node named '{out_id}'");
     };
@@ -59,7 +65,6 @@ pub fn render_media_out(graph: &Graph, out_id: &str, progress: &Progress) -> Res
 
     progress.total.store(last - first + 1, Ordering::Relaxed);
     progress.done.store(0, Ordering::Relaxed);
-    let mut eval = Evaluator::new();
     let mut writer: Option<VideoWriter> = None;
     for frame in first..=last {
         if progress.cancel.load(Ordering::Relaxed) {

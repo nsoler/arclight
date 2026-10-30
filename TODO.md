@@ -60,10 +60,8 @@ they come up and strike them (or delete them) when they ship.
 
 ## Particles
 
-- [ ] Bridged calls other than `particles` that simulate inside one
-      evaluation (`scene_objects`, a Scanline Render / Particles 2D at a
-      late frame) hold the shared evaluator for the whole run and the
-      viewer waits; renders through the bridge still re-simulate
+- [x] Bridged particle renders no longer block the viewer and go on
+      from its simulation (0.10.30)
 
 ## Gaussian splats (plan: `docs/splat-plan.md`, S1–S5 done)
 

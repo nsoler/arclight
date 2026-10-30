@@ -678,8 +678,69 @@ impl Session {
     /// Render node `id` at `frame`. Results are cached between calls.
     pub fn render(&mut self, id: &str, frame: i64) -> Result<Arc<Image>> {
         let ctx = EvalContext { frame, write_outputs: false };
+        // Particles a node simulates while it renders simulated first, a
+        // short run at a time: a viewer sharing the evaluator then waits
+        // for one evaluation, not the whole simulation.
+        for node in self.simulated_streams(id) {
+            let Ok(img) = self.eval.lock().unwrap_or_else(|e| e.into_inner()).evaluate(&self.graph, &node, &ctx) else { continue };
+            self.simulate_to(&img.scene.as_ref().map(|s| s.particles.clone()).unwrap_or_default(), frame);
+        }
         let mut eval = self.eval.lock().unwrap_or_else(|e| e.into_inner());
         Ok(eval.evaluate(&self.graph, id, &ctx)?)
+    }
+
+    /// The particle nodes whose streams nodes that `id` needs simulate
+    /// while they render (a Scanline Render, a Particles 2D): those handing
+    /// them on to something other than a particle node (a Scene, the
+    /// render itself). Upstream first, so a render inside another's scene
+    /// is simulated for before the scene that holds it is evaluated.
+    fn simulated_streams(&self, id: &str) -> Vec<String> {
+        const SIMULATES: [&str; 2] = ["scanline_render", "particles_2d"];
+        let op = |n: &str| self.graph.node(n).map_or("", |n| n.op.as_str());
+        let stream = |n: &str| crate::particle_nodes::is_particle(op(n)) && op(n) != "particles_2d";
+        let inputs = |n: &str| self.graph.node(n).map(|n| n.inputs.clone()).unwrap_or_default();
+        // The nodes `root` needs, upstream first.
+        let upstream = |root: &str| {
+            let (mut order, mut seen, mut todo) = (Vec::new(), HashSet::new(), vec![(root.to_string(), false)]);
+            while let Some((n, done)) = todo.pop() {
+                if done {
+                    order.push(n);
+                } else if seen.insert(n.clone()) {
+                    todo.push((n.clone(), true));
+                    todo.extend(inputs(&n).into_iter().filter(|i| !i.is_empty() && self.graph.node(i).is_some()).map(|i| (i, false)));
+                }
+            }
+            order
+        };
+        let mut out: Vec<String> = Vec::new();
+        for render in upstream(id).iter().filter(|n| SIMULATES.contains(&op(n))) {
+            let up = upstream(render);
+            for n in &up {
+                if stream(n) && !out.contains(n) && up.iter().any(|v| !stream(v) && inputs(v).contains(n)) {
+                    out.push(n.clone());
+                }
+            }
+        }
+        out
+    }
+
+    /// Simulate `streams` up to frame `last` a short run at a time (as many
+    /// frames as take about PARTICLE_RUN), so a viewer sharing the
+    /// simulation (the GUI's, over its bridge) waits for one run at most,
+    /// not the whole way.
+    fn simulate_to(&self, streams: &[crate::particle_nodes::ParticleStream], last: i64) {
+        for st in streams {
+            let (mut g, mut run) = (self.graph.project.first_frame, 1);
+            while g < last {
+                g = (g + run).min(last);
+                let t = std::time::Instant::now();
+                st.particles_at(g);
+                let took = t.elapsed();
+                run = if took > PARTICLE_RUN { (run / 2).max(1) } else if took < PARTICLE_RUN / 4 { run * 2 } else { run };
+                // (Long enough for a waiting viewer to take its turn.)
+                std::thread::sleep(std::time::Duration::from_micros(500));
+            }
+        }
     }
 
     /// What node `id`'s 3D scene holds at `frame`: its cameras, cards,
@@ -765,21 +826,7 @@ impl Session {
         if streams.is_empty() {
             bail!("'{id}' passes on no particles (connect it after a Particle Emitter)");
         }
-        // Simulated up to `frame` a short run at a time (as many frames as
-        // take about PARTICLE_RUN), so a viewer sharing the simulation (the
-        // GUI's, over its bridge) waits for one run at most, not the whole way.
-        for st in &streams {
-            let (mut g, mut run) = (self.graph.project.first_frame, 1);
-            while g + 1 < frame {
-                g = (g + run).min(frame - 1);
-                let t = std::time::Instant::now();
-                st.particles_at(g);
-                let took = t.elapsed();
-                run = if took > PARTICLE_RUN { (run / 2).max(1) } else if took < PARTICLE_RUN / 4 { run * 2 } else { run };
-                // (Long enough for a waiting viewer to take its turn.)
-                std::thread::sleep(std::time::Duration::from_micros(500));
-            }
-        }
+        self.simulate_to(&streams, frame - 1);
         let all: Vec<(usize, crate::particles::Particle)> = streams.iter().enumerate().flat_map(|(k, st)| st.particles().into_iter().map(move |p| (k, p))).collect();
         let total = all.len();
         let page = &all[offset.min(total)..(offset.saturating_add(limit.min(MAX_PARTICLES))).min(total)];
@@ -865,8 +912,11 @@ impl Session {
     }
 
     /// Render the frame range of `media_out` node `id`. Returns frames written.
+    /// Its particles go on from what this session has simulated (where
+    /// that still stands), in an evaluator of the render's own.
     pub fn render_output(&self, id: &str, progress: &Progress) -> Result<i64> {
-        render::render_media_out(&self.graph, id, progress)
+        let eval = self.eval.lock().unwrap_or_else(|e| e.into_inner()).borrowing_particles();
+        render::render_media_out_with(&self.graph, id, progress, eval)
     }
 }
 
@@ -1134,6 +1184,29 @@ mod tests {
 
     fn map(v: Value) -> Map<String, Value> {
         v.as_object().unwrap().clone()
+    }
+
+    /// Streams are simulated ahead only for nodes that simulate them while
+    /// they render: the last particle node before a Scene or the render.
+    #[test]
+    fn streams_are_simulated_ahead_only_for_what_renders_them() {
+        let s = Session::new(
+            serde_json::from_value(json!({ "nodes": [
+                { "id": "emit", "op": "particle_emitter", "params": {} },
+                { "id": "fall", "op": "particle_gravity", "inputs": ["emit"], "params": {} },
+                { "id": "scene", "op": "scene", "inputs": ["fall"], "params": {} },
+                { "id": "cam", "op": "camera", "params": {} },
+                { "id": "render", "op": "scanline_render", "inputs": ["scene", "cam"], "params": {} },
+                { "id": "dots", "op": "particles_2d", "inputs": ["emit", "render"], "params": {} },
+                { "id": "after", "op": "grade", "inputs": ["dots"], "params": {} },
+            ] }))
+            .unwrap(),
+        );
+        assert_eq!(s.simulated_streams("render"), ["fall"]);
+        assert_eq!(s.simulated_streams("after"), ["fall", "emit"], "the render inside first");
+        for id in ["scene", "fall", "emit", "cam"] {
+            assert!(s.simulated_streams(id).is_empty(), "{id}");
+        }
     }
 
     #[test]

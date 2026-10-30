@@ -12,6 +12,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.30 — 2026-10-30
+
+- Bridged calls that render particles at a late frame (a Scanline Render
+  or Particles 2D through `render_frame`, or scene-reading calls)
+  simulate a short run at a time, so the viewer keeps updating
+  meanwhile. Renders over the bridge (`render_frame`, `render_output`)
+  and a session's `render_output` go on from the particles already
+  simulated, where they still match the rendered graph, instead of
+  simulating from the first frame, and never change the viewer's
+  simulation.
+
 ## 0.10.29 — 2026-10-30
 
 - Internal: `cargo clippy` is clean across the workspace (`Graph`

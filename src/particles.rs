@@ -775,6 +775,43 @@ impl Cache {
         &self.frames[&f].1.particles
     }
 
+    /// The latest frame up to `f` held here that still stands for the
+    /// system `params` gives, and its state: checked as [`Cache::frame`]
+    /// checks, but nothing is changed (for a cache another simulation
+    /// owns, see [`Cache::start_from`]).
+    pub fn standing(&self, params: &impl Params, f: i64) -> Option<(i64, State)> {
+        let first = params.at(f).first_frame();
+        if self.frames.first_key_value().map(|(&k, _)| k) != Some(first) {
+            return None;
+        }
+        let mut best = None;
+        for (&g, (old, state)) in self.frames.range(..=f) {
+            match params.at(g).changed_at(old, g) {
+                None => best = Some((g, state)),
+                Some(from) => {
+                    if from > g {
+                        best = Some((g, state));
+                    }
+                    break;
+                }
+            }
+        }
+        best.map(|(g, state)| (g, state.clone()))
+    }
+
+    /// Go on from `state` at frame `at` (one [`Cache::standing`] found in
+    /// another cache for the same `params`) rather than from the start.
+    pub fn start_from(&mut self, params: &impl Params, at: i64, state: State) {
+        let first = params.at(at).first_frame();
+        self.frames.entry(first).or_insert_with(|| (params.at(first), State::default()));
+        self.frames.insert(at, (params.at(at), state));
+    }
+
+    /// The latest frame up to `f` held.
+    pub fn latest(&self, f: i64) -> Option<i64> {
+        self.frames.range(..=f).next_back().map(|(&g, _)| g)
+    }
+
     /// Forget frame `f` and every one after it.
     pub fn invalidate_from(&mut self, f: i64) {
         self.frames.split_off(&f);

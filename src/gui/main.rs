@@ -318,7 +318,7 @@ impl App {
             autosaved: (std::time::Instant::now(), String::new()),
             rescale: None,
             bridge,
-            scripts: ScriptJobs::default(),
+            scripts: ScriptJobs::sharing(eval.clone()),
             calls: BridgeCalls::spawn(eval, move || ctx.request_repaint()),
             bridge_queue: Default::default(),
             in_flight: None,
