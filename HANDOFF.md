@@ -1,14 +1,13 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-30, session 12: **phase 10 (Gaussian splats) on
+Last updated 2026-10-30, session 12 (through 0.10.22): **phase 10 (Gaussian splats) on
 branch `wip-ns-splats`, 0.10.x**; phase 9 ended at 0.9.68 (v0.9.68) on
 `wip-ns-3dwork`, now frozen (herdr multi-agent sessions:
-one master + workers; see "Several agent sessions" below). Read this,
+one Supervisor (formerly "master") + workers; see "Several agent sessions" below). Read this,
 then `README.md` (user-facing features, file format, shortcuts,
 scripting, the "3D view" section), `docs/phase-4-plan.md` (3D plan: M1–M13
 done), `docs/help.md` (the in-app help) and
-`docs/spec-coverage.md` (planning docs vs. what exists), and `docs/splat-plan.md` (Gaussian splats, S1–S5:
-proposed 2026-10-30, not started; after the Particles round).
+`docs/spec-coverage.md` (planning docs vs. what exists), and `docs/splat-plan.md` (Gaussian splats, S1–S5: done).
 
 ## Start here (next session)
 
@@ -17,6 +16,31 @@ proposed 2026-10-30, not started; after the Particles round).
   larger items. Keep it current: add items as they come up, tick or
   remove them when they ship.
 
+- **Session 12, phase 10 continued, 0.10.14–0.10.22 (released v0.10.14
+  and v0.10.22; Linux assets built locally, the user uploads the macOS
+  DMG while Actions is billing-blocked):** 0.10.14 (Dev1) Read Splat Up
+  axis defaults to -y; `.spz` read/written turned 180° about X (positions,
+  quats, SH parity signs) so every format is Y down on disk, upright by
+  default; the sample `.ply` regenerated Y down. Camera Tracker group:
+  0.10.15 (Dev1) mask input (`features::Blocked`, `camtrack::input_frames`);
+  0.10.16 (Dev2) live link to the solve (`link.rs` kind `solve`,
+  `camtrack::camera_links` / `solved_value` / `baked_value`, Session
+  `export_camera_linked`, MCP `linked` default true, Properties Bake);
+  0.10.17 (Dev2) point picking over a Scanline Render
+  (`camera_tracker::tracker_for`); 0.10.18 (Dev2) `ops::other_frames`
+  fills Scanline Render defaults; 0.10.19 (Dev1) lens-distortion solve
+  (`solve::Intrinsics` k1/k2 = Lens Distort's Brown model about the frame
+  center, bundle Jacobian through the lens, `Solution.k1/k2`, Export adds
+  a Lens Distort undistort). 3D and rendering group: 0.10.20 (Dev2)
+  `geom::Camera.ortho`, Camera Projection / Ortho width, ortho
+  render3d / splats / sprites / 3D view / sun shadow maps; 0.10.21 (Dev2)
+  mipmaps (`render3d/mip.rs`, analytic per-sample footprint, trilinear
+  only when minified, else bit-identical); 0.10.22 (Dev1) Alembic
+  (`src/ogawa.rs`, `src/alembic.rs`; Read Geo `.abc`, Frame rate seeded
+  from the project, Frame offset; no materials, HDF5 refused). Follow-ups
+  are in TODO (Alembic curves / points / cameras; splat GPU path).
+  The master was renamed **Supervisor** (herdr `supervisor`, wD:p1) by
+  the user on 2026-10-30.
 - **Session 12, phase 10 (splats), 0.10.0–0.10.13 on `wip-ns-splats`:**
   0.10.1 `splat::Splats` (Arc'd SoA arrays) + `Scene.splats`; 0.10.2 the
   `.ply` reader + `read_splat` + `examples/geo/splats.ply`; 0.10.3
@@ -28,7 +52,7 @@ proposed 2026-10-30, not started; after the Particles round).
   (`graded_sh`); 0.10.10 `Scene.regions`; 0.10.11 crop handle
   (`GadgetKind::Crop`); 0.10.12 `.splat` / `.spz` (dep `flate2`);
   0.10.13 tile binning without a global sort + `View` LRU cache, preview
-  SH ≤ 1. 1 M splats 1080p ≈ 0.17 s. Open: Read Splat Up default (y; ask).
+  SH ≤ 1. 1 M splats 1080p ≈ 0.17 s. (Up default became -y in 0.10.14.)
   Master's ship script lives in the session scratchpad: snapshot reported
   paths, test at HEAD in a worktree, commit those blobs, bump in place,
   build the launcher from the committed tree.
@@ -514,8 +538,9 @@ proposed 2026-10-30, not started; after the Particles round).
   `main`, without asking first. Then carry on with the next step. Keep
   `main`, `wip-ns-3dwork` and both remote branches at the same commit.
 - **Several agent sessions (herdr), one master (2026-10-29, user
-  instruction):** the user runs several Claude sessions in herdr on this
-  one checkout. One of them is the **master** (herdr agent name `master`;
+  instruction; the master is called the **Supervisor** since 2026-10-30,
+  herdr name `supervisor`):** the user runs several Claude sessions in herdr on this
+  one checkout. One of them is the **master** (herdr agent name `supervisor`, formerly `master`;
   see `herdr agent list`). Only the master commits, pushes, fast-forwards
   `main`, bumps the version, writes CHANGELOG version headers, tags
   releases and keeps this file's status current. **Every other session
@@ -524,7 +549,7 @@ proposed 2026-10-30, not started; after the Particles round).
   master what you'll work on and which files you expect to touch (two
   workers mustn't edit the same file at once). When a milestone is done
   (`cargo test --release` and `cargo clippy --release --all-targets`
-  clean), report it: `herdr agent prompt master "<report>"` with a
+  clean), report it: `herdr agent prompt supervisor "<report>"` with a
   one-line title, the exact paths changed or added, a CHANGELOG bullet and
   any README/HANDOFF notes. The master checks and commits only those
   paths, and replies when it's in. (A `git add -A` by one session once
