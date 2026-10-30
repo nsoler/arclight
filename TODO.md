@@ -99,6 +99,11 @@ Phase 10: 0.10.x on branch `wip-ns-splats` (started 0.10.0).
 - [x] `set_node_position` / `layout_nodes` in MCP / Python (0.10.28)
 - [x] Shift+Tab over the viewer no longer toggles 2D / 3D (0.10.23)
 
+## Media
+
+- [ ] Audio: Media Out writes video only, and sources' audio isn't read
+      (reading, syncing and mixing it is a project of its own)
+
 ## Engine and platform (larger)
 
 - [ ] GPU acceleration (`wgpu` compute; CPU / rayon only today)
