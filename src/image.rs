@@ -116,7 +116,7 @@ impl Image {
     }
 
     /// Roughly how much memory this image holds: pixels, planes and a
-    /// scene's card textures, meshes (with their textures) and points, plus
+    /// scene's card textures, meshes (with their textures), splats and points, plus
     /// a little for the struct itself, so an image carrying only a scene
     /// never counts as nothing. A mesh or texture shared by several objects
     /// counts once for each.
@@ -131,7 +131,8 @@ impl Image {
                     (g.positions.len() + g.normals.len()) * 24 + g.uvs.len() * 16 + g.triangles.len() * 12 + m.texture.as_ref().map_or(0, |t| t.bytes()) + 256
                 })
                 .sum();
-            s.cards.iter().map(|c| c.image.bytes() + 256).sum::<usize>() + meshes + s.cameras.len() * 256 + s.points.len() * 24
+            let splats: usize = s.splats.iter().map(|g| g.bytes()).sum();
+            s.cards.iter().map(|c| c.image.bytes() + 256).sum::<usize>() + meshes + splats + s.cameras.len() * 256 + s.points.len() * 24
         });
         std::mem::size_of::<Image>() + self.pixels.len() * std::mem::size_of::<Rgba>() + planes + scene
     }

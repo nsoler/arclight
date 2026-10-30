@@ -12,6 +12,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.1 — 2026-10-30
+
+- **Splat data model** (Dev1, internal, splat plan S1): `splat::Splats`
+  (positions, scales, rotations, opacity, spherical-harmonic color up to
+  degree 3, shared without copying) and `Scene.splats`, carried through
+  scenes and motion blur. Nothing user-visible yet: the reader, Read
+  Splat node and renderer follow.
+
 ## 0.10.0 — 2026-10-30
 
 - **Phase 10 begins: Gaussian splats** (`docs/splat-plan.md`), on branch

@@ -36,5 +36,6 @@ pub mod session;
 pub mod shade;
 pub mod sfm;
 pub mod shape;
+pub mod splat;
 pub mod solve;
 pub mod track;

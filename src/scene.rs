@@ -33,6 +33,9 @@ pub struct Scene {
     pub point_errors: Vec<f32>,
     /// Particle streams (simulated when drawn; each knows its node).
     pub particles: Vec<crate::particle_nodes::ParticleStream>,
+    /// Gaussian splat captures (each knows its node; shared, never copied
+    /// per frame).
+    pub splats: Vec<Arc<crate::splat::Splats>>,
 }
 
 /// An image on a flat rectangle in 3D: `size` wide and high in its own
@@ -127,6 +130,7 @@ impl Scene {
         self.lights.extend(other.lights.iter().cloned());
         self.points.extend(other.points.iter().copied());
         self.particles.extend(other.particles.iter().cloned());
+        self.splats.extend(other.splats.iter().cloned());
         let mut other = other.clone();
         other.fill_nodes();
         self.camera_nodes.extend(other.camera_nodes);
@@ -149,6 +153,10 @@ impl Scene {
             if n.is_empty() {
                 *n = id.to_string();
             }
+        }
+        // (A copy of the struct only: the splats themselves stay shared.)
+        for s in self.splats.iter_mut().filter(|s| s.node.is_empty()) {
+            Arc::make_mut(s).node = id.to_string();
         }
     }
 
@@ -177,6 +185,10 @@ impl Scene {
         }
         if !self.particles.is_empty() {
             parts.push(n(self.particles.len(), "particle stream", "particle streams"));
+        }
+        if !self.splats.is_empty() {
+            let count: usize = self.splats.iter().map(|s| s.len()).sum();
+            parts.push(format!("{} ({count} splats)", n(self.splats.len(), "splat capture", "splat captures")));
         }
         parts.join(", ")
     }
@@ -384,6 +396,13 @@ impl Scene {
                         m.mesh.normals.clone()
                     };
                     m.mesh = Arc::new(Mesh { positions: lerp(p, q), normals, ..(*m.mesh).clone() });
+                }
+            }
+        }
+        if same_nodes(&out.splats, &a.splats, &b.splats, |s| &s.node) {
+            for (s, (x, y)) in out.splats.iter_mut().zip(a.splats.iter().zip(&b.splats)) {
+                if x.world != y.world {
+                    Arc::make_mut(s).world = between(&x.world, &y.world, w);
                 }
             }
         }
