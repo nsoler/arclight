@@ -15,7 +15,8 @@ use std::path::PathBuf;
 
 pub const NODE_W: f32 = 150.0;
 pub const NODE_H: f32 = 46.0;
-const UNDO_LIMIT: usize = 200;
+/// Undo steps kept unless the preferences say otherwise.
+pub const UNDO_LEVELS: usize = 200;
 
 struct History {
     undo: Vec<Graph>,
@@ -65,16 +66,24 @@ pub struct Doc {
     /// re-render. Compared against the history to find uncommitted edits.
     edits: u64,
     history: History,
+    /// The most undo steps kept (0: no limit; Preferences ▸ Files).
+    pub undo_levels: usize,
 }
 
 impl Doc {
     pub fn new(graph: Graph, path: Option<PathBuf>) -> Doc {
         let history = History { undo: Vec::new(), redo: Vec::new(), committed: Graph::default(), committed_edits: 0 };
-        let mut doc = Doc { graph, selected: None, selection: Vec::new(), selection_for: None, selected_backdrop: None, selected_wire: None, show_3d: None, intro_3d: false, view_override: None, active_viewer: None, view_format: None, revision: 1, path, dirty: false, edits: 0, history };
+        let mut doc = Doc { graph, selected: None, selection: Vec::new(), selection_for: None, selected_backdrop: None, selected_wire: None, show_3d: None, intro_3d: false, view_override: None, active_viewer: None, view_format: None, revision: 1, path, dirty: false, edits: 0, history, undo_levels: UNDO_LEVELS };
         doc.normalize();
         doc.auto_layout();
         doc.history.committed = doc.graph.clone();
         doc
+    }
+
+    /// A new, empty project with `project`'s format, rate and frames
+    /// (Preferences ▸ New project).
+    pub fn blank(project: arclight::graph::Project) -> Doc {
+        Doc::new(Graph { project, ..Graph::default() }, None)
     }
 
     /// An edit that affects rendering.
@@ -101,8 +110,9 @@ impl Doc {
         if self.graph != self.history.committed {
             let prev = std::mem::replace(&mut self.history.committed, self.graph.clone());
             self.history.undo.push(prev);
-            if self.history.undo.len() > UNDO_LIMIT {
-                self.history.undo.remove(0);
+            if self.undo_levels > 0 && self.history.undo.len() > self.undo_levels {
+                let extra = self.history.undo.len() - self.undo_levels;
+                self.history.undo.drain(..extra);
             }
             self.history.redo.clear();
         }
@@ -1366,6 +1376,33 @@ mod tests {
         d.add_node("grade", [0.0, 0.0]);
         d.commit(false);
         assert!(!d.can_redo());
+    }
+
+    #[test]
+    fn undo_keeps_as_many_steps_as_the_preferences_say() {
+        let steps = |levels: usize| {
+            let mut d = Doc::new(Graph::default(), None);
+            d.undo_levels = levels;
+            for i in 0..250 {
+                d.add_node("grade", [i as f32 * 200.0, 0.0]);
+                d.commit(false);
+            }
+            let mut n = 0;
+            while d.history.undo.pop().is_some() {
+                n += 1;
+            }
+            n
+        };
+        assert_eq!((steps(UNDO_LEVELS), steps(3), steps(0)), (200, 3, 250), "200 as before, 3, or all of them");
+    }
+
+    #[test]
+    fn a_blank_project_takes_the_new_project_defaults() {
+        let mut project = arclight::graph::Project::default();
+        (project.first_frame, project.last_frame, project.fps, project.format) = (1001, 1100, 25.0, arclight::image::Size { width: 1280, height: 720 });
+        let d = Doc::blank(project.clone());
+        assert_eq!((d.graph.project.clone(), d.graph.nodes.len(), d.path.clone(), d.dirty, d.can_undo()), (project, 0, None, false, false));
+        assert_eq!(Doc::blank(Default::default()).graph, Doc::new(Graph::default(), None).graph, "the defaults as today");
     }
 
     #[test]

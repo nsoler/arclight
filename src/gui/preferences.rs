@@ -224,9 +224,48 @@ fn theme_label(theme: &str) -> &'static str {
 
 /// What File ▸ New starts with.
 fn new_project(ui: &mut egui::Ui, p: &mut NewProjectPrefs) {
+    use crate::project_settings::{format_name, rate_name, FORMATS, RATES};
     heading(ui, "New project");
-    let _ = p;
-    ui.weak("Coming soon.");
+    ui.label("File ▸ New starts a project with these (Project Settings ▸ Save as defaults sets them too).");
+    ui.add_space(6.0);
+    egui::Grid::new("new_project_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+        ui.label("Format");
+        ui.horizontal(|ui| {
+            let size = arclight::image::Size { width: p.width, height: p.height };
+            let name = format_name(size).unwrap_or("Custom");
+            egui::ComboBox::from_id_salt("new_format").selected_text(name).width(160.0).show_ui(ui, |ui| {
+                for (n, w, h) in FORMATS {
+                    if ui.selectable_label(*n == name, format!("{n}  ·  {w} × {h}")).clicked() {
+                        (p.width, p.height) = (*w, *h);
+                    }
+                }
+            });
+            ui.add(egui::DragValue::new(&mut p.width).range(1..=16384).suffix(" w"));
+            ui.label("×");
+            ui.add(egui::DragValue::new(&mut p.height).range(1..=16384).suffix(" h"));
+        });
+        ui.end_row();
+        ui.label("Frame rate");
+        ui.horizontal(|ui| {
+            let name = rate_name(p.fps).unwrap_or("Custom");
+            egui::ComboBox::from_id_salt("new_rate").selected_text(name).width(90.0).show_ui(ui, |ui| {
+                for (n, f) in RATES {
+                    if ui.selectable_label(*n == name, *n).clicked() {
+                        p.fps = *f;
+                    }
+                }
+            });
+            ui.add(egui::DragValue::new(&mut p.fps).range(0.1..=240.0).speed(0.1).max_decimals(3).suffix(" fps"));
+        });
+        ui.end_row();
+        ui.label("Frames");
+        ui.horizontal(|ui| {
+            ui.add(egui::DragValue::new(&mut p.first_frame).prefix("first "));
+            ui.add(egui::DragValue::new(&mut p.last_frame).prefix("last "));
+            p.last_frame = p.last_frame.max(p.first_frame);
+        });
+        ui.end_row();
+    });
 }
 
 /// Autosave, recent files, undo and where file dialogs start.
@@ -281,8 +320,40 @@ fn folder_row(ui: &mut egui::Ui, dir: &mut Option<PathBuf>, which: Folder, wante
 /// How the 3D view takes the mouse and trackpad.
 fn view3d(ui: &mut egui::Ui, p: &mut View3dPrefs) {
     heading(ui, "3D view");
-    let _ = p;
-    ui.weak("Coming soon.");
+    egui::Grid::new("view3d_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+        ui.label("Mouse");
+        ui.checkbox(&mut p.emulate_three_button, "Emulate 3-button mouse").on_hover_text("Alt + left-drag orbits, pans (⇧) and zooms (⌃), as the middle button does");
+        ui.end_row();
+        ui.label("Two-finger scroll");
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut p.trackpad, "orbit".to_string(), "Orbits").on_hover_text("⇧ pans");
+            ui.radio_value(&mut p.trackpad, "pan".to_string(), "Pans").on_hover_text("⇧ orbits");
+        });
+        ui.end_row();
+        ui.label("Zoom");
+        ui.vertical(|ui| {
+            ui.checkbox(&mut p.zoom_to_pointer, "Toward the pointer").on_hover_text("Else toward the middle of the view");
+            ui.checkbox(&mut p.invert_zoom, "Invert").on_hover_text("The wheel, ⌃ + scroll and ⌃ + middle-drag zoom the other way (pinching doesn't change)");
+        });
+        ui.end_row();
+        ui.label("Shading");
+        egui::ComboBox::from_id_salt("default_shading").selected_text(shading_label(&p.default_shading)).show_ui(ui, |ui| {
+            for t in ["auto", "solid", "lit"] {
+                ui.selectable_value(&mut p.default_shading, t.to_string(), shading_label(t));
+            }
+        })
+        .response
+        .on_hover_text("How projects without their own 3D view start. Automatic: as you last chose, else Lit when the scene has lights");
+        ui.end_row();
+    });
+}
+
+fn shading_label(shading: &str) -> &'static str {
+    match shading {
+        "solid" => "Solid",
+        "lit" => "Lit",
+        _ => "Automatic",
+    }
 }
 
 #[cfg(test)]

@@ -116,6 +116,9 @@ pub struct ProjectSettings {
     draft: Option<Project>,
     /// What Match media did, or why it couldn't.
     message: Option<(bool, String)>,
+    /// Settings to save as the defaults for new projects (see
+    /// [`take_defaults`](Self::take_defaults)).
+    defaults: Option<Project>,
 }
 
 impl ProjectSettings {
@@ -140,6 +143,23 @@ impl ProjectSettings {
                 doc.graph.project = d;
                 doc.changed();
             }
+        }
+    }
+
+    /// The settings "Save as defaults" asked to keep for new projects
+    /// (Preferences ▸ New project), once.
+    pub fn take_defaults(&mut self) -> Option<Project> {
+        self.defaults.take()
+    }
+
+    /// Ask for the settings being edited to be the defaults for new
+    /// projects (the frame range tidied as Apply does).
+    fn save_defaults(&mut self) {
+        if let Some(d) = &self.draft {
+            let mut d = d.clone();
+            d.last_frame = d.last_frame.max(d.first_frame);
+            self.defaults = Some(d);
+            self.message = Some((true, "New projects will start with these settings.".into()));
         }
     }
 
@@ -170,6 +190,7 @@ impl ProjectSettings {
         let (mut apply, mut close) = (false, false);
         let media = doc.selected.clone().filter(|id| doc.node(id).is_some_and(|n| matches!(n.op.as_str(), "media_in" | "read")));
         let mut match_from = None;
+        let mut defaults = false;
         let window = egui::Window::new("Project Settings").open(&mut keep_open).collapsible(false).resizable(false);
         // In the middle of the window the first time it opens.
         let window = window.pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center());
@@ -230,6 +251,9 @@ impl ProjectSettings {
                 if let Some(id) = &media {
                     ui.weak(format!("from {id}"));
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    defaults = ui.button("Save as defaults").on_hover_text("Start new projects with these settings (Preferences ▸ New project)").clicked();
+                });
             });
             if let Some((ok, msg)) = &self.message {
                 let color = if *ok { egui::Color32::from_rgb(110, 200, 120) } else { egui::Color32::from_rgb(235, 100, 90) };
@@ -248,6 +272,9 @@ impl ProjectSettings {
         self.draft = Some(d);
         if let Some(id) = match_from {
             self.match_media(doc, &id);
+        }
+        if defaults {
+            self.save_defaults();
         }
         if apply {
             self.apply(doc);
@@ -276,9 +303,10 @@ mod tests {
 
     #[test]
     fn matching_takes_what_the_source_has() {
-        let project = Project { first_frame: 1, last_frame: 100, fps: 25.0, format: Size { width: 1920, height: 1080 } };
+        let project = Project { fps: 25.0, ..Default::default() };
         let clip = Source { size: Size { width: 3840, height: 2160 }, fps: Some(24000.0 / 1001.0), range: Some((1001, 1048)) };
-        assert_eq!(matched(&project, &clip), Project { first_frame: 1001, last_frame: 1048, fps: 24000.0 / 1001.0, format: clip.size });
+        let m = matched(&project, &clip);
+        assert_eq!((m.first_frame, m.last_frame, m.fps, m.format), (1001, 1048, 24000.0 / 1001.0, clip.size));
         // A still: just its size.
         let still = Source { size: Size { width: 640, height: 480 }, fps: None, range: None };
         assert_eq!(matched(&project, &still), Project { format: still.size, ..project.clone() });
@@ -344,5 +372,24 @@ mod tests {
         w.match_media(&doc, &id);
         assert!(w.message.as_ref().is_some_and(|(ok, m)| !ok && m.contains("Can't match")));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn save_as_defaults_keeps_the_settings_being_edited_once() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let mut w = ProjectSettings::default();
+        w.save_defaults();
+        assert_eq!(w.take_defaults(), None, "not open");
+        w.open(&doc);
+        if let Some(d) = &mut w.draft {
+            (d.fps, d.first_frame, d.last_frame) = (25.0, 10, 5);
+        }
+        w.save_defaults();
+        let kept = w.take_defaults().unwrap();
+        assert_eq!((kept.fps, kept.first_frame, kept.last_frame), (25.0, 10, 10), "tidied as Apply does");
+        assert_eq!(w.take_defaults(), None, "once");
+        assert_eq!(doc.graph.project, Project::default(), "the project itself is unchanged");
+        w.apply(&mut doc);
+        assert_eq!(doc.graph.project.fps, 25.0);
     }
 }

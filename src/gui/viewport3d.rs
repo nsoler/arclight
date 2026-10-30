@@ -15,7 +15,9 @@
 //! short of the poles), ⇧ + middle-drag pans, scroll or ⌃ + middle-drag
 //! zooms toward the pointer; on a trackpad two-finger scroll orbits, ⇧ pans,
 //! pinch or ⌃ zooms; with "emulate 3-button mouse", Alt + left-drag stands
-//! in for the middle button. Keys (over the viewport, when no gizmo gesture
+//! in for the middle button. Preferences ▸ 3D view can make two-finger
+//! scroll pan (⇧ orbits), zoom toward the middle, and turn the zoom around
+//! (see [`Navigation`]). Keys (over the viewport, when no gizmo gesture
 //! owns them): 1 / 3 / 7 front / right / top (⌃: the opposite side), 5
 //! perspective / orthographic, 0 through the selected camera, spot or area
 //! light (else the scene's first camera), or back out, 2 / 4 / 6 / 8
@@ -853,6 +855,70 @@ fn streak(pt: &Particle, times: &[f64], fps: f64) -> Vec<Vec3> {
     times.iter().map(|t| pt.moved(t / fps).0).collect()
 }
 
+/// How the mouse and trackpad navigate the view (Preferences ▸ 3D view;
+/// the defaults are as it always has).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Navigation {
+    /// Alt + left-drag navigates, as Blender's "emulate 3-button mouse".
+    pub emulate_three_button: bool,
+    /// Two-finger scroll pans (⇧ orbits) rather than orbits (⇧ pans).
+    pub trackpad_pans: bool,
+    /// Zoom toward the pointer, else toward the middle of the view.
+    pub zoom_to_pointer: bool,
+    /// The wheel, ⌃ + scroll and ⌃ + middle-drag zoom the other way.
+    pub invert_zoom: bool,
+}
+
+impl Default for Navigation {
+    fn default() -> Self {
+        Navigation { emulate_three_button: false, trackpad_pans: false, zoom_to_pointer: true, invert_zoom: false }
+    }
+}
+
+/// What a scroll does to the view.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Scroll {
+    /// Zoom by this factor (below 1: closer).
+    Zoom(f64),
+    Pan(Vec2),
+    Orbit(f64, f64),
+}
+
+impl Navigation {
+    /// What a scroll of `delta` does: a wheel zooms; trackpad fingers (and
+    /// their momentum) orbit, ⇧ pan, ⌃ zoom (orbit and pan swapped by
+    /// `trackpad_pans`). When the platform doesn't say, line steps mean a
+    /// wheel.
+    fn scroll(&self, unit: egui::MouseWheelUnit, delta: Vec2, source: egui::MouseWheelSource, mods: egui::Modifiers) -> Scroll {
+        let wheel = match source {
+            egui::MouseWheelSource::Wheel => true,
+            egui::MouseWheelSource::Trackpad | egui::MouseWheelSource::Momentum => false,
+            egui::MouseWheelSource::Unknown => unit != egui::MouseWheelUnit::Point,
+        };
+        let turn = if self.invert_zoom { -1.0 } else { 1.0 };
+        if wheel {
+            let steps = if unit == egui::MouseWheelUnit::Point { delta.y as f64 / 50.0 } else { delta.y as f64 };
+            Scroll::Zoom(0.85f64.powf(steps * turn))
+        } else if mods.command || mods.ctrl {
+            Scroll::Zoom((-delta.y as f64 * 0.01 * turn).exp())
+        } else if mods.shift != self.trackpad_pans {
+            Scroll::Pan(-delta)
+        } else {
+            Scroll::Orbit(-delta.x as f64, -delta.y as f64)
+        }
+    }
+
+    /// The factor ⌃ + middle-drag by `dy` zooms by.
+    fn drag_zoom(&self, dy: f32) -> f64 {
+        (dy as f64 * 0.01 * if self.invert_zoom { -1.0 } else { 1.0 }).exp()
+    }
+
+    /// Where a zoom goes toward: the pointer at `at`, or the middle of `rect`.
+    fn zoom_toward(&self, at: Pos2, rect: Rect) -> Pos2 {
+        if self.zoom_to_pointer { at } else { rect.center() }
+    }
+}
+
 /// The camera and frame size that render the cards for projector `p` at
 /// `pixels`, matching what it draws: the scene camera through it; the free
 /// camera; for orthographic, a long lens from far away (as good as flat).
@@ -887,11 +953,14 @@ pub struct Viewport3d {
     /// pointer.
     light_drag: Option<(String, LightHandle)>,
     light_hot: Option<LightHandle>,
-    /// Alt + left-drag navigates, as Blender's "emulate 3-button mouse".
-    pub emulate_three_button: bool,
+    /// How the mouse and trackpad navigate (Preferences ▸ 3D view).
+    pub nav: Navigation,
     /// The view a project without a saved one starts with (the saved view
     /// preferences), and the Solid / Lit for one that never chose.
     pub new_view: ViewCam,
+    /// Solid or Lit for projects without their own view, over the last
+    /// used one in `new_view` (Preferences ▸ 3D view); None: as `new_view`.
+    pub default_shading: Option<Shading>,
     worker: Option<SceneWorker>,
     scene: Option<Arc<Scene>>,
     /// What was last asked of the worker (see [`Ask`]).
@@ -939,8 +1008,9 @@ impl Default for Viewport3d {
             format: Size { width: 1920, height: 1080 },
             light_drag: None,
             light_hot: None,
-            emulate_three_button: false,
+            nav: Navigation::default(),
             new_view: ViewCam::default(),
+            default_shading: None,
             worker: None,
             scene: None,
             asked: None,
@@ -1206,15 +1276,15 @@ impl Viewport3d {
         let p = self.view.projector(rect);
         let (mods, events) = ui.input(|i| (i.modifiers, i.raw.events.clone()));
         let middle = resp.dragged_by(PointerButton::Middle);
-        let emulated = self.emulate_three_button && !blocked && resp.dragged_by(PointerButton::Primary) && mods.alt;
+        let emulated = self.nav.emulate_three_button && !blocked && resp.dragged_by(PointerButton::Primary) && mods.alt;
         if middle || emulated {
             let d = resp.drag_delta();
             if mods.shift {
                 self.leave_camera();
                 self.view.pan(d, &p);
             } else if mods.command || mods.ctrl {
-                let at = resp.interact_pointer_pos().unwrap_or(rect.center());
-                self.view.zoom_at((d.y as f64 * 0.01).exp(), at, &p);
+                let at = self.nav.zoom_toward(resp.interact_pointer_pos().unwrap_or(rect.center()), rect);
+                self.view.zoom_at(self.nav.drag_zoom(d.y), at, &p);
             } else {
                 self.leave_camera();
                 self.view.orbit(d.x as f64, d.y as f64);
@@ -1223,28 +1293,19 @@ impl Viewport3d {
         if !resp.hovered() {
             return;
         }
-        let at = ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.center());
+        let at = self.nav.zoom_toward(ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.center()), rect);
         for e in events {
             if let egui::Event::MouseWheel { unit, delta, source, modifiers, .. } = e {
-                // A wheel zooms; trackpad fingers (and their momentum)
-                // orbit, ⇧ pan, ⌃ zoom. When the platform doesn't say,
-                // line steps mean a wheel.
-                let wheel = match source {
-                    egui::MouseWheelSource::Wheel => true,
-                    egui::MouseWheelSource::Trackpad | egui::MouseWheelSource::Momentum => false,
-                    egui::MouseWheelSource::Unknown => unit != egui::MouseWheelUnit::Point,
-                };
-                if wheel {
-                    let steps = if unit == egui::MouseWheelUnit::Point { delta.y as f64 / 50.0 } else { delta.y as f64 };
-                    self.view.zoom_at(0.85f64.powf(steps), at, &p);
-                } else if modifiers.command || modifiers.ctrl {
-                    self.view.zoom_at((-delta.y as f64 * 0.01).exp(), at, &p);
-                } else if modifiers.shift {
-                    self.leave_camera();
-                    self.view.pan(-delta, &p);
-                } else {
-                    self.leave_camera();
-                    self.view.orbit(-delta.x as f64, -delta.y as f64);
+                match self.nav.scroll(unit, delta, source, modifiers) {
+                    Scroll::Zoom(f) => self.view.zoom_at(f, at, &p),
+                    Scroll::Pan(d) => {
+                        self.leave_camera();
+                        self.view.pan(d, &p);
+                    }
+                    Scroll::Orbit(x, y) => {
+                        self.leave_camera();
+                        self.view.orbit(x, y);
+                    }
                 }
             }
         }
@@ -1303,6 +1364,12 @@ impl Viewport3d {
         }
     }
 
+    /// The view a project without its own starts with: `new_view`, with
+    /// the preferred Solid / Lit over its last used one.
+    pub fn fresh_view(&self) -> ViewCam {
+        ViewCam { shading: self.default_shading.or(self.new_view.shading), ..self.new_view }
+    }
+
     /// Take the view saved with a project when one is opened (or framing
     /// its first scene, when none was saved).
     fn restore(&mut self, doc: &Doc) {
@@ -1312,11 +1379,11 @@ impl Viewport3d {
         self.restored = Some(doc.path.clone());
         match doc.graph.view.0.get("viewport3d").and_then(|v| serde_json::from_value::<ViewCam>(v.clone()).ok()) {
             Some(v) => {
-                self.view = ViewCam { shading: v.shading.or(self.new_view.shading), ..v };
+                self.view = ViewCam { shading: v.shading.or(self.fresh_view().shading), ..v };
                 self.frame_first_scene = false;
             }
             None => {
-                self.view = self.new_view;
+                self.view = self.fresh_view();
                 self.frame_first_scene = true;
             }
         }
@@ -1342,7 +1409,7 @@ impl Viewport3d {
     fn select(&mut self, ui: &egui::Ui, resp: &Response, doc: &mut Doc, p: &Projector) {
         let Some(scene) = self.scene.clone() else { return };
         let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
-        if self.emulate_three_button && alt {
+        if self.nav.emulate_three_button && alt {
             return;
         }
         if resp.clicked_by(PointerButton::Primary) {
@@ -2087,6 +2154,48 @@ mod tests {
 
     fn rect() -> Rect {
         Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(800.0, 450.0))
+    }
+
+    #[test]
+    fn navigation_preferences_change_what_scrolls_do() {
+        use egui::{Modifiers, MouseWheelSource as Src, MouseWheelUnit as Unit};
+        let d = Vec2::new(3.0, 10.0);
+        let shift = Modifiers { shift: true, ..Modifiers::NONE };
+        let ctrl = Modifiers { ctrl: true, ..Modifiers::NONE };
+        let n = Navigation::default();
+        // As always: a wheel zooms, fingers orbit, ⇧ pan, ⌃ zoom.
+        assert_eq!(n.scroll(Unit::Line, d, Src::Wheel, Modifiers::NONE), Scroll::Zoom(0.85f64.powf(10.0)));
+        assert_eq!(n.scroll(Unit::Line, d, Src::Unknown, Modifiers::NONE), Scroll::Zoom(0.85f64.powf(10.0)), "line steps: a wheel");
+        assert_eq!(n.scroll(Unit::Point, d, Src::Trackpad, Modifiers::NONE), Scroll::Orbit(-3.0, -10.0));
+        assert_eq!(n.scroll(Unit::Point, d, Src::Momentum, shift), Scroll::Pan(-d));
+        assert_eq!(n.scroll(Unit::Point, d, Src::Trackpad, ctrl), Scroll::Zoom((-0.1f64).exp()));
+        assert_eq!((n.drag_zoom(10.0), n.zoom_toward(Pos2::new(5.0, 6.0), rect())), (0.1f64.exp(), Pos2::new(5.0, 6.0)));
+        // Fingers pan (⇧ orbits); zooms turned around, toward the middle.
+        let p = Navigation { trackpad_pans: true, invert_zoom: true, zoom_to_pointer: false, ..n };
+        assert_eq!(p.scroll(Unit::Point, d, Src::Trackpad, Modifiers::NONE), Scroll::Pan(-d));
+        assert_eq!(p.scroll(Unit::Point, d, Src::Trackpad, shift), Scroll::Orbit(-3.0, -10.0));
+        assert_eq!(p.scroll(Unit::Line, d, Src::Wheel, Modifiers::NONE), Scroll::Zoom(0.85f64.powf(-10.0)));
+        assert_eq!(p.scroll(Unit::Point, d, Src::Trackpad, ctrl), Scroll::Zoom(0.1f64.exp()));
+        assert_eq!((p.drag_zoom(10.0), p.zoom_toward(Pos2::new(5.0, 6.0), rect())), ((-0.1f64).exp(), rect().center()));
+    }
+
+    #[test]
+    fn the_preferred_shading_starts_projects_without_their_own() {
+        let mut v = Viewport3d::default();
+        assert_eq!(v.fresh_view(), ViewCam::default(), "auto, as always");
+        v.new_view.shading = Some(Shading::Lit);
+        assert_eq!(v.fresh_view().shading, Some(Shading::Lit), "auto: the last used");
+        v.default_shading = Some(Shading::Solid);
+        assert_eq!(v.fresh_view().shading, Some(Shading::Solid), "the preference over the last used");
+        // A project's own view keeps its own shading.
+        let mut doc = Doc::new(arclight::graph::Graph::default(), None);
+        v.restore(&doc);
+        assert_eq!(v.view.shading, Some(Shading::Solid));
+        let own = ViewCam { shading: Some(Shading::Lit), ..ViewCam::default() };
+        doc.graph.view.0.insert("viewport3d".into(), serde_json::to_value(own).unwrap());
+        doc.path = Some("own.arc".into());
+        v.restore(&doc);
+        assert_eq!(v.view.shading, Some(Shading::Lit));
     }
 
     fn close(a: Pos2, b: Pos2) -> bool {

@@ -67,7 +67,12 @@ fn main() -> eframe::Result {
                 std::process::exit(1);
             }
         },
-        None => Doc::new(starter_graph(), None),
+        // The example project, unless new projects have been given
+        // settings of their own (Preferences ▸ New project).
+        None => match Settings::load().new_project {
+            p if p == arclight::config::NewProjectPrefs::default() => Doc::new(starter_graph(), None),
+            p => Doc::blank(new_project(&p)),
+        },
     };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -92,6 +97,30 @@ fn app_icon() -> egui::IconData {
     let png = include_bytes!("../../assets/arclight.png");
     let img = image::load_from_memory(png).expect("bundled icon").to_rgba8();
     egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() }
+}
+
+/// A project as Preferences ▸ New project says.
+fn new_project(p: &arclight::config::NewProjectPrefs) -> arclight::graph::Project {
+    let mut project = arclight::graph::Project::default();
+    (project.first_frame, project.last_frame, project.fps) = (p.first_frame, p.last_frame.max(p.first_frame), p.fps);
+    project.format = arclight::image::Size { width: p.width.max(1), height: p.height.max(1) };
+    project
+}
+
+/// [`new_project`]'s way back: `project`'s settings as the defaults.
+fn new_project_prefs(project: &arclight::graph::Project) -> arclight::config::NewProjectPrefs {
+    arclight::config::NewProjectPrefs { width: project.format.width, height: project.format.height, fps: project.fps, first_frame: project.first_frame, last_frame: project.last_frame }
+}
+
+/// Set the 3D view's navigation and default shading as Preferences ▸ 3D
+/// view says.
+fn apply_view3d(p: &arclight::config::View3dPrefs, v: &mut viewport3d::Viewport3d) {
+    v.nav = viewport3d::Navigation { emulate_three_button: p.emulate_three_button, trackpad_pans: p.trackpad == "pan", zoom_to_pointer: p.zoom_to_pointer, invert_zoom: p.invert_zoom };
+    v.default_shading = match p.default_shading.as_str() {
+        "solid" => Some(viewport3d::Shading::Solid),
+        "lit" => Some(viewport3d::Shading::Lit),
+        _ => None,
+    };
 }
 
 /// The view preferences `viewer` shows now.
@@ -228,9 +257,10 @@ impl App {
         let eval = Arc::new(std::sync::Mutex::new(arclight::graph::Evaluator::new()));
         let mut viewer = Viewer::default();
         apply_prefs(&prefs, &mut viewer);
+        apply_view3d(&settings.view3d, &mut viewer.viewport3d);
         // Until a project's own is restored (so the first frames don't
         // read as a change and save the defaults over them).
-        viewer.viewport3d.view = viewer.viewport3d.new_view;
+        viewer.viewport3d.view = viewer.viewport3d.fresh_view();
         let mut app = App {
             doc,
             editor: NodeEditor::default(),
@@ -299,6 +329,8 @@ impl App {
         let f = &self.settings.files;
         dialogs::set_folders(dialogs::Folders { project: f.project_dir.clone(), read: f.read_dir.clone(), write: f.write_dir.clone() });
         self.recent.paths.truncate(f.recent_count);
+        self.doc.undo_levels = f.undo_levels;
+        apply_view3d(&self.settings.view3d, &mut self.viewer.viewport3d);
     }
 
     /// Settings from the Preferences window: kept, saved and applied.
@@ -512,6 +544,7 @@ impl App {
         self.transport = Transport::default();
         self.transport.frame = doc.graph.project.first_frame;
         self.doc = doc;
+        self.doc.undo_levels = self.settings.files.undo_levels;
         self.editor.fit();
         self.curves = CurveEditor::default();
         self.viewer.fit();
@@ -541,7 +574,7 @@ impl App {
         if self.doc.dirty {
             self.ask = Some(Ask::Discard(Then::New));
         } else {
-            self.load(Doc::new(Graph::default(), None));
+            self.load(Doc::blank(new_project(&self.settings.new_project)));
         }
     }
 
@@ -683,7 +716,7 @@ impl App {
                 }
             }
             (Ask::Close, _) => self.close_now(ctx),
-            (Ask::Discard(Then::New), _) => self.load(Doc::new(Graph::default(), None)),
+            (Ask::Discard(Then::New), _) => self.load(Doc::blank(new_project(&self.settings.new_project))),
             (Ask::Discard(Then::Open), _) => self.choose(FileFor::Open),
             (Ask::Discard(Then::Load(path)), _) => match Graph::from_file(&path) {
                 Ok(g) => self.load(Doc::new(g, Some(path))),
@@ -1309,6 +1342,10 @@ impl eframe::App for App {
         self.about_dialog(&ctx);
         self.help.ui(&ctx);
         self.project_settings.ui(&ctx, &mut self.doc);
+        if let Some(project) = self.project_settings.take_defaults() {
+            let settings = Settings { new_project: new_project_prefs(&project), ..self.settings.clone() };
+            self.set_settings(&ctx, settings);
+        }
         if let Some(settings) = self.preferences.ui(&ctx) {
             self.set_settings(&ctx, settings);
         }
@@ -1455,6 +1492,23 @@ fn starter_graph() -> Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// New projects and the 3D view as the preferences say; their defaults
+    /// as without settings.
+    #[test]
+    fn new_project_and_3d_view_preferences_apply() {
+        use arclight::config::{NewProjectPrefs, View3dPrefs};
+        assert_eq!(new_project(&NewProjectPrefs::default()), arclight::graph::Project::default());
+        let p = NewProjectPrefs { width: 1280, height: 720, fps: 25.0, first_frame: 1001, last_frame: 1100 };
+        assert_eq!(new_project_prefs(&new_project(&p)), p, "Save as defaults keeps what New starts with");
+        assert_eq!(new_project(&NewProjectPrefs { last_frame: 3, first_frame: 9, width: 0, ..p.clone() }).last_frame, 9);
+        let mut v = viewport3d::Viewport3d::default();
+        apply_view3d(&View3dPrefs::default(), &mut v);
+        assert_eq!((v.nav, v.default_shading), (viewport3d::Navigation::default(), None));
+        apply_view3d(&View3dPrefs { emulate_three_button: true, trackpad: "pan".into(), zoom_to_pointer: false, invert_zoom: true, default_shading: "lit".into() }, &mut v);
+        assert_eq!(v.nav, viewport3d::Navigation { emulate_three_button: true, trackpad_pans: true, zoom_to_pointer: false, invert_zoom: true });
+        assert_eq!(v.default_shading, Some(viewport3d::Shading::Lit));
+    }
 
     /// An autosave goes beside the project as <name>.autosave, never over
     /// it; one not saved yet in the state dir; a folder it can't write to

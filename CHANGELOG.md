@@ -11,6 +11,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.66 — 2026-10-29
+
+- **Preferences: New project, Undo levels and 3D view** (Dev2):
+  Preferences ▸ New project sets the format, frame rate and frame range
+  File ▸ New starts with (Project Settings ▸ Save as defaults sets them
+  from the open project); Files ▸ Undo levels now limits undo; 3D view:
+  emulate a 3-button mouse, two-finger scroll orbits or pans, zoom toward
+  the pointer or the middle, invert zoom, and the shading projects
+  without their own view start with.
+
 ## 0.9.65 — 2026-10-29
 
 - **Preferences** (Dev1): **Edit ▸ Preferences** (Ctrl/⌘+,), saved in

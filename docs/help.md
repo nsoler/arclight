@@ -503,6 +503,13 @@ defaults**.
   unsaved project's to `~/.local/state/arclight/autosave/`), never over
   the project, and removes it when you save; **File ▸ Open Recent** shows
   the last N projects; **Undo levels**; the folders file dialogs start in.
+- **New project:** the format, frame rate and frames File ▸ New starts
+  with (or use **Save as defaults** in Project Settings).
+- **3D view:** **Emulate 3-button mouse** (Alt + left-drag navigates);
+  two-finger scroll orbits (⇧ pans) or pans (⇧ orbits); zoom toward the
+  pointer or the middle of the view; **Invert zoom** (wheel, ⌃ + scroll,
+  ⌃ + middle-drag); **Shading** for projects without their own 3D view:
+  Automatic (as last chosen, else Lit with lights), Solid or Lit.
 
 ## Undo
 
