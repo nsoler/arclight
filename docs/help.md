@@ -352,6 +352,8 @@ color).
   fast moves); each one costs about a render. Viewing the render in the
   3D view shows the blur too once the view settles (up to 8 samples;
   sharp while you move it). Particle dots streak over the same shutter.
+  Looking through a moving camera or light, its own motion blurs the
+  view too.
 - **Holdout** on a Cube, Sphere, Cylinder, Plane or Read Geo makes it draw
   nothing but cut out what is behind it (alpha 0 there); its matte still
   shows where it is.

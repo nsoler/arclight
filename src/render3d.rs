@@ -606,13 +606,15 @@ pub fn render_preview(scene: &Scene, cam: &Camera, format: Size, preview: Previe
 }
 
 /// [`render_preview`] with motion blur: the mean of previews at each of
-/// `blur`'s times, jittered as [`render_blurred`] does (the camera stays:
-/// it's the view's). No blur (or one time): [`render_preview`].
+/// `blur`'s times, jittered and with the camera moving between its
+/// frames' as [`render_blurred`] does (the 3D view gives its own camera at
+/// every frame unless it looks through a scene's). No blur (or one time):
+/// [`render_preview`].
 pub fn render_preview_blurred(scene: &Scene, cam: &Camera, format: Size, preview: Preview, blur: Option<&Blur>) -> Image {
     let Some(blur) = blur.filter(|b| b.times.len() > 1) else { return render_preview(scene, cam, format, preview) };
     let frames: Vec<(i64, &Scene)> = blur.frames.iter().map(|f| (f.0, f.1)).collect();
     let sum = blur_sum(&blur.times, blur.jitter, |t, cell| {
-        let mut img = preview_cell(&scene.at_time(&frames, t), cam, format, preview, cell);
+        let mut img = preview_cell(&scene.at_time(&frames, t), &blur.camera(cam, t), format, preview, cell);
         img.planes.clear();
         img
     });

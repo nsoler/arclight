@@ -174,6 +174,10 @@ pub struct SceneRequest {
     /// With a Scanline Render's motion blur (the view has settled): see
     /// [`blurred`].
     pub blur: bool,
+    /// What the render camera looks through (and the project's frame size,
+    /// for a light): with blur, it's found again in the scene at each frame
+    /// round the shutter, so its own motion blurs the view too.
+    pub through: Option<(crate::viewport3d::Through, arclight::image::Size)>,
     /// Where the render goes on screen (echoed back).
     pub rect: Option<eframe::egui::Rect>,
 }
@@ -225,10 +229,10 @@ impl SceneWorker {
                             };
                             let now = shown(s);
                             let (times, then) = if blur_times.is_empty() { Default::default() } else { blurred(&mut eval, &req.graph, &req.node, req.frame) };
-                            let then: Vec<(i64, arclight::scene::Scene)> = then.iter().map(|(k, s)| (*k, shown(s))).collect();
+                            let then: Vec<(i64, arclight::scene::Scene, arclight::geom::Camera)> = then.iter().map(|(k, s)| (*k, shown(s), frame_camera(cam, s, req.through.as_ref()))).collect();
                             // Jittered as the render is (Jitter shutter).
                             let jitter = req.graph.node(&req.node).is_none_or(|n| arclight::ops::blur_jitter(&n.params));
-                            let blur = arclight::render3d::Blur { times, frames: std::iter::once((0, &now, cam.clone())).chain(then.iter().map(|(k, s)| (*k, s, cam.clone()))).collect(), jitter };
+                            let blur = arclight::render3d::Blur { times, frames: std::iter::once((0, &now, cam.clone())).chain(then.iter().map(|(k, s, c)| (*k, s, c.clone()))).collect(), jitter };
                             Some(Arc::new(arclight::render3d::render_preview_blurred(&now, cam, *format, req.preview, Some(&blur))))
                         }
                         _ => None,
@@ -269,6 +273,12 @@ fn blurred(eval: &mut Evaluator, graph: &Graph, id: &str, frame: i64) -> (Vec<f6
     let (lo, hi) = times.iter().fold((0.0f64, 0.0f64), |(lo, hi), &t| (lo.min(t), hi.max(t)));
     let then = (lo.floor() as i64..=hi.ceil() as i64).filter(|k| *k != 0).filter_map(|k| Some((k, scene_of(eval, graph, id, frame + k).ok()??))).collect();
     (times, then)
+}
+
+/// The render camera `cam` at another frame's `scene`: what it looks
+/// through, found there, else (the view's own camera) unchanged.
+fn frame_camera(cam: &arclight::geom::Camera, scene: &arclight::scene::Scene, through: Option<&(crate::viewport3d::Through, arclight::image::Size)>) -> arclight::geom::Camera {
+    through.and_then(|(t, format)| t.camera_in(scene, *format)).unwrap_or_else(|| cam.clone())
 }
 
 /// The shutter times of [`blurred`] alone (no scenes evaluated).
@@ -364,6 +374,35 @@ mod tests {
         let partly = |img: &Image| (0..64).filter(|&x| (0.02..0.98).contains(&img.at(x, 16)[3])).count();
         assert!(partly(&sharp) <= 2 && partly(&soft) >= 6, "{} {}", partly(&sharp), partly(&soft));
         assert_eq!(render_preview_blurred(&now, &cam, size, Preview::Solid, None).pixels, sharp.pixels, "unblurred as before");
+    }
+
+    /// Looking through a moving camera at a still card, the view blurs as
+    /// the render does; the view's own camera doesn't move.
+    #[test]
+    fn a_looked_through_camera_s_motion_blurs_the_3d_view() {
+        use crate::viewport3d::Through;
+        use arclight::render3d::{render_preview, render_preview_blurred, Blur, Preview};
+        let graph: Graph = serde_json::from_value(serde_json::json!({ "nodes": [
+            { "id": "plate", "op": "constant", "params": { "width": 16, "height": 16 } },
+            { "id": "cam", "op": "camera", "params": { "focal": 18, "translate": { "keys": [[1, [7.0, 0, 0]], [10, [-7.0625, 0, 0]]], "interp": "linear" } } },
+            { "id": "card1", "op": "card", "inputs": ["plate"], "params": { "translate": [0, 0, -5], "size": [3, 3] } },
+            { "id": "r", "op": "scanline_render", "inputs": ["card1", "cam", ""], "params": { "motion_blur": 4, "shutter": 0.5 } },
+        ] })).unwrap();
+        let mut eval = Evaluator::new();
+        let now = scene_of(&mut eval, &graph, "r", 5).unwrap().unwrap();
+        let (times, then) = blurred(&mut eval, &graph, "r", 5);
+        let (cam, size) = (now.cameras[0].clone(), arclight::image::Size { width: 64, height: 32 });
+        let through = (Through::Camera(0), size);
+        let preview = |through: Option<&(Through, arclight::image::Size)>| {
+            let frames = std::iter::once((0, &*now, cam.clone())).chain(then.iter().map(|(k, s)| (*k, &**s, frame_camera(&cam, s, through)))).collect();
+            render_preview_blurred(&now, &cam, size, Preview::Solid, Some(&Blur { times: times.clone(), frames, jitter: true }))
+        };
+        let partly = |img: &Image| (0..64).filter(|&x| (0.02..0.98).contains(&img.at(x, 16)[3])).count();
+        let (sharp, own, moving) = (render_preview(&now, &cam, size, Preview::Solid), preview(None), preview(Some(&through)));
+        assert!(partly(&sharp) <= 2 && partly(&own) <= 2, "the view's camera stays: {} {}", partly(&sharp), partly(&own));
+        assert!(partly(&moving) >= 6, "the camera's motion blurs: {}", partly(&moving));
+        assert_ne!(frame_camera(&cam, &then[0].1, Some(&through)).world, cam.world, "found at the frame before");
+        assert_eq!(frame_camera(&cam, &then[0].1, Some(&(Through::Camera(3), size))).world, cam.world, "or the view's when it's gone");
     }
 
     #[test]

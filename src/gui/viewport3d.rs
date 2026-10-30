@@ -757,6 +757,17 @@ pub enum Through {
     Light(String),
 }
 
+impl Through {
+    /// Its camera in `scene` (a light's for frames of `format`), if it's
+    /// there.
+    pub fn camera_in(&self, scene: &Scene, format: Size) -> Option<geom::Camera> {
+        match self {
+            Through::Camera(i) => scene.cameras.get(*i).cloned(),
+            Through::Light(n) => light_camera(scene.lights.iter().find(|l| &l.node == n)?, format),
+        }
+    }
+}
+
 /// A camera at a spot or area light, looking the way it shines (for aiming
 /// it), for frames of `format`: a spot's cone just fits the frame's height;
 /// an area light sees 90° high. None for other lights.
@@ -1049,11 +1060,7 @@ impl Viewport3d {
 
     /// The camera to look through (`look_through`, if it's still there).
     fn through_camera(&self) -> Option<geom::Camera> {
-        let s = self.scene.as_ref()?;
-        match self.look_through.as_ref()? {
-            Through::Camera(i) => s.cameras.get(*i).cloned(),
-            Through::Light(n) => light_camera(s.lights.iter().find(|l| &l.node == n)?, self.format),
-        }
+        self.look_through.as_ref()?.camera_in(self.scene.as_ref()?, self.format)
     }
 
     /// What's looked through, by name ("" for an unnamed camera).
@@ -1133,10 +1140,12 @@ impl Viewport3d {
             self.graph = Some((doc.revision, Arc::new(doc.graph.clone())));
         }
         let graph = self.graph.as_ref().unwrap().1.clone();
+        // A looked-through camera moves within the blur's shutter too.
+        let looking = through.is_some().then(|| self.look_through.clone().map(|t| (t, self.format))).flatten();
         let render = self.scene.is_some().then(|| render_camera(&self.view, p, through, pixels));
         if let Some(w) = &self.worker {
             // A render's motion blur only once the view has settled.
-            w.request(SceneRequest { graph, node, frame, render, solid: !self.view.wireframe, preview, blur: scale == 1.0, rect: Some(target) });
+            w.request(SceneRequest { graph, node, frame, render, solid: !self.view.wireframe, preview, blur: scale == 1.0, through: looking, rect: Some(target) });
         }
         self.asked = Some(ask);
     }

@@ -11,6 +11,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.61 — 2026-10-29
+
+- **The 3D view's motion blur preview includes a looked-through camera's
+  own motion** (Dev2): looking through a moving camera or light, the
+  settled preview blurs by its motion across the shutter, as Scanline
+  Render does.
+
 ## 0.9.60 — 2026-10-29
 
 - **Scanline Render: Jitter shutter** (Dev1): on by default. Off, every
