@@ -283,8 +283,13 @@ selected object.
   **Up axis** (Y down, Z forward, the default, as COLMAP / INRIA
   `.ply` and `.splat` captures come and `.spz` is read; y for captures
   already Y up; z for Z-up tools), Translate / Rotate / Scale, **Opacity** and
-  a **Color detail** cap (lower is faster). A sample is in
-  `examples/geo/splats.ply`. Splats render in Scanline Render with the
+  a **Color detail** cap (lower is faster). Samples: a small synthetic
+  one in `examples/geo/splats.ply`, and a real capture,
+  `examples/geo/hornedlizard.spz` (a horned lizard statue, 786 k splats,
+  from Niantic's SPZ repository, MIT license); open
+  `examples/hornedlizard.json` for it set up with a Splat Crop (the
+  capture has a far-off background shell around it), a Camera and a
+  Scanline Render. Splats render in Scanline Render with the
   rest of the scene: in front of, behind or through cards and meshes by
   depth; holdouts cut them out, and **Holdout** on a Read Splat makes it
   cut out what's behind it. They light themselves (no shadows from

@@ -1,0 +1,19 @@
+{
+  "project": { "folder": ".", "format": { "width": 1280, "height": 720 },
+               "fps": 24.0, "first_frame": 1, "last_frame": 1 },
+  "nodes": [
+    { "id": "lizard", "op": "read_splat",
+      "params": { "file": "geo/hornedlizard.spz" } },
+
+    { "id": "crop", "op": "splat_crop", "inputs": ["lizard"],
+      "params": { "shape": "box", "size": [6, 6, 6] } },
+
+    { "id": "camera", "op": "camera",
+      "params": { "translate": [0, 1.5, 5], "rotate": [-15, 0, 0] } },
+
+    { "id": "render", "op": "scanline_render", "inputs": ["crop", "camera", ""],
+      "params": { "width": 1280, "height": 720 } },
+
+    { "id": "viewer", "op": "viewer", "inputs": ["render"] }
+  ]
+}

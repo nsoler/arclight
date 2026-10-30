@@ -12,6 +12,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.26 — 2026-10-30
+
+- A real Gaussian splat capture to try: `examples/geo/hornedlizard.spz`
+  (a horned lizard statue, 786 k splats, SH degree 3), from Niantic's
+  SPZ repository under its MIT license (notice in
+  `examples/geo/hornedlizard.LICENSE.txt`). `examples/hornedlizard.json`
+  opens it cropped (Splat Crop drops the capture's far-off background
+  shell), with a Camera and a Scanline Render.
+
 ## 0.10.25 — 2026-10-30
 
 - Player and edit keys (Space, J / K / L, arrows, Home / End, Delete, V,
