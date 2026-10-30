@@ -716,7 +716,7 @@ impl Properties {
                         } else if op == "read_geo" {
                             dialogs::pick(what, dialogs::filter(dialogs::new(), "3D geometry (OBJ, glTF)", GEO_EXTS))
                         } else if op == "read_splat" {
-                            dialogs::pick(what, dialogs::filter(dialogs::new(), "Gaussian splats (.ply)", &["ply"]))
+                            dialogs::pick(what, dialogs::filter(dialogs::new(), "Gaussian splats (.ply, .splat, .spz)", &["ply", "splat", "spz"]))
                         } else {
                             dialogs::pick(what, dialogs::filter(dialogs::new(), "Images & video", READ_EXTS))
                         };

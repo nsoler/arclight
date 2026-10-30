@@ -12,6 +12,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.13 — 2026-10-30
+
+- **Splats render 2–2.5× faster** (Dev2, splat plan S5): 1 M at
+  1920×1080 0.36 → 0.17 s, 3 M 0.97 → 0.38 s, by binning each splat only
+  into the tiles its ellipse reaches, sorted without a global sort. A
+  re-render of the same view (another pass, anti-aliasing, an edit
+  elsewhere) reuses the projected splats (3 M: 0.97 → 0.09 s). The 3D
+  view takes splat color from SH degree 0–1. Read Splat's Browse lists
+  `.ply`, `.splat` and `.spz`. Faint splat edges may differ by up to
+  about 1% alpha from 0.10.3–0.10.12.
+
 ## 0.10.12 — 2026-10-30
 
 - **Read Splat reads `.splat` and `.spz`** (Dev1, splat plan S5): the

@@ -608,11 +608,16 @@ fn mean_into(mut out: Image, sum: Image, n: usize) -> Image {
     out
 }
 
+/// The highest SH degree the 3D view's splats take their color from (the
+/// rest of a capture's view-dependent color is subtle, and slow).
+const PREVIEW_SH: u8 = 1;
+
 /// `scene`'s cards, meshes and splats through `cam`, one sample a pixel,
 /// the meshes shaded as `preview` says (Lit without lights is Solid, so
-/// nothing goes black): what the 3D viewport shows under its outlines.
+/// nothing goes black), the splats' color from SH up to [`PREVIEW_SH`]:
+/// what the 3D viewport shows under its outlines.
 pub fn render_preview(scene: &Scene, cam: &Camera, format: Size, preview: Preview) -> Image {
-    preview_cell(scene, cam, format, preview, None, splats::prepare(&scene.splats, cam, format).as_ref())
+    preview_cell(scene, cam, format, preview, None, splats::prepare_upto(&scene.splats, cam, format, PREVIEW_SH).as_ref())
 }
 
 /// [`render_preview`] with motion blur: the mean of previews at each of
@@ -625,11 +630,11 @@ pub fn render_preview_blurred(scene: &Scene, cam: &Camera, format: Size, preview
     let frames: Vec<(i64, &Scene)> = blur.frames.iter().map(|f| (f.0, f.1)).collect();
     // The splats projected once, for the times where neither they nor the
     // camera move.
-    let still = splats::prepare(&scene.splats, cam, format);
+    let still = splats::prepare_upto(&scene.splats, cam, format, PREVIEW_SH);
     let sum = blur_sum(&blur.times, blur.jitter, |t, cell| {
         let (now, c) = (scene.at_time(&frames, t), blur.camera(cam, t));
         let moved = c != *cam || now.splats.iter().zip(&scene.splats).any(|(a, b)| a.world != b.world);
-        let own = moved.then(|| splats::prepare(&now.splats, &c, format)).flatten();
+        let own = moved.then(|| splats::prepare_upto(&now.splats, &c, format, PREVIEW_SH)).flatten();
         let mut img = preview_cell(&now, &c, format, preview, cell, if moved { own.as_ref() } else { still.as_ref() });
         img.planes.clear();
         img

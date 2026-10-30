@@ -284,7 +284,11 @@ selected object.
   and a matte per Read Splat, and emission; no uv. An animated Read Splat
   motion-blurs. In the 3D
   view they show as dots while you orbit and render in full a moment
-  after you stop (a selected capture shows its box); click near a splat (its center) to select its Read Splat,
+  after you stop (a selected capture shows its box; the view uses only
+  the first color bands, a little less view-dependent shine, while
+  renders use all of them). Re-rendering the same view of a capture
+  (another pass, or an edit elsewhere in the scene) reuses its sorted
+  splats, so it's quick; click near a splat (its center) to select its Read Splat,
   and **F** frames splats too.
 - **Splat Crop** keeps a capture's splats inside a box or sphere
   (Center, Size, Rotate; **Invert** keeps those outside), to cut it down
