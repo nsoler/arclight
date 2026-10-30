@@ -177,6 +177,9 @@ pub struct SceneRequest {
     /// With a Scanline Render's motion blur (the view has settled): see
     /// [`blurred`].
     pub blur: bool,
+    /// Render the splats too (the view has settled; while it moves the
+    /// viewport draws their centers instead).
+    pub splats: bool,
     /// What the render camera looks through (and the project's frame size,
     /// for a light): with blur, it's found again in the scene at each frame
     /// round the shutter, so its own motion blurs the view too.
@@ -190,6 +193,8 @@ pub struct SceneResponse {
     /// The node's scene: None when it shows none (an image node).
     pub scene: Result<Option<Arc<arclight::scene::Scene>>, String>,
     pub render: Option<Arc<Image>>,
+    /// Whether `render` has the splats in it.
+    pub splats: bool,
     pub rect: Option<eframe::egui::Rect>,
     pub millis: f32,
     /// The shutter times (frames on from the frame) a settled view of a
@@ -220,15 +225,17 @@ impl SceneWorker {
                     let t0 = Instant::now();
                     let scene = scene_of(&mut eval, &req.graph, &req.node, req.frame);
                     let blur_times = if req.blur { view_blur_times(&req.graph, &req.node, req.frame) } else { Vec::new() };
-                    // Only cards and solid meshes are rendered; the viewport
-                    // draws the rest.
+                    // Only cards, solid meshes and (settled) splats are
+                    // rendered; the viewport draws the rest.
+                    let splats = req.splats && matches!(&scene, Ok(Some(s)) if !s.splats.is_empty());
                     let render = match (&scene, &req.render) {
-                        (Ok(Some(s)), Some((cam, format))) if !s.cards.is_empty() || (req.solid && !s.meshes.is_empty()) => {
+                        (Ok(Some(s)), Some((cam, format))) if !s.cards.is_empty() || (req.solid && !s.meshes.is_empty()) || splats => {
                             let lit = matches!(req.preview, arclight::render3d::Preview::Lit { .. });
                             let shown = |s: &arclight::scene::Scene| {
                                 let meshes = if req.solid { s.meshes.clone() } else { Vec::new() };
                                 let lights = if lit { s.lights.clone() } else { Vec::new() };
-                                arclight::scene::Scene { cards: s.cards.clone(), meshes, lights, ..Default::default() }
+                                let splats = if splats { s.splats.clone() } else { Vec::new() };
+                                arclight::scene::Scene { cards: s.cards.clone(), meshes, lights, splats, ..Default::default() }
                             };
                             let now = shown(s);
                             let (times, then) = if blur_times.is_empty() { Default::default() } else { blurred(&mut eval, &req.graph, &req.node, req.frame) };
@@ -240,7 +247,8 @@ impl SceneWorker {
                         }
                         _ => None,
                     };
-                    let resp = SceneResponse { node: req.node, scene, render, rect: req.rect, millis: t0.elapsed().as_secs_f32() * 1000.0, blur_times };
+                    let splats = splats && render.is_some();
+                    let resp = SceneResponse { node: req.node, scene, render, splats, rect: req.rect, millis: t0.elapsed().as_secs_f32() * 1000.0, blur_times };
                     if resp_tx.send(resp).is_err() {
                         break;
                     }
@@ -406,6 +414,38 @@ mod tests {
         assert!(partly(&moving) >= 6, "the camera's motion blurs: {}", partly(&moving));
         assert_ne!(frame_camera(&cam, &then[0].1, Some(&through)).world, cam.world, "found at the frame before");
         assert_eq!(frame_camera(&cam, &then[0].1, Some(&(Through::Camera(3), size))).world, cam.world, "or the view's when it's gone");
+    }
+
+    /// Splats render only once the view has settled (asked for), and the
+    /// answer says so; unsettled, a splats-only scene renders nothing (the
+    /// viewport draws their centers).
+    #[test]
+    fn settled_views_render_the_splats() {
+        let file = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/geo/splats.ply");
+        let graph: Graph = serde_json::from_value(serde_json::json!({ "nodes": [
+            { "id": "cap", "op": "read_splat", "params": { "file": file, "translate": [0, 0, -6] } },
+        ] }))
+        .unwrap();
+        let worker = SceneWorker::spawn(eframe::egui::Context::default());
+        let size = arclight::image::Size { width: 64, height: 32 };
+        let cam = arclight::geom::Camera { focal: 18.0, ..Default::default() };
+        let ask = |splats: bool| {
+            worker.request(SceneRequest { graph: Arc::new(graph.clone()), node: "cap".into(), frame: 1, render: Some((cam.clone(), size)), solid: true, preview: arclight::render3d::Preview::Solid, blur: splats, splats, through: None, rect: None });
+            let t0 = Instant::now();
+            loop {
+                if let Some(r) = worker.poll() {
+                    break r;
+                }
+                assert!(t0.elapsed().as_secs() < 30, "the worker answers");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        };
+        let moving = ask(false);
+        assert!(moving.render.is_none() && !moving.splats);
+        let settled = ask(true);
+        assert!(settled.splats, "says it has them");
+        let img = settled.render.expect("a render");
+        assert!(img.pixels.iter().any(|p| p[3] > 0.5), "the capture shows");
     }
 
     #[test]

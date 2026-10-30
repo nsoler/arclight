@@ -12,6 +12,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.6 — 2026-10-30
+
+- **The 3D view renders splats in full once it settles** (Dev2): with
+  cards and meshes by depth, and in the motion-blurred preview; their
+  centers show as dots while the view moves, and a selected capture
+  shows its box.
+
 ## 0.10.5 — 2026-10-30
 
 - **Splats in scripting** (Dev1): `scene_objects` lists splat captures

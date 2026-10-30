@@ -278,8 +278,8 @@ selected object.
   rest of the scene: in front of, behind or through cards and meshes by
   depth; holdouts cut them out. They light themselves (no shadows from
   Arclight's lights); depth is where they become half opaque. In the 3D
-  view they show as dots at their centers (the full render while settled
-  comes later); click near a splat (its center) to select its Read Splat,
+  view they show as dots while you orbit and render in full a moment
+  after you stop (a selected capture shows its box); click near a splat (its center) to select its Read Splat,
   and **F** frames splats too.
 - **Read Geo** reads an OBJ file (with its MTL colors and textures) or a
   glTF file (.gltf, .glb).

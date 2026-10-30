@@ -1021,6 +1021,9 @@ pub struct Viewport3d {
     /// The textured cards, and where on screen they go.
     texture: Option<TextureHandle>,
     texture_rect: Option<Rect>,
+    /// The texture has the splats in it (the view has settled): their
+    /// centers aren't drawn over it.
+    splats_shown: bool,
     error: Option<String>,
     /// Selected points (of point clouds and Camera Trackers): node, index.
     pub points: Vec<(String, usize)>,
@@ -1062,6 +1065,7 @@ impl Default for Viewport3d {
             paths: Vec::new(),
             texture: None,
             texture_rect: None,
+            splats_shown: false,
             error: None,
             points: Vec::new(),
             marquee: None,
@@ -1087,6 +1091,8 @@ const MAX_EDGES: usize = 40_000;
 const POINT: Color32 = Color32::from_rgb(90, 175, 225);
 /// The most particles drawn as dots per stream (past it, every so many).
 const MAX_PARTICLE_DOTS: usize = 20_000;
+/// A box's twelve edges, by corner (bit 0: x high, 1: y high, 2: z high).
+const BOX_EDGES: [(usize, usize); 12] = [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)];
 /// The most splats drawn as dots per set (past it, every so many).
 const MAX_SPLAT_DOTS: usize = 300_000;
 const SELECTED: Color32 = Color32::from_rgb(255, 160, 40);
@@ -1203,6 +1209,7 @@ impl Viewport3d {
                 Err(e) => self.error = Some(e),
             }
             self.render_ms = r.millis;
+            self.splats_shown = r.splats;
             self.blur_times = r.blur_times;
             if let Some(img) = r.render {
                 let size = [img.format.width, img.format.height];
@@ -1255,8 +1262,9 @@ impl Viewport3d {
         let looking = through.is_some().then(|| self.look_through.clone().map(|t| (t, self.format))).flatten();
         let render = self.scene.is_some().then(|| render_camera(&self.view, p, through, pixels));
         if let Some(w) = &self.worker {
-            // A render's motion blur only once the view has settled.
-            w.request(SceneRequest { graph, node, frame, render, solid: !self.view.wireframe, preview, blur: scale == 1.0, through: looking, rect: Some(target) });
+            // A render's motion blur and the splats only once the view has
+            // settled.
+            w.request(SceneRequest { graph, node, frame, render, solid: !self.view.wireframe, preview, blur: scale == 1.0, splats: scale == 1.0, through: looking, rect: Some(target) });
         }
         self.asked = Some(ask);
     }
@@ -1833,7 +1841,7 @@ impl Viewport3d {
         // The textured cards, under the outlines (the newest render, which
         // may lag the view by a frame while it moves).
         if let (Some(tex), Some(r)) = (&self.texture, self.texture_rect) {
-            if self.scene.as_ref().is_some_and(|s| !s.cards.is_empty() || (!self.view.wireframe && !s.meshes.is_empty())) {
+            if self.scene.as_ref().is_some_and(|s| !s.cards.is_empty() || (!self.view.wireframe && !s.meshes.is_empty()) || (self.splats_shown && !s.splats.is_empty())) {
                 painter.image(tex.id(), r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
             }
         }
@@ -1983,10 +1991,11 @@ impl Viewport3d {
                 painter.circle_filled(s, 1.6, color);
             }
         }
-        // Splats: a dot at each center in its color (every so many past a
-        // cap), as one mesh (there can be hundreds of thousands).
+        // Splats, while the render doesn't have them (the view moving): a
+        // dot at each center in its color (every so many past a cap), as
+        // one mesh (there can be hundreds of thousands).
         let mut dots = egui::Mesh::default();
-        for set in &scene.splats {
+        for set in scene.splats.iter().filter(|_| !self.splats_shown) {
             let on = selected(&set.node);
             for (at, color) in splat_dots(set) {
                 let Some((s, _)) = p.project(at) else { continue };
@@ -1997,6 +2006,13 @@ impl Viewport3d {
         }
         if !dots.is_empty() {
             painter.add(egui::Shape::mesh(dots));
+        }
+        // A selected splat set: the box round its centers.
+        for (lo, hi) in scene.splats.iter().filter(|set| selected(&set.node)).filter_map(|set| set.bounds()) {
+            let corner = |i: usize| Vec3::new([lo.x, hi.x][i & 1], [lo.y, hi.y][(i >> 1) & 1], [lo.z, hi.z][(i >> 2) & 1]);
+            for (a, b) in BOX_EDGES {
+                line(corner(a), corner(b), Stroke::new(1.5, SELECTED));
+            }
         }
         // Through a camera: its frame, the outside darkened.
         if let Some(f) = p.frame {

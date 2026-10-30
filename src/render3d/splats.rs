@@ -341,6 +341,24 @@ mod tests {
     }
 
     #[test]
+    fn the_3d_view_preview_draws_splats_still_or_blurred() {
+        use super::super::{render_preview, render_preview_blurred, Blur, Preview};
+        let sc = scene(splats(&[([0.0, 0.0, -10.0], 0.5, 0.99, [0.0, 1.0, 0.0])]));
+        let sharp = render_preview(&sc, &camera(), FMT, Preview::Solid);
+        assert!(sharp.at(64, 32)[1] > 0.9 && sharp.at(0, 0)[3] == 0.0, "{:?}", sharp.at(64, 32));
+        // Blurred with nothing moving: the same picture.
+        let blur = Blur { times: Blur::times(-0.25, 0.5, 4), frames: vec![(0, &sc, camera())], jitter: true };
+        let still = render_preview_blurred(&sc, &camera(), FMT, Preview::Solid, Some(&blur));
+        let worst = still.pixels.iter().zip(&sharp.pixels).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0, f32::max);
+        assert!(worst < 1e-5, "{worst}");
+        // A camera moving across it smears it.
+        let moved = Camera { world: geom::trs([1.0, 0.0, 0.0], [0.0; 3], [1.0; 3]), ..camera() };
+        let blur = Blur { times: Blur::times(0.0, 1.0, 4), frames: vec![(0, &sc, camera()), (1, &sc, moved)], jitter: false };
+        let smear = render_preview_blurred(&sc, &camera(), FMT, Preview::Solid, Some(&blur));
+        assert!(smear.at(64, 32)[1] < sharp.at(64, 32)[1] - 0.1, "{:?} {:?}", smear.at(64, 32), sharp.at(64, 32));
+    }
+
+    #[test]
     fn holdouts_cut_splats() {
         let mut cube = crate::scene::primitive_model("cube", &serde_json::json!({ "size": [4, 4, 4] }), None).unwrap();
         cube.world = geom::trs([0.0, 0.0, -8.0], [0.0; 3], [1.0; 3]);

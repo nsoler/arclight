@@ -600,11 +600,11 @@ fn mean_into(mut out: Image, sum: Image, n: usize) -> Image {
     out
 }
 
-/// `scene`'s cards and meshes through `cam`, one sample a pixel, the meshes
-/// shaded as `preview` says (Lit without lights is Solid, so nothing goes
-/// black): what the 3D viewport shows under its outlines.
+/// `scene`'s cards, meshes and splats through `cam`, one sample a pixel,
+/// the meshes shaded as `preview` says (Lit without lights is Solid, so
+/// nothing goes black): what the 3D viewport shows under its outlines.
 pub fn render_preview(scene: &Scene, cam: &Camera, format: Size, preview: Preview) -> Image {
-    preview_cell(scene, cam, format, preview, None)
+    preview_cell(scene, cam, format, preview, None, splats::prepare(&scene.splats, cam, format).as_ref())
 }
 
 /// [`render_preview`] with motion blur: the mean of previews at each of
@@ -615,8 +615,14 @@ pub fn render_preview(scene: &Scene, cam: &Camera, format: Size, preview: Previe
 pub fn render_preview_blurred(scene: &Scene, cam: &Camera, format: Size, preview: Preview, blur: Option<&Blur>) -> Image {
     let Some(blur) = blur.filter(|b| b.times.len() > 1) else { return render_preview(scene, cam, format, preview) };
     let frames: Vec<(i64, &Scene)> = blur.frames.iter().map(|f| (f.0, f.1)).collect();
+    // The splats projected once, for the times where neither they nor the
+    // camera move.
+    let still = splats::prepare(&scene.splats, cam, format);
     let sum = blur_sum(&blur.times, blur.jitter, |t, cell| {
-        let mut img = preview_cell(&scene.at_time(&frames, t), &blur.camera(cam, t), format, preview, cell);
+        let (now, c) = (scene.at_time(&frames, t), blur.camera(cam, t));
+        let moved = c != *cam || now.splats.iter().zip(&scene.splats).any(|(a, b)| a.world != b.world);
+        let own = moved.then(|| splats::prepare(&now.splats, &c, format)).flatten();
+        let mut img = preview_cell(&now, &c, format, preview, cell, if moved { own.as_ref() } else { still.as_ref() });
         img.planes.clear();
         img
     });
@@ -627,19 +633,20 @@ pub fn render_preview_blurred(scene: &Scene, cam: &Camera, format: Size, preview
     }
 }
 
-/// [`render_preview`], only `cell`'s pixels drawn, or all of them.
-fn preview_cell(scene: &Scene, cam: &Camera, format: Size, preview: Preview, cell: Option<Cell>) -> Image {
+/// [`render_preview`], only `cell`'s pixels drawn, or all of them, with
+/// `splats` (the scene's, prepared for `cam`).
+fn preview_cell(scene: &Scene, cam: &Camera, format: Size, preview: Preview, cell: Option<Cell>, splats: Option<&splats::Prepared>) -> Image {
     let mut surfs = surfaces(scene);
     match preview {
         Preview::Lit { shadows } if !scene.lights.is_empty() => {
             let lights: Vec<Light> = scene.lights.iter().map(|l| Light { shadows: l.shadows && shadows, ..l.clone() }).collect();
-            draw_passes(&surfs, &lights, &[], cam, format, 1, Passes::DEPTH, None, cell, None)
+            draw_passes(&surfs, &lights, &[], cam, format, 1, Passes::DEPTH, None, cell, splats)
         }
         _ => {
             for s in surfs.iter_mut().skip(scene.cards.len()) {
                 s.headlight = true;
             }
-            draw_passes(&surfs, &[], &[], cam, format, 1, Passes::DEPTH, None, cell, None)
+            draw_passes(&surfs, &[], &[], cam, format, 1, Passes::DEPTH, None, cell, splats)
         }
     }
 }
