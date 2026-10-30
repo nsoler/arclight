@@ -408,6 +408,10 @@ color).
   sharp while you move it). Particle dots streak over the same shutter.
   Looking through a moving camera or light, its own motion blurs the
   view too.
+- **Textures seen small** (a card far away, or a mesh's texture at a
+  grazing angle) are filtered with mipmaps, so they average out instead
+  of shimmering. This works together with Anti-aliasing (each sample
+  filters what it covers) and needs no setting.
 - **Holdout** on a Cube, Sphere, Cylinder, Plane or Read Geo makes it draw
   nothing but cut out what is behind it (alpha 0 there); its matte still
   shows where it is.

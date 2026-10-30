@@ -25,7 +25,9 @@ use crate::scene::Scene;
 use crate::shade::{self, Light, Shaded};
 use rayon::prelude::*;
 use std::borrow::Cow;
+use std::sync::{Arc, OnceLock};
 
+mod mip;
 mod particles;
 mod shadow;
 mod splats;
@@ -44,7 +46,7 @@ pub(crate) struct Surface<'a> {
     pub v_up: bool,
     pub triangles: Cow<'a, [[u32; 3]]>,
     pub color: Rgba,
-    pub texture: Option<&'a Image>,
+    pub texture: Option<&'a Arc<Image>>,
     /// Texture coordinates past 0–1 repeat the texture (else they clamp to
     /// its edge, as a card's do).
     pub wrap: bool,
@@ -100,7 +102,7 @@ fn model_surface(m: &crate::scene::Model) -> Surface<'_> {
         uvs: Cow::Borrowed(&m.mesh.uvs),
         triangles: Cow::Borrowed(&m.mesh.triangles),
         color: [r * a, g * a, b * a, a],
-        texture: m.texture.as_deref(),
+        texture: m.texture.as_ref(),
         wrap: true,
         v_up: true,
         headlight: false,
@@ -280,6 +282,31 @@ impl Tri {
         Some((d, [b0 * self.inv_depth[0] / inv, b1 * self.inv_depth[1] / inv, b2 * self.inv_depth[2] / inv]))
     }
 
+    /// The (perspective-correct) barycentric coordinates of frame position
+    /// `q`, inside the triangle or not.
+    fn bary_at(&self, q: [f64; 2]) -> [f64; 3] {
+        let b0 = edge(self.p[1], self.p[2], q) / self.area;
+        let b1 = edge(self.p[2], self.p[0], q) / self.area;
+        let b = [b0, b1, 1.0 - b0 - b1];
+        if self.ortho {
+            return b;
+        }
+        let w: [f64; 3] = std::array::from_fn(|k| b[k] * self.inv_depth[k]);
+        let inv = w[0] + w[1] + w[2];
+        w.map(|w| w / inv)
+    }
+
+    /// How many texels of a `size` texture a sample at `q` with texture
+    /// coordinates `uv` covers, `step` pixels apart from the next: the
+    /// longer of its steps across and down, through the texture.
+    fn footprint(&self, q: [f64; 2], uv: [f64; 2], step: f64, size: [f64; 2]) -> f64 {
+        let along = |d: [f64; 2]| {
+            let o = self.uv(&self.bary_at([q[0] + d[0], q[1] + d[1]]));
+            ((o[0] - uv[0]) * size[0]).hypot((o[1] - uv[1]) * size[1])
+        };
+        along([step, 0.0]).max(along([0.0, step]))
+    }
+
     /// Texture coordinates at barycentric `b`.
     fn uv(&self, b: &[f64; 3]) -> [f64; 2] {
         std::array::from_fn(|k| b[0] * self.v[0].uv[k] + b[1] * self.v[1].uv[k] + b[2] * self.v[2].uv[k])
@@ -289,18 +316,46 @@ impl Tri {
 /// Surface `s`'s color at texture coordinates `uv`.
 fn shade(s: &Surface, uv: [f64; 2]) -> Rgba {
     let Some(img) = s.texture else { return s.color };
-    let (fw, fh) = (img.format.width as f64, img.format.height as f64);
-    if s.wrap {
-        let px = sample_wrapped(img, uv[0] * fw - 0.5, uv[1] * fh - 0.5);
-        return if s.color == [1.0; 4] { px } else { std::array::from_fn(|c| px[c] * s.color[c]) };
+    tint(s, sample_level(img, s.wrap, uv))
+}
+
+/// Surface `s`'s color at texture coordinates `uv` for a sample covering
+/// `texels` of its texture: where that's more than one, the mean over
+/// them from its mipmaps (`mips`, made when first needed), blending the
+/// two levels nearest that size.
+fn shade_covering(s: &Surface, uv: [f64; 2], texels: f64, mips: &OnceLock<Arc<mip::Mips>>) -> Rgba {
+    let Some(img) = s.texture else { return s.color };
+    // (1:1 within rounding is 1:1.)
+    if texels <= 1.0 + 1e-6 || !texels.is_finite() {
+        return tint(s, sample_level(img, s.wrap, uv));
     }
-    let (tx, ty) = {
-        // Clamped to the image's frame, so a card's edge is sharp (the
-        // samples soften it) rather than fading over half a texel.
-        ((uv[0] * fw - 0.5).clamp(0.0, (fw - 1.0).max(0.0)), (uv[1] * fh - 0.5).clamp(0.0, (fh - 1.0).max(0.0)))
-    };
-    let px = img.sample_bilinear(tx as f32, ty as f32);
+    let levels = &mips.get_or_init(|| mip::of(img, s.wrap)).levels;
+    let lod = texels.log2().min(levels.len() as f64);
+    let (k, w) = (lod.floor() as usize, (lod - lod.floor()) as f32);
+    let level = |k: usize| if k == 0 { sample_level(img, s.wrap, uv) } else { sample_level(&levels[k - 1], s.wrap, uv) };
+    let a = level(k);
+    if w == 0.0 || k >= levels.len() {
+        return tint(s, a);
+    }
+    let b = level(k + 1);
+    tint(s, std::array::from_fn(|c| a[c] + (b[c] - a[c]) * w))
+}
+
+/// `px` times surface `s`'s color.
+fn tint(s: &Surface, px: Rgba) -> Rgba {
     if s.color == [1.0; 4] { px } else { std::array::from_fn(|c| px[c] * s.color[c]) }
+}
+
+/// `img` at texture coordinates `uv`, bilinear: repeating (`wrap`) or
+/// clamped to its frame, so a card's edge is sharp (the samples soften
+/// it) rather than fading over half a texel.
+fn sample_level(img: &Image, wrap: bool, uv: [f64; 2]) -> Rgba {
+    let (fw, fh) = (img.format.width as f64, img.format.height as f64);
+    if wrap {
+        return sample_wrapped(img, uv[0] * fw - 0.5, uv[1] * fh - 0.5);
+    }
+    let (tx, ty) = ((uv[0] * fw - 0.5).clamp(0.0, (fw - 1.0).max(0.0)), (uv[1] * fh - 0.5).clamp(0.0, (fh - 1.0).max(0.0)));
+    img.sample_bilinear(tx as f32, ty as f32)
 }
 
 /// Bilinear sample of `img` at frame position (x, y) (pixel centers on
@@ -803,6 +858,8 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
     let shadow_at = slot(&mut k, passes.shadow, 3);
     let any_part = part_on.iter().any(|b| *b) || passes.lights || passes.shadow;
     let shadows = shadow::Shadows::build(if lights.is_empty() { &[] } else { surfs }, lights);
+    // Each surface's texture's mipmaps, made if a sample sees it small.
+    let mips: Vec<OnceLock<Arc<mip::Mips>>> = surfs.iter().map(|_| OnceLock::new()).collect();
     let mut color = vec![color::TRANSPARENT; w * h];
     let mut depth = vec![0.0f32; w * h];
     // (At least one channel, so every row has its chunk.)
@@ -878,7 +935,9 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                                 continue;
                             }
                             let s = &surfs[t.surf];
-                            let mut color = shade(s, t.uv(&bary));
+                            let uv = t.uv(&bary);
+                            let texels = s.texture.map_or(0.0, |img| t.footprint(q, uv, 1.0 / n as f64, [img.format.width as f64, img.format.height as f64]));
+                            let mut color = shade_covering(s, uv, texels, &mips[t.surf]);
                             let at = |f: fn(&Vert) -> Vec3| t.v.iter().zip(&bary).map(|(v, b)| f(v) * *b).sum::<Vec3>();
                             if s.headlight {
                                 let (n, p) = (at(|v| v.n), at(|v| v.world));
@@ -1357,7 +1416,7 @@ mod tests {
         // 200 × 200 squares (80 000 triangles) with the card's texture
         // coordinates: the same picture as the card, the texture repeated
         // where the coordinates run past 1.
-        let img = checker();
+        let img = Arc::new(checker());
         let n = 200;
         let positions: Vec<Vec3> = (0..=n).flat_map(|j| (0..=n).map(move |i| Vec3::new(10.0 * i as f64 / n as f64 - 5.0, 2.5 - 5.0 * j as f64 / n as f64, 0.0))).collect();
         let uvs: Vec<[f64; 2]> = (0..=n).flat_map(|j| (0..=n).map(move |i| [i as f64 / n as f64, j as f64 / n as f64])).collect();
@@ -2300,5 +2359,56 @@ mod tests {
         assert_eq!(ortho.to_eye(&Vec3::new(3.0, -2.0, -9.0)), Vec3::z());
         let cam = crate::scene::camera(&serde_json::json!({ "projection": "orthographic", "ortho_width": 7.5 }));
         assert_eq!((cam.ortho, crate::scene::camera(&serde_json::json!({ "ortho_width": 7.5 })).ortho), (7.5, 0.0));
+    }
+
+    /// A card seen eight times smaller than its texture takes the
+    /// texture's mean over each pixel (from its mipmaps), not whichever
+    /// texel falls under it; seen 1:1 it's exactly its image still, and
+    /// the 3D view's preview does the same.
+    #[test]
+    fn minified_cards_average_their_texture() {
+        // Texel noise: no pattern a pixel's samples could happen to average.
+        let mut img = checker();
+        for (i, p) in img.pixels.iter_mut().enumerate() {
+            let v = ((i as u32).wrapping_mul(2654435761) >> 24) as f32 / 255.0;
+            *p = [v, 1.0 - v, 0.5 * v, 1.0];
+        }
+        let mean: Rgba = std::array::from_fn(|c| img.pixels.iter().map(|p| p[c]).sum::<f32>() / img.pixels.len() as f32);
+        // 40 away the camera sees 80 across: the 10-wide card is 8 pixels.
+        let far = Scene { cards: vec![card(img.clone(), [0.0, 0.0, -40.0], [0.0; 3], [10.0, 5.0])], ..Scene::default() };
+        let off = |out: &Image| {
+            // The card's inside: pixels 29..35 across, 15..17 down.
+            (29..35).flat_map(|x| (15..17).map(move |y| (x, y))).map(|(x, y)| (0..3).map(|c| (out.at(x, y)[c] - mean[c]).abs()).fold(0.0, f32::max)).fold(0.0, f32::max)
+        };
+        for samples in [1, 3] {
+            let out = render(&far, &camera(), FMT, samples, None);
+            assert!(off(&out) < 0.03, "{samples} samples: {} off the mean", off(&out));
+        }
+        assert!(off(&render_preview(&far, &camera(), FMT, Preview::Solid)) < 0.03);
+        // A wrapped texture repeating eight times over a card's width: as
+        // even, seams and all.
+        let tiles: Vec<[f64; 2]> = vec![[0.0, 0.0], [8.0, 0.0], [8.0, 4.0], [0.0, 4.0]];
+        let tex = Arc::new(img.clone());
+        let plane = Surface {
+            world: geom::trs([0.0, 0.0, -5.0], [0.0; 3], [1.0; 3]),
+            positions: Cow::Owned(vec![Vec3::new(-5.0, 2.5, 0.0), Vec3::new(5.0, 2.5, 0.0), Vec3::new(5.0, -2.5, 0.0), Vec3::new(-5.0, -2.5, 0.0)]),
+            normals: Cow::Owned(Vec::new()),
+            uvs: tiles.into(),
+            triangles: Cow::Owned(vec![[0, 1, 2], [0, 2, 3]]),
+            color: [1.0; 4],
+            texture: Some(&tex),
+            wrap: true,
+            v_up: false,
+            headlight: false,
+            holdout: false,
+            node: "",
+            material: None,
+            casts: true,
+            receives: true,
+            two_sided: false,
+        };
+        let out = draw(&[plane], &[], &camera(), FMT, 1);
+        let worst = out.pixels.iter().map(|p| (0..3).map(|c| (p[c] - mean[c]).abs()).fold(0.0, f32::max)).fold(0.0, f32::max);
+        assert!(worst < 0.03, "{worst}");
     }
 }

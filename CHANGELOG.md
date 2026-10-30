@@ -12,6 +12,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.21 — 2026-10-30
+
+- **Mipmaps**: a texture seen smaller than its own pixels (a card or a
+  model far away or at a grazing angle) now takes the texture's mean
+  over what each sample covers, from a pyramid of halved copies made on
+  first need and kept, instead of shimmering and moiré-ing. Textures
+  seen 1:1 or closer render exactly as before. Scanline Render and the
+  3D view's preview both use it.
+
 ## 0.10.20 — 2026-10-30
 
 - **Orthographic cameras**: a Camera's new **Projection** (perspective /
