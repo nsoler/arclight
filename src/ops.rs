@@ -303,6 +303,8 @@ const SHADING: ParamSpec = fixed!("shading", "Shading", ParamKind::Choice(&["unl
 const SPECULAR: ParamSpec = p!("specular", "Specular", ParamKind::Float { min: 0.0, max: 1.0 }, 0.0);
 const ROUGHNESS: ParamSpec = p!("roughness", "Roughness", ParamKind::Float { min: 0.0, max: 1.0 }, 0.5);
 const EMISSION: ParamSpec = p!("emission", "Emission", ParamKind::Color, [0.0, 0.0, 0.0, 1.0]);
+/// How a Card takes light: unlit (its image as it is) unless chosen.
+const CARD_SHADING: ParamSpec = fixed!("shading", "Shading", ParamKind::Choice(&["unlit", "lambert", "blinn"]), "unlit");
 /// A 3D object that renders nothing but hides what's behind it.
 const HOLDOUT: ParamSpec = fixed!("holdout", "Holdout", ParamKind::Bool, false);
 
@@ -832,13 +834,21 @@ pub static OPS: &[OpInfo] = &[
             // Null: 1 wide, as high as the image's aspect makes it.
             p!("size", "Size", ParamKind::Vec2, Value::Null),
             p!("opacity", "Opacity", OPACITY, 1.0),
+            CARD_SHADING,
+            SPECULAR,
+            ROUGHNESS,
+            EMISSION,
             CASTS_SHADOWS,
+            RECEIVES_SHADOWS,
         ],
         overlay: Overlay::None,
         mask_base: None,
         help: "Puts its image on a flat card in 3D, centered on its origin and facing +Z, Size wide and high \
                (by default 1 wide, keeping the image's aspect), then scaled, rotated and moved. Opacity \
                fades the whole card (its shadow too), e.g. clouds at different depths. \
+               Shading is unlit by default (the image shows as it is); Lambert or Blinn lights it by \
+               the scene's lights (from either side, like a real card), with Specular, Roughness and \
+               Emission as on the mesh nodes, and shadows fall on it if Receives shadows is on. \
                Outputs a scene holding the card.",
     },
     OpInfo {

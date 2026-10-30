@@ -53,11 +53,13 @@ pub(crate) struct Surface<'a> {
     pub holdout: bool,
     /// The node it came from: its object id and matte.
     pub node: &'a str,
-    /// How it takes light (None: unlit, as a card).
+    /// How it takes light (None: unlit, as a card is by default).
     pub material: Option<&'a Material>,
     /// Whether it blocks shadow-casting lights, and takes their shadows.
     pub casts: bool,
     pub receives: bool,
+    /// Lit from either side (a card): its normal turned to the viewer.
+    pub two_sided: bool,
 }
 
 /// Card `card` as two triangles (top left, top right, bottom right; top
@@ -78,9 +80,10 @@ fn card_surface(card: &crate::scene::Card) -> Surface<'_> {
         headlight: false,
         holdout: false,
         node: &card.node,
-        material: None,
+        material: card.material.as_ref(),
         casts: card.casts_shadows,
-        receives: false,
+        receives: card.receives_shadows,
+        two_sided: true,
     }
 }
 
@@ -105,6 +108,7 @@ fn model_surface(m: &crate::scene::Model) -> Surface<'_> {
         material: Some(&m.material),
         casts: m.casts_shadows,
         receives: m.receives_shadows,
+        two_sided: false,
     }
 }
 
@@ -712,7 +716,10 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                             }
                             let hit_at = || {
                                 let p = at(|v| v.world);
-                                shade::Hit { position: p, normal: at(|v| v.n).try_normalize(1e-300).unwrap_or_else(Vec3::z), view: (eye - p).try_normalize(1e-300).unwrap_or_else(Vec3::z) }
+                                let view = (eye - p).try_normalize(1e-300).unwrap_or_else(Vec3::z);
+                                let n = at(|v| v.n).try_normalize(1e-300).unwrap_or_else(Vec3::z);
+                                let normal = if s.two_sided && n.dot(&view) < 0.0 { -n } else { n };
+                                shade::Hit { position: p, normal, view }
                             };
                             let (color, lit, lost) = light_hit(s, lights, &shadows, color, hit_at, passes.lights.then_some(&mut scratch));
                             if any_part {
@@ -1008,7 +1015,7 @@ mod tests {
 
     /// A mesh from its corners and triangles, flat-shaded, in one color.
     fn mesh(positions: Vec<Vec3>, triangles: Vec<[u32; 3]>, world: Mat4, color: Rgba) -> Surface<'static> {
-        Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: Cow::Owned(Vec::new()), triangles: triangles.into(), color, texture: None, wrap: false, v_up: false, headlight: false, holdout: false, node: "", material: None, casts: true, receives: true }
+        Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: Cow::Owned(Vec::new()), triangles: triangles.into(), color, texture: None, wrap: false, v_up: false, headlight: false, holdout: false, node: "", material: None, casts: true, receives: true, two_sided: false }
     }
 
     /// A cube `s` across, centered on the origin, its faces wound
@@ -1065,7 +1072,7 @@ mod tests {
         let at = |i: usize, j: usize| (j * (n + 1) + i) as u32;
         let triangles: Vec<[u32; 3]> = (0..n).flat_map(|j| (0..n).flat_map(move |i| [[at(i, j), at(i, j + 1), at(i + 1, j + 1)], [at(i, j), at(i + 1, j + 1), at(i + 1, j)]])).collect();
         let world = geom::trs([0.0, 0.0, -5.0], [0.0; 3], [1.0; 3]);
-        let plane = Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: uvs.clone().into(), triangles: triangles.clone().into(), color: [1.0; 4], texture: Some(&img), wrap: false, v_up: false, headlight: false, holdout: false, node: "", material: None, casts: true, receives: true };
+        let plane = Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: uvs.clone().into(), triangles: triangles.clone().into(), color: [1.0; 4], texture: Some(&img), wrap: false, v_up: false, headlight: false, holdout: false, node: "", material: None, casts: true, receives: true, two_sided: false };
         let card = card_surface_of(&img, world);
         for samples in [1, 3] {
             let (a, b) = (draw(&[plane_ref(&plane)], &[], &camera(), FMT, samples), draw(&[card_surface(&card)], &[], &camera(), FMT, samples));
@@ -1074,7 +1081,7 @@ mod tests {
         }
         // Twice the coordinates, repeating: the checker twice over.
         let doubled: Vec<[f64; 2]> = uvs.iter().map(|uv| [uv[0] * 2.0, uv[1] * 2.0]).collect();
-        let tiled = Surface { world, positions: plane.positions.clone(), normals: Cow::Owned(Vec::new()), uvs: doubled.into(), triangles: triangles.into(), color: [1.0; 4], texture: Some(&img), wrap: true, v_up: false, headlight: false, holdout: false, node: "", material: None, casts: true, receives: true };
+        let tiled = Surface { world, positions: plane.positions.clone(), normals: Cow::Owned(Vec::new()), uvs: doubled.into(), triangles: triangles.into(), color: [1.0; 4], texture: Some(&img), wrap: true, v_up: false, headlight: false, holdout: false, node: "", material: None, casts: true, receives: true, two_sided: false };
         let out = draw(&[tiled], &[], &camera(), FMT, 1);
         assert!((0..32).all(|y| (0..32).all(|x| out.at(x, y) == out.at(x + 32, y))), "repeats across");
     }
@@ -1086,7 +1093,7 @@ mod tests {
 
     /// A borrowed copy of `s`.
     fn plane_ref<'a>(s: &'a Surface) -> Surface<'a> {
-        Surface { world: s.world, positions: Cow::Borrowed(&s.positions), normals: Cow::Borrowed(&s.normals), uvs: Cow::Borrowed(&s.uvs), triangles: Cow::Borrowed(&s.triangles), color: s.color, texture: s.texture, wrap: s.wrap, v_up: s.v_up, headlight: s.headlight, holdout: s.holdout, node: s.node, material: s.material, casts: s.casts, receives: s.receives }
+        Surface { world: s.world, positions: Cow::Borrowed(&s.positions), normals: Cow::Borrowed(&s.normals), uvs: Cow::Borrowed(&s.uvs), triangles: Cow::Borrowed(&s.triangles), color: s.color, texture: s.texture, wrap: s.wrap, v_up: s.v_up, headlight: s.headlight, holdout: s.holdout, node: s.node, material: s.material, casts: s.casts, receives: s.receives, two_sided: s.two_sided }
     }
 
     /// Primitives and Read Geo through the graph, each at 5 in front of the
@@ -1428,6 +1435,73 @@ mod tests {
         // Shadows off on the light (the default): none.
         let (scene, cam) = shadow_scene(light("light_directional", json!({ "rotate": [-90, 0, -45] }), "sun"));
         assert!(floor_at(&render(&scene, &cam, SHADOW_FMT, 1, None), &cam, -1.0, 0.0).0 > 0.3);
+    }
+
+    #[test]
+    fn a_card_takes_light_when_shaded_from_either_side() {
+        use serde_json::json;
+        let white = Image::filled(4, 4, [1.0; 4]);
+        let at = |p: serde_json::Value| crate::scene::card(&p, &white);
+        // Unlit by default (and when asked): the image as it is, lights
+        // or not.
+        assert!(at(json!({})).material.is_none() && at(json!({ "shading": "unlit" })).material.is_none());
+        let place = json!({ "translate": [0, 0, -5], "size": [20, 20] });
+        let shaded = |shading: &str, rotate: [i32; 3]| {
+            let mut p = place.clone();
+            p["shading"] = json!(shading);
+            p["rotate"] = json!(rotate);
+            at(p)
+        };
+        // A sun shining away from the camera (onto the card's face), or
+        // toward it (from behind the card).
+        let from_camera = light("light_directional", json!({}), "sun");
+        let from_behind = light("light_directional", json!({ "rotate": [0, 180, 0] }), "sun");
+        let seen = |card: Card, l: &Light| render(&Scene { cards: vec![card], lights: vec![l.clone()], ..Scene::default() }, &camera(), FMT, 1, None).at(32, 16);
+        assert_eq!(seen(shaded("unlit", [0, 0, 0]), &from_behind), [1.0; 4], "unlit ignores the light");
+        let lit = seen(shaded("lambert", [0, 0, 0]), &from_camera);
+        assert!(lit[0] > 0.5 && lit[3] == 1.0, "{lit:?}");
+        assert!(seen(shaded("lambert", [0, 0, 0]), &from_behind)[0] < 0.01, "lit from behind, dark in front");
+        // Seen from its back, lit from the camera: lit as its front is (two
+        // sided, like a real card).
+        assert_eq!(seen(shaded("lambert", [0, 180, 0]), &from_camera), lit);
+        // Blinn adds a highlight; Emission glows without lights.
+        let mut shiny = place.clone();
+        shiny["shading"] = json!("blinn");
+        shiny["specular"] = json!(1.0);
+        assert!(seen(at(shiny), &from_camera)[0] > lit[0]);
+        let mut glow = place.clone();
+        glow["shading"] = json!("lambert");
+        glow["emission"] = json!([0.25, 0, 0, 1]);
+        let dark = render(&Scene { cards: vec![at(glow)], ..Scene::default() }, &camera(), FMT, 1, None).at(32, 16);
+        assert!(dark[0] >= 1.0 && dark[1] == 1.0, "no lights: the image, plus its glow: {dark:?}");
+        // Its light shows in the passes.
+        let out = render_passes(&Scene { cards: vec![shaded("lambert", [0, 0, 0])], lights: vec![from_camera.clone()], ..Scene::default() }, &camera(), FMT, 1, None, LIGHTING);
+        assert!((out.plane_at("diffuse.R", 32, 16) - lit[0]).abs() < 1e-5 && out.plane_at("light.sun.R", 32, 16) > 0.5);
+        // And the 3D view's Lit preview lights it too; Solid shows its image.
+        assert_eq!(render_preview(&Scene { cards: vec![shaded("lambert", [0, 0, 0])], lights: vec![from_behind.clone()], ..Scene::default() }, &camera(), FMT, Preview::Lit { shadows: false }).at(32, 16)[0], 0.0);
+        assert_eq!(render_preview(&Scene { cards: vec![shaded("lambert", [0, 0, 0])], lights: vec![from_behind], ..Scene::default() }, &camera(), FMT, Preview::Solid).at(32, 16), [1.0; 4]);
+    }
+
+    #[test]
+    fn a_lit_card_takes_shadows_unless_told_not_to() {
+        use serde_json::json;
+        let sun = light("light_directional", json!({ "rotate": [-90, 0, -45], "shadows": true, "shadow_softness": 0 }), "sun");
+        let (mut scene, cam) = shadow_scene(sun);
+        // A lit card for a floor instead of the mesh.
+        let floor = |receives: bool| crate::scene::card(&json!({ "shading": "lambert", "rotate": [-90, 0, 0], "size": [12, 12], "receives_shadows": receives }), &Image::filled(4, 4, [0.5, 0.5, 0.5, 1.0]));
+        scene.meshes.clear();
+        for receives in [true, false] {
+            scene.cards.truncate(1);
+            scene.cards.push(floor(receives));
+            let out = render(&scene, &cam, SHADOW_FMT, 1, None);
+            let (inside, outside) = (floor_at(&out, &cam, -1.0, 0.0).0, floor_at(&out, &cam, 2.0, 2.0).0);
+            assert!(outside > 0.2, "{outside}");
+            if receives {
+                assert!(inside < 0.1 * outside, "{inside} {outside}");
+            } else {
+                assert!((inside - outside).abs() < 1e-4, "{inside} {outside}");
+            }
+        }
     }
 
     #[test]

@@ -11,6 +11,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.50 — 2026-10-29
+
+- **Cards can take light** (MathWiz): the Card node's new **Shading**
+  (unlit by default, so existing projects look the same; lambert or
+  blinn) lights it by the scene's lights from either side, with
+  Specular, Roughness and Emission as on the mesh nodes, and shadows
+  fall on it unless **Receives shadows** is off. Light passes, shadows,
+  the 3D view's Lit preview and `scene_objects` include it.
+
 ## 0.9.49 — 2026-10-29
 
 - **Node browser on Shift+Tab** (MathWiz): over the node graph,

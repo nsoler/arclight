@@ -492,9 +492,14 @@ impl Session {
         let img = self.render(id, frame)?;
         let scene = img.scene.as_ref().ok_or_else(|| anyhow!("'{id}' outputs an image, not a 3D scene"))?;
         let origin = |m: &crate::geom::Mat4| -> [f64; 3] { crate::geom::transform_point(m, &crate::geom::Vec3::zeros()).into() };
+        let card_shading = |c: &crate::scene::Card| match c.material.as_ref().map(|m| m.shading) {
+            Some(crate::mesh::Shading::Lambert) => "lambert",
+            Some(crate::mesh::Shading::Blinn) => "blinn",
+            _ => "unlit",
+        };
         let facing = |m: &crate::geom::Mat4| -> [f64; 3] { (m.fixed_view::<3, 3>(0, 0) * -crate::geom::Vec3::z()).try_normalize(1e-12).unwrap_or_else(|| -crate::geom::Vec3::z()).into() };
         let cameras: Vec<Value> = scene.cameras.iter().enumerate().map(|(i, c)| json!({"node": scene.camera_node(i), "position": origin(&c.world), "direction": facing(&c.world), "focal": c.focal})).collect();
-        let cards: Vec<Value> = scene.cards.iter().map(|c| json!({"node": c.node, "position": origin(&c.world), "size": c.size, "casts_shadows": c.casts_shadows})).collect();
+        let cards: Vec<Value> = scene.cards.iter().map(|c| json!({"node": c.node, "position": origin(&c.world), "size": c.size, "shading": card_shading(c), "casts_shadows": c.casts_shadows, "receives_shadows": c.receives_shadows})).collect();
         let meshes: Vec<Value> = scene
             .meshes
             .iter()

@@ -47,6 +47,11 @@ pub struct Card {
     /// Whether it blocks lights that cast shadows (as much as it is
     /// opaque).
     pub casts_shadows: bool,
+    /// How it takes light (from either side), its image the color: None
+    /// for unlit, the image as it is.
+    pub material: Option<Material>,
+    /// Whether shadows fall on it (when lit).
+    pub receives_shadows: bool,
     /// The Card node it came from ("" until tagged).
     pub node: String,
 }
@@ -98,10 +103,10 @@ impl Model {
 }
 
 impl Card {
-    /// `image` on a card `size` across placed by `world`, opaque, casting
-    /// shadows.
+    /// `image` on a card `size` across placed by `world`, opaque, unlit,
+    /// casting shadows (and receiving them once lit).
     pub fn new(image: Arc<Image>, world: Mat4, size: [f64; 2]) -> Card {
-        Card { image, world, size, opacity: 1.0, casts_shadows: true, node: String::new() }
+        Card { image, world, size, opacity: 1.0, casts_shadows: true, material: None, receives_shadows: true, node: String::new() }
     }
 
     /// The four corners in scene space: top left, top right, bottom right,
@@ -203,14 +208,18 @@ pub fn camera(p: &Value) -> Camera {
 
 /// A Card node's card showing `image`. With no `size` (null), it is 1 wide
 /// and as high as the image's frame aspect makes it; Opacity (missing: 1)
-/// scales the image.
+/// scales the image. Shading (missing: unlit) lambert or blinn lights it
+/// with the other lighting params (see [`lighting`]).
 pub fn card(p: &Value, image: &Image) -> Card {
     let size = match p["size"].as_array() {
         Some(_) => numbers::<2>(&p["size"], 1.0),
         None => [1.0, image.format.height as f64 / image.format.width.max(1) as f64],
     };
     let opacity = p["opacity"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) as f32;
-    Card { opacity, casts_shadows: p["casts_shadows"].as_bool().unwrap_or(true), ..Card::new(Arc::new(image.clone()), placement(p), size) }
+    let lit = matches!(p["shading"].as_str(), Some("lambert" | "blinn"));
+    let material = lit.then(|| lighting(p, &Material::default()));
+    let on = |n: &str| p[n].as_bool().unwrap_or(true);
+    Card { opacity, casts_shadows: on("casts_shadows"), material, receives_shadows: on("receives_shadows"), ..Card::new(Arc::new(image.clone()), placement(p), size) }
 }
 
 /// The surface look a primitive's params give: Color (straight RGBA), and

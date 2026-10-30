@@ -253,6 +253,10 @@ selected object.
   at different depths); see-through cards and meshes (a mesh's opacity is
   its **Color**'s alpha) blend with what's behind them, nearest first,
   whatever order they're wired in. The 3D view shows it too.
+- **Shading** on a Card is **unlit** by default (its image as it is);
+  **lambert** or **blinn** lights it by the scene's lights, from either
+  side like a real card, with Specular, Roughness and Emission as on the
+  mesh nodes, and it takes shadows unless **Receives shadows** is off.
 
 ### Lights
 
