@@ -171,6 +171,9 @@ pub struct SceneRequest {
     /// How solid meshes are shaded: from the camera, or by the scene's
     /// lights.
     pub preview: arclight::render3d::Preview,
+    /// With a Scanline Render's motion blur (the view has settled): see
+    /// [`blurred`].
+    pub blur: bool,
     /// Where the render goes on screen (echoed back).
     pub rect: Option<eframe::egui::Rect>,
 }
@@ -209,11 +212,17 @@ impl SceneWorker {
                     // draws the rest.
                     let render = match (&scene, &req.render) {
                         (Ok(Some(s)), Some((cam, format))) if !s.cards.is_empty() || (req.solid && !s.meshes.is_empty()) => {
-                            let meshes = if req.solid { s.meshes.clone() } else { Vec::new() };
                             let lit = matches!(req.preview, arclight::render3d::Preview::Lit { .. });
-                            let lights = if lit { s.lights.clone() } else { Vec::new() };
-                            let shown = arclight::scene::Scene { cards: s.cards.clone(), meshes, lights, ..Default::default() };
-                            Some(Arc::new(arclight::render3d::render_preview(&shown, cam, *format, req.preview)))
+                            let shown = |s: &arclight::scene::Scene| {
+                                let meshes = if req.solid { s.meshes.clone() } else { Vec::new() };
+                                let lights = if lit { s.lights.clone() } else { Vec::new() };
+                                arclight::scene::Scene { cards: s.cards.clone(), meshes, lights, ..Default::default() }
+                            };
+                            let now = shown(s);
+                            let (times, then) = if req.blur { blurred(&mut eval, &req.graph, &req.node, req.frame) } else { (Vec::new(), Vec::new()) };
+                            let then: Vec<(i64, arclight::scene::Scene)> = then.iter().map(|(k, s)| (*k, shown(s))).collect();
+                            let blur = arclight::render3d::Blur { times, frames: std::iter::once((0, &now, cam.clone())).chain(then.iter().map(|(k, s)| (*k, s, cam.clone()))).collect() };
+                            Some(Arc::new(arclight::render3d::render_preview_blurred(&now, cam, *format, req.preview, Some(&blur))))
                         }
                         _ => None,
                     };
@@ -235,6 +244,27 @@ impl SceneWorker {
     pub fn poll(&self) -> Option<SceneResponse> {
         self.rx.try_iter().last()
     }
+}
+
+/// The most shutter times the 3D view blurs over (few: it's a preview,
+/// and the times are jittered).
+const VIEW_BLUR_TIMES: usize = 8;
+
+/// For the 3D view of Scanline Render `id` with motion blur at `frame`:
+/// its shutter times (at most [`VIEW_BLUR_TIMES`], spread over the same
+/// shutter) and its scenes at the frames round them (by offset; frames
+/// whose scene fails are left out). Nothing without blur.
+fn blurred(eval: &mut Evaluator, graph: &Graph, id: &str, frame: i64) -> (Vec<f64>, Vec<(i64, Arc<arclight::scene::Scene>)>) {
+    let Some(node) = graph.node(id).filter(|n| n.op == "scanline_render") else { return Default::default() };
+    let params = arclight::ops::params_with_defaults(&node.op, &arclight::ops::resolve_params(&node.op, &node.params, frame));
+    let Some(mut times) = arclight::ops::blur_times(&params).filter(|t| t.len() > 1) else { return Default::default() };
+    if times.len() > VIEW_BLUR_TIMES {
+        let share = times[1] - times[0];
+        times = arclight::render3d::Blur::times(times[0] - share / 2.0, share * times.len() as f64, VIEW_BLUR_TIMES);
+    }
+    let (lo, hi) = times.iter().fold((0.0f64, 0.0f64), |(lo, hi), &t| (lo.min(t), hi.max(t)));
+    let then = (lo.floor() as i64..=hi.ceil() as i64).filter(|k| *k != 0).filter_map(|k| Some((k, scene_of(eval, graph, id, frame + k).ok()??))).collect();
+    (times, then)
 }
 
 /// The scene node `id` shows at `frame`: its own output for 3D nodes, a
@@ -281,6 +311,42 @@ pub fn scene_of(eval: &mut Evaluator, graph: &Graph, id: &str, frame: i64) -> Re
 mod tests {
     use super::*;
     use crate::doc::Doc;
+
+    /// The 3D view of a blurred render: its shutter times (at most 8, over
+    /// the same shutter) and scenes round them; the card's preview smears.
+    #[test]
+    fn the_3d_view_blurs_as_the_render_does() {
+        use arclight::render3d::{render_preview, render_preview_blurred, Blur, Preview};
+        let graph = |mb: i64| -> Graph {
+            serde_json::from_value(serde_json::json!({
+                "project": { "first_frame": 1, "last_frame": 10, "fps": 24, "format": { "width": 64, "height": 32 } },
+                "nodes": [
+                    { "id": "plate", "op": "constant", "params": { "width": 16, "height": 16 } },
+                    { "id": "cam", "op": "camera", "params": { "focal": 18 } },
+                    { "id": "card1", "op": "card", "inputs": ["plate"], "params": { "translate": { "keys": [[1, [-7.0, 0, -5]], [10, [7.0625, 0, -5]]], "interp": "linear" }, "size": [3, 3] } },
+                    { "id": "r", "op": "scanline_render", "inputs": ["card1", "cam", ""], "params": { "motion_blur": mb, "shutter": 0.5 } },
+                ] })).unwrap()
+        };
+        let mut eval = Evaluator::new();
+        let none = blurred(&mut eval, &graph(0), "r", 5);
+        assert!(none.0.is_empty() && none.1.is_empty(), "no blur");
+        assert_eq!(blurred(&mut eval, &graph(1), "card1", 5).0, Vec::<f64>::new(), "not a render");
+        let (times, then) = blurred(&mut eval, &graph(16), "r", 5);
+        assert_eq!(times, Blur::times(-0.25, 0.5, VIEW_BLUR_TIMES), "8 times over the render's shutter");
+        assert_eq!(then.iter().map(|t| t.0).collect::<Vec<_>>(), [-1, 1]);
+        // Its preview: soft edges 5 px wide, as the render's.
+        let g = graph(4);
+        let now = scene_of(&mut eval, &g, "r", 5).unwrap().unwrap();
+        let (times, then) = blurred(&mut eval, &g, "r", 5);
+        assert_eq!(times.len(), 4);
+        let cam = now.cameras[0].clone();
+        let size = arclight::image::Size { width: 64, height: 32 };
+        let blur = Blur { times, frames: std::iter::once((0, &*now, cam.clone())).chain(then.iter().map(|(k, s)| (*k, &**s, cam.clone()))).collect() };
+        let (sharp, soft) = (render_preview(&now, &cam, size, Preview::Solid), render_preview_blurred(&now, &cam, size, Preview::Solid, Some(&blur)));
+        let partly = |img: &Image| (0..64).filter(|&x| (0.02..0.98).contains(&img.at(x, 16)[3])).count();
+        assert!(partly(&sharp) <= 2 && partly(&soft) >= 6, "{} {}", partly(&sharp), partly(&soft));
+        assert_eq!(render_preview_blurred(&now, &cam, size, Preview::Solid, None).pixels, sharp.pixels, "unblurred as before");
+    }
 
     #[test]
     fn a_new_camera_setup_sees_a_card_and_the_renders_extra_inputs() {

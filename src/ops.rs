@@ -2946,6 +2946,12 @@ fn scanline_render(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     scanline_render_frames(params, inputs, &[])
 }
 
+/// A Scanline Render's motion blur times (frames from the frame), from
+/// its params at the frame; None without blur.
+pub fn blur_times(params: &Value) -> Option<Vec<f64>> {
+    serde_json::from_value::<ScanlineRender>(params.clone()).ok()?.blur_times()
+}
+
 /// The frames besides its own (offsets from it) whose inputs a node of `op`
 /// with (resolved) `params` needs too (see [`scanline_render_frames`]): a
 /// Scanline Render's next with the motion pass, and with motion blur

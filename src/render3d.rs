@@ -597,17 +597,40 @@ fn mean_into(mut out: Image, sum: Image, n: usize) -> Image {
 /// shaded as `preview` says (Lit without lights is Solid, so nothing goes
 /// black): what the 3D viewport shows under its outlines.
 pub fn render_preview(scene: &Scene, cam: &Camera, format: Size, preview: Preview) -> Image {
+    preview_cell(scene, cam, format, preview, None)
+}
+
+/// [`render_preview`] with motion blur: the mean of previews at each of
+/// `blur`'s times, jittered as [`render_blurred`] does (the camera stays:
+/// it's the view's). No blur (or one time): [`render_preview`].
+pub fn render_preview_blurred(scene: &Scene, cam: &Camera, format: Size, preview: Preview, blur: Option<&Blur>) -> Image {
+    let Some(blur) = blur.filter(|b| b.times.len() > 1) else { return render_preview(scene, cam, format, preview) };
+    let frames: Vec<(i64, &Scene)> = blur.frames.iter().map(|f| (f.0, f.1)).collect();
+    let sum = blur_sum(&blur.times, |t, cell| {
+        let mut img = preview_cell(&scene.at_time(&frames, t), cam, format, preview, cell);
+        img.planes.clear();
+        img
+    });
+    let out = Image::blank(format, IRect::frame(format));
+    match sum {
+        Some(sum) if sum.pixels.len() == out.pixels.len() => mean_into(out, sum, blur.times.len()),
+        _ => render_preview(scene, cam, format, preview),
+    }
+}
+
+/// [`render_preview`], only `cell`'s pixels drawn, or all of them.
+fn preview_cell(scene: &Scene, cam: &Camera, format: Size, preview: Preview, cell: Option<Cell>) -> Image {
     let mut surfs = surfaces(scene);
     match preview {
         Preview::Lit { shadows } if !scene.lights.is_empty() => {
             let lights: Vec<Light> = scene.lights.iter().map(|l| Light { shadows: l.shadows && shadows, ..l.clone() }).collect();
-            draw_passes(&surfs, &lights, &[], cam, format, 1, Passes::DEPTH, None, None)
+            draw_passes(&surfs, &lights, &[], cam, format, 1, Passes::DEPTH, None, cell)
         }
         _ => {
             for s in surfs.iter_mut().skip(scene.cards.len()) {
                 s.headlight = true;
             }
-            draw(&surfs, &[], cam, format, 1)
+            draw_passes(&surfs, &[], &[], cam, format, 1, Passes::DEPTH, None, cell)
         }
     }
 }
@@ -668,6 +691,7 @@ fn slot(k: &mut usize, on: bool, n: usize) -> usize {
 
 /// Surfaces `surfs` and dots at `points` through `cam` into a frame of
 /// `format`, with depth (see [`render`]).
+#[cfg(test)]
 fn draw(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, samples: usize) -> Image {
     draw_passes(surfs, &[], points, cam, format, samples, Passes::DEPTH, None, None)
 }

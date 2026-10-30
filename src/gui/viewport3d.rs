@@ -1122,7 +1122,8 @@ impl Viewport3d {
         let graph = self.graph.as_ref().unwrap().1.clone();
         let render = self.scene.is_some().then(|| render_camera(&self.view, p, through, pixels));
         if let Some(w) = &self.worker {
-            w.request(SceneRequest { graph, node, frame, render, solid: !self.view.wireframe, preview, rect: Some(target) });
+            // A render's motion blur only once the view has settled.
+            w.request(SceneRequest { graph, node, frame, render, solid: !self.view.wireframe, preview, blur: scale == 1.0, rect: Some(target) });
         }
         self.asked = Some(ask);
     }

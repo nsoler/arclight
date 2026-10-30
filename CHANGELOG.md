@@ -11,6 +11,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.57 — 2026-10-29
+
+- **The 3D view shows a Scanline Render's motion blur** (Dev2): once the
+  view stops moving, its cards and meshes (Lit or Solid) smear across
+  the render's shutter (up to 8 samples, jittered); while you orbit it
+  stays sharp. Particles (drawn as dots) and a looked-through camera's
+  own motion aren't blurred.
+
 ## 0.9.56 — 2026-10-29
 
 - **Motion-blurred particles curve** (Dev2): under gravity and other
