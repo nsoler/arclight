@@ -78,10 +78,9 @@ proposed 2026-10-30, not started; after the Particles round).
   Light 2D; particles (Emitter → forces → Particle Render → Scanline
   Render's growable inputs, Particles 2D, dots and gizmos in the 3D
   view). Then the older open questions below.
-- **Known limits:** animated geometry emitters re-simulate from
-  scratch; sprite texture is one image
-  (no sequence input); the GUI bridge re-simulates particles per MCP
-  call. Shadows cost time (soft spot + 6×6 area ≈ 3.5× unshadowed);
+- **Known limits (updated session 12):** sprite sequences, incremental
+  animated emitters and the shared bridge evaluator shipped in
+  0.9.62–0.9.64; see TODO for the bridge's remaining lock limit. Shadows cost time (soft spot + 6×6 area ≈ 3.5× unshadowed);
   motion blur costs about one render per sample (8 samples ≈ 8×).
 - **Next (no plan yet; ask the user):** motion blur follow-ups
   (per-pixel time jitter against banding at low samples, acceleration in

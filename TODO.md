@@ -7,8 +7,9 @@ they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
-- [ ] 0.9.62–0.9.63: Particle Render texture sequences (play / loop /
-      random start); MCP / Python calls to a running GUI share its caches
+- [ ] 0.9.62–0.9.64: Particle Render texture sequences (play / loop /
+      random start); an emitter on a moving card leaves a trail and plays
+      fast; MCP / Python calls to a running GUI share its caches
       and stay responsive
 - [ ] 0.9.58–0.9.61: several Viewer nodes (the active one shows, eye
       icon); 3D view motion blur preview: particle dots streak, looking
@@ -39,8 +40,6 @@ they come up and strike them (or delete them) when they ship.
 
 ## Particles
 
-- [ ] An image-sequence input for sprite textures
-- [ ] Animated geometry emitters without re-simulating from scratch
 - [ ] Bridged calls other than `particles` that simulate inside one
       evaluation (`scene_objects`, a Scanline Render / Particles 2D at a
       late frame) hold the shared evaluator for the whole run and the
