@@ -162,6 +162,12 @@ VP9 + alpha to keep transparency (VP9 + alpha is the web's transparent
 video, in `.webm`), AV1 for small high-quality files. A codec the
 container can't hold, or one your ffmpeg lacks, is refused with a message
 saying what to use; a failed encode leaves no broken file.
+**Format** picks the file type and renames the file to match: a sequence
+gets a frame number (`shot.####.exr`), a video loses it (`shot.mov`), and
+an empty file gets a name in the project folder. **Codec** lists only
+what the chosen video container can hold, and goes back to auto when a
+new format can't hold the current one. Codec and FPS show only for
+video, the DPX settings only for DPX.
 
 New **Read** and **Media In** nodes fit what they read to the project's
 size (**Fit to project**), and follow it when it changes:

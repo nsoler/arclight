@@ -326,6 +326,10 @@ impl Properties {
                     if op == "light_2d" && !light_2d_shows(doc.param(id, "type").as_str().unwrap_or("spot"), spec.name) {
                         continue;
                     }
+                    // A Media Out shows what its format uses.
+                    if op == "media_out" && !media_out_shows(doc.param(id, "path").as_str().unwrap_or(""), spec.name) {
+                        continue;
+                    }
                     let linked = arclight::link::is_link(&doc.param(id, spec.name));
                     ui.horizontal(|ui| {
                         if spec.animatable && !linked {
@@ -345,6 +349,10 @@ impl Properties {
                         self.param_widget(ui, doc, id, &op, spec);
                     }
                     ui.end_row();
+                    if op == "media_out" && spec.name == "path" {
+                        media_out_format(ui, doc, id);
+                        ui.end_row();
+                    }
                 }
             });
             if let Some((err_id, msg)) = &self.name_error {
@@ -684,14 +692,29 @@ impl Properties {
             ParamKind::Choice(options) => {
                 let current = value.as_str().unwrap_or("").to_string();
                 let mut chosen = current.clone();
+                // A Media Out's codecs: those its video container holds.
+                let video = (op == "media_out" && spec.name == "codec")
+                    .then(|| media::output_format(doc.param(id, "path").as_str().unwrap_or("")))
+                    .flatten()
+                    .filter(|e| media::VIDEO_WRITE_EXTS.contains(e));
+                let options = video.map_or_else(|| options.to_vec(), media::video_codec_choices);
                 ui.horizontal(|ui| {
-                    egui::ComboBox::from_id_salt(("choice", id, spec.name))
-                        .selected_text(&chosen)
+                    let mut text = RichText::new(&chosen);
+                    let invalid = video.filter(|_| !options.contains(&chosen.as_str()));
+                    if invalid.is_some() {
+                        text = text.color(Color32::from_rgb(235, 100, 90));
+                    }
+                    let combo = egui::ComboBox::from_id_salt(("choice", id, spec.name))
+                        .selected_text(text)
                         .show_ui(ui, |ui| {
-                            for o in options {
+                            for o in &options {
                                 ui.selectable_value(&mut chosen, o.to_string(), *o);
                             }
                         });
+                    if let Some(ext) = invalid {
+                        let needs = media::VideoCodec::choose(&current, Path::new(&format!("x.{ext}"))).err().map(|e| format!("{e:#}")).unwrap_or_default();
+                        combo.response.on_hover_text(needs);
+                    }
                     if op == "merge" && spec.name == "operation" {
                         swap_button(ui, doc, id);
                     }
@@ -1269,6 +1292,57 @@ pub struct Browse {
 
 /// Whether a Light 2D of type `kind` uses param `name` (the shape params
 /// of other types are hidden; the rest always show).
+/// Whether a Media Out writing `path` shows param `name`: the codec and
+/// frame rate for a video, the DPX settings for a .dpx sequence;
+/// everything until the path names a format.
+fn media_out_shows(path: &str, name: &str) -> bool {
+    let Some(ext) = media::output_format(path) else { return true };
+    match name {
+        "codec" | "fps" => media::VIDEO_WRITE_EXTS.contains(&ext),
+        "dpx" | "dpx_alpha" => ext == "dpx",
+        _ => true,
+    }
+}
+
+/// Media Out's Format row: the formats it writes, grouped; choosing one
+/// rewrites the File path (see [`set_media_out_format`]).
+fn media_out_format(ui: &mut egui::Ui, doc: &mut Doc, id: &str) {
+    ui.horizontal(|ui| {
+        ui.add_space(KEY_SIZE + ui.spacing().item_spacing.x);
+        ui.label("Format");
+    });
+    let current = media::output_format(doc.param(id, "path").as_str().unwrap_or(""));
+    let name = |ext: &str| media::OUTPUT_FORMATS.iter().find(|f| f.1 == ext).map_or("", |f| f.0);
+    let mut chosen = current;
+    egui::ComboBox::from_id_salt(("format", id)).selected_text(current.map_or("", name)).show_ui(ui, |ui| {
+        for (heading, video) in [("Image sequence", false), ("Video", true)] {
+            ui.label(RichText::new(heading).small().weak());
+            for &(label, ext) in media::OUTPUT_FORMATS.iter().filter(|f| media::VIDEO_WRITE_EXTS.contains(&f.1) == video) {
+                ui.selectable_value(&mut chosen, Some(ext), label);
+            }
+        }
+    });
+    if let Some(ext) = chosen.filter(|&e| Some(e) != current) {
+        set_media_out_format(doc, id, ext);
+    }
+}
+
+/// Write Media Out `id` as format `ext`: its path renamed (a frame pattern
+/// added or dropped; empty, a default name in the project's folder), and
+/// a codec the new container can't hold back to auto, in the same edit.
+fn set_media_out_format(doc: &mut Doc, id: &str, ext: &str) {
+    let path = doc.param(id, "path").as_str().unwrap_or("").to_string();
+    let mut new = media::with_format(&path, ext);
+    if path.is_empty() {
+        new = doc.graph.project.resolve_path(doc.path.as_deref(), &new);
+    }
+    doc.set_param(id, "path", json!(new));
+    let codec = doc.param(id, "codec").as_str().unwrap_or("auto").to_string();
+    if media::VIDEO_WRITE_EXTS.contains(&ext) && !media::video_codec_choices(ext).contains(&codec.as_str()) {
+        doc.set_param(id, "codec", json!("auto"));
+    }
+}
+
 fn light_2d_shows(kind: &str, name: &str) -> bool {
     let only: &[&str] = match name {
         "cone" | "softness" | "reach" => &["spot"],
@@ -1649,6 +1723,46 @@ mod tests {
         // In the middle of the text, up to the cursor.
         let (start, list) = completions("cos(fr) + 1", 6, &d);
         assert_eq!((start, list[0].insert.as_str()), (4, "frame"));
+    }
+
+    /// A Media Out shows the codec and frame rate for a video, the DPX
+    /// settings for a .dpx sequence, and everything before it has a format.
+    #[test]
+    fn a_media_out_shows_what_its_format_uses() {
+        let shown = |path: &str| -> Vec<&str> { arclight::ops::info("media_out").unwrap().params.iter().map(|p| p.name).filter(|n| media_out_shows(path, n)).collect() };
+        assert_eq!(shown("/r/shot.mov"), ["path", "first_frame", "last_frame", "fps", "codec"]);
+        assert_eq!(shown("/r/shot.####.dpx"), ["path", "first_frame", "last_frame", "dpx", "dpx_alpha"]);
+        assert_eq!(shown("/r/shot.####.exr"), ["path", "first_frame", "last_frame"]);
+        assert_eq!(shown("").len(), 7);
+        assert_eq!(shown("/r/shot.mpg").len(), 7, "not a format: all shown");
+    }
+
+    /// Choosing a format renames the file; a codec the new container can't
+    /// hold goes back to auto, and one undo puts both back.
+    #[test]
+    fn a_new_format_renames_the_file_and_resets_a_codec_it_cant_hold() {
+        let mut doc = Doc::new(Graph::default(), None);
+        doc.graph.project.folder = Some("/shows/spot".into());
+        let out = doc.add_node("media_out", [0.0, 0.0]);
+        let state = |doc: &Doc| (doc.param(&out, "path"), doc.param(&out, "codec"));
+        doc.commit(false);
+        // Empty: a default name in the project's folder.
+        set_media_out_format(&mut doc, &out, "exr");
+        assert_eq!(state(&doc).0, json!("/shows/spot/render.####.exr"));
+        doc.set_param(&out, "path", json!("/r/shot.mov"));
+        doc.set_param(&out, "codec", json!("ProRes 4444 + alpha"));
+        doc.commit(false);
+        set_media_out_format(&mut doc, &out, "mkv");
+        doc.commit(false);
+        assert_eq!(state(&doc), (json!("/r/shot.mkv"), json!("ProRes 4444 + alpha")), "kept where it can go");
+        set_media_out_format(&mut doc, &out, "webm");
+        doc.commit(false);
+        assert_eq!(state(&doc), (json!("/r/shot.webm"), json!("auto")));
+        doc.undo();
+        assert_eq!(state(&doc), (json!("/r/shot.mkv"), json!("ProRes 4444 + alpha")), "one step");
+        // To a sequence: the codec stays (it isn't used or shown).
+        set_media_out_format(&mut doc, &out, "png");
+        assert_eq!(state(&doc), (json!("/r/shot.####.png"), json!("ProRes 4444 + alpha")));
     }
 
     /// A Media Out render goes on from the viewer's particles: it writes

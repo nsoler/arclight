@@ -12,6 +12,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.33 — 2026-10-30
+
+- Media Out's properties have a **Format** menu (image sequences EXR,
+  DPX, TIFF, PNG, JPEG, WebP, TGA; video MP4, MOV, MKV, WebM, MXF, M4V,
+  AVI) that renames the file. Switching between a sequence and a video
+  adds or drops the frame number (`shot.mov` ↔ `shot.####.exr`), and an
+  empty file gets a name in the project folder. The Codec menu offers
+  only codecs the chosen container holds, and goes back to auto when a
+  new format can't hold the current one. Codec and FPS show only for
+  video, the DPX settings only for DPX.
+
 ## 0.10.32 — 2026-10-30
 
 - **Media Out writes DNxHR, VP9 and AV1**: DNxHR HQX and DNxHR 444

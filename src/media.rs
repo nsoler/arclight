@@ -433,6 +433,70 @@ pub const VIDEO_CODECS: &[&str] = &[
 /// The video containers Media Out writes.
 pub const VIDEO_WRITE_EXTS: &[&str] = &["mp4", "mov", "mkv", "webm", "mxf", "m4v", "avi"];
 
+/// The image sequence formats Media Out writes (see [`Image::write_as`]).
+pub const SEQUENCE_WRITE_EXTS: &[&str] = &["exr", "dpx", "tif", "png", "jpg", "webp", "tga"];
+
+/// Every format Media Out writes, as (name, extension): the sequences
+/// (`SEQUENCE_WRITE_EXTS`), then the videos (`VIDEO_WRITE_EXTS`).
+pub const OUTPUT_FORMATS: &[(&str, &str)] = &[
+    ("EXR", "exr"), ("DPX", "dpx"), ("TIFF", "tif"), ("PNG", "png"), ("JPEG", "jpg"), ("WebP", "webp"), ("TGA", "tga"),
+    ("MP4", "mp4"), ("MOV", "mov"), ("MKV", "mkv"), ("WebM", "webm"), ("MXF", "mxf"), ("M4V", "m4v"), ("AVI", "avi"),
+];
+
+/// The output format (an extension of `OUTPUT_FORMATS`) a Media Out path
+/// is written as, if it names one (`.tiff` and `.jpeg` count as `tif`
+/// and `jpg`).
+pub fn output_format(path: &str) -> Option<&'static str> {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or("");
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase())?;
+    let ext = match ext.as_str() {
+        "tiff" => "tif",
+        "jpeg" => "jpg",
+        e => e,
+    };
+    OUTPUT_FORMATS.iter().map(|&(_, e)| e).find(|&e| e == ext)
+}
+
+/// `path` written as format `ext` instead: its extension replaced, and a
+/// frame pattern added for a sequence (`shot.mov` → `shot.####.exr`) or
+/// dropped for a video (`shot_%04d.png` → `shot.mov`); one already there
+/// stays as typed. An empty path gives `render.####.exr`, `render.mov`….
+pub fn with_format(path: &str, ext: &str) -> String {
+    let cut = path.rfind(['/', '\\']).map_or(0, |i| i + 1);
+    let (dir, name) = path.split_at(cut);
+    // An extension, unless what follows the dot is a frame pattern.
+    let stem = match name.rsplit_once('.') {
+        Some((stem, e)) if !stem.is_empty() && !e.contains(['#', '%']) => stem,
+        _ => name,
+    };
+    // A trailing frame pattern: #### or %04d, with the . or _ before it.
+    let digits = stem.trim_end_matches('#');
+    let base = if digits.len() < stem.len() {
+        digits
+    } else {
+        match stem.strip_suffix('d').and_then(|s| s.rsplit_once('%')) {
+            Some((before, pad)) if pad.chars().all(|c| c.is_ascii_digit()) => before,
+            _ => stem,
+        }
+    };
+    let pattern = base.len() < stem.len();
+    let base = if pattern { base.strip_suffix(['.', '_']).unwrap_or(base) } else { base };
+    let base = if base.is_empty() { "render" } else { base };
+    if VIDEO_WRITE_EXTS.contains(&ext) {
+        format!("{dir}{base}.{ext}")
+    } else if pattern {
+        format!("{dir}{stem}.{ext}")
+    } else {
+        format!("{dir}{base}.####.{ext}")
+    }
+}
+
+/// Media Out's codec choices for a video in a `.ext` file: auto, then
+/// those that container holds.
+pub fn video_codec_choices(ext: &str) -> Vec<&'static str> {
+    VIDEO_CODECS.iter().copied().filter(|&c| c == "auto" || VideoCodec::ALL.iter().any(|v| v.name() == c && v.containers().contains(&ext))).collect()
+}
+
 /// What a video file is encoded as.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum VideoCodec {
@@ -746,6 +810,67 @@ mod tests {
         assert!(err.starts_with("AV1 10-bit needs ffmpeg's libsvtav1 or libaom-av1 encoder, which this ffmpeg"), "{err}");
         let err = VideoCodec::Dnxhr444.encoder_in(&[]).unwrap_err().to_string();
         assert!(err.starts_with("DNxHR 444 10-bit needs ffmpeg's dnxhd encoder"), "{err}");
+    }
+
+    /// The formats offered are exactly the ones written, and each
+    /// sequence format writes a frame that reads back.
+    #[test]
+    fn output_formats_are_what_media_out_writes() {
+        let exts: Vec<&str> = OUTPUT_FORMATS.iter().map(|&(_, e)| e).collect();
+        assert_eq!(exts, [SEQUENCE_WRITE_EXTS, VIDEO_WRITE_EXTS].concat());
+        let dir = std::env::temp_dir().join(format!("arclight_formats_{}", std::process::id()));
+        let mut img = Image::new(4, 2);
+        img.pixels.fill([0.2, 0.4, 0.6, 1.0]);
+        for ext in SEQUENCE_WRITE_EXTS {
+            let path = dir.join(format!("f.0001.{ext}"));
+            img.write(&path).unwrap_or_else(|e| panic!("{ext}: {e:#}"));
+            assert_eq!(Image::read(&path).unwrap_or_else(|e| panic!("{ext}: {e:#}")).width, 4, "{ext}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(output_format("/a/shot.####.EXR"), Some("exr"));
+        assert_eq!(output_format("shot.tiff"), Some("tif"));
+        assert_eq!(output_format("shot.jpeg"), Some("jpg"));
+        assert_eq!((output_format("shot.mpg"), output_format(""), output_format("dir.v2/shot")), (None, None, None));
+    }
+
+    #[test]
+    fn a_new_format_rewrites_the_name_and_its_frame_pattern() {
+        for (path, ext, want) in [
+            ("/shots/a/shot.mov", "exr", "/shots/a/shot.####.exr"),
+            ("/shots/a/shot.####.exr", "mov", "/shots/a/shot.mov"),
+            ("shot_%04d.png", "mp4", "shot.mp4"),
+            ("shot.%04d.png", "exr", "shot.%04d.exr"),
+            ("shot.####.png", "dpx", "shot.####.dpx"),
+            ("shot_####.tif", "jpg", "shot_####.jpg"),
+            ("shot.mp4", "webm", "shot.webm"),
+            ("shot", "exr", "shot.####.exr"),
+            ("shot", "mov", "shot.mov"),
+            ("", "exr", "render.####.exr"),
+            ("", "mov", "render.mov"),
+            ("/out/", "png", "/out/render.####.png"),
+            ("####.exr", "mov", "render.mov"),
+            ("C:\\renders\\v2.1\\shot.mov", "png", "C:\\renders\\v2.1\\shot.####.png"),
+            ("dir.v2/take.3.mov", "tif", "dir.v2/take.3.####.tif"),
+        ] {
+            assert_eq!(with_format(path, ext), want, "{path} -> {ext}");
+        }
+    }
+
+    #[test]
+    fn codec_choices_follow_the_container() {
+        assert_eq!(video_codec_choices("webm"), ["auto", "VP9 10-bit", "VP9 + alpha", "AV1 10-bit"]);
+        assert_eq!(video_codec_choices("mxf"), ["auto", "DNxHR HQX 10-bit", "DNxHR 444 10-bit"]);
+        assert_eq!(video_codec_choices("avi"), ["auto", "H.264 8-bit"]);
+        assert_eq!(video_codec_choices("mov"), ["auto", "H.264 8-bit", "HEVC 10-bit", "ProRes 422 HQ 10-bit", "ProRes 4444 + alpha", "DNxHR HQX 10-bit", "DNxHR 444 10-bit"]);
+        // Each offered is one VideoCodec::choose takes for it.
+        for ext in VIDEO_WRITE_EXTS {
+            let path = PathBuf::from(format!("x.{ext}"));
+            for c in video_codec_choices(ext) {
+                assert!(VideoCodec::choose(c, &path).is_ok(), "{c} in .{ext}");
+            }
+            let refused = VIDEO_CODECS.iter().filter(|c| !video_codec_choices(ext).contains(c));
+            assert!(refused.clone().all(|c| VideoCodec::choose(c, &path).is_err()), ".{ext}");
+        }
     }
 
     #[test]
