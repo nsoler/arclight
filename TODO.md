@@ -7,15 +7,11 @@ they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
-- [ ] 0.9.49–0.9.51: node browser on ⇧Tab; Card Shading (lambert /
-      blinn, lit by an Area Light on the render's extra input); a new 3D
-      setup renders a Card (not black); the light's icon and handles in
-      the 3D view; Look through in 3D view in Camera / light Properties
 - [ ] 0.9.48: Scanline Render motion blur (incl. particles), the 3D
       view's Solid / Lit (⇧Z) (the camera setup before the Viewer:
       user tested it, which led to 0.9.49–0.9.51)
-- [ ] 0.9.47: Card Opacity, the viewer's frame size labels, the square
-      About logo
+- [ ] 0.9.47: the viewer's frame size labels, the square About logo
+      (Card Opacity checked by the user with 0.9.51)
 - [ ] 0.9.34–0.9.46: node graph Tab / ⇧R / ⇧T / ⇧M; Area Light, falloff,
       radius, exposure, Look at; light handles and Look through (0);
       shadows and the shadow pass; Light 2D; particles

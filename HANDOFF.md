@@ -25,7 +25,7 @@ done), `docs/help.md` (the in-app help) and
   black), `worker::scene_of` includes a render's extra inputs (lights
   there had no icon / handles), Look through toggle in Camera / Spot /
   Area Light Properties. **Released as v0.9.51.** Ask the user how these
-  test; their old test project still has its camera at z = 0. v0.9.51 checked: both workflows passed, all five assets attached, marked Latest. A Card
+  test; their old test project still has its camera at z = 0. The user hand-tested 0.9.49–0.9.51 (Card Shading, Opacity, Blinn) and it works. v0.9.51 checked: both workflows passed, all five assets attached, marked Latest. A Card
   can't go into the render's background (image) port: Scene or the
   render's last input.
 - **State (before session 12):** version **0.9.48** on branch **`wip-ns-3dwork`**, merged to
