@@ -7,6 +7,7 @@
 use crate::doc::Doc;
 use crate::gizmo3d::{self, Handle, Layout, Mode, Space, Tool, Transforming};
 use crate::overlay::{Overlays, Xf};
+use crate::viewport3d::Shading;
 use arclight::color;
 use arclight::ops;
 use arclight::image::{IRect, Image, Plane, Size};
@@ -550,6 +551,14 @@ impl Viewer {
             let tip = "The gizmo's axes: the world's, or the object's own (G / R / S: press X / Y / Z twice for the object's)";
             ui.selectable_value(&mut self.space, Space::Global, "Global").on_hover_text(tip);
             ui.selectable_value(&mut self.space, Space::Local, "Local").on_hover_text(tip);
+            ui.separator();
+            let shading = self.viewport3d.shading();
+            for (s, label, tip) in [(Shading::Solid, "Solid", "Meshes lit from the view, quick to work in (⇧Z)"), (Shading::Lit, "Lit", "Meshes lit by the scene's lights and materials, as a render is (⇧Z)")] {
+                if ui.selectable_label(shading == s, label).on_hover_text(tip).clicked() {
+                    self.viewport3d.set_shading(s);
+                }
+            }
+            ui.add_enabled(shading == Shading::Lit, egui::Checkbox::new(&mut self.viewport3d.view.shadows, "Shadows")).on_hover_text("Lit: the lights' shadows (once the view stops moving)");
             ui.separator();
             if let Some(t) = d.target {
                 ui.weak(format!("Viewing {t}"));

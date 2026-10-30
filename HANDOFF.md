@@ -9,17 +9,17 @@ done), `docs/help.md` (the in-app help) and
 
 ## Start here (next session)
 
-- **State:** version **0.9.47** on branch **`wip-ns-3dwork`**, merged to
+- **State:** version **0.9.48** on branch **`wip-ns-3dwork`**, merged to
   `main`; **M12 (lights) and M13 (particles) are DONE**. The local build
-  (`target/release`) is 0.9.47, so the Omarchy launcher runs 0.9.47
+  (`target/release`) is 0.9.48, so the Omarchy launcher runs 0.9.48
   (the Python `.so` is 0.9.46). Both workers idle; nothing uncommitted.
-- **Latest release: v0.9.47** (marked **Latest**;
+- **Latest release: v0.9.48** (marked **Latest**;
   github.com/nsoler/arclight/releases/latest): Linux x86_64 tarball,
   macOS universal DMG, `arclt` wheels + sdist (both workflows passed,
-  all five assets checked). Earlier: v0.9.46, v0.9.33, v0.9.32,
+  all five assets checked). Earlier: v0.9.47, v0.9.46, v0.9.33, v0.9.32,
   v0.9.31, v0.9.30, v0.9.27, v0.9.11. The stray v0.9.7 draft release was deleted
   at the user's request (the published v0.9.7 release and tag remain).
-- **Ask the user first:** how 0.9.34–0.9.47 test (0.9.47: Card Opacity, frame size labels, square About logo); node graph Tab /
+- **Ask the user first:** how 0.9.34–0.9.48 test (0.9.48: motion blur, Lit / Solid view, camera setup before the Viewer; 0.9.47: Card Opacity, frame size labels, square About logo); node graph Tab /
   ⇧R / ⇧T / ⇧M; Area Light, falloff, radius, exposure, Look at; light
   handles and Look through selected (0); shadows and the shadow pass;
   Light 2D; particles (Emitter → forces → Particle Render → Scanline
@@ -48,6 +48,19 @@ done), `docs/help.md` (the in-app help) and
   (session-only) and a square, undistorted About logo (`square_uv`;
   egui's Image kept the whole texture's aspect and squeezed it)
   (MathWiz). Released as v0.9.47.
+- **0.9.48 (user requests after 0.9.47):** Scanline Render motion blur
+  incl. particles (3DWorker: params `motion_blur` (Int samples, 0/1 off),
+  `shutter`, `shutter_offset`, like other blurring nodes; stratified
+  temporal supersampling; `Evaluator.others: BTreeMap<offset,
+  Evaluator>`, `ops::other_frames`, `scanline_render_frames`,
+  `Scene::at_time`, `scene::between`; `ParticleStream.shift`; particle
+  motion vectors). Follow-ups: per-pixel time jitter, acceleration in
+  particle streaks, blur in the viewport preview. 3D view Solid / Lit
+  (MathWiz: `render3d::Preview {Solid, Lit {shadows}}`,
+  `ViewCam.shading / shadows`, ⇧Z, toolbar, View menu). Camera setup
+  before the Viewer (MathWiz: `Doc::add_camera_setup` priority: targeted
+  wire > first Viewer's input > new Viewer; `last_image()`). The user
+  hand-tested the 0.9.30 camera setup and asked for this placement.
 - **M12 (lights), done 0.9.35–0.9.43:** Area Light, falloff, radius,
   exposure / enabled, look at (0.9.35, 3DWorker); 3D view handles + Look
   through selected (0.9.37); Light 2D engine (0.9.38, MathWiz) and node
@@ -226,7 +239,7 @@ done), `docs/help.md` (the in-app help) and
   (emitter shapes, attractor, vortex, bounce) picked / moved;
   `gizmo3d::param_for(op, mode)` (forces move only); overlay emitter
   handles when a Particles 2D is viewed. **M13 done.**
-  - Next version: **0.9.48**. Both workers (mathwiz, worker3d) were
+  - Next version: **0.9.49**. Both workers (mathwiz, worker3d) were
     idle at the end of session 10; nothing uncommitted. (CHANGELOG has one entry per version.)
 - Mac: also ask whether anyone tried an Intel Mac. Mac-only bugs come
   first.
@@ -438,7 +451,7 @@ done), `docs/help.md` (the in-app help) and
   3D viewport, so its changes go 0.9.1, 0.9.2, … 0.9.nn).
   The bump goes in `Cargo.toml`, `python/Cargo.toml` and
   `plugins/example/Cargo.toml` together, with an entry in `CHANGELOG.md`,
-  in the same commit as the change. Current: **0.9.47**.
+  in the same commit as the change. Current: **0.9.48**.
 - ~27,400 lines of Rust + Python. Tests: 136 library + 10 CLI + 77 GUI
   (`cargo test --release`) and 10 Python (see "Working tips"), all
   passing. Some tests need ffmpeg (with libx265) and skip without it.

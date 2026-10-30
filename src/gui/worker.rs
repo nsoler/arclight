@@ -168,6 +168,9 @@ pub struct SceneRequest {
     pub render: Option<(arclight::geom::Camera, arclight::image::Size)>,
     /// Render the meshes too, solid (else the viewport draws their edges).
     pub solid: bool,
+    /// How solid meshes are shaded: from the camera, or by the scene's
+    /// lights.
+    pub preview: arclight::render3d::Preview,
     /// Where the render goes on screen (echoed back).
     pub rect: Option<eframe::egui::Rect>,
 }
@@ -207,8 +210,10 @@ impl SceneWorker {
                     let render = match (&scene, &req.render) {
                         (Ok(Some(s)), Some((cam, format))) if !s.cards.is_empty() || (req.solid && !s.meshes.is_empty()) => {
                             let meshes = if req.solid { s.meshes.clone() } else { Vec::new() };
-                            let shown = arclight::scene::Scene { cards: s.cards.clone(), meshes, ..Default::default() };
-                            Some(Arc::new(arclight::render3d::render_preview(&shown, cam, *format)))
+                            let lit = matches!(req.preview, arclight::render3d::Preview::Lit { .. });
+                            let lights = if lit { s.lights.clone() } else { Vec::new() };
+                            let shown = arclight::scene::Scene { cards: s.cards.clone(), meshes, lights, ..Default::default() };
+                            Some(Arc::new(arclight::render3d::render_preview(&shown, cam, *format, req.preview)))
                         }
                         _ => None,
                     };

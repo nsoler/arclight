@@ -28,15 +28,17 @@ input is violet and labelled **mask**.
 
 ### 3D camera setup
 
-To put a picture into 3D, add a **3D Camera Setup**: right-click the wire
-the picture travels on and choose **Insert 3D Camera Setup**, or use
-**Edit ▸ Add 3D Camera Setup** (into the selected wire, else after the
-selected node, else on its own). It adds a **Camera**, a **Scene** and a
-**Scanline Render**, wired up, in a **3D Setup** backdrop beside the wire:
-the picture on the wire becomes the render's background, and the render
-goes on to where the wire went. Then add Cards, meshes and lights to the
-Scene's free inputs. Choosing **Camera** in the node browser does the same
-(hold **⇧** for the Camera alone).
+To put a picture into 3D, use **Edit ▸ Add 3D Camera Setup** (or choose
+**Camera** in the node browser; hold **⇧** for the Camera alone). It adds a
+**Camera**, a **Scene** and a **Scanline Render**, wired up, in a **3D
+Setup** backdrop, just before the **Viewer**, so the render shows straight
+away: the picture the Viewer showed becomes the render's background (with
+no Viewer, one is added; a Viewer with nothing connected takes the
+selected node, or the end of the chain, as the background). To put it
+somewhere else, right-click a wire and choose **Insert 3D Camera Setup**:
+the picture on that wire becomes the background and the render goes on to
+where the wire went. Then add Cards, meshes and lights to the Scene's free
+inputs.
 
 The first setup in a project switches the viewer to its **3D** view,
 framed on the new scene, and says how to switch back (**Tab**). The
@@ -177,12 +179,15 @@ orthographic.
 | **Home** | Frame everything |
 | **`** (backtick) | A pie of views: point at one and click, or let go of the key |
 | **Z** | Meshes solid (lit from the view) or as wireframes |
+| **⇧Z** | Solid (lit from the view) or Lit (by the scene's lights) |
 
 The number row works as well as the numpad. Axis views switch to
 orthographic until you orbit away. Orbiting leaves a camera view for the
 free view from where the camera was. Looking through a spot or area light
 shows where it shines (a spot's cone just fills the frame's height): move
 or rotate it with G / R or the gizmo to aim it.
+
+- **Solid / Lit** (⇧Z, the 3D toolbar, View ▸ Lit shading): Solid lights meshes from the view, for working fast; Lit lights them by the scene's lights and materials as Scanline Render does (from the view if there are no lights). Lit is the default when the scene has lights. **Shadows** (toolbar, View ▸ Lit shadows) adds the lights' shadows in Lit, once the view stops moving.
 
 ### Selecting in 3D
 
@@ -312,7 +317,17 @@ color).
   faint card in front doesn't take them from what shows through it.
 - **motion** (`motion.u`, `motion.v`) is how far, in pixels (right and
   down), what each pixel shows moves by the next frame, with the camera's
-  move and the objects' own animation: for motion blur in 2D.
+  move and the objects' own animation (particles by their velocity): for
+  motion blur in 2D.
+- **Motion blur** (Scanline Render, 0 or 1: off, the default) renders
+  that many times across the **Shutter** (in frames: 0.5 is a 180°
+  shutter), **centered** on the frame, or starting or ending at it
+  (**Shutter offset**), and averages them. Cameras, cards, meshes (their
+  vertices too, if they deform) and lights move between where they are at
+  the frames round each time; particles move along their velocities, so
+  fast ones streak. The picture, mattes and light passes blur; depth, P,
+  N, uv, motion and id stay the frame's own. 8 is usually smooth (16 for
+  fast moves); each one costs about a render.
 - **Holdout** on a Cube, Sphere, Cylinder, Plane or Read Geo makes it draw
   nothing but cut out what is behind it (alpha 0 there); its matte still
   shows where it is.
@@ -372,7 +387,9 @@ drag its position, size and angle in the viewer.
   fire); or **objects** (a copy of the **objects** input's meshes at each
   particle, one at random when there are several, scaled by size and
   facing along their velocity, spinning, or as modelled). Rendered by
-  Scanline Render with everything else, behind nearer surfaces.
+  Scanline Render with everything else, behind nearer surfaces; its
+  **Motion blur** streaks them along their velocities, and its **motion**
+  pass gives their motion vectors.
 - **Particles 2D:** no camera: x and y are frame pixels (y down) and size
   is pixels, drawn over the **background** as Particle Render says. Pair it
   with an emitter's **mask** shape to emit where an image is.

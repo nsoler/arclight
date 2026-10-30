@@ -1125,6 +1125,9 @@ pub static OPS: &[OpInfo] = &[
             p!("height", "Height", FRAME_SIZE, 0),
             fixed!("samples", "Anti-aliasing", ParamKind::Int { min: 1, max: 8 }, 3),
             fixed!("passes", "Passes", ParamKind::Flags(&render3d::Passes::NAMES), ["depth"]),
+            fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
+            fixed!("shutter", "Shutter", SHUTTER, 0.5),
+            fixed!("shutter_offset", "Shutter offset", ParamKind::Choice(SHUTTER_OFFSETS), "centered"),
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -1139,7 +1142,10 @@ pub static OPS: &[OpInfo] = &[
                shadows took away: the picture plus it has no shadows). The scene's lights light Lambert and Blinn objects; \
                with none, everything renders unlit. Lights with Cast shadows on are blocked by objects that cast shadows, \
                on objects that receive them. Holdout objects draw \
-               nothing but cut out what is behind them.",
+               nothing but cut out what is behind them. Motion blur renders that many times across the shutter \
+               (Shutter frames long, centered on the frame, starting or ending at it; 0 or 1: off) and averages them: \
+               cameras, objects and lights move between their places at the frames round each time, particles along \
+               their velocities. The picture, mattes and light passes blur; depth, P, N, uv, motion and id are the frame's own.",
     },
     OpInfo {
         name: "lens_distort",
@@ -2882,6 +2888,32 @@ struct ScanlineRender {
     /// None (a project from before passes): depth only.
     #[serde(default)]
     passes: Option<Vec<String>>,
+    /// Renders across the shutter (0 or 1: no motion blur; missing: 0).
+    #[serde(default)]
+    motion_blur: usize,
+    #[serde(default = "half")]
+    shutter: f64,
+    #[serde(default)]
+    shutter_offset: Option<String>,
+}
+
+fn half() -> f64 {
+    0.5
+}
+
+impl ScanlineRender {
+    /// With motion blur, the times to render at (frames from the frame).
+    fn blur_times(&self) -> Option<Vec<f64>> {
+        if self.motion_blur < 2 || self.shutter <= 0.0 {
+            return None;
+        }
+        let start = match self.shutter_offset.as_deref() {
+            Some("start") => 0.0,
+            Some("end") => -self.shutter,
+            _ => -self.shutter / 2.0,
+        };
+        Some(render3d::Blur::times(start, self.shutter, self.motion_blur))
+    }
 }
 
 /// A particle node outside a graph: its params the same at every frame,
@@ -2899,25 +2931,37 @@ fn particle_node(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &Eval
 }
 
 fn scanline_render(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
-    scanline_render_next(params, inputs, [None, None])
+    scanline_render_frames(params, inputs, &[])
 }
 
-/// Whether a node of `op` with (resolved) `params` needs its inputs a frame
-/// later too (see [`scanline_render_next`]): a Scanline Render writing the
-/// motion pass.
-pub fn needs_next_frame(op: &str, params: &Value) -> bool {
-    op == "scanline_render" && params["passes"].as_array().is_some_and(|a| a.iter().any(|v| v == "motion"))
+/// The frames besides its own (offsets from it) whose inputs a node of `op`
+/// with (resolved) `params` needs too (see [`scanline_render_frames`]): a
+/// Scanline Render's next with the motion pass, and with motion blur
+/// those round its shutter. Ascending.
+pub fn other_frames(op: &str, params: &Value) -> Vec<i64> {
+    if op != "scanline_render" {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    if params["passes"].as_array().is_some_and(|a| a.iter().any(|v| v == "motion")) {
+        out.push(1);
+    }
+    let times = serde_json::from_value::<ScanlineRender>(params.clone()).ok().and_then(|p| p.blur_times());
+    if let Some(t) = times {
+        let (lo, hi) = t.iter().fold((0.0f64, 0.0f64), |(lo, hi), &t| (lo.min(t), hi.max(t)));
+        out.extend((lo.floor() as i64..=hi.ceil() as i64).filter(|k| *k != 0));
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
-/// A Scanline Render, given also its scene and camera inputs a frame later
-/// (`next`), for the motion pass (unconnected or missing: as now).
-pub fn scanline_render_next(params: &Value, inputs: &[Option<&Image>], next: [Option<&Image>; 2]) -> Result<Image> {
-    let p: ScanlineRender = parse(params, "scanline_render")?;
+/// A Scanline Render's scene (its scene input's, with the scenes or
+/// particles on its extra inputs joined) and camera (the camera input's,
+/// else the scene's first), from `inputs`.
+fn render_scene(inputs: &[Option<&Image>]) -> (Option<std::sync::Arc<Scene>>, Option<crate::geom::Camera>) {
     let port = |i: usize| inputs.get(i).copied().flatten();
-    let camera_of = |scene_in: Option<&Image>, camera_in: Option<&Image>| {
-        camera_in.and_then(|img| img.scene.as_ref()?.cameras.first().cloned()).or_else(|| scene_in?.scene.as_ref()?.cameras.first().cloned())
-    };
-    // More scenes (or particles) on the extra inputs join the first.
+    let camera = port(1).and_then(|img| img.scene.as_ref()?.cameras.first().cloned()).or_else(|| port(0)?.scene.as_ref()?.cameras.first().cloned());
     let extra: Vec<&Scene> = inputs.iter().skip(3).flatten().filter_map(|i| i.scene.as_deref()).collect();
     let scene = match port(0).and_then(|img| img.scene.clone()) {
         Some(s) if extra.is_empty() => Some(s),
@@ -2927,15 +2971,35 @@ pub fn scanline_render_next(params: &Value, inputs: &[Option<&Image>], next: [Op
             Some(std::sync::Arc::new(all))
         }
     };
-    let camera = camera_of(port(0), port(1)).context("no camera: connect a Camera to the camera input, or put one in the scene")?;
-    let bg = port(2);
+    (scene, camera)
+}
+
+/// A Scanline Render, given also its inputs at `others` frames (offset,
+/// inputs then; see [`other_frames`]): the next for the motion pass, those
+/// round the shutter for motion blur (unconnected or missing: as now).
+pub fn scanline_render_frames(params: &Value, inputs: &[Option<&Image>], others: &[(i64, Vec<Option<&Image>>)]) -> Result<Image> {
+    let p: ScanlineRender = parse(params, "scanline_render")?;
+    let (scene, camera) = render_scene(inputs);
+    let camera = camera.context("no camera: connect a Camera to the camera input, or put one in the scene")?;
+    let bg = inputs.get(2).copied().flatten();
     let format = bg.map_or(source_size(p.width, p.height), |b| b.format);
     let empty = Scene::default();
+    let scene = scene.as_deref().unwrap_or(&empty);
     let passes = p.passes.as_ref().map_or(render3d::Passes::DEPTH, |n| render3d::Passes::from_names(n.iter().map(String::as_str)));
-    let next_scene = next[0].and_then(|img| img.scene.clone());
-    let next_camera = camera_of(next[0], next[1]).unwrap_or_else(|| camera.clone());
-    let later = passes.motion.then(|| (next_scene.as_deref().unwrap_or(&empty), &next_camera));
-    Ok(render3d::render_motion(scene.as_deref().unwrap_or(&empty), &camera, format, p.samples, bg, passes, later))
+    let then: Vec<(i64, Option<std::sync::Arc<Scene>>, crate::geom::Camera)> = others
+        .iter()
+        .map(|(k, ins)| {
+            let (s, c) = render_scene(ins);
+            (*k, s, c.unwrap_or_else(|| camera.clone()))
+        })
+        .collect();
+    let next = then.iter().find(|t| t.0 == 1).map(|t| (t.1.as_deref().unwrap_or(&empty), &t.2));
+    let later = next.filter(|_| passes.motion).or(passes.motion.then_some((&empty, &camera)));
+    let blur = p.blur_times().map(|times| render3d::Blur {
+        times,
+        frames: std::iter::once((0, scene, camera.clone())).chain(then.iter().map(|t| (t.0, t.1.as_deref().unwrap_or(&empty), t.2.clone()))).collect(),
+    });
+    Ok(render3d::render_blurred(scene, &camera, format, p.samples, bg, passes, later, blur.as_ref()))
 }
 
 /// A Read Geo's meshes: the file's parts (OBJ, or glTF for .gltf / .glb;

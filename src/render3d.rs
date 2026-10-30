@@ -408,13 +408,17 @@ pub fn render_motion(scene: &Scene, cam: &Camera, format: Size, samples: usize, 
     let sprites = scene.particles.iter().any(|s| !matches!(s.look, crate::particle_nodes::Look::Objects { .. }));
     let depth_for_sprites = sprites && !passes.depth;
     let passes = Passes { depth: passes.depth || sprites, ..passes };
+    // Particle objects a frame later: the same particles moved on along
+    // their velocities (the next frame's own may be others).
+    let next_objects = next.filter(|_| objects.is_some() && passes.motion).and_then(|(n, _)| particles::with_objects(&Scene { particles: scene.particles.iter().map(|s| s.shifted(1.0)).collect(), ..n.clone() }));
+    let next = next.map(|(n, c)| (next_objects.as_ref().unwrap_or(n), c));
     let out = draw_passes(&surfaces(scene), &scene.lights, &scene.points, cam, format, samples, passes, next);
     let mut out = match background {
         Some(bg) => over_background(out, bg),
         None => out,
     };
     if sprites {
-        out = particles::draw(scene, cam, format, out);
+        out = particles::draw(scene, cam, format, out, passes.motion.then(|| next.map_or(cam, |n| n.1)));
         if depth_for_sprites {
             out.planes.retain(|p| p.name != "depth");
         }
@@ -422,15 +426,100 @@ pub fn render_motion(scene: &Scene, cam: &Camera, format: Size, samples: usize, 
     out
 }
 
-/// `scene`'s cards and meshes through `cam`, one sample a pixel, the meshes
-/// lit from the camera (so their shape shows without lights): what the 3D
-/// viewport shows under its outlines.
-pub fn render_preview(scene: &Scene, cam: &Camera, format: Size) -> Image {
-    let mut surfs = surfaces(scene);
-    for s in surfs.iter_mut().skip(scene.cards.len()) {
-        s.headlight = true;
+/// How the 3D viewport shades its meshes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Preview {
+    /// Lit from the camera, so their shape shows without lights (quick).
+    #[default]
+    Solid,
+    /// By the scene's lights and their materials, as a render is, with
+    /// the lights' shadows or none.
+    Lit { shadows: bool },
+}
+
+/// Motion blur for [`render_blurred`]: the times to render at (frames
+/// from the current one) and the scenes and cameras at the whole frames
+/// round them (offset from the current frame; 0 is the current one).
+pub struct Blur<'a> {
+    pub times: Vec<f64>,
+    pub frames: Vec<(i64, &'a Scene, Camera)>,
+}
+
+impl Blur<'_> {
+    /// `n` times evenly across a shutter `shutter` frames open from
+    /// `start` frames (each in the middle of its share).
+    pub fn times(start: f64, shutter: f64, n: usize) -> Vec<f64> {
+        (0..n).map(|i| start + shutter * (i as f64 + 0.5) / n as f64).collect()
     }
-    draw(&surfs, &[], cam, format, 1)
+
+    /// The camera `t` frames on: between those at the whole frames round
+    /// it, else `cam`.
+    fn camera(&self, cam: &Camera, t: f64) -> Camera {
+        let k = t.floor() as i64;
+        let w = t - t.floor();
+        let find = |k: i64| self.frames.iter().find(|f| f.0 == k).map(|f| &f.2);
+        match (find(k), find(k + 1)) {
+            (Some(a), Some(b)) => Camera { world: crate::scene::between(&a.world, &b.world, w), focal: a.focal + (b.focal - a.focal) * w, ..cam.clone() },
+            (Some(a), None) if w == 0.0 => a.clone(),
+            _ => cam.clone(),
+        }
+    }
+}
+
+/// [`render_motion`] with motion blur: the picture, mattes and light passes
+/// the mean of renders at each of `blur`'s times (the scene and camera
+/// in between their whole frames: see [`Scene::at_time`]); depth, P, N, uv,
+/// motion and id from the render at the frame itself, as without blur.
+/// No blur (or one time): [`render_motion`].
+#[allow(clippy::too_many_arguments)]
+pub fn render_blurred(scene: &Scene, cam: &Camera, format: Size, samples: usize, background: Option<&Image>, passes: Passes, next: Option<(&Scene, &Camera)>, blur: Option<&Blur>) -> Image {
+    let mut out = render_motion(scene, cam, format, samples, background, passes, next);
+    let Some(blur) = blur.filter(|b| b.times.len() > 1) else { return out };
+    let mixed = Passes { depth: false, position: false, normal: false, uv: false, motion: false, id: false, ..passes };
+    let frames: Vec<(i64, &Scene)> = blur.frames.iter().map(|f| (f.0, f.1)).collect();
+    let mut sum: Option<Image> = None;
+    for &t in &blur.times {
+        let img = render_motion(&scene.at_time(&frames, t), &blur.camera(cam, t), format, samples, background, mixed, None);
+        match &mut sum {
+            None => sum = Some(img),
+            Some(acc) => {
+                acc.pixels.iter_mut().zip(&img.pixels).for_each(|(a, b)| (0..4).for_each(|c| a[c] += b[c]));
+                for p in &mut acc.planes {
+                    if let Some(q) = img.plane(&p.name) {
+                        p.data.iter_mut().zip(&q.data).for_each(|(a, b)| *a += b);
+                    }
+                }
+            }
+        }
+    }
+    let Some(sum) = sum.filter(|s| s.pixels.len() == out.pixels.len()) else { return out };
+    let k = 1.0 / blur.times.len() as f32;
+    out.pixels = sum.pixels.iter().map(|p| p.map(|v| v * k)).collect();
+    for p in sum.planes {
+        if p.data.len() == out.pixels.len() {
+            *out.plane_mut(&p.name) = p.data.iter().map(|v| v * k).collect();
+        }
+    }
+    out
+}
+
+/// `scene`'s cards and meshes through `cam`, one sample a pixel, the meshes
+/// shaded as `preview` says (Lit without lights is Solid, so nothing goes
+/// black): what the 3D viewport shows under its outlines.
+pub fn render_preview(scene: &Scene, cam: &Camera, format: Size, preview: Preview) -> Image {
+    let mut surfs = surfaces(scene);
+    match preview {
+        Preview::Lit { shadows } if !scene.lights.is_empty() => {
+            let lights: Vec<Light> = scene.lights.iter().map(|l| Light { shadows: l.shadows && shadows, ..l.clone() }).collect();
+            draw_passes(&surfs, &lights, &[], cam, format, 1, Passes::DEPTH, None)
+        }
+        _ => {
+            for s in surfs.iter_mut().skip(scene.cards.len()) {
+                s.headlight = true;
+            }
+            draw(&surfs, &[], cam, format, 1)
+        }
+    }
 }
 
 /// The light at a hit, in parts (premultiplied, as `color` is): `color`
@@ -1056,7 +1145,7 @@ mod tests {
         let sphere = crate::scene::primitive_model("sphere", &serde_json::json!({ "radius": 2.0, "segments": [48, 24], "translate": [0, 0, -5] }), None).unwrap();
         let red = card(Image::filled(4, 4, [1.0, 0.0, 0.0, 1.0]), [4.5, 0.0, -5.0], [0.0, 60.0, 0.0], [2.0, 2.0]);
         let scene = Scene { cards: vec![red], meshes: vec![sphere], ..Scene::default() };
-        let out = render_preview(&scene, &camera(), FMT);
+        let out = render_preview(&scene, &camera(), FMT, Preview::Solid);
         // Facing the camera in the middle, turning away at the rim; the
         // card as it renders.
         let (mid, rim) = (out.at(32, 16)[0], out.at(32, 16 - 13)[0]);
@@ -1353,7 +1442,7 @@ mod tests {
         let out = render(&Scene { cards: vec![faded(&red, -5.0, 20.0, 0.5)], ..Scene::default() }, &camera(), FMT, 1, Some(&blue));
         assert_eq!(out.at(32, 16), [0.5, 0.0, 0.5, 1.0]);
         // The 3D view's preview shows it faded too.
-        assert_eq!(render_preview(&Scene { cards: vec![faded(&red, -5.0, 20.0, 0.5)], ..Scene::default() }, &camera(), FMT).at(32, 16), [0.5, 0.0, 0.0, 0.5]);
+        assert_eq!(render_preview(&Scene { cards: vec![faded(&red, -5.0, 20.0, 0.5)], ..Scene::default() }, &camera(), FMT, Preview::Solid).at(32, 16), [0.5, 0.0, 0.0, 0.5]);
         // Two half cards stack front to back in either order.
         let green = Image::filled(4, 4, [0.0, 1.0, 0.0, 1.0]);
         let (front, back) = (faded(&red, -3.0, 20.0, 0.5), faded(&green, -6.0, 40.0, 0.5));
@@ -1610,6 +1699,55 @@ mod tests {
         assert_ne!(Evaluator::key(&held, "r", &ctx(5)).unwrap(), Evaluator::key(&later, "r", &ctx(5)).unwrap(), "but not at 6");
         let out = Evaluator::new().evaluate(&later, "r", &ctx(5)).unwrap();
         assert!(out.plane_at("motion.u", 32, 16) > 1.0, "so it moves");
+    }
+
+    #[test]
+    fn motion_blur_averages_renders_across_the_shutter() {
+        use crate::graph::{Evaluator, Graph};
+        use crate::ops::EvalContext;
+        use serde_json::json;
+        // A white card 3 across (19.2 px) sliding right 10 px a frame (as in
+        // the motion test) past a still camera, centered at x 27.2 at frame 5.
+        let graph = |card: serde_json::Value, render: serde_json::Value| -> Graph {
+            serde_json::from_value(json!({
+                "project": { "first_frame": 1, "last_frame": 10, "fps": 24, "format": { "width": 64, "height": 32 } },
+                "nodes": [
+                    { "id": "plate", "op": "constant", "params": { "width": 16, "height": 16 } },
+                    { "id": "cam", "op": "camera", "params": { "focal": 18 } },
+                    { "id": "card1", "op": "card", "inputs": ["plate"], "params": card },
+                    { "id": "r", "op": "scanline_render", "inputs": ["card1", "cam", ""], "params": render },
+                ] })).unwrap()
+        };
+        let sliding = json!({ "translate": { "keys": [[1, [-7.0, 0, -5]], [10, [7.0625, 0, -5]]], "interp": "linear" }, "size": [3, 3] });
+        let at5 = |card: &serde_json::Value, render: serde_json::Value| Evaluator::new().evaluate(&graph(card.clone(), render), "r", &EvalContext { frame: 5, write_outputs: false }).unwrap();
+        // Off (missing, 0 or 1): the render as it was.
+        let sharp = at5(&sliding, json!({ "samples": 4 }));
+        for mb in [0, 1] {
+            let off = at5(&sliding, json!({ "samples": 4, "motion_blur": mb, "shutter": 1.0 }));
+            assert!(off.pixels == sharp.pixels && off.planes.iter().zip(&sharp.planes).all(|(a, b)| a.name == b.name && a.data == b.data), "motion_blur {mb}");
+        }
+        // On, a half-frame shutter: each edge smears over 5 px (the card
+        // from 2.5 px left to 2.5 px right of where it is), the row's total
+        // the same, and the depth pass the frame's own.
+        let blurred = at5(&sliding, json!({ "samples": 4, "motion_blur": 16, "shutter": 0.5 }));
+        let row = |img: &Image| (0..64).map(|x| img.at(x, 16)[3]).collect::<Vec<f32>>();
+        let (a, b) = (row(&sharp), row(&blurred));
+        for (x, got) in b.iter().enumerate() {
+            let left = ((x as f32 + 0.5 - (17.6 - 2.5)) / 5.0).clamp(0.0, 1.0);
+            let right = (((36.8 + 2.5) - (x as f32 + 0.5)) / 5.0).clamp(0.0, 1.0);
+            assert!((got - left.min(right)).abs() < 0.06, "x {x}: {got} vs {}", left.min(right));
+        }
+        let soft = b.iter().filter(|&&v| v > 0.02 && v < 0.98).count();
+        assert!((9..=12).contains(&soft), "{soft} px partly covered (two 5 px edges)");
+        assert!((a.iter().sum::<f32>() - b.iter().sum::<f32>()).abs() < 0.1, "{} vs {}", a.iter().sum::<f32>(), b.iter().sum::<f32>());
+        assert_eq!(blurred.plane("depth").unwrap().data, sharp.plane("depth").unwrap().data);
+        // Starting at the frame: all of the smear to the right of it.
+        let late = row(&at5(&sliding, json!({ "samples": 4, "motion_blur": 16, "shutter": 0.5, "shutter_offset": "start" })));
+        assert!(late[16] < 0.02 && late[38] > 0.3 && b[16] > 0.2, "{} {} {}", late[16], late[38], b[16]);
+        // A still scene with blur on renders as without.
+        let still = json!({ "translate": [0, 0, -5], "size": [3, 3] });
+        let (s0, s1) = (at5(&still, json!({ "samples": 4 })), at5(&still, json!({ "samples": 4, "motion_blur": 8 })));
+        assert!(s0.pixels.iter().zip(&s1.pixels).all(|(p, q)| (0..4).all(|c| (p[c] - q[c]).abs() < 1e-6)));
     }
 
     #[test]

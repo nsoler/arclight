@@ -2,7 +2,8 @@
 //! to the viewer, with Blender-style navigation (the conventions only; no
 //! Blender code), picking and selection shared with the node graph, and the
 //! cards textured and meshes shaded by the CPU renderer on a worker thread
-//! (meshes lit from the view, or drawn as wireframes). Lights show as
+//! (meshes Solid, lit from the view; Lit, by the scene's lights and
+//! materials, optionally with shadows; or drawn as wireframes). Lights show as
 //! icons (a star for a point light, a cone for a spot, parallel arrows for
 //! a directional light, the rectangle for an area light, a ring for
 //! ambient light) and are picked, selected, framed and moved like cameras.
@@ -19,7 +20,8 @@
 //! perspective / orthographic, 0 through the selected camera, spot or area
 //! light (else the scene's first camera), or back out, 2 / 4 / 6 / 8
 //! orbit 15°, . or F frame the selection, Home frame everything, A select
-//! all, Alt+A or Esc deselect, Z solid / wireframe meshes, ` a pie of
+//! all, Alt+A or Esc deselect, Z solid / wireframe meshes, ⇧Z Solid / Lit
+//! shading, ` a pie of
 //! views. (egui doesn't tell the numpad from the
 //! number row, so both work.) A navigation gizmo in the top-right corner
 //! does the same with the mouse.
@@ -32,6 +34,7 @@ use arclight::geom::{self, Mat4, Vec3};
 use arclight::particle_nodes::PartOf;
 use arclight::particles::{Effect, Shape};
 use arclight::image::{Image, Size};
+use arclight::render3d::Preview;
 use arclight::scene::Scene;
 use arclight::shade::{Light, LightKind};
 use eframe::egui::{self, Align2, Color32, FontId, PointerButton, Pos2, Rect, Response, Sense, Stroke, TextureHandle, TextureOptions, Vec2};
@@ -63,11 +66,27 @@ pub struct ViewCam {
     /// Meshes as wireframes, not solid.
     #[serde(default)]
     pub wireframe: bool,
+    /// How solid meshes are shaded, once chosen (else Lit when the scene
+    /// has lights, Solid when not: see [`Viewport3d::shading`]).
+    #[serde(default)]
+    pub shading: Option<Shading>,
+    /// Lit shading shows the lights' shadows.
+    #[serde(default)]
+    pub shadows: bool,
+}
+
+/// How the viewport shades solid meshes (Blender's): Solid lit from the
+/// view, quick to work in; Lit by the scene's lights and materials, as a
+/// render is (from the view where the scene has no lights).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Shading {
+    Solid,
+    Lit,
 }
 
 impl Default for ViewCam {
     fn default() -> ViewCam {
-        ViewCam { center: [0.0; 3], yaw: 30.0, pitch: 25.0, distance: 12.0, ortho: false, auto_ortho: false, wireframe: false }
+        ViewCam { center: [0.0; 3], yaw: 30.0, pitch: 25.0, distance: 12.0, ortho: false, auto_ortho: false, wireframe: false, shading: None, shadows: false }
     }
 }
 
@@ -726,6 +745,7 @@ struct Ask {
     /// The camera looked through as it was (it moves with its node).
     through: Option<geom::Camera>,
     pixels: [usize; 2],
+    preview: Preview,
 }
 
 /// What the view looks through instead of the free camera.
@@ -955,6 +975,35 @@ impl Viewport3d {
         self.scene.is_some()
     }
 
+    /// How solid meshes are shaded: as chosen, else Lit when the viewed
+    /// scene has lights and Solid when not.
+    pub fn shading(&self) -> Shading {
+        let lights = self.scene.as_ref().is_some_and(|s| !s.lights.is_empty());
+        self.view.shading.unwrap_or(if lights { Shading::Lit } else { Shading::Solid })
+    }
+
+    /// Choose Solid or Lit shading (⇧Z, the toolbar, View menu).
+    pub fn set_shading(&mut self, shading: Shading) {
+        self.view.shading = Some(shading);
+    }
+
+    /// Switch between Solid and Lit shading.
+    pub fn toggle_shading(&mut self) {
+        self.set_shading(match self.shading() {
+            Shading::Solid => Shading::Lit,
+            Shading::Lit => Shading::Solid,
+        });
+    }
+
+    /// What the renderer is asked for: Lit's shadows only once the view
+    /// settles (`settled`), so navigating stays quick.
+    fn preview(&self, settled: bool) -> Preview {
+        match self.shading() {
+            Shading::Solid => Preview::Solid,
+            Shading::Lit => Preview::Lit { shadows: self.view.shadows && settled },
+        }
+    }
+
     /// The world matrix of node `node`'s object in the viewed scene (a
     /// card, mesh, camera, light or locator; no parenting yet, so it's the node's own
     /// translate / rotate / scale).
@@ -1053,7 +1102,9 @@ impl Viewport3d {
         let target = p.frame.unwrap_or(p.rect);
         let ppp = ctx.pixels_per_point() * scale;
         let pixels = [(target.width() * ppp).round() as usize, (target.height() * ppp).round() as usize];
-        let ask = Ask { node: node.clone(), frame, revision: doc.revision, view: self.view, look_through: self.look_through.clone(), through: through.clone(), pixels };
+        // Asked again when the scene's lights change what Lit is.
+        let preview = self.preview(scale == 1.0);
+        let ask = Ask { node: node.clone(), frame, revision: doc.revision, view: self.view, look_through: self.look_through.clone(), through: through.clone(), pixels, preview };
         if self.asked.as_ref() == Some(&ask) {
             return;
         }
@@ -1063,7 +1114,7 @@ impl Viewport3d {
         let graph = self.graph.as_ref().unwrap().1.clone();
         let render = self.scene.is_some().then(|| render_camera(&self.view, p, through, pixels));
         if let Some(w) = &self.worker {
-            w.request(SceneRequest { graph, node, frame, render, solid: !self.view.wireframe, rect: Some(target) });
+            w.request(SceneRequest { graph, node, frame, render, solid: !self.view.wireframe, preview, rect: Some(target) });
         }
         self.asked = Some(ask);
     }
@@ -1448,9 +1499,9 @@ impl Viewport3d {
     /// The view keys (see the module notes).
     fn keys(&mut self, ui: &egui::Ui, doc: &mut Doc) {
         use egui::Key;
-        let (pressed, ctrl, alt) = ui.input(|i| {
+        let (pressed, ctrl, alt, shift) = ui.input(|i| {
             let keys = [Key::Num0, Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Period, Key::Home, Key::F, Key::A, Key::Z, Key::Escape, Key::Backtick];
-            (keys.into_iter().filter(|k| i.key_pressed(*k)).collect::<Vec<_>>(), i.modifiers.command || i.modifiers.ctrl, i.modifiers.alt)
+            (keys.into_iter().filter(|k| i.key_pressed(*k)).collect::<Vec<_>>(), i.modifiers.command || i.modifiers.ctrl, i.modifiers.alt, i.modifiers.shift)
         });
         for k in pressed {
             match k {
@@ -1479,6 +1530,7 @@ impl Viewport3d {
                     doc.clear_selection();
                 }
                 Key::A => self.select_everything(doc),
+                Key::Z if shift => self.toggle_shading(),
                 Key::Z => self.view.wireframe = !self.view.wireframe,
                 Key::Backtick if self.pie.is_none() => self.pie = ui.input(|i| i.pointer.hover_pos()),
                 // Esc cancels a box first, else deselects.
@@ -1965,10 +2017,66 @@ mod tests {
         a.distance(b) < 1e-3
     }
 
+    /// A gray lambert cube seen from front right, and a sun from the right
+    /// (lighting its +X face, grazing its +Z one); each face's middle on
+    /// screen.
+    fn sunlit_cube() -> (Scene, geom::Camera, Size, [(usize, usize); 2]) {
+        let cube = arclight::scene::primitive_model("cube", &json!({ "color": [0.8, 0.8, 0.8, 1], "shading": "lambert" }), None).unwrap();
+        let sun = arclight::scene::light("light_directional", &json!({ "rotate": [0, 90, 0] }), None).unwrap();
+        let cam = geom::Camera { focal: 35.0, world: geom::trs([4.0, 0.0, 4.0], [0.0, 45.0, 0.0], [1.0; 3]), ..geom::Camera::default() };
+        let format = Size { width: 96, height: 64 };
+        let at = |p: Vec3| {
+            let (q, _) = cam.project(&p, format).unwrap();
+            (q[0].floor() as usize, q[1].floor() as usize)
+        };
+        let faces = [at(Vec3::new(0.5, 0.0, 0.0)), at(Vec3::new(0.0, 0.0, 0.5))];
+        (Scene { meshes: vec![cube], lights: vec![sun], ..Scene::default() }, cam, format, faces)
+    }
+
+    #[test]
+    fn lit_shading_lights_meshes_by_the_scenes_lights() {
+        use arclight::render3d::render_preview;
+        let (scene, cam, format, [side, front]) = sunlit_cube();
+        let red = |img: &Image, (x, y): (usize, usize)| img.at(x as i32, y as i32)[0];
+        // Lit: the side the sun faces bright, the one it grazes dark.
+        let lit = render_preview(&scene, &cam, format, Preview::Lit { shadows: false });
+        assert!(red(&lit, side) > 0.6 && red(&lit, front) < 0.05, "{} {}", red(&lit, side), red(&lit, front));
+        assert!([side, front].iter().all(|&(x, y)| lit.at(x as i32, y as i32)[3] == 1.0), "both on the cube");
+        // Solid: lit from the view, both faces turned as much from it alike.
+        let solid = render_preview(&scene, &cam, format, Preview::Solid);
+        assert!((red(&solid, side) - red(&solid, front)).abs() < 0.02 && red(&solid, front) > 0.4, "{} {}", red(&solid, side), red(&solid, front));
+        // No lights: Lit is Solid, so nothing goes black.
+        let dark = Scene { lights: Vec::new(), ..scene };
+        assert_eq!(render_preview(&dark, &cam, format, Preview::Lit { shadows: true }).pixels, solid.pixels);
+    }
+
+    #[test]
+    fn shading_is_lit_with_lights_until_chosen_and_shift_z_toggles_it() {
+        let (scene, ..) = sunlit_cube();
+        let mut v = Viewport3d::default();
+        assert_eq!(v.shading(), Shading::Solid, "no scene");
+        v.scene = Some(Arc::new(Scene { lights: Vec::new(), ..scene.clone() }));
+        assert_eq!(v.shading(), Shading::Solid, "no lights");
+        v.scene = Some(Arc::new(scene));
+        assert_eq!(v.shading(), Shading::Lit, "lights");
+        assert_eq!(v.preview(true), Preview::Lit { shadows: false }, "shadows off by default");
+        v.view.shadows = true;
+        assert_eq!((v.preview(true), v.preview(false)), (Preview::Lit { shadows: true }, Preview::Lit { shadows: false }), "not while moving");
+        v.toggle_shading();
+        assert_eq!((v.shading(), v.preview(true)), (Shading::Solid, Preview::Solid));
+        v.toggle_shading();
+        assert_eq!(v.shading(), Shading::Lit);
+        // The choice is kept with the view (in the project).
+        let back: ViewCam = serde_json::from_value(serde_json::to_value(v.view).unwrap()).unwrap();
+        assert_eq!(back.shading, Some(Shading::Lit));
+        let old: ViewCam = serde_json::from_value(json!({ "center": [0, 0, 0], "yaw": 0, "pitch": 0, "distance": 5, "ortho": false })).unwrap();
+        assert_eq!((old.shading, old.shadows), (None, false), "older projects: auto");
+    }
+
     #[test]
     fn projection_and_rays_agree() {
         for ortho in [false, true] {
-            let v = ViewCam { center: [1.0, 0.5, -2.0], yaw: 40.0, pitch: 20.0, distance: 9.0, ortho, auto_ortho: false, wireframe: false };
+            let v = ViewCam { center: [1.0, 0.5, -2.0], yaw: 40.0, pitch: 20.0, distance: 9.0, ortho, auto_ortho: false, wireframe: false, shading: None, shadows: false };
             let p = v.projector(rect());
             // The orbit center is the middle of the view.
             let (c, depth) = p.project(Vec3::from(v.center)).unwrap();
@@ -2083,7 +2191,7 @@ mod tests {
             pos: None,
         });
         let doc = Doc::new(Graph { nodes: nodes.collect(), ..Default::default() }, None);
-        let p = ViewCam { center: [0.0, 0.0, -8.0], yaw: 0.0, pitch: 0.0, distance: 8.0, ortho: false, auto_ortho: false, wireframe: false }.projector(rect());
+        let p = ViewCam { center: [0.0, 0.0, -8.0], yaw: 0.0, pitch: 0.0, distance: 8.0, ortho: false, auto_ortho: false, wireframe: false, shading: None, shadows: false }.projector(rect());
         (s, p, doc)
     }
 
@@ -2251,7 +2359,7 @@ mod tests {
         let (mut doc, s) = light_doc(json!({ "translate": [0, 0, -8], "rotate": [0, 0, 0], "cone": 40 }), json!({ "translate": [5, 0, -8] }));
         doc.select_nodes(&["spot".to_string()], false);
         doc.commit(false);
-        let p = ViewCam { center: [0.0, 0.0, -8.0], yaw: 0.0, pitch: 60.0, distance: 8.0, ortho: false, auto_ortho: false, wireframe: false }.projector(rect());
+        let p = ViewCam { center: [0.0, 0.0, -8.0], yaw: 0.0, pitch: 60.0, distance: 8.0, ortho: false, auto_ortho: false, wireframe: false, shading: None, shadows: false }.projector(rect());
         let size = icon_size(&s);
         let mut v = Viewport3d { scene: Some(Arc::new(s.clone())), ..Viewport3d::default() };
         let (h, at) = light_handles(&s.lights[0], size).into_iter().find(|(_, w)| p.project(*w).is_some()).unwrap();

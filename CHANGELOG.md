@@ -11,6 +11,26 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.48 — 2026-10-29
+
+- **Scanline Render motion blur** (3DWorker): **Motion blur** (samples
+  across the shutter; 0 = off, the default), **Shutter** and **Shutter
+  offset** average renders with cameras, objects (deforming vertices
+  too) and lights in between their places at the surrounding frames,
+  and particles moved along their velocities, so fast ones streak;
+  depth / P / N / uv / motion / id stay the frame's own. Particles now
+  have motion vectors in the motion pass (sprites, points and objects).
+  8 samples cost about 8× a plain render.
+- **3D view Solid / Lit** (MathWiz): Lit lights meshes by the scene's
+  lights and materials as Scanline Render does (optionally with
+  shadows, drawn once the view settles); Solid lights them from the
+  view. Lit is the default when the scene has lights. **⇧Z**, the 3D
+  toolbar or View ▸ Lit shading.
+- **3D Camera Setup goes just before the Viewer** (MathWiz), so its
+  render shows straight away with the Viewer's picture as background;
+  with no Viewer it brings one. From a wire's menu it still goes into
+  that wire.
+
 ## 0.9.47 — 2026-10-29
 
 - Card has an **Opacity** (0–1, animatable): a faded card blends with

@@ -308,6 +308,9 @@ pub struct ParticleStream {
     /// The nodes its system is made of, and which of its emitters and
     /// modifiers each made (for showing and moving them in 3D).
     pub parts: Vec<Part>,
+    /// Frames past `frame` it is shown at (within a render's shutter, for
+    /// motion blur): each particle moved on along its velocity.
+    pub shift: f64,
 }
 
 /// A node in a particle system: an emitter or a modifier (its index in
@@ -331,9 +334,28 @@ impl std::fmt::Debug for ParticleStream {
 }
 
 impl ParticleStream {
-    /// The particles at the stream's frame (simulated as needed).
+    /// The particles at the stream's frame (simulated as needed), moved
+    /// on by its shift.
     pub fn particles(&self) -> Vec<Particle> {
-        self.particles_at(self.frame)
+        let mut out = self.particles_at(self.frame);
+        if self.shift != 0.0 {
+            let secs = self.shift / self.fps();
+            for p in &mut out {
+                p.position += p.velocity * secs;
+                p.rotation += p.spin * secs;
+            }
+        }
+        out
+    }
+
+    /// Frames a second (velocities are per second).
+    pub fn fps(&self) -> f64 {
+        (self.system)(self.frame).fps.max(1e-6)
+    }
+
+    /// The stream shown `frames` later than it is (see `shift`).
+    pub fn shifted(&self, frames: f64) -> ParticleStream {
+        ParticleStream { shift: self.shift + frames, ..self.clone() }
     }
 
     /// The particles at frame `f`.
@@ -407,7 +429,7 @@ pub fn eval(op: &str, cx: Context, state: &mut ParticleState) -> Result<Output> 
         let (op, own) = (op.to_string(), cx.own.clone());
         move |g: i64| with_defaults(&op, &own(g))
     };
-    let stream = |system: Sampler, look: Look, parts: Vec<Part>, state: &mut ParticleState| ParticleStream { node: cx.node.to_string(), system, cache: state.cache(cx.node), look, frame: cx.frame, parts };
+    let stream = |system: Sampler, look: Look, parts: Vec<Part>, state: &mut ParticleState| ParticleStream { node: cx.node.to_string(), system, cache: state.cache(cx.node), look, frame: cx.frame, parts, shift: 0.0 };
     let input = |i: usize| cx.inputs.get(i).copied().flatten();
     match op {
         "particle_emitter" => {

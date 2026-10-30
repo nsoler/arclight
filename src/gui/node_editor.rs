@@ -323,8 +323,9 @@ impl NodeEditor {
     /// input.
     ///
     /// A Camera comes with what it needs (`Doc::add_camera_setup`): a
-    /// Scene and a Scanline Render, which goes where the node would have;
-    /// the Camera is selected. `bare` (Shift held): just the Camera. With a
+    /// Scene and a Scanline Render, which goes into the target wire, else
+    /// just before the Viewer (made if there's none); the Camera is
+    /// selected. `bare` (Shift held): just the Camera. With a
     /// Scanline Render selected, a node making a scene or particles goes
     /// into its spare input.
     fn place(&mut self, doc: &mut Doc, op: &OpInfo, at: Pos2, bare: bool) {
@@ -1513,8 +1514,9 @@ mod tests {
         assert_eq!((doc.node(&grade).unwrap().inputs[0].as_str(), doc.node(&blur).unwrap().inputs[0].as_str()), (src.as_str(), grade.as_str()));
     }
 
-    /// Placing a Camera brings its Scene and Scanline Render, after the
-    /// selected node, and selects the Camera; with Shift, just the Camera.
+    /// Placing a Camera brings its Scene and Scanline Render, with the
+    /// selected node as the background and into a Viewer (made, as there's
+    /// none), and selects the Camera; with Shift, just the Camera.
     #[test]
     fn a_camera_comes_with_its_rig_unless_shift_is_held() {
         let mut doc = Doc::new(Graph::default(), None);
@@ -1526,6 +1528,8 @@ mod tests {
         assert_eq!(doc.node(&cam).unwrap().op, "camera");
         let render = doc.graph.nodes.iter().find(|n| n.op == "scanline_render").unwrap();
         assert_eq!(render.inputs[2], plate);
+        let render = render.id.clone();
+        assert!(doc.graph.nodes.iter().any(|n| n.op == "viewer" && n.inputs[0] == render), "shown in a new Viewer");
         let n = doc.graph.nodes.len();
         ed.place(&mut doc, ops::info("camera").unwrap(), Pos2::new(400.0, 100.0), true);
         assert_eq!(doc.graph.nodes.len(), n + 1, "Shift: the Camera alone");

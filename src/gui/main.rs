@@ -877,17 +877,18 @@ impl App {
                     ui.close();
                 }
                 ui.separator();
+                let viewer = self.doc.graph.nodes.iter().any(|n| n.op == "viewer");
                 let target = if self.doc.selected_wire.is_some() {
                     "into the selected wire"
-                } else if sel.is_some() {
-                    "after the selected node"
+                } else if viewer {
+                    "just before the Viewer"
                 } else {
-                    "on its own"
+                    "with a new Viewer"
                 };
                 let tip = format!(
-                    "A Camera, a Scene and a Scanline Render, wired up, in a \"3D Setup\" backdrop ({target}): on a wire, its picture becomes \
-                     the render's background and the render goes on to where the wire went. Add Cards, meshes and lights to the Scene. \
-                     (Right-click a wire for the same.)"
+                    "A Camera, a Scene and a Scanline Render, wired up, in a \"3D Setup\" backdrop, {target}, so the render shows straight away. \
+                     The picture that was there (else the selected node, or the end of the chain) becomes the render's background. \
+                     Add Cards, meshes and lights to the Scene. (Right-click a wire to put it into that wire instead.)"
                 );
                 if ui.button("Add 3D Camera Setup").on_hover_text(tip).clicked() {
                     let at = self.editor.view_center();
@@ -919,6 +920,12 @@ impl App {
                     self.viewer.viewport3d.look_through_selected(&self.doc.selection());
                     ui.close();
                 }
+                let vp = &mut self.viewer.viewport3d;
+                let mut lit = vp.shading() == viewport3d::Shading::Lit;
+                if ui.add(egui::Checkbox::new(&mut lit, "Lit shading")).on_hover_text("In the 3D view, light meshes by the scene's lights and materials instead of from the view (⇧Z)").changed() {
+                    vp.set_shading(if lit { viewport3d::Shading::Lit } else { viewport3d::Shading::Solid });
+                }
+                ui.add_enabled(lit, egui::Checkbox::new(&mut vp.view.shadows, "Lit shadows")).on_hover_text("With Lit shading, show the lights' shadows (once the view stops moving)");
             });
             ui.menu_button("Help", |ui| {
                 if ui.add(egui::Button::new("Arclight Help…").shortcut_text("F1")).clicked() {

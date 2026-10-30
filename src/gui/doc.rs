@@ -426,40 +426,72 @@ impl Doc {
     }
 
     /// Add a 3D camera setup (a Camera into a Scene into a Scanline Render,
-    /// see [`add_camera_rig`](Self::add_camera_rig)) where it fits what's
-    /// selected: into the selected wire (its picture becomes the render's
-    /// background, and the render feeds where the wire went), else after
-    /// the selected node, else on its own at `free_at`. The three stand in a
-    /// column beside the wire or node (moved right until clear of other
-    /// nodes) inside a "3D Setup" backdrop; the Camera is selected. The
-    /// first setup in a project asks the app to show it in 3D
+    /// see [`add_camera_rig`](Self::add_camera_rig)) so its render shows
+    /// straight away: into the selected (or aimed at) wire, its picture
+    /// becoming the render's background and the render feeding where the
+    /// wire went; else just before the Viewer (the first one), into its
+    /// input, with what it showed as the background (a scene goes into the
+    /// Scene instead); an unconnected Viewer, or none (one is made), gets
+    /// the render with the selected node, else the last image node feeding
+    /// nothing, as its background. The three stand in a column (beside the
+    /// wire, or where the Viewer was, which moves to just below the render)
+    /// moved right until clear of other nodes, inside a "3D Setup"
+    /// backdrop; the Camera is selected. With no wire and nothing to see
+    /// (an empty project) it stands on its own at `free_at`, with a Viewer.
+    /// The first setup in a project asks the app to show it in 3D
     /// ([`show_3d`](Self::show_3d)). Returns (camera, scene, render).
     pub fn add_camera_setup(&mut self, free_at: [f32; 2]) -> (String, String, String) {
         let wire = self.selected_wire.take().filter(|w| self.wire_exists(w));
-        let up = if wire.is_none() { self.selected.clone().filter(|u| self.node(u).is_some()) } else { None };
         let pos = |d: &Doc, id: &str| d.node(id).and_then(|n| n.pos).unwrap_or([0.0, 0.0]);
-        // Beside what it attaches to: right of the wire's middle or of the
-        // node, level with it.
         let (dx, dy) = (NODE_W + 60.0, NODE_H + 40.0);
-        let anchor = match (&wire, &up) {
-            (Some((src, dst, _)), _) => {
+        // Without a wire: the Viewer, and the picture (or scene) it gets.
+        let viewer = wire.is_none().then(|| self.graph.nodes.iter().find(|n| n.op == "viewer").map(|n| n.id.clone())).flatten();
+        let feed = if wire.is_some() {
+            None
+        } else {
+            viewer
+                .as_ref()
+                .and_then(|v| self.node(v).and_then(|n| n.inputs.first()).filter(|i| !i.is_empty()).cloned())
+                .or_else(|| self.selected.clone().filter(|u| self.node(u).is_some_and(|n| n.op != "viewer")))
+                .or_else(|| self.last_image())
+        };
+        // Beside what it attaches to: right of the wire's middle, level
+        // with it; where the Viewer is; below and right of the picture.
+        let anchor = match (&wire, &viewer, &feed) {
+            (Some((src, dst, _)), _, _) => {
                 let (a, b) = (pos(self, src), pos(self, dst));
                 [a[0].max(b[0]) + dx, (a[1] + b[1]) / 2.0]
             }
-            (None, Some(u)) => {
-                let p = pos(self, u);
+            (None, Some(v), _) => pos(self, v),
+            (None, None, Some(f)) => {
+                let p = pos(self, f);
                 [p[0] + dx, p[1] + dy]
             }
             _ => free_at,
         };
-        let (camera, scene, render) = self.add_camera_rig(anchor, wire.as_ref().map(|(s, d, p)| (s.as_str(), d.as_str(), *p)), up.as_deref());
+        let (camera, scene, render) = self.add_camera_rig(anchor, wire.as_ref().map(|(s, d, p)| (s.as_str(), d.as_str(), *p)), None);
+        let viewer = match (&wire, viewer) {
+            (Some(_), _) => None,
+            (None, Some(v)) => Some(v),
+            (None, None) => Some(self.add_node("viewer", [anchor[0], anchor[1] + dy])),
+        };
+        if let Some(v) = &viewer {
+            if let Some(f) = &feed {
+                if ops::output_kind(&self.node(f).map(|n| n.op.clone()).unwrap_or_default()) == ops::Kind::Scene {
+                    self.connect(f, &scene, 1);
+                } else {
+                    self.connect(f, &render, 2);
+                }
+            }
+            self.connect(&render, v, 0);
+        }
         let ours = [camera.clone(), scene.clone(), render.clone()];
         // A column, render at the anchor's height: camera, scene, render.
         let column = |x: f32| [[x, anchor[1] - 2.0 * dy], [x, anchor[1] - dy], [x, anchor[1]]];
         let boxes = |x: f32| column(x).map(|p| (p, [p[0] + NODE_W, p[1] + NODE_H]));
         let clear = |d: &Doc, x: f32| {
             let Some(b) = Backdrop::around("", "", boxes(x)) else { return true };
-            !d.graph.nodes.iter().filter(|n| !ours.contains(&n.id)).any(|n| {
+            !d.graph.nodes.iter().filter(|n| !ours.contains(&n.id) && Some(&n.id) != viewer.as_ref()).any(|n| {
                 let (a, c) = Self::node_box(n);
                 a[0] < b.pos[0] + b.size[0] && c[0] > b.pos[0] && a[1] < b.pos[1] + b.size[1] && c[1] > b.pos[1]
             })
@@ -476,6 +508,10 @@ impl Doc {
                 n.pos = Some(p);
             }
         }
+        // The Viewer last, just below the render.
+        if let Some(n) = viewer.as_ref().and_then(|v| self.node_mut(v)) {
+            n.pos = Some([x, anchor[1] + dy]);
+        }
         let id = self.graph.new_backdrop_id();
         if let Some(mut b) = Backdrop::around(&id, "3D Setup", boxes(x)) {
             b.color = Backdrop::COLORS[7];
@@ -491,6 +527,19 @@ impl Doc {
             self.show_3d = Some(render.clone());
         }
         (camera, scene, render)
+    }
+
+    /// The last image node (in the graph's order) that feeds nothing but
+    /// outputs (Viewers, Writes, Media Outs): what ends the chain.
+    fn last_image(&self) -> Option<String> {
+        let output = |op: &str| matches!(op, "viewer" | "write" | "media_out");
+        let fed: HashSet<&str> = self.graph.nodes.iter().filter(|n| !output(&n.op)).flat_map(|n| n.inputs.iter().map(String::as_str)).collect();
+        self.graph
+            .nodes
+            .iter()
+            .rev()
+            .find(|n| !output(&n.op) && !fed.contains(n.id.as_str()) && ops::output_kind(&n.op) == ops::Kind::Image)
+            .map(|n| n.id.clone())
     }
 
     /// Remove a node. Downstream ports it fed are reconnected to its first
@@ -978,7 +1027,7 @@ mod tests {
     }
 
     #[test]
-    fn a_3d_camera_setup_goes_where_the_selection_is_in_a_backdrop() {
+    fn a_3d_camera_setup_goes_into_a_selected_wire_in_a_backdrop() {
         let mut d = Doc::new(Graph::default(), None);
         let plate = d.add_node("checkerboard", [0.0, 0.0]);
         let grade = d.add_node("grade", [0.0, 100.0]);
@@ -1010,19 +1059,10 @@ mod tests {
             let (a, c) = Doc::node_box(d.node(n).unwrap());
             a[0] < b.pos[0] + b.size[0] && c[0] > b.pos[0] && a[1] < b.pos[1] + b.size[1] && c[1] > b.pos[1]
         }), "clear of the other nodes");
-        // The first in the project asks to be shown in 3D; later ones don't.
+        // The first in the project asks to be shown in 3D.
         assert_eq!(d.show_3d.take(), Some(render.clone()));
         d.undo();
         assert_eq!(d.graph, before, "one undo step");
-        // After the selected node; then on its own at the given spot.
-        d.select_only(&grade);
-        let (_, _, render) = d.add_camera_setup([500.0, 500.0]);
-        assert_eq!((inputs(&d, &render)[2].as_str(), inputs(&d, &viewer)[0].as_str()), (grade.as_str(), render.as_str()));
-        assert_eq!(d.show_3d, None, "the project has had its first (kept in its view state)");
-        d.clear_selection();
-        let (cam, _, render) = d.add_camera_setup([800.0, 300.0]);
-        assert_eq!((inputs(&d, &render)[2].as_str(), pos(&d, &render)), ("", [800.0, 300.0]));
-        assert_eq!(pos(&d, &cam)[1], 300.0 - 2.0 * (NODE_H + 40.0));
         // A selected wire is deleted by Delete, like a node; selecting a
         // node drops it.
         d.select_wire(&plate, &grade, 0);
@@ -1031,6 +1071,92 @@ mod tests {
         d.select_wire(&grade, &render, 2);
         d.select_only(&plate);
         assert!(d.selected_wire.is_none());
+    }
+
+    /// Without a wire, a camera setup goes just before the Viewer (moved
+    /// to just below the render), or makes one: each one undo step.
+    #[test]
+    fn a_3d_camera_setup_goes_before_the_viewer_or_brings_one() {
+        let pos = |d: &Doc, id: &str| d.node(id).unwrap().pos.unwrap();
+        let viewers = |d: &Doc| d.graph.nodes.iter().filter(|n| n.op == "viewer").map(|n| n.id.clone()).collect::<Vec<_>>();
+        // The Viewer last, under the render, outside the backdrop.
+        let last = |d: &Doc, render: &str, viewer: &str| {
+            assert_eq!(inputs(d, viewer)[0], render);
+            assert!(pos(d, viewer)[0] == pos(d, render)[0] && pos(d, viewer)[1] > pos(d, render)[1], "{:?} {:?}", pos(d, viewer), pos(d, render));
+            let b = d.graph.backdrops.iter().find(|b| b.title == "3D Setup").unwrap();
+            let (a, c) = Doc::node_box(d.node(viewer).unwrap());
+            assert!(!(a[0] < b.pos[0] + b.size[0] && c[0] > b.pos[0] && a[1] < b.pos[1] + b.size[1] && c[1] > b.pos[1]), "outside the backdrop");
+        };
+        let chain = |viewer: bool| {
+            let mut d = Doc::new(Graph::default(), None);
+            let plate = d.add_node("checkerboard", [0.0, 0.0]);
+            let grade = d.add_node("grade", [0.0, 100.0]);
+            d.connect(&plate, &grade, 0);
+            let v = viewer.then(|| d.add_node("viewer", [0.0, 200.0]));
+            if let Some(v) = &v {
+                d.connect(&grade, v, 0);
+            }
+            d.commit(false);
+            (d, plate, grade, v)
+        };
+        let undone = |mut d: Doc, before: Graph| {
+            d.commit(false);
+            d.undo();
+            assert_eq!(d.graph, before, "one undo step");
+        };
+        // Into the Viewer's wire, whatever is selected: what it showed is the
+        // background.
+        let (mut d, plate, grade, v) = chain(true);
+        let (v, before) = (v.unwrap(), d.graph.clone());
+        d.select_only(&plate);
+        let (cam, scene, render) = d.add_camera_setup([900.0, 900.0]);
+        assert_eq!((inputs(&d, &render)[0].as_str(), inputs(&d, &render)[2].as_str()), (scene.as_str(), grade.as_str()));
+        assert_eq!((viewers(&d), d.selected.clone()), (vec![v.clone()], Some(cam)));
+        last(&d, &render, &v);
+        assert_eq!(d.show_3d, Some(render.clone()), "the first setup shows in 3D");
+        undone(d, before);
+        // A Viewer showing a scene: that goes into the Scene.
+        let (mut d, ..) = chain(false);
+        let card = d.add_node("card", [300.0, 0.0]);
+        let v = d.add_node("viewer", [300.0, 100.0]);
+        d.connect(&card, &v, 0);
+        let (_, scene, render) = d.add_camera_setup([900.0, 900.0]);
+        assert_eq!((inputs(&d, &scene)[1].as_str(), inputs(&d, &render)[2].as_str()), (card.as_str(), ""));
+        last(&d, &render, &v);
+        // An unconnected Viewer: the selected node, else the chain's end,
+        // is the background.
+        for (select, bg) in [(true, 0), (false, 1)] {
+            let (mut d, plate, grade, _) = chain(false);
+            let v = d.add_node("viewer", [400.0, 400.0]);
+            d.commit(false);
+            let before = d.graph.clone();
+            if select {
+                d.select_only(&plate);
+            }
+            let (_, _, render) = d.add_camera_setup([900.0, 900.0]);
+            assert_eq!(&inputs(&d, &render)[2], [&plate, &grade][bg]);
+            last(&d, &render, &v);
+            undone(d, before);
+        }
+        // No Viewer: one is made, the chain's end (not a Write after it)
+        // the background.
+        let (mut d, _, grade, _) = chain(false);
+        let write = d.add_node("write", [0.0, 200.0]);
+        d.connect(&grade, &write, 0);
+        d.commit(false);
+        let before = d.graph.clone();
+        let (_, _, render) = d.add_camera_setup([900.0, 900.0]);
+        assert_eq!((inputs(&d, &render)[2].as_str(), inputs(&d, &write)[0].as_str()), (grade.as_str(), grade.as_str()));
+        let made = viewers(&d);
+        assert_eq!(made.len(), 1);
+        last(&d, &render, &made[0]);
+        undone(d, before);
+        // An empty project: on its own at the given spot, with a Viewer.
+        let mut d = Doc::new(Graph::default(), None);
+        let (cam, _, render) = d.add_camera_setup([800.0, 300.0]);
+        assert_eq!((inputs(&d, &render)[2].as_str(), pos(&d, &render)), ("", [800.0, 300.0]));
+        assert_eq!(pos(&d, &cam)[1], 300.0 - 2.0 * (NODE_H + 40.0));
+        last(&d, &render, &viewers(&d)[0]);
     }
 
     #[test]

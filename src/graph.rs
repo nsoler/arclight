@@ -283,9 +283,10 @@ impl Graph {
 #[derive(Default)]
 pub struct Evaluator {
     cache: HashMap<String, (u64, Arc<Image>)>,
-    /// Results a frame later, for nodes that need them (a Scanline
-    /// Render's motion pass: see [`ops::needs_next_frame`]).
-    next: Option<Box<Evaluator>>,
+    /// Results at other frames, by offset from the one evaluated, for
+    /// nodes that need them (a Scanline Render's motion pass and motion
+    /// blur: see [`ops::other_frames`]).
+    others: std::collections::BTreeMap<i64, Evaluator>,
     /// Particle nodes' simulation caches and shapes.
     particles: particle_nodes::ParticleState,
 }
@@ -341,10 +342,14 @@ impl Evaluator {
             let mut params = linked_params(&index, node, ctx.frame, &graph.project)?;
             ops::apply_format(&node.op, &mut params, graph.project.format);
             let mut k = node_key(node, &params, &keys, ctx);
-            if ops::needs_next_frame(&node.op, &params) {
-                let later = EvalContext { frame: ctx.frame + 1, write_outputs: false };
-                let next: Vec<u64> = next_inputs(node).iter().flatten().map(|d| Evaluator::key(graph, d, &later)).collect::<Result<_, _>>()?;
-                k = mix(k, &next);
+            for off in ops::other_frames(&node.op, &params) {
+                let later = EvalContext { frame: ctx.frame + off, write_outputs: false };
+                // (A frame that fails is left out, as in `run`.)
+                let then: Option<Vec<u64>> = other_inputs(node).iter().flatten().map(|d| Evaluator::key(graph, d, &later).ok()).collect();
+                k = mix(k, &[off as u64]);
+                if let Some(then) = then {
+                    k = mix(k, &then);
+                }
             }
             keys.insert(id.as_str(), k);
         }
@@ -373,20 +378,25 @@ impl Evaluator {
             let mut params = linked_params(index, node, ctx.frame, project)?;
             ops::apply_format(&node.op, &mut params, graph_format);
             let mut key = node_key(node, &params, &keys, ctx);
-            // A node that needs its inputs a frame later: render those (and
-            // what they need) at the next frame too, and key on them.
-            let next = if ops::needs_next_frame(&node.op, &params) {
-                let deps = next_inputs(node);
+            // A node that needs its inputs at other frames: render those (and
+            // what they need) then too, and key on them. A frame they fail
+            // at (say before a plate's first) is left out: the render does
+            // without it.
+            let mut others: Vec<(i64, Vec<Option<Arc<Image>>>)> = Vec::new();
+            for off in ops::other_frames(&node.op, &params) {
+                let deps = other_inputs(node);
                 let roots: Vec<String> = deps.iter().flatten().cloned().collect();
-                let later = self.next.get_or_insert_with(Default::default);
-                let ctx_next = EvalContext { frame: ctx.frame + 1, write_outputs: false };
-                later.run(index, &Graph::order(index, roots)?, &ctx_next, project)?;
-                let found = deps.map(|d| d.map(|d| later.cache[&d].clone()));
+                let later = self.others.entry(off).or_default();
+                let ctx_then = EvalContext { frame: ctx.frame + off, write_outputs: false };
+                if later.run(index, &Graph::order(index, roots)?, &ctx_then, project).is_err() {
+                    key = mix(key, &[off as u64]);
+                    continue;
+                }
+                let found: Vec<_> = deps.iter().map(|d| d.as_ref().map(|d| later.cache[d].clone())).collect();
+                key = mix(key, &[off as u64]);
                 key = mix(key, &found.iter().flatten().map(|f| f.0).collect::<Vec<_>>());
-                Some(found.map(|f| f.map(|f| f.1)))
-            } else {
-                None
-            };
+                others.push((off, found.into_iter().map(|f| f.map(|f| f.1)).collect()));
+            }
             keys.insert(id.as_str(), key);
             if self.cache.get(id).is_some_and(|(k, _)| *k == key) {
                 continue;
@@ -422,14 +432,17 @@ impl Evaluator {
                     inputs.push(Some(img));
                 }
             }
-            let out = match &next {
+            let out = match &others {
                 _ if particle.is_some() => {
                     let snap = snapshot.get_or_insert_with(|| Arc::new(index.values().map(|n| (*n).clone()).collect())).clone();
                     let input_keys: Vec<u64> = node.inputs.iter().map(|d| keys.get(d.as_str()).copied().unwrap_or(0)).collect();
                     particle_node(node, snap, project, &inputs, &input_keys, ctx.frame, &mut self.particles)
                 }
-                Some(later) => ops::scanline_render_next(&params, &inputs, [later[0].as_deref(), later[1].as_deref()]),
-                None => ops::eval(&node.op, &params, &inputs, ctx),
+                others if !others.is_empty() => {
+                    let others: Vec<(i64, Vec<Option<&Image>>)> = others.iter().map(|(k, v)| (*k, v.iter().map(|i| i.as_deref()).collect())).collect();
+                    ops::scanline_render_frames(&params, &inputs, &others)
+                }
+                _ => ops::eval(&node.op, &params, &inputs, ctx),
             };
             let mut out = out.map_err(|e| node_err(id, format!("{e:#}")))?;
             // What a node made in 3D carries its name (for the viewport).
@@ -491,10 +504,10 @@ fn linked_params(index: &HashMap<&str, &NodeSpec>, node: &NodeSpec, frame: i64, 
 }
 
 /// `params` are the node's params already resolved at `ctx.frame`.
-/// The inputs a node needing the next frame wants then (a Scanline
-/// Render's scene and camera; None where unconnected).
-fn next_inputs(node: &NodeSpec) -> [Option<String>; 2] {
-    std::array::from_fn(|i| node.inputs.get(i).filter(|d| !d.is_empty()).cloned())
+/// The inputs a node needing other frames wants then: a Scanline Render's
+/// all but its background (None there and where unconnected).
+fn other_inputs(node: &NodeSpec) -> Vec<Option<String>> {
+    node.inputs.iter().enumerate().map(|(i, d)| (i != 2 && !d.is_empty()).then(|| d.clone())).collect()
 }
 
 /// `key` combined with `more` keys.

@@ -332,12 +332,133 @@ impl Scene {
             .or_else(|| self.points.first().copied())
             .or_else(|| self.lights.first().map(Light::position))
     }
+
+    /// The scene `t` frames after this one (for motion blur), from
+    /// `frames`: the scenes at whole frames from this one (0 is this one).
+    /// Between the two round `t`, each object's placement (and a deforming
+    /// mesh's vertices, a camera's focal length, the points) goes from one
+    /// to the other, where both list the same objects from the same nodes;
+    /// otherwise it stays as here. Particles move on along their
+    /// velocities. Everything else is as here.
+    pub fn at_time(&self, frames: &[(i64, &Scene)], t: f64) -> Scene {
+        let mut out = self.clone();
+        out.particles = self.particles.iter().map(|s| s.shifted(t)).collect();
+        let k = t.floor();
+        let w = t - k;
+        let find = |k: i64| frames.iter().find(|f| f.0 == k).map(|f| f.1);
+        let (Some(a), Some(b)) = (find(k as i64), find(k as i64 + 1).or_else(|| (w == 0.0).then(|| find(k as i64)).flatten())) else { return out };
+        let mut a = a.clone();
+        let mut b = b.clone();
+        a.fill_nodes();
+        b.fill_nodes();
+        out.fill_nodes();
+        if a.camera_nodes == out.camera_nodes && b.camera_nodes == out.camera_nodes {
+            for (c, (x, y)) in out.cameras.iter_mut().zip(a.cameras.iter().zip(&b.cameras)) {
+                c.world = between(&x.world, &y.world, w);
+                c.focal = x.focal + (y.focal - x.focal) * w;
+            }
+        }
+        if same_nodes(&out.cards, &a.cards, &b.cards, |c| &c.node) {
+            for (c, (x, y)) in out.cards.iter_mut().zip(a.cards.iter().zip(&b.cards)) {
+                c.world = between(&x.world, &y.world, w);
+            }
+        }
+        if same_nodes(&out.meshes, &a.meshes, &b.meshes, |m| &m.node) {
+            for (m, (x, y)) in out.meshes.iter_mut().zip(a.meshes.iter().zip(&b.meshes)) {
+                m.world = between(&x.world, &y.world, w);
+                let (p, q) = (&x.mesh.positions, &y.mesh.positions);
+                if !Arc::ptr_eq(&x.mesh, &y.mesh) && p.len() == q.len() && p.len() == m.mesh.positions.len() && p != q {
+                    let lerp = |u: &[Vec3], v: &[Vec3]| u.iter().zip(v).map(|(u, v)| u + (v - u) * w).collect::<Vec<_>>();
+                    let normals = if x.mesh.normals.len() == y.mesh.normals.len() && x.mesh.normals.len() == m.mesh.normals.len() {
+                        lerp(&x.mesh.normals, &y.mesh.normals).into_iter().map(|n| n.try_normalize(1e-300).unwrap_or(n)).collect()
+                    } else {
+                        m.mesh.normals.clone()
+                    };
+                    m.mesh = Arc::new(Mesh { positions: lerp(p, q), normals, ..(*m.mesh).clone() });
+                }
+            }
+        }
+        if same_nodes(&out.lights, &a.lights, &b.lights, |l| &l.node) {
+            for (l, (x, y)) in out.lights.iter_mut().zip(a.lights.iter().zip(&b.lights)) {
+                l.world = between(&x.world, &y.world, w);
+            }
+        }
+        if a.point_nodes == out.point_nodes && b.point_nodes == out.point_nodes {
+            for (p, (x, y)) in out.points.iter_mut().zip(a.points.iter().zip(&b.points)) {
+                *p = x + (y - x) * w;
+            }
+        }
+        out
+    }
+}
+
+/// Whether `x`, `a` and `b` list as many things, from the same nodes in
+/// the same order.
+fn same_nodes<T>(x: &[T], a: &[T], b: &[T], node: impl Fn(&T) -> &String) -> bool {
+    let same = |u: &[T], v: &[T]| u.len() == v.len() && u.iter().zip(v).all(|(u, v)| node(u) == node(v));
+    same(x, a) && same(x, b)
+}
+
+/// The placement `w` of the way from `a` to `b` (0: `a`, 1: `b`): the
+/// move blended, the turn slerped, the scale (and shear) blended; with a
+/// mirror in either, element by element.
+pub fn between(a: &Mat4, b: &Mat4, w: f64) -> Mat4 {
+    use nalgebra::{Matrix3, Rotation3, UnitQuaternion};
+    if w == 0.0 || a == b {
+        return *a;
+    }
+    if w == 1.0 {
+        return *b;
+    }
+    let mut out = a + (b - a) * w;
+    let linear = |m: &Mat4| -> Matrix3<f64> { m.fixed_view::<3, 3>(0, 0).into_owned() };
+    let (la, lb) = (linear(a), linear(b));
+    if la.determinant() > 0.0 && lb.determinant() > 0.0 {
+        // Each as a turn times a stretch (polar decomposition).
+        let split = |l: &Matrix3<f64>| {
+            let r = Rotation3::from_matrix_eps(l, 1e-12, 100, Rotation3::identity());
+            (UnitQuaternion::from_rotation_matrix(&r), r.matrix().transpose() * l)
+        };
+        let ((qa, sa), (qb, sb)) = (split(&la), split(&lb));
+        let q = qa.try_slerp(&qb, w, 1e-9).unwrap_or(if w < 0.5 { qa } else { qb });
+        let l = q.to_rotation_matrix().matrix() * (sa + (sb - sa) * w);
+        out.fixed_view_mut::<3, 3>(0, 0).copy_from(&l);
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn placements_and_scenes_between_frames() {
+        // Halfway from still to 90° about Y, 2 right and twice as big: 45°,
+        // 1 right, 1.5 times.
+        let (a, b) = (geom::trs([0.0; 3], [0.0; 3], [1.0; 3]), geom::trs([2.0, 0.0, 0.0], [0.0, 90.0, 0.0], [2.0; 3]));
+        let want = geom::trs([1.0, 0.0, 0.0], [0.0, 45.0, 0.0], [1.5; 3]);
+        assert!((between(&a, &b, 0.5) - want).abs().max() < 1e-9, "{}", between(&a, &b, 0.5));
+        assert_eq!((between(&a, &b, 0.0), between(&a, &b, 1.0)), (a, b));
+        // A scene a quarter frame on and back: its card and camera between
+        // the frames' (the one before for negative times); a card that
+        // only one frame has stays put.
+        let img = Arc::new(Image::filled(2, 2, [1.0; 4]));
+        let at = |x: f64| Scene {
+            cards: vec![Card { node: "c".into(), ..Card::new(img.clone(), geom::trs([x, 0.0, 0.0], [0.0; 3], [1.0; 3]), [1.0, 1.0]) }],
+            cameras: vec![Camera { world: geom::trs([0.0, x, 0.0], [0.0; 3], [1.0; 3]), ..Camera::default() }],
+            ..Scene::default()
+        };
+        let (before, now, after) = (at(-4.0), at(0.0), at(8.0));
+        let frames = [(-1, &before), (0, &now), (1, &after)];
+        let x = |s: &Scene| (s.cards[0].world[(0, 3)], s.cameras[0].world[(1, 3)]);
+        assert_eq!(x(&now.at_time(&frames, 0.25)), (2.0, 2.0));
+        assert_eq!(x(&now.at_time(&frames, -0.25)), (-1.0, -1.0));
+        assert_eq!(x(&now.at_time(&frames, 0.0)), (0.0, 0.0));
+        let mut more = after.clone();
+        more.cards.push(more.cards[0].clone());
+        assert_eq!(x(&now.at_time(&[(0, &now), (1, &more)], 0.5)).0, 0.0);
+    }
 
     #[test]
     fn cards_and_cameras_from_params() {
