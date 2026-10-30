@@ -964,6 +964,7 @@ pub static OPS: &[OpInfo] = &[
             PLACE_T,
             PLACE_R,
             PLACE_S,
+            p!("opacity", "Opacity", OPACITY, 1.0),
             fixed!("override_material", "Override material", ParamKind::Bool, false),
             SHADING,
             SPECULAR,
@@ -976,8 +977,9 @@ pub static OPS: &[OpInfo] = &[
         overlay: Overlay::None,
         mask_base: None,
         help: "Reads meshes from a Wavefront OBJ file (with the colors and textures of its MTL materials) or a glTF 2.0 \
-               file (.gltf or .glb), then scales, rotates and moves them all. Outputs a scene holding one mesh per object \
-               and material in the file.",
+               file (.gltf or .glb), then scales, rotates and moves them all. Opacity fades them all (each material's own \
+               opacity times it, their shadows too), with or without Override material. Outputs a scene holding one mesh \
+               per object and material in the file.",
     },
     OpInfo {
         name: "light_ambient",
@@ -3051,7 +3053,8 @@ fn read_geo(params: &Value) -> Result<Image> {
     let meshes = parts
         .iter()
         .map(|(part, tex)| {
-            let material = if params["override_material"].as_bool().unwrap_or(false) { scene::lighting(params, &part.material) } else { part.material.clone() };
+            let mut material = if params["override_material"].as_bool().unwrap_or(false) { scene::lighting(params, &part.material) } else { part.material.clone() };
+            material.opacity *= params["opacity"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) as f32;
             let m = scene::Model::new(std::sync::Arc::new(part.mesh.clone()), world, material).flags(params);
             scene::Model { texture: tex.clone(), name: part.name.clone(), ..m }
         })
@@ -3288,6 +3291,28 @@ fn write(params: &Value, inputs: &[Option<&Image>], ctx: &EvalContext) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_geo_opacity_fades_the_files_materials() {
+        use serde_json::json;
+        let dir = std::env::temp_dir().join(format!("arclight_geo_opacity_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("t.mtl"), "newmtl half\nKd 1 0 0\nd 0.5\n").unwrap();
+        std::fs::write(dir.join("t.obj"), "mtllib t.mtl\nusemtl half\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").unwrap();
+        let file = dir.join("t.obj").to_string_lossy().into_owned();
+        let opacity = |p: Value| {
+            let img = read_geo(&p).unwrap();
+            img.scene.as_ref().unwrap().meshes.iter().map(|m| m.material.opacity).collect::<Vec<_>>()
+        };
+        // Missing (older projects): the file's own; else times it, with or
+        // without Override material.
+        assert_eq!(opacity(json!({ "file": file })), [0.5]);
+        assert_eq!(opacity(json!({ "file": file, "opacity": 0.5 })), [0.25]);
+        assert_eq!(opacity(json!({ "file": file, "opacity": 0.5, "override_material": true, "shading": "unlit" })), [0.25]);
+        assert_eq!(opacity(json!({ "file": file, "opacity": 3.0 })), [0.5], "clamped to 1");
+        assert!(info("read_geo").unwrap().params.iter().any(|p| p.name == "opacity" && p.default_value() == json!(1.0) && p.animatable));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// A 960 × 540 still (white, with a red column at its left edge) in a
     /// 1920 × 1080 project, through a Read and a Media In with each fit.

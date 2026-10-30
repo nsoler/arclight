@@ -257,6 +257,8 @@ selected object.
   **Specular** is how strong, **Roughness** how broad). **Emission** is
   light of their own. Read Geo uses the file's materials unless **Override
   material** is on.
+- **Opacity** on a Read Geo fades all its meshes (each material's own
+  opacity times it, shadows too), with or without Override material.
 - **Opacity** on a Card fades the whole card (e.g. clouds at lower opacity
   at different depths); see-through cards and meshes (a mesh's opacity is
   its **Color**'s alpha) blend with what's behind them, nearest first,

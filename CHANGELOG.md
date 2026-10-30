@@ -11,6 +11,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.53 — 2026-10-29
+
+- **Read Geo Opacity** (Dev1): fades the whole file (each material's
+  own opacity times it, its shadows too), with or without Override
+  material; animatable. Default 1, so existing projects are unchanged.
+
 ## 0.9.52 — 2026-10-29
 
 - **Fixed: the 3D view of a Scanline Render with scenes only on its
