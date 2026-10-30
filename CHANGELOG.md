@@ -11,6 +11,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.59 — 2026-10-29
+
+- **Particle dots streak in the 3D view's motion blur preview** (Dev2):
+  viewing a Scanline Render with Motion blur, once the view settles its
+  particle dots streak across the shutter, curving with their
+  acceleration as in the render.
+
 ## 0.9.58 — 2026-10-29
 
 - **Fixed: a comp wired into a second Viewer showed black or a stale

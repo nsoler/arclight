@@ -351,7 +351,7 @@ color).
   N, uv, motion and id stay the frame's own. 8 is usually smooth (16 for
   fast moves); each one costs about a render. Viewing the render in the
   3D view shows the blur too once the view settles (up to 8 samples;
-  sharp while you move it).
+  sharp while you move it). Particle dots streak over the same shutter.
 - **Holdout** on a Cube, Sphere, Cylinder, Plane or Read Geo makes it draw
   nothing but cut out what is behind it (alpha 0 there); its matte still
   shows where it is.

@@ -32,7 +32,7 @@ use crate::doc::Doc;
 use crate::worker::{SceneRequest, SceneWorker};
 use arclight::geom::{self, Mat4, Vec3};
 use arclight::particle_nodes::PartOf;
-use arclight::particles::{Effect, Shape};
+use arclight::particles::{Effect, Particle, Shape};
 use arclight::image::{Image, Size};
 use arclight::render3d::Preview;
 use arclight::scene::Scene;
@@ -835,6 +835,13 @@ fn icon_size(scene: &Scene) -> f64 {
     bounds(scene, None).map_or(1.0, |(_, r)| (r * 0.08).max(0.15))
 }
 
+/// Where particle `pt` is at each of `times` (frames on from its frame, at
+/// `fps`), as a render's motion blur moves it (see [`Particle::moved`]).
+/// Empty without times.
+fn streak(pt: &Particle, times: &[f64], fps: f64) -> Vec<Vec3> {
+    times.iter().map(|t| pt.moved(t / fps).0).collect()
+}
+
 /// The camera and frame size that render the cards for projector `p` at
 /// `pixels`, matching what it draws: the scene camera through it; the free
 /// camera; for orthographic, a long lens from far away (as good as flat).
@@ -884,6 +891,9 @@ pub struct Viewport3d {
     /// took (ms): renders are smaller while it moves.
     moved_at: f64,
     render_ms: f32,
+    /// The shutter times the particles streak over (see
+    /// [`SceneResponse::blur_times`](crate::worker::SceneResponse)).
+    blur_times: Vec<f64>,
     /// The node whose scene is shown, if any.
     node: Option<String>,
     last: Option<Projector>,
@@ -926,6 +936,7 @@ impl Default for Viewport3d {
             graph: None,
             moved_at: 0.0,
             render_ms: 0.0,
+            blur_times: Vec::new(),
             node: None,
             last: None,
             paths: Vec::new(),
@@ -1074,6 +1085,7 @@ impl Viewport3d {
                 Err(e) => self.error = Some(e),
             }
             self.render_ms = r.millis;
+            self.blur_times = r.blur_times;
             if let Some(img) = r.render {
                 let size = [img.format.width, img.format.height];
                 let ci = egui::ColorImage::from_rgba_premultiplied(size, &premultiplied_bytes(&img));
@@ -1089,6 +1101,7 @@ impl Viewport3d {
             self.scene = None;
             self.look_through = None;
             self.texture_rect = None;
+            self.blur_times.clear();
             self.node = node.clone();
         }
         let Some(node) = node else {
@@ -1823,19 +1836,30 @@ impl Viewport3d {
             }
         }
         // Particles: a dot each in its color (every so many past a cap),
-        // ringed when their node is selected.
+        // ringed when their node is selected; streaked over the shutter
+        // when the render's motion blur is shown.
         for stream in &scene.particles {
             let all = stream.particles();
             let every = all.len().div_ceil(MAX_PARTICLE_DOTS).max(1);
             let on = selected(&stream.node);
+            let fps = stream.fps();
             for pt in all.iter().step_by(every) {
                 let Some((s, _)) = p.project(pt.position) else { continue };
-                if !p.rect.contains(s) {
+                let streak: Vec<Pos2> = streak(pt, &self.blur_times, fps).into_iter().filter_map(|q| Some(p.project(q)?.0)).collect();
+                if !p.rect.contains(s) && !streak.iter().any(|q| p.rect.contains(*q)) {
                     continue;
                 }
                 let a = pt.color[3].max(1e-6);
                 let [r, g, b] = [0, 1, 2].map(|c| (pt.color[c] / a).clamp(0.0, 1.0));
                 let color: Color32 = egui::Rgba::from_rgb(r, g, b).into();
+                let long = streak.windows(2).map(|w| w[0].distance(w[1])).sum::<f32>() >= 1.0;
+                if long {
+                    if on {
+                        painter.add(egui::Shape::line(streak.clone(), Stroke::new(5.2, SELECTED)));
+                    }
+                    painter.add(egui::Shape::line(streak, Stroke::new(3.2, color)));
+                    continue;
+                }
                 if on {
                     painter.circle_filled(s, 2.6, SELECTED);
                 }
@@ -2581,6 +2605,35 @@ mod tests {
         assert!(good.g() > good.r() && poor.r() > poor.g());
         let mid = error_color(1.0);
         assert!(mid.r() > 200 && mid.g() > 150, "about yellow at a pixel: {mid:?}");
+    }
+
+    /// A blurred view's particle streaks pass where the render's motion
+    /// blur shows each particle at each shutter time (curving as it falls).
+    #[test]
+    fn particle_streaks_follow_the_render_s_shutter() {
+        use arclight::graph::{Evaluator, Graph, NodeSpec};
+        let node = |id: &str, op: &str, input: &str, params: serde_json::Value| NodeSpec { id: id.into(), op: op.into(), inputs: vec![input.into()], params, pos: None };
+        let graph = Graph {
+            nodes: vec![
+                node("emit", "particle_emitter", "", json!({ "speed": 4, "translate": [0, 0, -8] })),
+                node("fall", "particle_gravity", "emit", json!({ "strength": 20 })),
+            ],
+            ..Default::default()
+        };
+        let img = Evaluator::new().evaluate(&graph, "fall", &arclight::ops::EvalContext { frame: 6, write_outputs: false }).unwrap();
+        let stream = &img.scene.as_deref().unwrap().particles[0];
+        let (now, fps) = (stream.particles(), stream.fps());
+        let pt = now.iter().find(|p| p.accel.norm() > 0.0 && p.velocity.norm() > 0.0).expect("a moving, falling particle");
+        let times = [-0.25, 0.0, 0.25];
+        let line = streak(pt, &times, fps);
+        for (t, q) in times.iter().zip(&line) {
+            let then = stream.shifted(*t).particles().into_iter().find(|p| p.id == pt.id).unwrap();
+            assert!((then.position - q).norm() < 1e-9, "at {t}: {q:?} vs {:?}", then.position);
+        }
+        assert_eq!(line[1], pt.position);
+        let bend = (line[0] + line[2]) / 2.0 - line[1];
+        assert!(bend.norm() > 1e-6, "curves with the acceleration");
+        assert!(streak(pt, &[], fps).is_empty(), "a dot when not blurred");
     }
 
     #[test]

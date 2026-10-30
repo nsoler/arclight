@@ -185,6 +185,10 @@ pub struct SceneResponse {
     pub render: Option<Arc<Image>>,
     pub rect: Option<eframe::egui::Rect>,
     pub millis: f32,
+    /// The shutter times (frames on from the frame) a settled view of a
+    /// render with motion blur shows: the cards blurred over them, and the
+    /// particles streaked. Empty otherwise.
+    pub blur_times: Vec<f64>,
 }
 
 /// The 3D viewport's own background thread (so orbiting doesn't queue
@@ -208,6 +212,7 @@ impl SceneWorker {
                     }
                     let t0 = Instant::now();
                     let scene = scene_of(&mut eval, &req.graph, &req.node, req.frame);
+                    let blur_times = if req.blur { view_blur_times(&req.graph, &req.node, req.frame) } else { Vec::new() };
                     // Only cards and solid meshes are rendered; the viewport
                     // draws the rest.
                     let render = match (&scene, &req.render) {
@@ -219,14 +224,14 @@ impl SceneWorker {
                                 arclight::scene::Scene { cards: s.cards.clone(), meshes, lights, ..Default::default() }
                             };
                             let now = shown(s);
-                            let (times, then) = if req.blur { blurred(&mut eval, &req.graph, &req.node, req.frame) } else { (Vec::new(), Vec::new()) };
+                            let (times, then) = if blur_times.is_empty() { Default::default() } else { blurred(&mut eval, &req.graph, &req.node, req.frame) };
                             let then: Vec<(i64, arclight::scene::Scene)> = then.iter().map(|(k, s)| (*k, shown(s))).collect();
                             let blur = arclight::render3d::Blur { times, frames: std::iter::once((0, &now, cam.clone())).chain(then.iter().map(|(k, s)| (*k, s, cam.clone()))).collect() };
                             Some(Arc::new(arclight::render3d::render_preview_blurred(&now, cam, *format, req.preview, Some(&blur))))
                         }
                         _ => None,
                     };
-                    let resp = SceneResponse { node: req.node, scene, render, rect: req.rect, millis: t0.elapsed().as_secs_f32() * 1000.0 };
+                    let resp = SceneResponse { node: req.node, scene, render, rect: req.rect, millis: t0.elapsed().as_secs_f32() * 1000.0, blur_times };
                     if resp_tx.send(resp).is_err() {
                         break;
                     }
@@ -255,16 +260,25 @@ const VIEW_BLUR_TIMES: usize = 8;
 /// shutter) and its scenes at the frames round them (by offset; frames
 /// whose scene fails are left out). Nothing without blur.
 fn blurred(eval: &mut Evaluator, graph: &Graph, id: &str, frame: i64) -> (Vec<f64>, Vec<(i64, Arc<arclight::scene::Scene>)>) {
-    let Some(node) = graph.node(id).filter(|n| n.op == "scanline_render") else { return Default::default() };
-    let params = arclight::ops::params_with_defaults(&node.op, &arclight::ops::resolve_params(&node.op, &node.params, frame));
-    let Some(mut times) = arclight::ops::blur_times(&params).filter(|t| t.len() > 1) else { return Default::default() };
-    if times.len() > VIEW_BLUR_TIMES {
-        let share = times[1] - times[0];
-        times = arclight::render3d::Blur::times(times[0] - share / 2.0, share * times.len() as f64, VIEW_BLUR_TIMES);
+    let times = view_blur_times(graph, id, frame);
+    if times.is_empty() {
+        return Default::default();
     }
     let (lo, hi) = times.iter().fold((0.0f64, 0.0f64), |(lo, hi), &t| (lo.min(t), hi.max(t)));
     let then = (lo.floor() as i64..=hi.ceil() as i64).filter(|k| *k != 0).filter_map(|k| Some((k, scene_of(eval, graph, id, frame + k).ok()??))).collect();
     (times, then)
+}
+
+/// The shutter times of [`blurred`] alone (no scenes evaluated).
+fn view_blur_times(graph: &Graph, id: &str, frame: i64) -> Vec<f64> {
+    let Some(node) = graph.node(id).filter(|n| n.op == "scanline_render") else { return Vec::new() };
+    let params = arclight::ops::params_with_defaults(&node.op, &arclight::ops::resolve_params(&node.op, &node.params, frame));
+    let Some(times) = arclight::ops::blur_times(&params).filter(|t| t.len() > 1) else { return Vec::new() };
+    if times.len() <= VIEW_BLUR_TIMES {
+        return times;
+    }
+    let share = times[1] - times[0];
+    arclight::render3d::Blur::times(times[0] - share / 2.0, share * times.len() as f64, VIEW_BLUR_TIMES)
 }
 
 /// The scene node `id` shows at `frame`: its own output for 3D nodes, a
@@ -333,6 +347,8 @@ mod tests {
         assert_eq!(blurred(&mut eval, &graph(1), "card1", 5).0, Vec::<f64>::new(), "not a render");
         let (times, then) = blurred(&mut eval, &graph(16), "r", 5);
         assert_eq!(times, Blur::times(-0.25, 0.5, VIEW_BLUR_TIMES), "8 times over the render's shutter");
+        assert_eq!(view_blur_times(&graph(16), "r", 5), times, "the times alone (for the particles)");
+        assert!(view_blur_times(&graph(0), "r", 5).is_empty() && view_blur_times(&graph(16), "card1", 5).is_empty());
         assert_eq!(then.iter().map(|t| t.0).collect::<Vec<_>>(), [-1, 1]);
         // Its preview: soft edges 5 px wide, as the render's.
         let g = graph(4);
