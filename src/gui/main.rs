@@ -293,7 +293,7 @@ impl App {
             tab: BottomTab::Graph,
             viewer,
             transport,
-            props: Properties::default(),
+            props: Properties::sharing(eval.clone()),
             worker: Worker::spawn(ctx.clone(), eval.clone()),
             requested: None,
             image: None,
@@ -573,7 +573,7 @@ impl App {
         self.editor.fit();
         self.curves = CurveEditor::default();
         self.viewer.fit();
-        self.props = Properties::default();
+        self.props.reset();
         self.project_settings.cancel();
         self.requested = None;
     }

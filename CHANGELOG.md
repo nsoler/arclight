@@ -12,6 +12,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.31 — 2026-10-30
+
+- The Media Out **Render** button goes on from the particles the viewer
+  has already simulated (where they still match the graph) instead of
+  simulating from the first frame, without changing the viewer's
+  simulation.
+
 ## 0.10.30 — 2026-10-30
 
 - Bridged calls that render particles at a late frame (a Scanline Render

@@ -104,6 +104,9 @@ pub struct Properties {
     name_edit: HashMap<String, String>,
     name_error: Option<(String, String)>,
     jobs: HashMap<String, RenderJob>,
+    /// The viewer's evaluator, whose particle simulations Media Out
+    /// renders go on from (never changing them).
+    viewer: Arc<Mutex<arclight::graph::Evaluator>>,
     tracks: HashMap<String, TrackJob>,
     /// Camera Tracker solves, running or done, by node.
     camera_jobs: HashMap<String, crate::camera_tracker::CamJob>,
@@ -143,6 +146,29 @@ pub struct Properties {
 }
 
 impl Properties {
+    /// Media Out renders going on from `viewer`'s particle simulations.
+    pub fn sharing(viewer: Arc<Mutex<arclight::graph::Evaluator>>) -> Properties {
+        Properties { viewer, ..Properties::default() }
+    }
+
+    /// Back to as new (another project), still sharing the viewer's.
+    pub fn reset(&mut self) {
+        *self = Properties::sharing(self.viewer.clone());
+    }
+
+    /// Render Media Out node `id` of `graph` on a thread, in an evaluator
+    /// of its own (the viewer isn't held) that goes on from the viewer's
+    /// particles where they stand for `graph`.
+    fn start_render(&mut self, graph: arclight::graph::Graph, id: &str) {
+        let progress = Arc::new(Progress::default());
+        let (pg, node, viewer) = (progress.clone(), id.to_string(), self.viewer.clone());
+        let handle = std::thread::spawn(move || {
+            let eval = viewer.lock().unwrap_or_else(|e| e.into_inner()).borrowing_particles();
+            render::render_media_out_with(&graph, &node, &pg, eval)
+        });
+        self.jobs.insert(id.to_string(), RenderJob { progress, handle: Some(handle), result: None });
+    }
+
     pub fn is_rendering(&self) -> bool {
         self.jobs.values().any(|j| j.handle.is_some())
     }
@@ -940,11 +966,7 @@ impl Properties {
             let btn = ui.add_enabled(ready, egui::Button::new(RichText::new("Render").strong()));
             let btn = btn.on_disabled_hover_text("Connect an input and set an output file first");
             if btn.clicked() {
-                let progress = Arc::new(Progress::default());
-                let graph = doc.graph.clone();
-                let (pg, node) = (progress.clone(), id.to_string());
-                let handle = std::thread::spawn(move || render::render_media_out(&graph, &node, &pg));
-                self.jobs.insert(id.to_string(), RenderJob { progress, handle: Some(handle), result: None });
+                self.start_render(doc.graph.clone(), id);
             }
             if let Some((ok, msg)) = self.jobs.get(id).and_then(|j| j.result.as_ref()) {
                 let color = if *ok { Color32::from_rgb(110, 200, 120) } else { Color32::from_rgb(235, 100, 90) };
@@ -1627,6 +1649,44 @@ mod tests {
         // In the middle of the text, up to the cursor.
         let (start, list) = completions("cos(fr) + 1", 6, &d);
         assert_eq!((start, list[0].insert.as_str()), (4, "frame"));
+    }
+
+    /// A Media Out render goes on from the viewer's particles: it writes
+    /// what a render of its own writes, for the viewer's graph or another,
+    /// and leaves the viewer's simulation as it was.
+    #[test]
+    fn a_media_out_render_borrows_the_viewer_s_particles() {
+        use arclight::graph::Evaluator;
+        use arclight::ops::EvalContext;
+        let dir = std::env::temp_dir().join(format!("arclight_props_render_{}", std::process::id()));
+        let graph = |fall: f64, to: &str| -> Graph {
+            serde_json::from_value(json!({ "nodes": [
+                { "id": "emit", "op": "particle_emitter", "params": { "rate": 50, "speed": 2, "life": 1000, "size": 3 } },
+                { "id": "fall", "op": "particle_gravity", "inputs": ["emit"], "params": { "acceleration": [0, -fall, 0] } },
+                { "id": "dots", "op": "particles_2d", "inputs": ["fall"], "params": {} },
+                { "id": "out", "op": "media_out", "inputs": ["dots"], "params": { "path": dir.join(to).join("f.####.exr").to_string_lossy(), "first_frame": 40, "last_frame": 41, "fps": 24.0 } },
+            ], "project": { "first_frame": 1, "last_frame": 100, "fps": 24.0, "format": { "width": 32, "height": 32 } } }))
+            .unwrap()
+        };
+        let viewer = Arc::new(Mutex::new(Evaluator::new()));
+        let fall = || viewer.lock().unwrap().evaluate(&graph(1.0, "v"), "fall", &EvalContext { frame: 40, write_outputs: false }).unwrap().scene.as_ref().unwrap().particles[0].clone();
+        let shown = fall();
+        let (particles, steps) = (format!("{:?}", shown.particles()), shown.steps());
+        let mut props = Properties::sharing(viewer.clone());
+        for (k, g) in [1.0, 9.0].into_iter().enumerate() {
+            let (job, own) = (format!("job{k}"), format!("own{k}"));
+            props.start_render(graph(g, &job), "out");
+            let n = props.jobs.get_mut("out").unwrap().handle.take().unwrap().join().unwrap().unwrap();
+            assert_eq!(n, 2);
+            render::render_media_out(&graph(g, &own), "out", &Progress::default()).unwrap();
+            for f in ["f.0040.exr", "f.0041.exr"] {
+                let read = |d: &str| arclight::image::Image::read(&dir.join(d).join(f)).unwrap().pixels;
+                assert_eq!(read(&job), read(&own), "{job} {f}");
+            }
+            let now = fall();
+            assert_eq!((format!("{:?}", now.particles()), now.steps()), (particles.clone(), steps), "the viewer's simulation as it was");
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Tab takes the picked completion; ⇧Tab takes none and moves focus
