@@ -12,6 +12,18 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.7 — 2026-10-30
+
+- **Splat Crop** (Dev1, splat plan S4): keeps a Gaussian splat capture's
+  splats inside a box or sphere (Center, Size, Rotate; Invert keeps
+  those outside), to cut a capture down or clear floaters; everything
+  else in the scene passes through.
+- **Read Splat: Holdout** (Dev1): marks a capture as a holdout (it will
+  draw nothing but hide what's behind it, as a holdout mesh does; the
+  renderer honours it with the render-pass work, S3, next).
+- Fixed: two threads reading the same splat file at once could each
+  cache their own copy.
+
 ## 0.10.6 — 2026-10-30
 
 - **The 3D view renders splats in full once it settles** (Dev2): with

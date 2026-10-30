@@ -91,7 +91,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -283,6 +283,8 @@ const MASK_INVERT: ParamSpec = fixed!("mask_invert", "Invert mask", ParamKind::B
 /// Read Splat's Up axis: the capture's up as it is, Z-up, or Y down (Z
 /// forward, as COLMAP / OpenCV).
 const SPLAT_UPS: &[&str] = &["y", "z", "-y"];
+/// The scene a splat editing node changes (everything else passed on).
+const SPLATS_IN: Port = Port { label: "scene", optional: false, kind: Kind::Scene };
 
 const PLACE_T: ParamSpec = p!("translate", "Translate", ParamKind::Vec3, [0.0, 0.0, 0.0]);
 const PLACE_R: ParamSpec = p!("rotate", "Rotate", ParamKind::Vec3, [0.0, 0.0, 0.0]);
@@ -998,6 +1000,7 @@ pub static OPS: &[OpInfo] = &[
             PLACE_S,
             p!("opacity", "Opacity", OPACITY, 1.0),
             fixed!("sh_degree", "Color detail (SH degree)", ParamKind::Int { min: 0, max: 3 }, 3),
+            HOLDOUT,
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -1006,7 +1009,27 @@ pub static OPS: &[OpInfo] = &[
                default), z (Z-up tools), or -y (Y down, Z forward: captures straight from COLMAP / OpenCV, which then \
                look upside down). Translate, Rotate and Scale then place it. Opacity fades every splat. Color detail \
                keeps the color's change with the viewing angle up to that spherical-harmonics degree (0: one color per \
-               splat, the quickest; 3: all of it). Outputs a scene holding the capture.",
+               splat, the quickest; 3: all of it). Holdout draws nothing but hides what's behind the splats, as a holdout mesh \
+               does. Outputs a scene holding the capture.",
+    },
+    OpInfo {
+        name: "splat_crop",
+        label: "Splat Crop",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN],
+        params: &[
+            fixed!("shape", "Shape", ParamKind::Choice(&["box", "sphere"]), "box"),
+            p!("center", "Center", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+            p!("size", "Size", ParamKind::Vec3, [1.0, 1.0, 1.0]),
+            p!("rotate", "Rotate", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+            fixed!("invert", "Invert", ParamKind::Bool, false),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Keeps the Gaussian splats whose centers are inside a box or a sphere (in the scene: Center, Size across \
+               each way, a sphere stretched by it, turned by Rotate), and drops the rest: to cut a capture down to what's \
+               wanted or clear away floaters at its edges. Invert keeps those outside instead. Every capture in the scene \
+               is cropped; everything else passes through.",
     },
     OpInfo {
         name: "light_ambient",
@@ -1798,6 +1821,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         }
         "read_geo" => read_geo(params),
         "read_splat" => read_splat(params),
+        "splat_crop" => splat_crop(params, inputs),
         "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => {
             let target = inputs.first().copied().flatten().and_then(|t| t.scene.as_deref());
             let light = scene::light(op, params, target).context("unknown light")?;
@@ -3113,6 +3137,37 @@ fn read_geo(params: &Value) -> Result<Image> {
     Ok(scene_output(DEFAULT_FORMAT, Scene { meshes, ..Scene::default() }))
 }
 
+/// The scene on a splat editing node's input (an empty one when nothing
+/// is connected).
+fn input_scene(inputs: &[Option<&Image>]) -> Scene {
+    inputs.first().copied().flatten().and_then(|i| i.scene.as_deref()).cloned().unwrap_or_default()
+}
+
+/// A Splat Crop: each capture's splats with their centers inside its box
+/// or sphere (outside, inverted); the arrays shared where it keeps them all.
+fn splat_crop(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
+    let mut out = input_scene(inputs);
+    let size = scene::numbers::<3>(&params["size"], 1.0).map(|v| (v.abs() / 2.0).max(1e-12));
+    let region = geom::trs(scene::numbers(&params["center"], 0.0), scene::numbers(&params["rotate"], 0.0), size);
+    // Scene space into the region's, where it's the unit cube or ball.
+    let to_region = region.try_inverse().unwrap_or_else(geom::Mat4::identity);
+    let sphere = params["shape"].as_str() == Some("sphere");
+    let invert = params["invert"].as_bool().unwrap_or(false);
+    out.splats = out
+        .splats
+        .iter()
+        .map(|g| {
+            let kept = g.select(|i| {
+                let q = geom::transform_point(&to_region, &g.placed(i));
+                let inside = if sphere { q.norm_squared() <= 1.0 } else { q.x.abs() <= 1.0 && q.y.abs() <= 1.0 && q.z.abs() <= 1.0 };
+                inside != invert
+            });
+            std::sync::Arc::new(kept)
+        })
+        .collect();
+    Ok(scene_output(DEFAULT_FORMAT, out))
+}
+
 /// A Read Splat's capture: read (once per file, change and SH degree; see
 /// [`crate::splat::Splats::read`]), turned so its up is +Y, placed, and
 /// faded by Opacity (a copy of the opacities only when that isn't 1).
@@ -3130,7 +3185,8 @@ fn read_splat(params: &Value) -> Result<Image> {
         "-y" => geom::Mat4::new(1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
         _ => geom::Mat4::identity(),
     };
-    let mut splats = Splats { world: scene::placement(params) * up, ..(*read).clone() };
+    let holdout = params["holdout"].as_bool().unwrap_or(false);
+    let mut splats = Splats { world: scene::placement(params) * up, holdout, ..(*read).clone() };
     let fade = params["opacity"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) as f32;
     if fade != 1.0 {
         splats.opacity = std::sync::Arc::new(read.opacity.iter().map(|a| a * fade).collect());
@@ -3389,8 +3445,39 @@ mod tests {
         assert!((faded.splats[0].opacity[0] - g.opacity[0] * 0.5).abs() < 1e-6);
         assert!(std::sync::Arc::ptr_eq(&g.positions, &faded.splats[0].positions) && std::sync::Arc::ptr_eq(&g.opacity, &scene(json!({ "file": file })).splats[0].opacity));
         assert_eq!(scene(json!({ "file": file, "sh_degree": 0 })).splats[0].sh_degree, 0);
+        assert!(!g.holdout && scene(json!({ "file": file, "holdout": true })).splats[0].holdout);
         assert!(eval("read_splat", &json!({}), &[], &CTX).err().unwrap().to_string().contains("no file"));
         assert!(eval("read_splat", &json!({ "file": "/no/such.ply" }), &[], &CTX).is_err());
+    }
+
+    /// Splat Crop on the sample (a ball of 256 splats, radius 1 at y 1,
+    /// over 64 on the ground): a sphere round the ball keeps just it, a
+    /// thin box (turned or not) just the ground; inverted, the rest; what
+    /// keeps everything shares it; the rest of the scene passes through.
+    #[test]
+    fn splat_crop_keeps_whats_inside() {
+        let file = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/geo/splats.ply");
+        let mut input = eval("read_splat", &json!({ "file": file }), &[], &CTX).unwrap().scene.clone().unwrap();
+        std::sync::Arc::make_mut(&mut input).extend(eval("cube", &json!({}), &[None], &CTX).unwrap().scene.as_ref().unwrap());
+        let plate = scene_output(DEFAULT_FORMAT, (*input).clone());
+        let crop = |p: Value| eval("splat_crop", &p, &[Some(&plate)], &CTX).unwrap().scene.clone().unwrap();
+        let count = |p: Value| crop(p).splats[0].len();
+        assert_eq!(output_kind("splat_crop"), Kind::Scene);
+        let ball = json!({ "shape": "sphere", "center": [0, 1, 0], "size": [2.02, 2.02, 2.02] });
+        assert_eq!(count(ball.clone()), 256);
+        let mut outside = ball.clone();
+        outside["invert"] = json!(true);
+        assert_eq!(count(outside), 64);
+        assert_eq!(count(json!({ "size": [10, 0.005, 10] })), 64, "a slab at the ground");
+        assert_eq!(count(json!({ "size": [10, 10, 0.005], "rotate": [90, 0, 0] })), 64, "the same, turned flat");
+        // Kept: what was in the ball, in order, colors and all.
+        let kept = crop(ball);
+        let g = &input.splats[0];
+        assert!(kept.splats[0].positions.iter().zip(g.positions.iter()).all(|(a, b)| a == b) && kept.splats[0].sh_of(255) == g.sh_of(255));
+        assert_eq!((kept.meshes.len(), kept.splats[0].node.as_str()), (1, g.node.as_str()), "the rest passes through");
+        let all = crop(json!({ "size": [100, 100, 100] }));
+        assert!(std::sync::Arc::ptr_eq(&all.splats[0].positions, &g.positions) && std::sync::Arc::ptr_eq(&all.splats[0].sh, &g.sh), "kept whole: shared");
+        assert!(eval("splat_crop", &json!({}), &[None], &CTX).unwrap().scene.as_ref().unwrap().splats.is_empty(), "nothing in: nothing out");
     }
 
     #[test]

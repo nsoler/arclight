@@ -2240,6 +2240,7 @@ mod tests {
             sh: Arc::new([1.0, 0.5, 0.0].map(dc_of).repeat(n)),
             sh_degree: 0,
             world: geom::trs([0.0, 0.0, -5.0], [0.0; 3], [1.0; 3]),
+            holdout: false,
             node: "splat1".into(),
         };
         let dots: Vec<(Vec3, Color32)> = splat_dots(&s).collect();
@@ -2488,6 +2489,7 @@ mod tests {
             sh: Arc::new([0.5f32; 3].map(dc_of).repeat(3)),
             sh_degree: 0,
             world: geom::trs([1.0, 0.0, 0.0], [0.0; 3], [1.0; 3]),
+            holdout: false,
             node: "capture".into(),
         }));
         assert_eq!(pick(&s, &p, at(Vec3::new(-1.0, 2.0, -9.0)) + Vec2::new(3.0, 2.0), &loc), Some(Hit::Object("capture".into())), "near a center");

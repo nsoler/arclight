@@ -235,6 +235,7 @@ mod tests {
             sh_degree: 0,
             world: Mat4::identity(),
             node: "splat1".into(),
+            holdout: false,
         })
     }
 

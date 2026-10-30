@@ -281,6 +281,9 @@ selected object.
   view they show as dots while you orbit and render in full a moment
   after you stop (a selected capture shows its box); click near a splat (its center) to select its Read Splat,
   and **F** frames splats too.
+- **Splat Crop** keeps a capture's splats inside a box or sphere
+  (Center, Size, Rotate; **Invert** keeps those outside), to cut it down
+  or clear floaters; everything else in the scene passes through.
 - **Read Geo** reads an OBJ file (with its MTL colors and textures) or a
   glTF file (.gltf, .glb).
 - Each has Translate / Rotate / Scale, like a Card; wire them into a Scene

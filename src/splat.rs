@@ -34,6 +34,8 @@ pub struct Splats {
     pub sh_degree: u8,
     /// Where the capture's space sits in the scene.
     pub world: Mat4,
+    /// Draws nothing but hides what's behind it, as a holdout mesh does.
+    pub holdout: bool,
     /// The node it came from ("" until tagged).
     pub node: String,
 }
@@ -90,6 +92,32 @@ impl Splats {
         let placed: Vec<Vec3> = (0..8).map(|i| geom::transform_point(&self.world, &corner(i))).collect();
         let fold = |f: fn(f64, f64) -> f64, init: f64| Vec3::new(placed.iter().map(|p| p.x).fold(init, f), placed.iter().map(|p| p.y).fold(init, f), placed.iter().map(|p| p.z).fold(init, f));
         Some((fold(f64::min, f64::INFINITY), fold(f64::max, f64::NEG_INFINITY)))
+    }
+
+    /// Its splats where `keep` says (by index), in order: itself, sharing
+    /// everything, when it keeps them all.
+    pub fn select(&self, keep: impl Fn(usize) -> bool + Sync) -> Splats {
+        use rayon::prelude::*;
+        let kept: Vec<usize> = (0..self.len()).into_par_iter().filter(|&i| keep(i)).collect();
+        if kept.len() == self.len() {
+            return self.clone();
+        }
+        let pick = |v: &[[f32; 3]]| -> Arc<Vec<[f32; 3]>> { Arc::new(kept.iter().map(|&i| v[i]).collect()) };
+        let n = self.sh_stride();
+        Splats {
+            positions: pick(&self.positions),
+            scales: pick(&self.scales),
+            rotations: Arc::new(kept.iter().map(|&i| self.rotations[i]).collect()),
+            opacity: Arc::new(kept.iter().map(|&i| self.opacity[i]).collect()),
+            sh: Arc::new(kept.iter().flat_map(|&i| self.sh[i * n..(i + 1) * n].iter().copied()).collect()),
+            ..self.clone()
+        }
+    }
+
+    /// Splat `i`'s center in the scene (placed by `world`).
+    pub fn placed(&self, i: usize) -> Vec3 {
+        let p = self.positions[i];
+        geom::transform_point(&self.world, &Vec3::new(p[0] as f64, p[1] as f64, p[2] as f64))
     }
 
     /// Splat `i`'s color (linear RGB, as the capture stored it) seen along
@@ -158,6 +186,10 @@ impl Splats {
         drop(cache);
         let splats = Arc::new(read_ply(path, max_degree)?);
         let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        // Read at the same time elsewhere: that one, so all share one copy.
+        if let Some(c) = cache.iter().find(|c| c.0 == path && c.1 == max_degree && c.2 == modified) {
+            return Ok(c.3.clone());
+        }
         cache.retain(|c| !(c.0 == path && c.1 == max_degree));
         if cache.len() >= CACHED {
             cache.remove(0);
@@ -399,6 +431,7 @@ fn read_ply_from(r: &mut impl BufRead, max_degree: u8) -> Result<Splats> {
         sh: Arc::new(sh),
         sh_degree: degree,
         world: Mat4::identity(),
+        holdout: false,
         node: String::new(),
     })
 }
@@ -460,6 +493,7 @@ mod tests {
             sh: Arc::new(sh),
             sh_degree: 1,
             world: Mat4::identity(),
+            holdout: false,
             node: String::new(),
         }
     }
@@ -571,7 +605,7 @@ mod tests {
             sh.extend([0.0; 9]);
         }
         assert_eq!(positions.len(), n);
-        Splats { positions: Arc::new(positions), scales: Arc::new(scales), rotations: Arc::new(rotations), opacity: Arc::new(opacity), sh: Arc::new(sh), sh_degree: 1, world: Mat4::identity(), node: String::new() }
+        Splats { positions: Arc::new(positions), scales: Arc::new(scales), rotations: Arc::new(rotations), opacity: Arc::new(opacity), sh: Arc::new(sh), sh_degree: 1, world: Mat4::identity(), holdout: false, node: String::new() }
     }
 
     /// The path of the sample capture.
