@@ -7,6 +7,10 @@ they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
+- [ ] 0.10.20–0.10.22: a Camera set to Orthographic (Ortho width) through
+      Scanline Render, and the 3D view's 5 / axis views; a far-off
+      textured card no longer shimmers; Read Geo an .abc from Blender /
+      Maya / Houdini (animated, deforming, motion blur)
 - [ ] 0.10.15–0.10.19: Camera Tracker on real footage: a Roto mask over
       something moving through the shot; Export Linked (re-solve or Set
       origin and the Camera follows; Bake / Unlink in Properties); pick
@@ -78,10 +82,11 @@ Phase 10: 0.10.x on branch `wip-ns-splats` (started 0.10.0).
 
 ## 3D and rendering
 
-- [ ] A true orthographic texture path in render3d (ortho views use a
-      very long lens today)
-- [ ] Mipmaps for minified cards
-- [ ] Alembic import for animated caches
+- [x] A true orthographic camera and render path (0.10.20)
+- [x] Mipmaps for minified textures (0.10.21)
+- [x] Alembic import (.abc, Ogawa): transforms and deforming meshes (0.10.22)
+- [ ] Alembic follow-ups: curves, points (into particles?), cameras, face
+      sets as materials
 
 ## Camera tracker
 

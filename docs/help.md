@@ -309,8 +309,14 @@ selected object.
   exact from every viewing angle) and their **Opacity**; **View
   independent** drops the color's change with the angle (quicker, and
   steadier where reflections flicker).
-- **Read Geo** reads an OBJ file (with its MTL colors and textures) or a
-  glTF file (.gltf, .glb).
+- **Read Geo** reads an OBJ file (with its MTL colors and textures), a
+  glTF file (.gltf, .glb) or an Alembic cache (.abc): its meshes move and
+  deform frame by frame. **Frame rate** (set to the project's when you
+  add the node) and **Frame offset** say which time of the cache each
+  frame shows: (frame + offset) / rate seconds. Alembic has no
+  materials, so its meshes come in white; turn on **Override material**
+  to shade them. Only Ogawa .abc files are read (Alembic 1.5 and later
+  write them; an old HDF5 one says to re-export).
 - Each has Translate / Rotate / Scale, like a Card; wire them into a Scene
   and a Scanline Render draws them with the cards.
 - **Shading** sets how they take light: **unlit** (their color as it is),

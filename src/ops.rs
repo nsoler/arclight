@@ -973,6 +973,8 @@ pub static OPS: &[OpInfo] = &[
         inputs: &[],
         params: &[
             fixed!("file", "File", ParamKind::Path { save: false }, ""),
+            fixed!("frame_rate", "Frame rate (Alembic)", ParamKind::Float { min: 1.0, max: 240.0 }, 24.0),
+            p!("frame_offset", "Frame offset (Alembic)", ParamKind::Float { min: -100000.0, max: 100000.0 }, 0.0),
             PLACE_T,
             PLACE_R,
             PLACE_S,
@@ -988,8 +990,11 @@ pub static OPS: &[OpInfo] = &[
         ],
         overlay: Overlay::None,
         mask_base: None,
-        help: "Reads meshes from a Wavefront OBJ file (with the colors and textures of its MTL materials) or a glTF 2.0 \
-               file (.gltf or .glb), then scales, rotates and moves them all. Opacity fades them all (each material's own \
+        help: "Reads meshes from a Wavefront OBJ file (with the colors and textures of its MTL materials), a glTF 2.0 \
+               file (.gltf or .glb) or an Alembic cache (.abc, Ogawa: its polygon and subdivision meshes, moving and \
+               deforming, under their transforms; white, as it has no materials), then scales, rotates and moves them all. \
+               An Alembic cache is read at the frame's time: (frame + Frame offset) ÷ Frame rate seconds, the rate \
+               starting as the project's. Opacity fades them all (each material's own \
                opacity times it, their shadows too), with or without Override material. Outputs a scene holding one mesh \
                per object and material in the file.",
     },
@@ -1858,7 +1863,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
             let model = scene::primitive_model(op, params, texture).context("unknown primitive")?;
             Ok(scene_output(texture.map_or(DEFAULT_FORMAT, |t| t.format), Scene { meshes: vec![model], ..Scene::default() }))
         }
-        "read_geo" => read_geo(params),
+        "read_geo" => read_geo(params, ctx.frame),
         "read_splat" => read_splat(params),
         "splat_crop" => splat_crop(params, inputs),
         "splat_color" => splat_color(params, inputs),
@@ -3134,17 +3139,18 @@ pub fn scanline_render_frames(params: &Value, inputs: &[Option<&Image>], others:
 /// A Read Geo's meshes: the file's parts (OBJ, or glTF for .gltf / .glb;
 /// read once per path and change time, with their textures), placed by its
 /// transform.
-fn read_geo(params: &Value) -> Result<Image> {
-    type Parts = std::sync::Arc<Vec<(crate::mesh::Part, Option<std::sync::Arc<Image>>)>>;
-    static CACHE: std::sync::Mutex<Option<(std::path::PathBuf, Option<std::time::SystemTime>, Parts)>> = std::sync::Mutex::new(None);
+fn read_geo(params: &Value, frame: i64) -> Result<Image> {
+    static CACHE: std::sync::Mutex<Option<(std::path::PathBuf, Option<std::time::SystemTime>, GeoParts)>> = std::sync::Mutex::new(None);
     let file = params["file"].as_str().unwrap_or("");
     if file.is_empty() {
         bail!("no file: choose an OBJ file");
     }
     let path = std::path::PathBuf::from(file);
     let modified = std::fs::metadata(&path).with_context(|| format!("can't read {file}"))?.modified().ok();
+    let alembic = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("abc"));
     let cached = CACHE.lock().unwrap().as_ref().filter(|c| c.0 == path && c.1 == modified).map(|c| c.2.clone());
     let parts = match cached {
+        _ if alembic => alembic_parts(path, modified, params, frame)?,
         Some(p) => p,
         None => {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
@@ -3152,7 +3158,7 @@ fn read_geo(params: &Value) -> Result<Image> {
                 "gltf" | "glb" => crate::gltf::read_gltf(&path)?,
                 _ => crate::mesh::read_obj(&path)?,
             };
-            let loaded: Parts = std::sync::Arc::new(
+            let loaded: GeoParts = std::sync::Arc::new(
                 parts
                     .into_iter()
                     .map(|part| {
@@ -3177,6 +3183,46 @@ fn read_geo(params: &Value) -> Result<Image> {
         })
         .collect();
     Ok(scene_output(DEFAULT_FORMAT, Scene { meshes, ..Scene::default() }))
+}
+
+/// A Read Geo's meshes, each with its texture.
+type GeoParts = std::sync::Arc<Vec<(crate::mesh::Part, Option<std::sync::Arc<Image>>)>>;
+
+/// A Read Geo's Alembic meshes at `frame`'s time ((frame + Frame offset) ÷
+/// Frame rate): the archive read once per file and change, and its meshes
+/// at the last few times asked kept.
+fn alembic_parts(path: std::path::PathBuf, modified: Option<std::time::SystemTime>, params: &Value, frame: i64) -> Result<GeoParts> {
+    use crate::alembic::Archive;
+    use std::sync::{Arc, Mutex};
+    type Key = (std::path::PathBuf, Option<std::time::SystemTime>);
+    static ARCHIVE: Mutex<Option<(Key, Arc<Archive>)>> = Mutex::new(None);
+    static TIMES: Mutex<Vec<(Key, u64, GeoParts)>> = Mutex::new(Vec::new());
+    const KEPT: usize = 8;
+    let fps = params["frame_rate"].as_f64().unwrap_or(24.0).max(1e-3);
+    let t = (frame as f64 + params["frame_offset"].as_f64().unwrap_or(0.0)) / fps;
+    let key = (path, modified);
+    if let Some(p) = TIMES.lock().unwrap().iter().find(|c| c.0 == key && c.1 == t.to_bits()).map(|c| c.2.clone()) {
+        return Ok(p);
+    }
+    let archive = {
+        let mut a = ARCHIVE.lock().unwrap();
+        match a.as_ref().filter(|a| a.0 == key) {
+            Some(a) => a.1.clone(),
+            None => {
+                let opened = Arc::new(Archive::open(&key.0)?);
+                *a = Some((key.clone(), opened.clone()));
+                opened
+            }
+        }
+    };
+    let parts: GeoParts = Arc::new(archive.parts(t)?.into_iter().map(|p| (p, None)).collect());
+    let mut times = TIMES.lock().unwrap();
+    times.retain(|c| c.0 == key);
+    if times.len() >= KEPT {
+        times.remove(0);
+    }
+    times.push((key, t.to_bits(), parts.clone()));
+    Ok(parts)
 }
 
 /// The scene on a splat editing node's input (an empty one when nothing
@@ -3626,6 +3672,33 @@ mod tests {
         assert!(std::sync::Arc::ptr_eq(&f.positions, &g.positions));
     }
 
+    /// Read Geo on the Alembic sample (examples/geo/anim.abc: a cube under
+    /// a rig moving from x 0 to 3 over frames 1–10 at 24 fps): read at the
+    /// frame's time, shifted by Frame offset and scaled by Frame rate, which
+    /// starts as the project's; placed like any Read Geo.
+    #[test]
+    fn read_geo_reads_alembic_at_the_frames_time() {
+        let file = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/geo/anim.abc");
+        let cube_x = |p: Value, frame: i64| {
+            let ctx = EvalContext { frame, write_outputs: false };
+            let s = eval("read_geo", &p, &[], &ctx).unwrap().scene.clone().unwrap();
+            assert_eq!(s.meshes.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["rig/box/Cube", "sheet/Grid"]);
+            let m = &s.meshes[0];
+            let c = m.mesh.positions.iter().sum::<crate::geom::Vec3>() / m.mesh.positions.len() as f64;
+            crate::geom::transform_point(&m.world, &c).x
+        };
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-6;
+        assert!(close(cube_x(json!({ "file": file }), 1), 0.0) && close(cube_x(json!({ "file": file }), 10), 3.0));
+        assert!(close(cube_x(json!({ "file": file, "frame_offset": -9 }), 10), 0.0), "offset back to frame 1");
+        assert!(close(cube_x(json!({ "file": file, "frame_rate": 48 }), 20), 3.0), "at 48 fps, frame 20 is frame 10's time");
+        assert!(close(cube_x(json!({ "file": file, "translate": [1, 0, 0] }), 10), 4.0), "placed");
+        // A new Read Geo takes the project's frame rate.
+        let mut session = crate::session::Session::new(serde_json::from_value(json!({ "project": { "first_frame": 1, "last_frame": 10, "fps": 30, "format": { "width": 64, "height": 32 } }, "nodes": [] })).unwrap());
+        let id = session.create_node("read_geo", None, &Map::new(), &[]).unwrap();
+        assert_eq!(session.node(&id).unwrap().params["frame_rate"], json!(30.0));
+        assert!(format!("{:#}", eval("read_geo", &json!({ "file": "/no/such.abc" }), &[], &CTX).err().unwrap()).contains("can't read"));
+    }
+
     #[test]
     fn read_geo_opacity_fades_the_files_materials() {
         use serde_json::json;
@@ -3635,7 +3708,7 @@ mod tests {
         std::fs::write(dir.join("t.obj"), "mtllib t.mtl\nusemtl half\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").unwrap();
         let file = dir.join("t.obj").to_string_lossy().into_owned();
         let opacity = |p: Value| {
-            let img = read_geo(&p).unwrap();
+            let img = read_geo(&p, 1).unwrap();
             img.scene.as_ref().unwrap().meshes.iter().map(|m| m.material.opacity).collect::<Vec<_>>()
         };
         // Missing (older projects): the file's own; else times it, with or

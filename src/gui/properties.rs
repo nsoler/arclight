@@ -55,7 +55,7 @@ const READ_EXTS: &[&str] = &[
     "mp4", "mov", "m4v", "mkv", "avi", "webm", "mxf", "mpg", "mpeg",
 ];
 /// What Read Geo's file browser offers.
-const GEO_EXTS: &[&str] = &["obj", "gltf", "glb"];
+const GEO_EXTS: &[&str] = &["obj", "gltf", "glb", "abc"];
 /// …and to write.
 const WRITE_EXTS: &[&str] = &["exr", "dpx", "tif", "tiff", "tga", "png", "jpg", "webp", "mp4", "mov"];
 

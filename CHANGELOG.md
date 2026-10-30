@@ -12,6 +12,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.22 — 2026-10-30
+
+- **Read Geo reads Alembic caches** (`.abc`, Ogawa): polygon and
+  subdivision meshes under their transforms, moving and deforming, with
+  their normals and UVs, at each frame's time ((frame + Frame offset) /
+  Frame rate; the rate starts as the project's). Deforming meshes
+  motion-blur. Alembic has no materials, so meshes come in white: use
+  Override material. Curves, points and cameras aren't read yet. A
+  sample is `examples/geo/anim.abc`.
+
 ## 0.10.21 — 2026-10-30
 
 - **Mipmaps**: a texture seen smaller than its own pixels (a card or a

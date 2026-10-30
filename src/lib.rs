@@ -3,6 +3,7 @@
 //! A float-linear, premultiplied-alpha compositing engine driven by a JSON node
 //! graph. This is original work, not derived from any existing product.
 
+pub mod alembic;
 pub mod anim;
 pub mod bundle;
 pub mod camtrack;
@@ -24,6 +25,7 @@ pub mod mesh;
 #[cfg(unix)]
 pub mod mcp;
 pub mod nodal;
+pub mod ogawa;
 pub mod ops;
 pub mod particle_nodes;
 pub mod particles;

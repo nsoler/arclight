@@ -204,6 +204,10 @@ impl Session {
             values["last_frame"] = self.graph.project.last_frame.into();
             values["fps"] = self.graph.project.fps.into();
         }
+        // An Alembic cache's times in the project's frames.
+        if op == "read_geo" {
+            values["frame_rate"] = self.graph.project.fps.into();
+        }
         for (name, v) in params {
             values[name.as_str()] = validate_param(info, name, v)?;
         }

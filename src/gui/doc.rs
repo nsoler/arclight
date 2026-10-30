@@ -387,6 +387,10 @@ impl Doc {
             params["last_frame"] = self.graph.project.last_frame.into();
             params["fps"] = self.graph.project.fps.into();
         }
+        // An Alembic cache's times in the project's frames.
+        if op == "read_geo" {
+            params["frame_rate"] = self.graph.project.fps.into();
+        }
         self.graph.nodes.push(NodeSpec {
             id: id.clone(),
             op: op.to_string(),
