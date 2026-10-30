@@ -47,6 +47,8 @@ they come up and strike them (or delete them) when they ship.
 
 ## Gaussian splats (plan: `docs/splat-plan.md`, proposed)
 
+Starts phase 10: version 0.10.0 on a new branch `wip-ns-splats`.
+
 - [ ] S1: Read Splat (`.ply`) and a CPU splat renderer in Scanline
       Render, composited with cards and meshes by depth
 - [ ] S2: the 3D view (dots while moving, full once settled), picking,

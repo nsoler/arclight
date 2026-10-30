@@ -5,6 +5,11 @@ it follows the TODO "Particles" round. Decisions D1–D5 below stand as
 proposed until the user says otherwise. The work goes one milestone at a
 time, as in `phase-4-plan.md`.
 
+**Versioning (user, 2026-10-30):** starting S1 begins **phase 10**: the
+version goes to **0.10.0** and the work moves to a new branch
+**`wip-ns-splats`** (from the current work branch, pushed to GitHub);
+changes then count 0.10.1, 0.10.2, ….
+
 ## Goal
 
 Read existing 3D Gaussian splat captures and render them in Arclight's
