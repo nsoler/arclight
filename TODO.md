@@ -7,6 +7,9 @@ they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
+- [ ] 0.9.62–0.9.63: Particle Render texture sequences (play / loop /
+      random start); MCP / Python calls to a running GUI share its caches
+      and stay responsive
 - [ ] 0.9.58–0.9.61: several Viewer nodes (the active one shows, eye
       icon); 3D view motion blur preview: particle dots streak, looking
       through a moving camera blurs by its motion; Scanline Render
@@ -38,8 +41,10 @@ they come up and strike them (or delete them) when they ship.
 
 - [ ] An image-sequence input for sprite textures
 - [ ] Animated geometry emitters without re-simulating from scratch
-- [ ] Reuse the GUI's evaluator in the MCP bridge, so `particles` via an
-      attached GUI doesn't re-simulate each call
+- [ ] Bridged calls other than `particles` that simulate inside one
+      evaluation (`scene_objects`, a Scanline Render / Particles 2D at a
+      late frame) hold the shared evaluator for the whole run and the
+      viewer waits; renders through the bridge still re-simulate
 
 ## Gaussian splats (plan: `docs/splat-plan.md`, proposed)
 
