@@ -1,6 +1,8 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-29, end of session 11 (after v0.9.48) (herdr multi-agent sessions:
+Last updated 2026-10-30, session 12: **phase 10 (Gaussian splats) on
+branch `wip-ns-splats`, 0.10.x**; phase 9 ended at 0.9.68 (v0.9.68) on
+`wip-ns-3dwork`, now frozen (herdr multi-agent sessions:
 one master + workers; see "Several agent sessions" below). Read this,
 then `README.md` (user-facing features, file format, shortcuts,
 scripting, the "3D view" section), `docs/phase-4-plan.md` (3D plan: M1–M13
