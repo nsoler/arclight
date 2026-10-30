@@ -7,7 +7,8 @@ they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
-- [ ] 0.10.2–0.10.6: Read Splat a real capture (.ply from Postshot /
+- [ ] 0.10.2–0.10.13: Splat Crop (drag its box in 3D), Splat Color, .splat /
+      .spz files; Read Splat a real capture (.ply from Postshot /
       Polycam / Luma…; try Up axis -y if it's upside down), render it
       with a card in front / behind, the 3D view's dots then full render,
       F, click to select
@@ -54,7 +55,7 @@ they come up and strike them (or delete them) when they ship.
       late frame) hold the shared evaluator for the whole run and the
       viewer waits; renders through the bridge still re-simulate
 
-## Gaussian splats (plan: `docs/splat-plan.md`, proposed)
+## Gaussian splats (plan: `docs/splat-plan.md`, S1–S5 done)
 
 Phase 10: 0.10.x on branch `wip-ns-splats` (started 0.10.0).
 
@@ -64,8 +65,11 @@ Phase 10: 0.10.x on branch `wip-ns-splats` (started 0.10.0).
       framing; `scene_objects` / a paged `splats` query in MCP and Python
 - [x] S3 (0.10.7–0.10.8): render passes, holdouts and motion blur for splats
 - [x] S4 (0.10.7, 0.10.9–0.10.11): Splat Crop (with its 3D view handle), Splat Color; placement via Read Splat's own transform
-- [ ] S5: `.splat` / `.spz` readers, faster rendering (a GPU path if the
-      wgpu item lands)
+- [x] S5 (0.10.12–0.10.13): `.splat` / `.spz` readers, 2–2.5× faster
+      rendering, a per-view cache
+- [ ] Splat follow-ups: a GPU path (with the wgpu item); SOG / compressed
+      PLY if asked; Read Splat's Up axis default (y today; most COLMAP
+      captures need -y: ask the user)
 
 ## 3D and rendering
 

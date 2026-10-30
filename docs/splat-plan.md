@@ -1,6 +1,7 @@
 # Splat plan: Gaussian splats in the 3D scene
 
-Status: **started** (2026-10-30): phase 10, 0.10.0 on `wip-ns-splats`.
+Status: **S1–S5 done** (0.10.1–0.10.13, 2026-10-30) on `wip-ns-splats`.
+Started 2026-10-30 (phase 10, 0.10.0).
 Proposed 2026-10-30 at the user's request. Decisions D1–D5 below stand as
 proposed until the user says otherwise. The work goes one milestone at a
 time, as in `phase-4-plan.md`.

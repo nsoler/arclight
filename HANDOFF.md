@@ -17,6 +17,21 @@ proposed 2026-10-30, not started; after the Particles round).
   larger items. Keep it current: add items as they come up, tick or
   remove them when they ship.
 
+- **Session 12, phase 10 (splats), 0.10.0–0.10.13 on `wip-ns-splats`:**
+  0.10.1 `splat::Splats` (Arc'd SoA arrays) + `Scene.splats`; 0.10.2 the
+  `.ply` reader + `read_splat` + `examples/geo/splats.ply`; 0.10.3
+  `render3d/splats.rs` rasterizer (EWA, SH 0–3, tiles, merged per AA
+  sample with surfaces in `draw_passes`) + viewport dots; 0.10.4 pick /
+  frame / box; 0.10.5 `scene_objects` + paged `splats` (MCP, Python);
+  0.10.6 settled 3D view render; 0.10.7 Splat Crop + `Splats.holdout`;
+  0.10.8 passes / holdout / motion blur; 0.10.9 Splat Color
+  (`graded_sh`); 0.10.10 `Scene.regions`; 0.10.11 crop handle
+  (`GadgetKind::Crop`); 0.10.12 `.splat` / `.spz` (dep `flate2`);
+  0.10.13 tile binning without a global sort + `View` LRU cache, preview
+  SH ≤ 1. 1 M splats 1080p ≈ 0.17 s. Open: Read Splat Up default (y; ask).
+  Master's ship script lives in the session scratchpad: snapshot reported
+  paths, test at HEAD in a worktree, commit those blobs, bump in place,
+  build the launcher from the committed tree.
 - **Session 12, fourth round:** 0.9.62 (Dev1) sprite texture sequences;
   0.9.63 (Dev2) the bridge shares the GUI's evaluator
   (`Session.eval: Arc<Mutex<Evaluator>>`, `gui/bridge_calls.rs`); 0.9.64
