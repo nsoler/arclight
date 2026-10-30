@@ -268,11 +268,11 @@ impl App {
 
     /// What the user is looking at.
     fn view_state(&self) -> Value {
-        let viewer = self.doc.graph.nodes.iter().find(|n| n.op == "viewer");
+        let viewer = self.doc.viewer();
         let viewing = self.doc.viewed();
         json!({
             "selected": self.doc.selected,
-            "viewer": viewer.map(|v| &v.id),
+            "viewer": viewer,
             "viewing": viewing,
             "frame": self.transport.frame,
             "playing": self.transport.play != Play::Stopped,
@@ -926,7 +926,7 @@ impl App {
                     ui.close();
                 }
                 ui.separator();
-                let viewer = self.doc.graph.nodes.iter().any(|n| n.op == "viewer");
+                let viewer = self.doc.viewer().is_some();
                 let target = if self.doc.selected_wire.is_some() {
                     "into the selected wire"
                 } else if viewer {
@@ -1153,7 +1153,7 @@ impl eframe::App for App {
             egui::CentralPanel::no_frame().show(ui, |ui| {
                 let error = self.error.as_ref().map(|e| e.to_string());
                 let target = self.doc.view_target();
-                let returns_to = self.doc.overridden().and_then(|_| self.doc.graph.nodes.iter().find(|n| n.op == "viewer")).map(|v| v.id.clone());
+                let returns_to = self.doc.overridden().and_then(|_| self.doc.viewer());
                 self.viewer.ui(
                     ui,
                     Display {

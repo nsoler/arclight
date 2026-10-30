@@ -50,6 +50,10 @@ pub struct Doc {
     /// A node shown in place of the Viewer node's input (double-click, V),
     /// until the Viewer is viewed again. View state: not saved or undone.
     pub view_override: Option<String>,
+    /// The Viewer node shown when a project has several: the one last
+    /// viewed, clicked or wired into (see [`viewer`](Self::viewer)). View
+    /// state: not saved or undone.
+    active_viewer: Option<String>,
     /// The frame of the image in the viewer, if any: new shapes are placed
     /// and sized to fit it (the project format otherwise), so they land in
     /// the picture being looked at even when it isn't project-sized.
@@ -66,7 +70,7 @@ pub struct Doc {
 impl Doc {
     pub fn new(graph: Graph, path: Option<PathBuf>) -> Doc {
         let history = History { undo: Vec::new(), redo: Vec::new(), committed: Graph::default(), committed_edits: 0 };
-        let mut doc = Doc { graph, selected: None, selection: Vec::new(), selection_for: None, selected_backdrop: None, selected_wire: None, show_3d: None, intro_3d: false, view_override: None, view_format: None, revision: 1, path, dirty: false, edits: 0, history };
+        let mut doc = Doc { graph, selected: None, selection: Vec::new(), selection_for: None, selected_backdrop: None, selected_wire: None, show_3d: None, intro_3d: false, view_override: None, active_viewer: None, view_format: None, revision: 1, path, dirty: false, edits: 0, history };
         doc.normalize();
         doc.auto_layout();
         doc.history.committed = doc.graph.clone();
@@ -450,7 +454,7 @@ impl Doc {
         let pos = |d: &Doc, id: &str| d.node(id).and_then(|n| n.pos).unwrap_or([0.0, 0.0]);
         let (dx, dy) = (NODE_W + 60.0, NODE_H + 40.0);
         // Without a wire: the Viewer, and the picture (or scene) it gets.
-        let viewer = wire.is_none().then(|| self.graph.nodes.iter().find(|n| n.op == "viewer").map(|n| n.id.clone())).flatten();
+        let viewer = wire.is_none().then(|| self.viewer()).flatten();
         let feed = if wire.is_some() {
             None
         } else {
@@ -596,6 +600,10 @@ impl Doc {
             return false;
         }
         n.inputs[port] = from.to_string();
+        // Wiring into a Viewer is asking to see it.
+        if n.op == "viewer" {
+            self.active_viewer = Some(to.to_string());
+        }
         self.changed();
         true
     }
@@ -698,7 +706,7 @@ impl Doc {
             }
             arclight::link::rename(&mut n.params, old, new);
         }
-        let lists = [&mut self.selected, &mut self.view_override, &mut self.selection_for].into_iter().flatten();
+        let lists = [&mut self.selected, &mut self.view_override, &mut self.active_viewer, &mut self.selection_for].into_iter().flatten();
         for id in lists.chain(self.selection.iter_mut()) {
             if id == old {
                 *id = new.to_string();
@@ -713,13 +721,20 @@ impl Doc {
         self.view_override.as_deref().filter(|id| self.node(id).is_some())
     }
 
-    /// What the viewer shows: a node viewed by double-click (or V), else
-    /// the first Viewer node, else the selection.
-    pub fn view_target(&self) -> Option<String> {
-        self.overridden()
+    /// The Viewer node the viewer shows: the one last viewed, clicked or
+    /// wired into, else the first.
+    pub fn viewer(&self) -> Option<String> {
+        self.active_viewer
+            .as_deref()
+            .filter(|id| self.node(id).is_some_and(|n| n.op == "viewer"))
             .map(str::to_string)
             .or_else(|| self.graph.nodes.iter().find(|n| n.op == "viewer").map(|n| n.id.clone()))
-            .or_else(|| self.selected.clone())
+    }
+
+    /// What the viewer shows: a node viewed by double-click (or V), else
+    /// the Viewer node, else the selection.
+    pub fn view_target(&self) -> Option<String> {
+        self.overridden().map(str::to_string).or_else(|| self.viewer()).or_else(|| self.selected.clone())
     }
 
     /// The node whose image the viewer shows: the overriding node, the
@@ -728,8 +743,8 @@ impl Doc {
         if let Some(id) = self.overridden() {
             return Some(id.to_string());
         }
-        match self.graph.nodes.iter().find(|n| n.op == "viewer") {
-            Some(v) => v.inputs.first().filter(|i| !i.is_empty()).cloned(),
+        match self.viewer() {
+            Some(v) => self.node(&v)?.inputs.first().filter(|i| !i.is_empty()).cloned(),
             None => self.selected.clone(),
         }
     }
@@ -741,9 +756,10 @@ impl Doc {
         let Some(n) = self.node(id) else { return };
         if n.op == "viewer" {
             self.view_override = None;
+            self.active_viewer = Some(id.to_string());
             return;
         }
-        if self.graph.nodes.iter().any(|n| n.op == "viewer") {
+        if self.viewer().is_some() {
             self.view_override = Some(id.to_string());
             return;
         }
@@ -757,8 +773,8 @@ impl Doc {
             return;
         }
         self.view_override = None;
-        let viewer = match self.graph.nodes.iter().find(|n| n.op == "viewer") {
-            Some(v) => v.id.clone(),
+        let viewer = match self.viewer() {
+            Some(v) => v,
             None => {
                 let p = self.node(id).and_then(|n| n.pos).unwrap_or([0.0, 0.0]);
                 self.add_node("viewer", [p[0] + NODE_W + 60.0, p[1] + 80.0])
@@ -1238,6 +1254,45 @@ mod tests {
         assert_eq!(d.view_target(), Some(plate.clone()));
         d.view_node(&viewer);
         assert_eq!((d.view_target(), d.viewed()), (Some(viewer), Some(plate)));
+    }
+
+    /// A project that already has a Viewer, and a new comp wired into a
+    /// second one: the viewer shows the Viewer last wired into, viewed or
+    /// clicked, not just the first in the file (which left the new comp
+    /// unseen, the old picture on screen whatever was done to it).
+    #[test]
+    fn the_viewer_shows_the_viewer_node_last_wired_viewed_or_clicked() {
+        let mut d = Doc::new(Graph::default(), None);
+        let old = d.add_node("constant", [0.0, 0.0]);
+        d.view_node(&old);
+        let first = d.viewer().unwrap();
+        assert_eq!(d.viewed(), Some(old.clone()));
+        let (plate, logo) = (d.add_node("read", [0.0, 200.0]), d.add_node("read", [0.0, 300.0]));
+        let merge = d.add_node("merge", [200.0, 250.0]);
+        d.connect(&plate, &merge, 0);
+        d.connect(&logo, &merge, 1);
+        // Loaded this way, the first Viewer is shown, as before.
+        let second = d.add_node("viewer", [400.0, 250.0]);
+        assert_eq!(d.view_target(), Some(first.clone()));
+        // Wiring the comp into the new Viewer shows it…
+        d.connect(&merge, &second, 0);
+        assert_eq!((d.view_target(), d.viewed()), (Some(second.clone()), Some(merge.clone())));
+        // …as does viewing it again after viewing the old one; the rest
+        // goes into it too (route_to_viewer, a node viewed in its place).
+        d.view_node(&first);
+        assert_eq!(d.viewed(), Some(old.clone()));
+        d.view_node(&second);
+        assert_eq!(d.viewed(), Some(merge.clone()));
+        d.route_to_viewer(&logo);
+        assert_eq!((d.node(&second).unwrap().inputs[0].as_str(), d.node(&first).unwrap().inputs[0].as_str()), (logo.as_str(), old.as_str()));
+        d.view_node(&plate);
+        assert_eq!(d.view_target(), Some(plate.clone()));
+        d.view_node(&second);
+        // It follows a rename, and when it goes the first one shows again.
+        d.rename(&second, "comp_view").unwrap();
+        assert_eq!(d.view_target().as_deref(), Some("comp_view"));
+        d.delete_node("comp_view");
+        assert_eq!((d.view_target(), d.viewed()), (Some(first), Some(old)));
     }
 
     #[test]

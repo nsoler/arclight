@@ -87,6 +87,9 @@ choose in Properties:
 
 ## Viewer
 
+- A project can have several **Viewer** nodes; the viewer shows the one
+  you last wired into, double-clicked (or pressed **V** on) or clicked,
+  marked with an eye in the graph (the others read "Viewer (not shown)").
 - Drag (or middle-drag) to pan; scroll or pinch to zoom.
 - Double-click or **F** to fit.
 - **Tab** (with the pointer over the viewer) switches between **2D** (the

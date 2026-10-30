@@ -11,6 +11,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.58 — 2026-10-29
+
+- **Fixed: a comp wired into a second Viewer showed black or a stale
+  picture** (Dev1): in a project with more than one Viewer node the
+  viewer always showed the first one, so a new Viewer (even
+  double-clicked) never showed and edits to its Merge seemed to do
+  nothing. The viewer now shows the Viewer last wired into,
+  double-clicked or clicked; the graph marks it with an eye and the
+  others read "Viewer (not shown)". One-Viewer projects are unchanged.
+
 ## 0.9.57 — 2026-10-29
 
 - **The 3D view shows a Scanline Render's motion blur** (Dev2): once the

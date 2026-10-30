@@ -610,9 +610,9 @@ impl NodeEditor {
                     doc.select_only(id);
                 }
             }
-            // Selecting the Viewer shows its own input again.
+            // Selecting a Viewer shows it, with its own input again.
             if (resp.clicked() || resp.drag_started()) && op == "viewer" && doc.is_selected(id) {
-                doc.view_override = None;
+                doc.view_node(id);
             }
             resp.context_menu(|ui| self.node_menu(ui, doc, id));
             if resp.drag_started() {
@@ -1135,8 +1135,12 @@ impl NodeEditor {
             FontId::proportional((13.0 * z).max(10.0)),
             Color32::WHITE,
         );
-        if doc.overridden() == Some(id) {
-            // Shown in the viewer in place of the Viewer's input: an eye.
+        // With several Viewers, which one the viewer shows.
+        let several = op == "viewer" && doc.graph.nodes.iter().filter(|n| n.op == "viewer").count() > 1;
+        let active = several && doc.viewer().as_deref() == Some(id);
+        if doc.overridden() == Some(id) || (active && doc.overridden().is_none()) {
+            // Shown in the viewer (in place of the Viewer's input, or the
+            // Viewer shown of several): an eye.
             let c = Pos2::new(r.left() + 11.0 * z, r.top() + 10.0 * z);
             let eye = Color32::from_rgb(120, 200, 240);
             painter.add(egui::Shape::convex_polygon(
@@ -1162,6 +1166,9 @@ impl NodeEditor {
         if z > 0.6 {
             // Subtitle: the op, plus the file name for media nodes.
             let mut sub = info.map_or(op.to_string(), |i| i.label.to_string());
+            if several && !active {
+                sub = format!("{sub} (not shown)");
+            }
             if let Some(path) = doc.node(id).and_then(|n| n.params.get("path")).and_then(|p| p.as_str()) {
                 if let Some(name) = std::path::Path::new(path).file_name() {
                     sub = name.to_string_lossy().into_owned();
