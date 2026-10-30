@@ -11,6 +11,20 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.51 — 2026-10-29
+
+- **Fixed: a new 3D Camera Setup rendered black** with a default Card
+  (3DWorker): its Camera sat at the origin, in the card's own plane. The
+  setup's Camera now starts back along +Z, so a new Card just fills its
+  frame. (A project made before this keeps its camera at 0: move it
+  back, Translate z ≈ 1, or insert the setup again.)
+- **The 3D view shows a Scanline Render's extra inputs** (3DWorker):
+  lights, cards and particles on its growable inputs now get their
+  icons, handles and look-through.
+- **Look through in 3D view** (3DWorker): a button in a Camera's (and a
+  Spot or Area Light's) Properties switches the viewer to 3D looking
+  through it; click again to come back out.
+
 ## 0.9.50 — 2026-10-29
 
 - **Cards can take light** (MathWiz): the Card node's new **Shading**

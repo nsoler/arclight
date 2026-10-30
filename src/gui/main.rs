@@ -1047,9 +1047,21 @@ impl eframe::App for App {
                 ui.separator();
                 self.props.layer = self.probe.as_ref().map(|(n, img)| (n.clone(), img.window(), img.format));
                 self.props.input_layers = self.probe.as_ref().map(|(n, img)| (n.clone(), img.layers()));
+                self.props.looking_through = self.viewer.viewport3d.looking_through().filter(|_| self.viewer.mode3d);
                 if let Some(f) = self.props.ui(ui, &mut self.doc, self.transport.frame) {
                     self.transport.set_play(Play::Stopped);
                     self.transport.seek(f, &self.doc.graph.project);
+                }
+                // A Look through button: into the 3D view through that
+                // camera or light, or back out of it.
+                if let Some(n) = self.props.look_through.take() {
+                    let vp = &mut self.viewer.viewport3d;
+                    if self.props.looking_through.as_ref() == Some(&n) {
+                        vp.stop_looking_through();
+                    } else {
+                        self.viewer.mode3d = true;
+                        vp.look_through_node(&n);
+                    }
                 }
             });
         let error_node = self.error.as_ref().and_then(|e| e.node.clone());

@@ -38,7 +38,15 @@ selected node, or the end of the chain, as the background). To put it
 somewhere else, right-click a wire and choose **Insert 3D Camera Setup**:
 the picture on that wire becomes the background and the render goes on to
 where the wire went. Then add Cards, meshes and lights to the Scene's free
-inputs.
+inputs (or the render's last, empty input). The setup's Camera starts back
+along +Z, far enough that a new Card (1 wide, at the origin) just fills
+its frame. The 3D view shows everything the render draws, extra inputs
+included.
+
+To see the scene as a Camera sees it, click **Look through in 3D view** in
+its Properties (spot and area lights have it too): the viewer switches to
+3D through that lens; click again to come back out. The **0** key does the
+same for the selected camera or light.
 
 The first setup in a project switches the viewer to its **3D** view,
 framed on the new scene, and says how to switch back (**Tab**). The

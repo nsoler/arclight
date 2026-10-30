@@ -860,6 +860,9 @@ pub struct Viewport3d {
     pub view: ViewCam,
     /// Through a scene camera or a light instead of the free camera.
     pub look_through: Option<Through>,
+    /// A camera or light node to look through once the scene has it (see
+    /// [`look_through_node`](Self::look_through_node)).
+    through_node: Option<String>,
     /// The project's frame size (for looking through a light).
     format: Size,
     /// A light handle being dragged (its node), and the one under the
@@ -908,6 +911,7 @@ impl Default for Viewport3d {
         Viewport3d {
             view: ViewCam::default(),
             look_through: None,
+            through_node: None,
             format: Size { width: 1920, height: 1080 },
             light_drag: None,
             light_hot: None,
@@ -1131,6 +1135,7 @@ impl Viewport3d {
         if !blocked && resp.hovered() {
             self.keys(ui, doc);
         }
+        self.resolve_through_node();
         let p = match self.through_camera() {
             Some(cam) => Projector::through(&cam, doc.graph.project.format, rect),
             None => {
@@ -1573,17 +1578,50 @@ impl Viewport3d {
             return;
         }
         let Some(s) = self.scene.as_ref() else { return };
-        let pick = selection.last().and_then(|n| {
-            if let Some(i) = (0..s.cameras.len()).find(|&i| s.camera_node(i) == n) {
-                return Some(Through::Camera(i));
-            }
-            let l = s.lights.iter().find(|l| &l.node == n)?;
-            light_camera(l, self.format).map(|_| Through::Light(n.clone()))
-        });
+        let pick = selection.last().and_then(|n| self.through_of(n));
         match pick.or_else(|| (!s.cameras.is_empty()).then_some(Through::Camera(0))) {
             Some(t) => self.look_through = Some(t),
             None => self.message = Some("Nothing to look through: select a camera, spot light or area light".into()),
         }
+    }
+
+    /// How to look through node `n` of the scene: a camera, spot or area
+    /// light (None for anything else, or not in the scene).
+    fn through_of(&self, n: &str) -> Option<Through> {
+        let s = self.scene.as_ref()?;
+        if let Some(i) = (0..s.cameras.len()).find(|&i| s.camera_node(i) == n) {
+            return Some(Through::Camera(i));
+        }
+        let l = s.lights.iter().find(|l| l.node == n)?;
+        light_camera(l, self.format).map(|_| Through::Light(n.to_string()))
+    }
+
+    /// Look through camera, spot or area light node `n` (as soon as the
+    /// viewed scene is there; it says so if `n` isn't in it).
+    pub fn look_through_node(&mut self, n: &str) {
+        self.through_node = Some(n.to_string());
+    }
+
+    /// Look through the asked-for node once there's a scene.
+    fn resolve_through_node(&mut self) {
+        if let Some(n) = self.through_node.take_if(|_| self.scene.is_some()) {
+            match self.through_of(&n) {
+                Some(t) => self.look_through = Some(t),
+                None => self.message = Some(format!("Can't look through '{n}': it isn't in the viewed scene")),
+            }
+        }
+    }
+
+    /// The camera or light node being looked through, if any (or about
+    /// to be).
+    pub fn looking_through(&self) -> Option<String> {
+        self.through_node.clone().or_else(|| Some(self.through_name()).filter(|n| self.look_through.is_some() && !n.is_empty()))
+    }
+
+    /// Back out of looking through, where the camera or light was.
+    pub fn stop_looking_through(&mut self) {
+        self.through_node = None;
+        self.leave_camera();
     }
 
     /// The aspect of the last view drawn.
@@ -2432,6 +2470,29 @@ mod tests {
         v.scene = Some(Arc::new(Scene { lights: vec![Light { node: "bulb".into(), ..Light::new(LightKind::Point, Mat4::identity()) }], ..Scene::default() }));
         v.look_through_selected(&["bulb".to_string()]);
         assert!(v.look_through.is_none() && v.message.as_deref().is_some_and(|m| m.contains("Nothing to look through")));
+    }
+
+    /// Properties' Look through button: by node, once the scene is there.
+    #[test]
+    fn looking_through_a_node_waits_for_its_scene() {
+        let (_, mut s) = light_doc(json!({ "translate": [0, 3, 0], "rotate": [-90, 0, 0] }), json!({ "translate": [2, 0, 0] }));
+        s.cameras.push(geom::Camera::default());
+        s.camera_nodes.push("cam".into());
+        let mut v = Viewport3d::default();
+        v.look_through_node("panel");
+        v.resolve_through_node();
+        assert_eq!((v.look_through.clone(), v.looking_through()), (None, Some("panel".to_string())), "no scene yet: still asked for");
+        v.scene = Some(Arc::new(s));
+        v.resolve_through_node();
+        assert_eq!((v.look_through.clone(), v.looking_through()), (Some(Through::Light("panel".into())), Some("panel".to_string())));
+        v.look_through_node("cam");
+        v.resolve_through_node();
+        assert_eq!(v.looking_through().as_deref(), Some("cam"));
+        v.stop_looking_through();
+        assert_eq!((v.look_through.clone(), v.looking_through()), (None, None));
+        v.look_through_node("elsewhere");
+        v.resolve_through_node();
+        assert!(v.looking_through().is_none() && v.message.as_deref().is_some_and(|m| m.contains("isn't in the viewed scene")));
     }
 
     /// G X 2 Enter on a selected light moves it 2 along X; undo puts it

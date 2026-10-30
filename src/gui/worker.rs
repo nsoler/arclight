@@ -238,7 +238,7 @@ impl SceneWorker {
 }
 
 /// The scene node `id` shows at `frame`: its own output for 3D nodes, a
-/// Scanline Render's scene and camera inputs together, a Camera Tracker's
+/// Scanline Render's scene, camera and extra scene inputs together, a Camera Tracker's
 /// solved camera and points; None for nodes that show no scene.
 pub fn scene_of(eval: &mut Evaluator, graph: &Graph, id: &str, frame: i64) -> Result<Option<Arc<arclight::scene::Scene>>, String> {
     use arclight::scene::Scene;
@@ -255,10 +255,11 @@ pub fn scene_of(eval: &mut Evaluator, graph: &Graph, id: &str, frame: i64) -> Re
     }
     match node.op.as_str() {
         "scanline_render" => {
-            let input = |i: usize| node.inputs.get(i).cloned().unwrap_or_default();
+            // All but the background: the scene, the camera, and the extra
+            // scenes it renders too (lights, cards, …; see ops::render_scene).
             let mut all = Scene::default();
-            for src in [input(0), input(1)] {
-                if let Some(s) = out_of(&src)? {
+            for src in node.inputs.iter().enumerate().filter(|(i, _)| *i != 2).map(|(_, s)| s) {
+                if let Some(s) = out_of(src)? {
                     all.extend(&s);
                 }
             }
@@ -273,5 +274,37 @@ pub fn scene_of(eval: &mut Evaluator, graph: &Graph, id: &str, frame: i64) -> Re
             Ok(Some(Arc::new(s)))
         }
         _ => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::doc::Doc;
+
+    #[test]
+    fn a_new_camera_setup_sees_a_card_and_the_renders_extra_inputs() {
+        // The hand test: a 3D setup, a Card of a picture in its Scene, an
+        // Area Light on the render's growable input.
+        let mut d = Doc::new(Graph::default(), None);
+        let plate = d.add_node("constant", [0.0, 0.0]);
+        d.set_param(&plate, "color", serde_json::json!([1.0, 0.5, 0.25, 1.0]));
+        let card = d.add_node("card", [0.0, 100.0]);
+        d.connect(&plate, &card, 0);
+        let (_, scene, render) = d.add_camera_rig([300.0, 300.0], None, Some(&card));
+        assert_eq!(d.graph.node(&scene).unwrap().inputs[1], card);
+        let light = d.add_node("light_area", [500.0, 100.0]);
+        d.commit(false);
+        assert!(d.connect(&light, &render, 3));
+        let mut eval = Evaluator::new();
+        let s = scene_of(&mut eval, &d.graph, &render, 1).unwrap().unwrap();
+        assert_eq!((s.cameras.len(), s.cards.len(), s.lights.len()), (1, 1, 1), "the extra input's light is in the 3D view too");
+        // The render isn't black: the card fills the camera's frame.
+        let img = eval.evaluate(&d.graph, &render, &EvalContext { frame: 1, write_outputs: false }).unwrap();
+        let (w, h) = (img.width, img.pixels.len() / img.width);
+        for (x, y) in [(w / 2, h / 2), (w / 20, h / 2), (w - 1 - w / 20, h / 2)] {
+            let p = img.get(x, y);
+            assert!((p[0] - 1.0).abs() < 0.02 && (p[1] - 0.5).abs() < 0.02 && (p[3] - 1.0).abs() < 0.02, "the card at ({x}, {y}): {p:?}");
+        }
     }
 }

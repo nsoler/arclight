@@ -386,7 +386,8 @@ impl Doc {
 
     /// Add a camera rig with its Scanline Render at `pos`: a Camera into a
     /// Scene (input 1) into the render's scene input, the Camera and Scene
-    /// stacked above and to the left. Over `wire` (source, destination,
+    /// stacked above and to the left, the Camera backed off along +Z so a
+    /// new Card fills its frame. Over `wire` (source, destination,
     /// port) carrying an image, the render goes into it: the source feeds
     /// its background and it feeds the destination. Else, after node `up`:
     /// an image `up` feeds the background and whatever `up` fed comes from
@@ -397,6 +398,10 @@ impl Doc {
         let render = self.add_node("scanline_render", pos);
         let scene = self.add_node("scene", [pos[0] - dx, pos[1] - dy]);
         let camera = self.add_node("camera", [pos[0] - dx, pos[1] - 2.0 * dy]);
+        // Back on +Z till a new Card (1 wide, at the origin) just fills the
+        // frame's width: the film back's width at the focal length.
+        let z = self.param(&camera, "focal").as_f64().unwrap_or(35.0) / self.param(&camera, "film_back")[0].as_f64().unwrap_or(36.0);
+        self.set_param(&camera, "translate", serde_json::json!([0.0, 0.0, z]));
         self.connect(&camera, &scene, 0);
         self.connect(&scene, &render, 0);
         let op = |d: &Doc, id: &str| d.node(id).map(|n| n.op.clone()).unwrap_or_default();
@@ -1003,6 +1008,9 @@ mod tests {
         assert_eq!((inputs(&d, &render)[2].as_str(), inputs(&d, &grade)[0].as_str()), (plate.as_str(), render.as_str()));
         let (pc, pr) = (d.node(&cam).unwrap().pos.unwrap(), d.node(&render).unwrap().pos.unwrap());
         assert!(pc[0] < pr[0] && pc[1] < pr[1], "the camera above and to the left");
+        let t = d.param(&cam, "translate");
+        assert_eq!((t[0].as_f64(), t[1].as_f64()), (Some(0.0), Some(0.0)));
+        assert!((t[2].as_f64().unwrap() - 35.0 / 36.0).abs() < 1e-12, "back on +Z till a new Card fills the frame: {t}");
         d.undo();
         assert_eq!(d.graph, before, "one undo step");
         // After the selected grade: it feeds the background, the viewer

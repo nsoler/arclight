@@ -135,6 +135,11 @@ pub struct Properties {
     /// Where the completion list was drawn last frame: a click there
     /// mustn't count as leaving the field.
     formula_popup: Option<egui::Rect>,
+    /// The camera or light node the 3D view looks through (set by the app
+    /// before drawing), and one a Look through button asked to (or to come
+    /// back out of), taken by the app after.
+    pub looking_through: Option<String>,
+    pub look_through: Option<String>,
 }
 
 impl Properties {
@@ -233,6 +238,17 @@ impl Properties {
         }
     }
 
+    /// A Camera's (spot or area light's) switch to view the scene through
+    /// it in the 3D view, or come back out.
+    fn look_through_button(&mut self, ui: &mut egui::Ui, id: &str) {
+        let mut on = self.looking_through.as_deref() == Some(id);
+        let text = if on { "Looking through it in the 3D view" } else { "Look through in 3D view" };
+        let tip = "Show the 3D view through this node's lens, as the 0 key does; click again to come back out";
+        if ui.toggle_value(&mut on, text).on_hover_text(tip).clicked() {
+            self.look_through = Some(id.to_string());
+        }
+    }
+
     fn panel(&mut self, ui: &mut egui::Ui, doc: &mut Doc, id: &str) {
         let Some(node) = doc.node(id) else { return };
         let op = node.op.clone();
@@ -317,6 +333,7 @@ impl Properties {
                 "tracker" => self.tracker_extras(ui, doc, id),
                 "camera_tracker" => crate::camera_tracker::panel(ui, doc, id, &mut self.camera_jobs),
                 "corner_pin" => self.corner_pin_extras(ui, doc, id),
+                "camera" | "light_spot" | "light_area" => self.look_through_button(ui, id),
                 _ => {}
             }
 
