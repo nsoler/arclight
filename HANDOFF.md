@@ -31,6 +31,21 @@ done), `docs/help.md` (the in-app help) and
 - **Next (no plan yet):** M12/M13 follow-ups above; the M9 leftover
   (true ortho texture path), the viewport's solid view lit by scene
   lights; other items under "Next steps". Ask the user what's next.
+- **In progress at this update (session 11, after v0.9.46):** three user
+  requests, to be committed as 0.9.47+, then **test, merge and release
+  as usual** (user asked) and stop:
+  (1) **Card Opacity** (3DWorker: ops.rs, scene.rs, render3d.rs,
+  render3d/shadow.rs, viewport3d.rs preview, README, help): 0–1 slider,
+  premultiplied multiply, shadows scale with opacity, maybe Opacity on
+  mesh nodes too; old projects unchanged.
+  (2) **Viewer frame size labels** (MathWiz: gui/viewer.rs, gui/main.rs):
+  dim "0,0" outside the format's bottom-left and "W,H" outside its
+  top-right, 2D only, View ▸ Show frame size (session-only toggle).
+  (3) **About logo shown square** (MathWiz: main.rs about_dialog): a
+  square box with the whole art centered, not stretched; MathWiz is
+  checking whether today's dialog actually distorts it (the art's opaque
+  bounds are wider than tall) — tell the user what was found.
+  If the tree has uncommitted edits in those files, they're these.
 - **M12 (lights), done 0.9.35–0.9.43:** Area Light, falloff, radius,
   exposure / enabled, look at (0.9.35, 3DWorker); 3D view handles + Look
   through selected (0.9.37); Light 2D engine (0.9.38, MathWiz) and node
