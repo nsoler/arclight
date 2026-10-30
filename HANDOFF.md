@@ -9,6 +9,11 @@ done), `docs/help.md` (the in-app help) and
 
 ## Start here (next session)
 
+- **`TODO.md`** (repo root, added 2026-10-29 at the user's request) is
+  the running list of what's still wanted: hand checks, follow-ups,
+  larger items. Keep it current: add items as they come up, tick or
+  remove them when they ship.
+
 - **State:** version **0.9.48** on branch **`wip-ns-3dwork`**, merged to
   `main`; **M12 (lights) and M13 (particles) are DONE**. The local build
   (`target/release`) is 0.9.48, so the Omarchy launcher runs 0.9.48
