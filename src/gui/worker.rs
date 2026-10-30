@@ -226,7 +226,9 @@ impl SceneWorker {
                             let now = shown(s);
                             let (times, then) = if blur_times.is_empty() { Default::default() } else { blurred(&mut eval, &req.graph, &req.node, req.frame) };
                             let then: Vec<(i64, arclight::scene::Scene)> = then.iter().map(|(k, s)| (*k, shown(s))).collect();
-                            let blur = arclight::render3d::Blur { times, frames: std::iter::once((0, &now, cam.clone())).chain(then.iter().map(|(k, s)| (*k, s, cam.clone()))).collect() };
+                            // Jittered as the render is (Jitter shutter).
+                            let jitter = req.graph.node(&req.node).is_none_or(|n| arclight::ops::blur_jitter(&n.params));
+                            let blur = arclight::render3d::Blur { times, frames: std::iter::once((0, &now, cam.clone())).chain(then.iter().map(|(k, s)| (*k, s, cam.clone()))).collect(), jitter };
                             Some(Arc::new(arclight::render3d::render_preview_blurred(&now, cam, *format, req.preview, Some(&blur))))
                         }
                         _ => None,
@@ -357,7 +359,7 @@ mod tests {
         assert_eq!(times.len(), 4);
         let cam = now.cameras[0].clone();
         let size = arclight::image::Size { width: 64, height: 32 };
-        let blur = Blur { times, frames: std::iter::once((0, &*now, cam.clone())).chain(then.iter().map(|(k, s)| (*k, &**s, cam.clone()))).collect() };
+        let blur = Blur { times, frames: std::iter::once((0, &*now, cam.clone())).chain(then.iter().map(|(k, s)| (*k, &**s, cam.clone()))).collect(), jitter: true };
         let (sharp, soft) = (render_preview(&now, &cam, size, Preview::Solid), render_preview_blurred(&now, &cam, size, Preview::Solid, Some(&blur)));
         let partly = |img: &Image| (0..64).filter(|&x| (0.02..0.98).contains(&img.at(x, 16)[3])).count();
         assert!(partly(&sharp) <= 2 && partly(&soft) >= 6, "{} {}", partly(&sharp), partly(&soft));

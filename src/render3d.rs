@@ -469,6 +469,9 @@ pub enum Preview {
 pub struct Blur<'a> {
     pub times: Vec<f64>,
     pub frames: Vec<(i64, &'a Scene, Camera)>,
+    /// Each pixel's times jittered within their shares of the shutter (see
+    /// [`render_blurred`]); off, every pixel at the same times.
+    pub jitter: bool,
 }
 
 impl Blur<'_> {
@@ -502,14 +505,15 @@ impl Blur<'_> {
 /// a very fast move smears into fine grain instead of a few sharp copies:
 /// the pixels of each tile (see [`jitter_side`]) take turns at offsets
 /// spread across a share (in ordered-dither order, so neighbours differ),
-/// each turn rendering just its pixels. The same every time.
+/// each turn rendering just its pixels. The same every time. Without
+/// [`Blur::jitter`], every pixel renders at the times themselves.
 #[allow(clippy::too_many_arguments)]
 pub fn render_blurred(scene: &Scene, cam: &Camera, format: Size, samples: usize, background: Option<&Image>, passes: Passes, next: Option<(&Scene, &Camera)>, blur: Option<&Blur>) -> Image {
     let out = render_motion(scene, cam, format, samples, background, passes, next);
     let Some(blur) = blur.filter(|b| b.times.len() > 1) else { return out };
     let mixed = Passes { depth: false, position: false, normal: false, uv: false, motion: false, id: false, ..passes };
     let frames: Vec<(i64, &Scene)> = blur.frames.iter().map(|f| (f.0, f.1)).collect();
-    match blur_sum(&blur.times, |t, cell| render_cell(&scene.at_time(&frames, t), &blur.camera(cam, t), format, samples, background, mixed, None, cell)) {
+    match blur_sum(&blur.times, blur.jitter, |t, cell| render_cell(&scene.at_time(&frames, t), &blur.camera(cam, t), format, samples, background, mixed, None, cell)) {
         Some(sum) if sum.pixels.len() == out.pixels.len() => mean_into(out, sum, blur.times.len()),
         _ => out,
     }
@@ -544,9 +548,10 @@ fn dither_rank(side: usize, x: usize, y: usize) -> usize {
 
 /// The sum over `times` (a share of the shutter apart) of renders by
 /// `render` (time, cell), each tile pixel's times moved within their
-/// shares by its jitter. None if nothing rendered.
-fn blur_sum(times: &[f64], render: impl Fn(f64, Option<Cell>) -> Image) -> Option<Image> {
-    let side = jitter_side(times.len());
+/// shares by its jitter (with `jitter`; else whole renders at the times).
+/// None if nothing rendered.
+fn blur_sum(times: &[f64], jitter: bool, render: impl Fn(f64, Option<Cell>) -> Image) -> Option<Image> {
+    let side = if jitter { jitter_side(times.len()) } else { 1 };
     let share = if times.len() > 1 { times[1] - times[0] } else { 0.0 };
     let mut sum: Option<Image> = None;
     for cy in 0..side {
@@ -606,7 +611,7 @@ pub fn render_preview(scene: &Scene, cam: &Camera, format: Size, preview: Previe
 pub fn render_preview_blurred(scene: &Scene, cam: &Camera, format: Size, preview: Preview, blur: Option<&Blur>) -> Image {
     let Some(blur) = blur.filter(|b| b.times.len() > 1) else { return render_preview(scene, cam, format, preview) };
     let frames: Vec<(i64, &Scene)> = blur.frames.iter().map(|f| (f.0, f.1)).collect();
-    let sum = blur_sum(&blur.times, |t, cell| {
+    let sum = blur_sum(&blur.times, blur.jitter, |t, cell| {
         let mut img = preview_cell(&scene.at_time(&frames, t), cam, format, preview, cell);
         img.planes.clear();
         img
@@ -1932,6 +1937,71 @@ mod tests {
         let still = json!({ "translate": [0, 0, -5], "size": [3, 3] });
         let (s0, s1) = (at5(&still, json!({ "samples": 4 })), at5(&still, json!({ "samples": 4, "motion_blur": 8 })));
         assert!(s0.pixels.iter().zip(&s1.pixels).all(|(p, q)| (0..4).all(|c| (p[c] - q[c]).abs() < 1e-6)));
+        // Jitter shutter: on unless turned off (a render from before it
+        // renders as it did); off, not the same picture.
+        let jitter = |on: Option<bool>| {
+            let mut p = json!({ "samples": 2, "motion_blur": 2, "shutter": 1.0 });
+            if let Some(on) = on {
+                p["jitter"] = json!(on);
+            }
+            at5(&sliding, p).pixels.clone()
+        };
+        assert!(jitter(None) == jitter(Some(true)) && jitter(None) != jitter(Some(false)));
+    }
+
+    /// Jitter shutter off: every pixel at the shutter's times themselves,
+    /// the picture the mean of whole renders at them, the passes that
+    /// don't blur the frame's own: exactly the render of 0.9.48–0.9.54
+    /// (before jitter), done here as it was then. The 3D view's blurred
+    /// preview too: the mean of previews at the times.
+    #[test]
+    fn unjittered_motion_blur_renders_whole_frames_at_the_times() {
+        let white = Image::filled(4, 4, [1.0; 4]);
+        let at = |x: f64| Scene { cards: vec![card(white.clone(), [x, 0.0, -5.0], [0.0; 3], [1.25, 2.5])], ..Scene::default() };
+        let (a, b) = (at(-3.5), at(2.75));
+        let cam = camera();
+        let frames = [(0, &a), (1, &b)];
+        let passes = Passes { depth: true, emission: true, ..Passes::NONE };
+        for n in [2, 3, 8] {
+            let blur = Blur { times: Blur::times(0.0, 1.0, n), frames: vec![(0, &a, cam.clone()), (1, &b, cam.clone())], jitter: false };
+            let got = render_blurred(&a, &cam, FMT, 2, None, passes, None, Some(&blur));
+            // As 0.9.54 rendered it.
+            let mut want = render_motion(&a, &cam, FMT, 2, None, passes, None);
+            let mixed = Passes { depth: false, ..passes };
+            let mut sum: Option<Image> = None;
+            for &t in &blur.times {
+                let img = render_motion(&a.at_time(&frames, t), &blur.camera(&cam, t), FMT, 2, None, mixed, None);
+                match &mut sum {
+                    None => sum = Some(img),
+                    Some(acc) => {
+                        acc.pixels.iter_mut().zip(&img.pixels).for_each(|(p, q)| (0..4).for_each(|c| p[c] += q[c]));
+                        for p in &mut acc.planes {
+                            p.data.iter_mut().zip(&img.plane(&p.name).unwrap().data).for_each(|(p, q)| *p += q);
+                        }
+                    }
+                }
+            }
+            let (sum, k) = (sum.unwrap(), 1.0 / n as f32);
+            want.pixels = sum.pixels.iter().map(|p| p.map(|v| v * k)).collect();
+            for p in sum.planes {
+                *want.plane_mut(&p.name) = p.data.iter().map(|v| v * k).collect();
+            }
+            assert!(got.pixels == want.pixels, "{n} times");
+            assert!(got.planes.len() == want.planes.len() && got.planes.iter().all(|p| want.plane(&p.name).is_some_and(|q| q.data == p.data)), "{n} times");
+            // Jittered, it isn't that.
+            let jittered = render_blurred(&a, &cam, FMT, 2, None, passes, None, Some(&Blur { jitter: true, ..blur }));
+            assert!(jittered.pixels != want.pixels, "{n} times");
+
+            let blur = Blur { times: Blur::times(0.0, 1.0, n), frames: vec![(0, &a, cam.clone()), (1, &b, cam.clone())], jitter: false };
+            let got = render_preview_blurred(&a, &cam, FMT, Preview::Solid, Some(&blur));
+            let previews: Vec<Image> = blur.times.iter().map(|&t| render_preview(&a.at_time(&frames, t), &cam, FMT, Preview::Solid)).collect();
+            let want: Vec<Rgba> = (0..got.pixels.len()).map(|i| {
+                let mut s = [0.0f32; 4];
+                previews.iter().for_each(|p| (0..4).for_each(|c| s[c] += p.pixels[i][c]));
+                s.map(|v| v * k)
+            }).collect();
+            assert!(got.pixels == want, "preview, {n} times");
+        }
     }
 
     /// Two times across a frame of a card moving 40 px a frame: without
@@ -1943,7 +2013,7 @@ mod tests {
         let at = |x: f64| Scene { cards: vec![card(white.clone(), [x, 0.0, -5.0], [0.0; 3], [1.25, 2.5])], ..Scene::default() };
         let (a, b) = (at(-3.5), at(2.75));
         let cam = camera();
-        let blur = |n: usize| Blur { times: Blur::times(0.0, 1.0, n), frames: vec![(0, &a, cam.clone()), (1, &b, cam.clone())] };
+        let blur = |n: usize| Blur { times: Blur::times(0.0, 1.0, n), frames: vec![(0, &a, cam.clone()), (1, &b, cam.clone())], jitter: true };
         let render = |n: usize| render_blurred(&a, &cam, FMT, 2, None, Passes::NONE, None, Some(&blur(n)));
         let row = |img: &Image| (0..64).map(|x| img.at(x, 16)[3]).collect::<Vec<f32>>();
         let (smear_img, jittered_img) = (render(64), render(2));

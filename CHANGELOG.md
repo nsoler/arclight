@@ -11,6 +11,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.60 — 2026-10-29
+
+- **Scanline Render: Jitter shutter** (Dev1): on by default. Off, every
+  pixel renders at the same shutter times, as before 0.9.55: a fast move
+  shows as sharp copies rather than grain, exactly the render 0.9.48–0.9.54
+  gave. The 3D view's blurred preview follows it.
+
 ## 0.9.59 — 2026-10-29
 
 - **Particle dots streak in the 3D view's motion blur preview** (Dev2):

@@ -191,7 +191,7 @@ mod tests {
         // bright in all (up to how a sprite's soft edge falls on the
         // pixels); none across it.
         let sharp = render(&scene, &cam, FMT, 4, None);
-        let blur = Blur { times: Blur::times(-0.25, 0.5, 16), frames: vec![(0, &scene, cam.clone())] };
+        let blur = Blur { times: Blur::times(-0.25, 0.5, 16), frames: vec![(0, &scene, cam.clone())], jitter: true };
         let smear = render_blurred(&scene, &cam, FMT, 4, None, Passes::NONE, None, Some(&blur));
         let red = |img: &Image, x: i32, y: i32| img.at(x, y)[0];
         let row: Vec<f32> = (cx - 5..=cx + 5).map(|x| red(&smear, x, cy)).collect();

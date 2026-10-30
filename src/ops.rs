@@ -1140,6 +1140,7 @@ pub static OPS: &[OpInfo] = &[
             fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
             fixed!("shutter", "Shutter", SHUTTER, 0.5),
             fixed!("shutter_offset", "Shutter offset", ParamKind::Choice(SHUTTER_OFFSETS), "centered"),
+            fixed!("jitter", "Jitter shutter", ParamKind::Bool, true),
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -1157,7 +1158,9 @@ pub static OPS: &[OpInfo] = &[
                nothing but cut out what is behind them. Motion blur renders that many times across the shutter \
                (Shutter frames long, centered on the frame, starting or ending at it; 0 or 1: off) and averages them: \
                cameras, objects and lights move between their places at the frames round each time, particles along \
-               their velocities. The picture, mattes and light passes blur; depth, P, N, uv, motion and id are the frame's own.",
+               their velocities. Jitter shutter spreads each pixel's times a little within the shutter, so a fast move \
+               smears into fine grain rather than a few sharp copies; off, every pixel renders at the same times (as \
+               before 0.9.55). The picture, mattes and light passes blur; depth, P, N, uv, motion and id are the frame's own.",
     },
     OpInfo {
         name: "lens_distort",
@@ -2907,10 +2910,17 @@ struct ScanlineRender {
     shutter: f64,
     #[serde(default)]
     shutter_offset: Option<String>,
+    /// Each pixel's shutter times jittered (missing: on).
+    #[serde(default = "on")]
+    jitter: bool,
 }
 
 fn half() -> f64 {
     0.5
+}
+
+fn on() -> bool {
+    true
 }
 
 impl ScanlineRender {
@@ -2950,6 +2960,12 @@ fn scanline_render(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
 /// its params at the frame; None without blur.
 pub fn blur_times(params: &Value) -> Option<Vec<f64>> {
     serde_json::from_value::<ScanlineRender>(params.clone()).ok()?.blur_times()
+}
+
+/// Whether a Scanline Render with `params` jitters its pixels' shutter
+/// times (see [`render3d::Blur::jitter`]): on unless Jitter shutter is off.
+pub fn blur_jitter(params: &Value) -> bool {
+    params.get("jitter").and_then(Value::as_bool).unwrap_or(true)
 }
 
 /// The frames besides its own (offsets from it) whose inputs a node of `op`
@@ -3015,6 +3031,7 @@ pub fn scanline_render_frames(params: &Value, inputs: &[Option<&Image>], others:
     let later = next.filter(|_| passes.motion).or(passes.motion.then_some((&empty, &camera)));
     let blur = p.blur_times().map(|times| render3d::Blur {
         times,
+        jitter: p.jitter,
         frames: std::iter::once((0, scene, camera.clone())).chain(then.iter().map(|t| (t.0, t.1.as_deref().unwrap_or(&empty), t.2.clone()))).collect(),
     });
     Ok(render3d::render_blurred(scene, &camera, format, p.samples, bg, passes, later, blur.as_ref()))
