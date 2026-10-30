@@ -137,7 +137,7 @@ impl Default for NewProjectPrefs {
     }
 }
 
-/// Saving, history and where file dialogs start.
+/// Saving, history and where new projects go.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct FilePrefs {
@@ -149,17 +149,14 @@ pub struct FilePrefs {
     pub recent_count: usize,
     /// Steps of undo kept (0: no limit).
     pub undo_levels: usize,
-    /// Where the project dialogs (Open, Save As) start.
+    /// The Projects folder: where new projects' folders go (File ▸ New),
+    /// and where Open starts.
     pub project_dir: Option<PathBuf>,
-    /// Where choosing a file to read (media, geometry) starts.
-    pub read_dir: Option<PathBuf>,
-    /// Where choosing a file to write (renders) starts.
-    pub write_dir: Option<PathBuf>,
 }
 
 impl Default for FilePrefs {
     fn default() -> Self {
-        FilePrefs { autosave_minutes: 0, recent_count: 10, undo_levels: 200, project_dir: None, read_dir: None, write_dir: None }
+        FilePrefs { autosave_minutes: 0, recent_count: 10, undo_levels: 200, project_dir: None }
     }
 }
 
@@ -336,9 +333,9 @@ mod tests {
         assert_eq!((d.new_project.width, d.new_project.height, d.new_project.fps, d.new_project.first_frame, d.new_project.last_frame), (1920, 1080, 24.0, 1, 100));
         assert_eq!((d.files.autosave_minutes, d.files.recent_count, d.files.undo_levels, d.files.project_dir.clone()), (0, 10, 200, None));
         assert_eq!((d.view3d.trackpad.as_str(), d.view3d.zoom_to_pointer, d.view3d.default_shading.as_str()), ("orbit", true, "auto"));
-        let part: Settings = serde_json::from_str(r#"{"interface": {"theme": "light"}, "files": {"read_dir": "/plates"}, "from_the_future": {"x": 1}}"#).unwrap();
+        let part: Settings = serde_json::from_str(r#"{"interface": {"theme": "light"}, "files": {"project_dir": "/shows"}, "from_the_future": {"x": 1}}"#).unwrap();
         assert_eq!(part.interface, InterfacePrefs { theme: "light".into(), ..InterfacePrefs::default() });
-        assert_eq!(part.files.read_dir, Some(PathBuf::from("/plates")));
+        assert_eq!(part.files.project_dir, Some(PathBuf::from("/shows")));
         let dir = std::env::temp_dir().join(format!("arclight_settings_{}", std::process::id()));
         let path = dir.join("config/settings.json");
         assert_eq!(Settings::load_from(&path), Settings::default(), "none: the defaults");

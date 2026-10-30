@@ -11,6 +11,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.67 — 2026-10-29
+
+- **Project folder** (Dev1): File ▸ New asks for the new project's name
+  and folder (made in Preferences ▸ Files and safety ▸ Projects folder
+  unless you choose another; or none). Media and render file dialogs
+  start in the project's folder; a saved project without one uses the
+  folder its file is in. File ▸ Project Settings shows and changes it
+  (Browse…). Preferences' separate media / render folders are gone; the
+  Projects folder is where new projects go and where Open starts. Older
+  projects load and save unchanged.
+
 ## 0.9.66 — 2026-10-29
 
 - **Preferences: New project, Undo levels and 3D view** (Dev2):

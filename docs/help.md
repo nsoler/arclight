@@ -119,6 +119,13 @@ choose in Properties:
 
 ## Project settings
 
+Each project can have a **folder**: **File ▸ New** asks for the new
+project's name and folder (in the Projects folder from Preferences unless
+you choose another; or none), and **Folder** in Project Settings changes
+it (Browse…). File dialogs for media (Read, Media In, Read Geo, Import)
+and outputs (Write, Media Out) start there; without one, in the folder
+the project file is in.
+
 **File ▸ Project Settings…** (**⇧⌘P**) sets the project's frame size, frame
 rate and frame range. Pick a format (HD, UHD, 2K or 4K DCI, 720p, PAL,
 NTSC, square, vertical…) or type the width and height (⇄ swaps them), and
@@ -502,7 +509,8 @@ defaults**.
   unsaved changes to `<project file>.autosave` beside the project (an
   unsaved project's to `~/.local/state/arclight/autosave/`), never over
   the project, and removes it when you save; **File ▸ Open Recent** shows
-  the last N projects; **Undo levels**; the folders file dialogs start in.
+  the last N projects; **Undo levels**; the **Projects folder** (where
+  File ▸ New makes projects' folders and where Open starts).
 - **New project:** the format, frame rate and frames File ▸ New starts
   with (or use **Save as defaults** in Project Settings).
 - **3D view:** **Emulate 3-button mouse** (Alt + left-drag navigates);

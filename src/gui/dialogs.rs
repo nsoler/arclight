@@ -9,10 +9,10 @@
 //! One at a time: [`busy`] says one is open. Dialogs are built by [`new`],
 //! which makes them belong to the app's window (see [`set_parent`]), so the
 //! system shows them over it. Add file-type filters with [`filter`], which
-//! matches extensions in either case. They start in the folders the
-//! preferences give ([`set_folders`]): [`pick`] where files are read from,
-//! [`save`] where they're written, [`pick_project`] / [`save_project`]
-//! where projects are.
+//! matches extensions in either case. They start in the folders
+//! [`set_folders`] gives: [`pick`] and [`save`] (media read, renders
+//! written) in the project's folder; [`pick_project`] in the Projects
+//! folder (Preferences), [`save_project`] in the project's.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -23,22 +23,37 @@ use std::sync::Mutex;
 /// Where dialogs start (None: wherever the system likes).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Folders {
+    /// The open project's folder (see `Project::folder_for`).
     pub project: Option<PathBuf>,
-    pub read: Option<PathBuf>,
-    pub write: Option<PathBuf>,
+    /// Where projects go (Preferences ▸ Files and safety).
+    pub projects: Option<PathBuf>,
 }
 
-static FOLDERS: Mutex<Folders> = Mutex::new(Folders { project: None, read: None, write: None });
+static FOLDERS: Mutex<Folders> = Mutex::new(Folders { project: None, projects: None });
 
 /// Start dialogs in `folders` from now on.
 pub fn set_folders(folders: Folders) {
     *FOLDERS.lock().unwrap_or_else(|e| e.into_inner()) = folders;
 }
 
-/// `d` starting in the folder `which` picks, if it's set and exists.
-fn in_folder(d: rfd::FileDialog, which: fn(&Folders) -> &Option<PathBuf>) -> rfd::FileDialog {
-    let folders = FOLDERS.lock().unwrap_or_else(|e| e.into_inner());
-    match which(&folders).as_ref().filter(|p| p.is_dir()) {
+/// The first of the folders `order` picks from `folders` that's set and
+/// exists.
+fn first_folder(folders: &Folders, order: fn(&Folders) -> [&Option<PathBuf>; 2]) -> Option<PathBuf> {
+    order(folders).into_iter().flatten().find(|p| p.is_dir()).cloned()
+}
+
+/// Media read and renders written: the project's folder.
+const FOR_MEDIA: fn(&Folders) -> [&Option<PathBuf>; 2] = |f| [&f.project, &None];
+/// Projects opened: the Projects folder, else the open project's.
+const FOR_OPEN: fn(&Folders) -> [&Option<PathBuf>; 2] = |f| [&f.projects, &f.project];
+/// A project saved: its folder, else the Projects folder.
+const FOR_SAVE: fn(&Folders) -> [&Option<PathBuf>; 2] = |f| [&f.project, &f.projects];
+
+/// `d` starting in the first of the folders `order` picks that's set and
+/// exists.
+fn in_folder(d: rfd::FileDialog, order: fn(&Folders) -> [&Option<PathBuf>; 2]) -> rfd::FileDialog {
+    let dir = first_folder(&FOLDERS.lock().unwrap_or_else(|e| e.into_inner()), order);
+    match dir {
         Some(dir) => d.set_directory(dir),
         None => d,
     }
@@ -138,27 +153,31 @@ pub fn start<T>(what: T, show: impl FnOnce() -> Option<PathBuf> + Send + 'static
     Some(Pending { what, answer })
 }
 
-/// Choose a file to read with dialog `d` (starting in the read folder).
+/// Choose a file to read with dialog `d` (starting in the project's
+/// folder).
 pub fn pick<T>(what: T, d: rfd::FileDialog) -> Option<Pending<T>> {
-    let d = in_folder(d, |f| &f.read);
+    let d = in_folder(d, FOR_MEDIA);
     start(what, move || d.pick_file())
 }
 
-/// Choose where to write with dialog `d` (starting in the write folder).
+/// Choose where to write with dialog `d` (starting in the project's
+/// folder).
 pub fn save<T>(what: T, d: rfd::FileDialog) -> Option<Pending<T>> {
-    let d = in_folder(d, |f| &f.write);
+    let d = in_folder(d, FOR_MEDIA);
     start(what, move || d.save_file())
 }
 
-/// Choose a project to open with dialog `d` (in the projects folder).
+/// Choose a project to open with dialog `d` (in the Projects folder, else
+/// the open project's).
 pub fn pick_project<T>(what: T, d: rfd::FileDialog) -> Option<Pending<T>> {
-    let d = in_folder(d, |f| &f.project);
+    let d = in_folder(d, FOR_OPEN);
     start(what, move || d.pick_file())
 }
 
-/// Choose where to save a project with dialog `d` (in the projects folder).
+/// Choose where to save a project with dialog `d` (in its folder, else the
+/// Projects folder).
 pub fn save_project<T>(what: T, d: rfd::FileDialog) -> Option<Pending<T>> {
-    let d = in_folder(d, |f| &f.project);
+    let d = in_folder(d, FOR_SAVE);
     start(what, move || d.save_file())
 }
 
@@ -186,6 +205,22 @@ pub(crate) mod tests {
             assert!(t0.elapsed() < Duration::from_secs(5), "no answer");
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+
+    #[test]
+    fn dialogs_start_in_the_project_folder_or_the_projects_folder() {
+        let tmp = std::env::temp_dir().join(format!("arclight_dialog_folders_{}", std::process::id()));
+        let (project, projects) = (tmp.join("show"), tmp.join("shows"));
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&projects).unwrap();
+        let both = Folders { project: Some(project.clone()), projects: Some(projects.clone()) };
+        assert_eq!([FOR_MEDIA, FOR_OPEN, FOR_SAVE].map(|o| first_folder(&both, o)), [Some(project.clone()), Some(projects.clone()), Some(project.clone())]);
+        let no_project = Folders { project: None, ..both.clone() };
+        assert_eq!([FOR_MEDIA, FOR_OPEN, FOR_SAVE].map(|o| first_folder(&no_project, o)), [None, Some(projects.clone()), Some(projects.clone())]);
+        // One that's gone is passed over.
+        let gone = Folders { projects: Some(tmp.join("gone")), ..both };
+        assert_eq!(first_folder(&gone, FOR_OPEN), Some(project));
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]

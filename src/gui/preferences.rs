@@ -32,9 +32,8 @@ const SECTIONS: [(Section, &str); 5] = [
 pub enum Folder {
     /// One more plugin folder.
     Plugin,
-    Project,
-    Read,
-    Write,
+    /// The Projects folder.
+    Projects,
 }
 
 /// The window, and the settings being changed in it.
@@ -138,9 +137,7 @@ fn set_folder(s: &mut Settings, which: Folder, dir: PathBuf) {
     match which {
         Folder::Plugin if !s.plugin_paths.contains(&dir) => s.plugin_paths.push(dir),
         Folder::Plugin => {}
-        Folder::Project => s.files.project_dir = Some(dir),
-        Folder::Read => s.files.read_dir = Some(dir),
-        Folder::Write => s.files.write_dir = Some(dir),
+        Folder::Projects => s.files.project_dir = Some(dir),
     }
 }
 
@@ -268,7 +265,7 @@ fn new_project(ui: &mut egui::Ui, p: &mut NewProjectPrefs) {
     });
 }
 
-/// Autosave, recent files, undo and where file dialogs start.
+/// Autosave, recent files, undo and the Projects folder.
 fn files(ui: &mut egui::Ui, p: &mut FilePrefs, wanted: &mut Option<Folder>) {
     heading(ui, "Files and safety");
     egui::Grid::new("files_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
@@ -290,14 +287,10 @@ fn files(ui: &mut egui::Ui, p: &mut FilePrefs, wanted: &mut Option<Folder>) {
         ui.end_row();
     });
     ui.add_space(10.0);
-    ui.label("Where file dialogs start (empty: wherever the system likes)");
-    ui.add_space(4.0);
     egui::Grid::new("folders_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-        for (label, dir, which) in [("Projects", &mut p.project_dir, Folder::Project), ("Reading media", &mut p.read_dir, Folder::Read), ("Writing renders", &mut p.write_dir, Folder::Write)] {
-            ui.label(label);
-            folder_row(ui, dir, which, wanted);
-            ui.end_row();
-        }
+        ui.label("Projects folder").on_hover_text("Where File ▸ New puts new projects' folders, and where Open starts. A project's own folder (File ▸ Project Settings) is where its media dialogs and renders start.");
+        folder_row(ui, &mut p.project_dir, Folder::Projects, wanted);
+        ui.end_row();
     });
 }
 
@@ -365,10 +358,8 @@ mod tests {
         let mut s = Settings::default();
         set_folder(&mut s, Folder::Plugin, "/plug".into());
         set_folder(&mut s, Folder::Plugin, "/plug".into());
-        set_folder(&mut s, Folder::Project, "/proj".into());
-        set_folder(&mut s, Folder::Read, "/plates".into());
-        set_folder(&mut s, Folder::Write, "/renders".into());
+        set_folder(&mut s, Folder::Projects, "/shows".into());
         assert_eq!(s.plugin_paths, [PathBuf::from("/plug")], "once");
-        assert_eq!((s.files.project_dir, s.files.read_dir, s.files.write_dir), (Some("/proj".into()), Some("/plates".into()), Some("/renders".into())));
+        assert_eq!(s.files.project_dir, Some("/shows".into()));
     }
 }

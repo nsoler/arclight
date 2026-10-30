@@ -1,9 +1,11 @@
 //! The Project Settings window (File ▸ Project Settings…, ⇧⌘P): the
 //! project's frame size, frame rate and frame range, picked from presets or
-//! typed, or matched to a selected Media In or Read. It edits a copy: Apply
+//! typed, or matched to a selected Media In or Read, and its folder (where
+//! media are read from and renders written to). It edits a copy: Apply
 //! (or OK) puts it in the project as one undo step, Cancel drops it. The
 //! transport bar's fields edit the same values directly.
 
+use crate::dialogs;
 use crate::doc::Doc;
 use anyhow::{bail, Context, Result};
 use arclight::graph::Project;
@@ -119,6 +121,8 @@ pub struct ProjectSettings {
     /// Settings to save as the defaults for new projects (see
     /// [`take_defaults`](Self::take_defaults)).
     defaults: Option<Project>,
+    /// The folder dialog Browse… opened, if any.
+    browse: Option<dialogs::Pending<()>>,
 }
 
 impl ProjectSettings {
@@ -186,6 +190,18 @@ impl ProjectSettings {
     /// The window, when open.
     pub fn ui(&mut self, ctx: &egui::Context, doc: &mut Doc) {
         let Some(mut d) = self.draft.clone() else { return };
+        // A folder chosen with Browse….
+        match self.browse.as_ref().and_then(|b| b.poll()) {
+            Some(answer) => {
+                self.browse = None;
+                if let Some(dir) = answer {
+                    d.folder = Some(dir);
+                }
+            }
+            None if self.browse.is_some() => ctx.request_repaint_after(std::time::Duration::from_millis(100)),
+            None => {}
+        }
+        let mut browse = false;
         let mut keep_open = true;
         let (mut apply, mut close) = (false, false);
         let media = doc.selected.clone().filter(|id| doc.node(id).is_some_and(|n| matches!(n.op.as_str(), "media_in" | "read")));
@@ -240,6 +256,26 @@ impl ProjectSettings {
                     ui.weak(format!("{n} frame{} · {:.2} s", if n == 1 { "" } else { "s" }, n as f64 / d.fps.max(0.1)));
                 });
                 ui.end_row();
+                ui.label("Folder").on_hover_text("Where media are read from and renders written to by default; files in it are saved relative to it, so the folder can move");
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        let mut text = d.folder.as_ref().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+                        if ui.add(egui::TextEdit::singleline(&mut text).desired_width(260.0)).changed() {
+                            d.folder = (!text.trim().is_empty()).then(|| text.trim().into());
+                        }
+                        browse = ui.add_enabled(!dialogs::busy(), egui::Button::new("Browse…")).clicked();
+                        if ui.add_enabled(d.folder.is_some(), egui::Button::new("Clear")).clicked() {
+                            d.folder = None;
+                        }
+                    });
+                    if d.folder.is_none() {
+                        ui.weak(match d.folder_for(doc.path.as_deref()) {
+                            Some(dir) => format!("None: the project file's folder, {}", dir.display()),
+                            None => "None (until the project is saved: then the folder its file is in)".to_string(),
+                        });
+                    }
+                });
+                ui.end_row();
             });
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -269,6 +305,15 @@ impl ProjectSettings {
                 }
             });
         });
+        if browse && self.browse.is_none() {
+            let start = d.folder.clone().or_else(|| d.folder_for(doc.path.as_deref()));
+            let dialog = dialogs::new();
+            let dialog = match start.filter(|s| s.is_dir()) {
+                Some(dir) => dialog.set_directory(dir),
+                None => dialog,
+            };
+            self.browse = dialogs::pick_folder((), dialog);
+        }
         self.draft = Some(d);
         if let Some(id) = match_from {
             self.match_media(doc, &id);

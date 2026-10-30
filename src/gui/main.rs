@@ -233,6 +233,8 @@ struct App {
     /// The window icon as a texture, for the About dialog (made on first use).
     /// and the part of it with artwork (UV), its transparent border cut off.
     logo: Option<(egui::TextureHandle, egui::Rect)>,
+    /// File ▸ New's question: the new project's name and folder.
+    starting: Option<NewProjectAsk>,
 }
 
 impl App {
@@ -305,6 +307,7 @@ impl App {
             help: help::Help::default(),
             project_settings: Default::default(),
             logo: None,
+            starting: None,
         };
         app.apply_settings(&ctx_for_settings);
         app
@@ -327,7 +330,6 @@ impl App {
         self.editor.snap_to_grid = ui.snap_to_grid;
         self.editor.straight_wires = ui.wire_style == "straight";
         let f = &self.settings.files;
-        dialogs::set_folders(dialogs::Folders { project: f.project_dir.clone(), read: f.read_dir.clone(), write: f.write_dir.clone() });
         self.recent.paths.truncate(f.recent_count);
         self.doc.undo_levels = f.undo_levels;
         apply_view3d(&self.settings.view3d, &mut self.viewer.viewport3d);
@@ -574,7 +576,85 @@ impl App {
         if self.doc.dirty {
             self.ask = Some(Ask::Discard(Then::New));
         } else {
-            self.load(Doc::blank(new_project(&self.settings.new_project)));
+            self.ask_new();
+        }
+    }
+
+    /// Ask for the new project's name and folder (see [`App::new_ui`]).
+    fn ask_new(&mut self) {
+        self.starting = Some(NewProjectAsk::new(self.settings.files.project_dir.clone()));
+    }
+
+    /// Start a new project as Preferences ▸ New project says, in `folder`
+    /// (made if it isn't there).
+    fn start_new(&mut self, folder: Option<PathBuf>) {
+        let mut project = new_project(&self.settings.new_project);
+        if let Some(dir) = &folder {
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                self.status = Some(format!("making {}: {e}", dir.display()));
+                return;
+            }
+        }
+        project.folder = folder;
+        self.load(Doc::blank(project));
+    }
+
+    /// File ▸ New's question, while it's asked: a name for the project and
+    /// its folder (in the Projects folder, unless chosen or typed), or no
+    /// folder.
+    fn new_ui(&mut self, ctx: &egui::Context) {
+        let Some(ask) = &mut self.starting else { return };
+        let projects = self.settings.files.project_dir.clone();
+        let (mut create, mut cancel, mut browse) = (false, false, false);
+        egui::Modal::new(egui::Id::unique("new_project")).show(ctx, |ui| {
+            ui.set_width(460.0);
+            ui.heading("New project");
+            ui.add_space(8.0);
+            egui::Grid::new("new_project_ask").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                ui.label("Name");
+                if ui.add(egui::TextEdit::singleline(&mut ask.name).desired_width(300.0)).changed() {
+                    ask.follow_name(projects.as_deref());
+                }
+                ui.end_row();
+                ui.label("Folder");
+                ui.vertical(|ui| {
+                    ui.add_enabled_ui(ask.use_folder, |ui| {
+                        ui.horizontal(|ui| {
+                            if ui.add(egui::TextEdit::singleline(&mut ask.folder).desired_width(220.0)).changed() {
+                                ask.folder_typed = true;
+                            }
+                            browse = ui.add_enabled(!dialogs::busy(), egui::Button::new("Browse…")).clicked();
+                        });
+                    });
+                    ui.checkbox(&mut ask.use_folder, "Keep the project in a folder")
+                        .on_hover_text("Its media dialogs and renders start there, and files in it are saved relative to it, so the whole folder can move. Made if it isn't there.");
+                    if ask.use_folder && projects.is_none() && !ask.folder_typed {
+                        ui.weak("Set a Projects folder in Preferences ▸ Files and safety to have new ones made there.");
+                    }
+                });
+                ui.end_row();
+            });
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let ok = !ask.use_folder || !ask.folder.trim().is_empty();
+                if ui.add_enabled(ok, egui::Button::new("Create")).clicked() || (ok && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                    create = true;
+                }
+                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    cancel = true;
+                }
+            });
+        });
+        if browse && self.file.is_none() {
+            let start = ask.chosen().filter(|d| d.is_dir()).or(projects).filter(|d| d.is_dir());
+            let dialog = start.map_or_else(dialogs::new, |d| dialogs::new().set_directory(d));
+            self.file = dialogs::pick_folder(FileFor::NewFolder, dialog);
+        }
+        if create {
+            let folder = self.starting.take().and_then(|a| a.chosen());
+            self.start_new(folder);
+        } else if cancel {
+            self.starting = None;
         }
     }
 
@@ -606,8 +686,13 @@ impl App {
         }
         self.file = match what {
             FileFor::Open => dialogs::pick_project(what, dialogs::filter(dialogs::new(), "Arclight graph", &["json"])),
-            FileFor::SaveAs => dialogs::save_project(what, dialogs::filter(dialogs::new(), "Arclight graph", &["json"]).set_file_name("comp.json")),
+            FileFor::SaveAs => {
+                // Named after its folder, if it has one.
+                let name = self.doc.graph.project.folder.as_deref().and_then(|f| f.file_name()).map_or("comp".into(), |n| n.to_string_lossy().into_owned());
+                dialogs::save_project(what, dialogs::filter(dialogs::new(), "Arclight graph", &["json"]).set_file_name(format!("{name}.json")))
+            }
             FileFor::Import => dialogs::pick(what, dialogs::new()),
+            FileFor::NewFolder => None,
         };
     }
 
@@ -639,6 +724,12 @@ impl App {
                 let id = self.doc.add_node("media_in", [0.0, -90.0]);
                 properties::apply_media(&mut self.doc, &id, &path);
                 self.doc.selected = Some(id);
+            }
+            Some(FileFor::NewFolder) => {
+                if let Some(ask) = &mut self.starting {
+                    ask.folder = path.to_string_lossy().into_owned();
+                    ask.folder_typed = true;
+                }
             }
             None => {}
         }
@@ -716,7 +807,7 @@ impl App {
                 }
             }
             (Ask::Close, _) => self.close_now(ctx),
-            (Ask::Discard(Then::New), _) => self.load(Doc::blank(new_project(&self.settings.new_project))),
+            (Ask::Discard(Then::New), _) => self.ask_new(),
             (Ask::Discard(Then::Open), _) => self.choose(FileFor::Open),
             (Ask::Discard(Then::Load(path)), _) => match Graph::from_file(&path) {
                 Ok(g) => self.load(Doc::new(g, Some(path))),
@@ -1282,6 +1373,47 @@ enum FileFor {
     Open,
     SaveAs,
     Import,
+    /// A folder for File ▸ New's project.
+    NewFolder,
+}
+
+/// File ▸ New's question being asked (see [`App::new_ui`]).
+#[derive(Clone, Debug, PartialEq)]
+struct NewProjectAsk {
+    name: String,
+    /// The folder as typed or chosen.
+    folder: String,
+    /// The folder was typed or chosen, so it no longer follows the name.
+    folder_typed: bool,
+    use_folder: bool,
+}
+
+impl NewProjectAsk {
+    /// Asked afresh: "Untitled", in a folder of that name in `projects` (a
+    /// folder is on by default when there's a Projects folder).
+    fn new(projects: Option<PathBuf>) -> NewProjectAsk {
+        let mut ask = NewProjectAsk { name: "Untitled".into(), folder: String::new(), folder_typed: false, use_folder: projects.is_some() };
+        ask.follow_name(projects.as_deref());
+        ask
+    }
+
+    /// The folder after a new name: `<projects>/<name>`, unless one was
+    /// typed or chosen.
+    fn follow_name(&mut self, projects: Option<&std::path::Path>) {
+        if self.folder_typed {
+            return;
+        }
+        let name = self.name.trim().replace(['/', '\\'], "_");
+        self.folder = match projects {
+            Some(dir) if !name.is_empty() => dir.join(name).to_string_lossy().into_owned(),
+            _ => String::new(),
+        };
+    }
+
+    /// The folder the project gets, if any.
+    fn chosen(&self) -> Option<PathBuf> {
+        Some(PathBuf::from(self.folder.trim())).filter(|f| self.use_folder && !f.as_os_str().is_empty())
+    }
 }
 
 /// A question about unsaved changes.
@@ -1350,6 +1482,9 @@ impl eframe::App for App {
             self.set_settings(&ctx, settings);
         }
         self.ask_ui(&ctx);
+        self.new_ui(&ctx);
+        // File dialogs start in this project's folder (or its file's).
+        dialogs::set_folders(dialogs::Folders { project: self.doc.graph.project.folder_for(self.doc.path.as_deref()), projects: self.settings.files.project_dir.clone() });
         egui::Panel::right("properties")
             .default_size(380.0)
             .min_size(280.0)
@@ -1508,6 +1643,26 @@ mod tests {
         apply_view3d(&View3dPrefs { emulate_three_button: true, trackpad: "pan".into(), zoom_to_pointer: false, invert_zoom: true, default_shading: "lit".into() }, &mut v);
         assert_eq!(v.nav, viewport3d::Navigation { emulate_three_button: true, trackpad_pans: true, zoom_to_pointer: false, invert_zoom: true });
         assert_eq!(v.default_shading, Some(viewport3d::Shading::Lit));
+    }
+
+    /// File ▸ New's folder: <Projects folder>/<name> while the name is
+    /// typed, until one is typed or chosen; none when unticked (and by
+    /// default without a Projects folder).
+    #[test]
+    fn a_new_projects_folder_follows_its_name() {
+        let mut ask = NewProjectAsk::new(Some("/shows".into()));
+        assert_eq!((ask.use_folder, ask.chosen()), (true, Some("/shows/Untitled".into())));
+        ask.name = "Spot 30/s".into();
+        ask.follow_name(Some(std::path::Path::new("/shows")));
+        assert_eq!(ask.chosen(), Some("/shows/Spot 30_s".into()), "a slash can't make a folder deeper");
+        (ask.folder, ask.folder_typed) = ("/elsewhere/spot".into(), true);
+        ask.name = "Spot 15".into();
+        ask.follow_name(Some(std::path::Path::new("/shows")));
+        assert_eq!(ask.chosen(), Some("/elsewhere/spot".into()), "typed: kept");
+        ask.use_folder = false;
+        assert_eq!(ask.chosen(), None);
+        let plain = NewProjectAsk::new(None);
+        assert_eq!((plain.use_folder, plain.chosen()), (false, None));
     }
 
     /// An autosave goes beside the project as <name>.autosave, never over

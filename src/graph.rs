@@ -43,12 +43,22 @@ pub struct Project {
     /// Constant, a shape without a background) whose own size is 0.
     #[serde(default = "default_format")]
     pub format: Size,
+    /// The project's folder, where its media are read from and renders
+    /// written to by default (None: the folder its file is in, if saved).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<std::path::PathBuf>,
 }
 
 impl Project {
     /// Its timing, for formulas' `time` and `fps`.
     pub fn clock(&self) -> crate::expr::Clock {
         crate::expr::Clock { fps: self.fps, first_frame: self.first_frame as f64 }
+    }
+
+    /// Its folder: the one it was given, else that of its file (`file`,
+    /// where it's saved, if it is).
+    pub fn folder_for(&self, file: Option<&Path>) -> Option<std::path::PathBuf> {
+        self.folder.clone().or_else(|| std::path::absolute(file?).ok()?.parent().map(Path::to_path_buf))
     }
 }
 
@@ -58,7 +68,7 @@ fn default_format() -> Size {
 
 impl Default for Project {
     fn default() -> Self {
-        Project { first_frame: 1, last_frame: 100, fps: 24.0, format: ops::DEFAULT_FORMAT }
+        Project { first_frame: 1, last_frame: 100, fps: 24.0, format: ops::DEFAULT_FORMAT, folder: None }
     }
 }
 
@@ -627,6 +637,23 @@ fn node_key(node: &NodeSpec, params: &Value, keys: &HashMap<&str, u64>, ctx: &Ev
 
 #[cfg(test)]
 mod tests {
+    /// A project's folder: saved when it has one, missing from older
+    /// files (which load without), else the folder of its file.
+    #[test]
+    fn a_projects_folder_is_its_own_or_its_files() {
+        let old: Graph = serde_json::from_str(r#"{"nodes": [], "project": {"first_frame": 1, "last_frame": 10, "fps": 24}}"#).unwrap();
+        assert_eq!(old.project.folder, None);
+        assert!(!old.to_json().contains("folder"), "none: nothing saved");
+        assert_eq!(old.project.folder_for(Some(Path::new("/shows/a/comp.json"))), Some("/shows/a".into()));
+        assert_eq!(old.project.folder_for(None), None);
+        assert_eq!(old.project.folder_for(Some(Path::new("comp.json"))), Some(std::env::current_dir().unwrap()), "a file named relative: where it is");
+        let mut g = old.clone();
+        g.project.folder = Some("/shows/b".into());
+        let back: Graph = serde_json::from_str(&g.to_json()).unwrap();
+        assert_eq!(back.project.folder, Some("/shows/b".into()));
+        assert_eq!(back.project.folder_for(Some(Path::new("/elsewhere/comp.json"))), Some("/shows/b".into()), "its own first");
+    }
+
     #[test]
     fn view_state_saves_but_is_never_a_difference() {
         let mut g = Graph::default();
