@@ -12,6 +12,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.10 — 2026-10-30
+
+- **Scene regions** (Dev1, internal, for the Splat Crop handle): Splat
+  Crop now passes its box or sphere along in the scene (`Scene.regions`,
+  never rendered), so the 3D view can show and drag it downstream.
+
 ## 0.10.9 — 2026-10-30
 
 - **Splat Color** (Dev1, splat plan S4): grades Gaussian splat captures

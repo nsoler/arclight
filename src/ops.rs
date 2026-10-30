@@ -3174,6 +3174,8 @@ fn splat_crop(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let to_region = region.try_inverse().unwrap_or_else(geom::Mat4::identity);
     let sphere = params["shape"].as_str() == Some("sphere");
     let invert = params["invert"].as_bool().unwrap_or(false);
+    // Shown in the 3D view (tagged with this node by the graph).
+    out.regions.push(scene::Region { node: String::new(), world: region, sphere });
     out.splats = out
         .splats
         .iter()
@@ -3532,6 +3534,12 @@ mod tests {
         let all = crop(json!({ "size": [100, 100, 100] }));
         assert!(std::sync::Arc::ptr_eq(&all.splats[0].positions, &g.positions) && std::sync::Arc::ptr_eq(&all.splats[0].sh, &g.sh), "kept whole: shared");
         assert!(eval("splat_crop", &json!({}), &[None], &CTX).unwrap().scene.as_ref().unwrap().splats.is_empty(), "nothing in: nothing out");
+        // Its region, for the 3D view: the unit cube or ball onto the box.
+        let r = crop(json!({ "shape": "sphere", "center": [1, 2, 3], "size": [2, 4, 6], "rotate": [0, 90, 0] })).regions.clone();
+        assert_eq!((r.len(), r[0].sphere, r[0].node.as_str()), (1, true, ""));
+        let on = |v: [f64; 3]| crate::geom::transform_point(&r[0].world, &crate::geom::Vec3::from(v));
+        assert!((on([0.0; 3]) - crate::geom::Vec3::new(1.0, 2.0, 3.0)).norm() < 1e-9 && (on([0.0, 1.0, 0.0]) - crate::geom::Vec3::new(1.0, 4.0, 3.0)).norm() < 1e-9);
+        assert!(((on([1.0, 0.0, 0.0]) - on([0.0; 3])).norm() - 1.0).abs() < 1e-9 && ((on([0.0, 0.0, 1.0]) - on([0.0; 3])).norm() - 3.0).abs() < 1e-9, "half the size each way, turned");
     }
 
     /// Splat Color on the sample (degree 1: its color changes with the

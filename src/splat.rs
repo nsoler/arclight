@@ -689,6 +689,17 @@ mod tests {
         let half = a.at_time(&[(0, &a), (1, &b)], 0.5);
         assert_eq!(geom::transform_point(&half.splats[0].world, &Vec3::zeros()), Vec3::new(2.0, 0.0, 0.0));
         assert!(Arc::ptr_eq(&half.splats[0].sh, &s.sh));
+        // A crop's region likewise: gathered, tagged, moved between frames.
+        let region = |x: f64| crate::scene::Region { node: String::new(), world: geom::trs([x, 0.0, 0.0], [0.0; 3], [1.0; 3]), sphere: false };
+        let (mut ra, mut rb) = (Scene { regions: vec![region(0.0)], ..Scene::default() }, Scene { regions: vec![region(4.0)], ..Scene::default() });
+        ra.tag("crop");
+        rb.tag("crop");
+        let mut gathered = Scene::default();
+        gathered.extend(&ra);
+        gathered.tag("scene1");
+        assert_eq!(gathered.regions[0].node, "crop");
+        let mid = ra.at_time(&[(0, &ra), (1, &rb)], 0.5);
+        assert_eq!(geom::transform_point(&mid.regions[0].world, &Vec3::zeros()), Vec3::new(2.0, 0.0, 0.0));
         let img = crate::image::Image { scene: Some(Arc::new(a)), ..crate::image::Image::blank(crate::image::Size { width: 1, height: 1 }, crate::image::IRect::default()) };
         assert!(img.bytes() >= s.bytes());
     }

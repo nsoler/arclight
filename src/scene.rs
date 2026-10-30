@@ -36,6 +36,19 @@ pub struct Scene {
     /// Gaussian splat captures (each knows its node; shared, never copied
     /// per frame).
     pub splats: Vec<Arc<crate::splat::Splats>>,
+    /// Regions nodes act in (a Splat Crop's box or sphere), for the 3D
+    /// view to show and move; nothing renders them.
+    pub regions: Vec<Region>,
+}
+
+/// A box or ball a node acts in: `world` takes the unit cube [-1, 1]³
+/// (or the unit ball, `sphere`) onto it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Region {
+    /// The node it belongs to ("" until tagged).
+    pub node: String,
+    pub world: Mat4,
+    pub sphere: bool,
 }
 
 /// An image on a flat rectangle in 3D: `size` wide and high in its own
@@ -131,6 +144,7 @@ impl Scene {
         self.points.extend(other.points.iter().copied());
         self.particles.extend(other.particles.iter().cloned());
         self.splats.extend(other.splats.iter().cloned());
+        self.regions.extend(other.regions.iter().cloned());
         let mut other = other.clone();
         other.fill_nodes();
         self.camera_nodes.extend(other.camera_nodes);
@@ -153,6 +167,9 @@ impl Scene {
             if n.is_empty() {
                 *n = id.to_string();
             }
+        }
+        for r in self.regions.iter_mut().filter(|r| r.node.is_empty()) {
+            r.node = id.to_string();
         }
         // (A copy of the struct only: the splats themselves stay shared.)
         for s in self.splats.iter_mut().filter(|s| s.node.is_empty()) {
@@ -397,6 +414,11 @@ impl Scene {
                     };
                     m.mesh = Arc::new(Mesh { positions: lerp(p, q), normals, ..(*m.mesh).clone() });
                 }
+            }
+        }
+        if same_nodes(&out.regions, &a.regions, &b.regions, |r| &r.node) {
+            for (r, (x, y)) in out.regions.iter_mut().zip(a.regions.iter().zip(&b.regions)) {
+                r.world = between(&x.world, &y.world, w);
             }
         }
         if same_nodes(&out.splats, &a.splats, &b.splats, |s| &s.node) {
