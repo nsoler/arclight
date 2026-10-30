@@ -22,7 +22,12 @@ done), `docs/help.md` (the in-app help) and
   grain from earlier versions) (Dev2); 0.9.56 `Particle.accel`,
   `Particle::moved` (Dev2); 0.9.57 `render_preview_blurred`,
   `ops::blur_times`, viewport blur when settled (≤ 8 samples) (Dev2).
-  **Released as v0.9.57.** Master workflow: a ship script snapshots the
+  **Released as v0.9.57**, but GitHub Actions was blocked by an account
+  billing problem ("recent account payments have failed"), so the user
+  built the universal DMG (and an arm64 one) on a Mac and uploaded them
+  by hand; checked: both binaries universal (x86_64 + arm64), 0.9.57.
+  The `arclt` wheels / sdist for 0.9.57 were not built (rerun
+  wheels.yml for the tag once Actions runs again). Master workflow: a ship script snapshots the
   reported paths, tests them alone at HEAD with the bump, commits those
   blobs only; workers keep README / help / CHANGELOG / TODO to the master.
 - **Session 12 (2026-10-29, master wD:p1; workers **Dev1** = herdr `dev1`
