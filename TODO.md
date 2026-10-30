@@ -62,7 +62,7 @@ Phase 10: 0.10.x on branch `wip-ns-splats` (started 0.10.0).
       Render, composited with cards and meshes by depth
 - [x] S2 (0.10.4–0.10.6): the 3D view (dots while moving, full once settled), picking,
       framing; `scene_objects` / a paged `splats` query in MCP and Python
-- [ ] S3: render passes, holdouts and motion blur for splats
+- [x] S3 (0.10.7–0.10.8): render passes, holdouts and motion blur for splats
 - [ ] S4: Splat Crop, Splat Color (and transform) nodes
 - [ ] S5: `.splat` / `.spz` readers, faster rendering (a GPU path if the
       wgpu item lands)
