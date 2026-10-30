@@ -268,7 +268,8 @@ selected object.
 - **Cube**, **Sphere**, **Cylinder** and **Plane** (3D category) make
   meshes with their own size and segments; connect an image to their
   **texture** input to wrap it on, times **Color**.
-- **Read Splat** reads a Gaussian splat capture (`.ply`, as Postshot,
+- **Read Splat** reads a Gaussian splat capture (`.ply`, `.splat` or
+  Niantic's compressed `.spz`; `.ply` as Postshot,
   Polycam, Luma, Nerfstudio, gsplat and the INRIA 3DGS code export it:
   binary or ASCII, color detail up to spherical-harmonics degree 3), with
   **Up axis** (as is, Z-up, or Y-down for COLMAP captures, which

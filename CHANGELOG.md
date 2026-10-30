@@ -12,6 +12,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.12 — 2026-10-30
+
+- **Read Splat reads `.splat` and `.spz`** (Dev1, splat plan S5): the
+  antimatter15 web format and Niantic's compressed format (versions 2
+  and 3) as well as `.ply`. (`.spz` needs the `flate2` crate, already in
+  the build through the image libraries.)
+
 ## 0.10.11 — 2026-10-30
 
 - **Splat Crop's region in the 3D view** (Dev2, splat plan S4): its box

@@ -297,13 +297,14 @@ dependencies = [
 
 [[package]]
 name = "arclight"
-version = "0.10.11"
+version = "0.10.12"
 dependencies = [
  "anyhow",
  "clap",
  "eframe",
  "egui_commonmark",
  "exr",
+ "flate2",
  "gltf",
  "image",
  "libloading 0.9.0",
@@ -318,14 +319,14 @@ dependencies = [
 
 [[package]]
 name = "arclight-plugin-example"
-version = "0.10.11"
+version = "0.10.12"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "arclt"
-version = "0.10.11"
+version = "0.10.12"
 dependencies = [
  "arclight",
  "pyo3",

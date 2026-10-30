@@ -218,7 +218,7 @@ impl Splats {
             return Ok(splats);
         }
         drop(cache);
-        let splats = Arc::new(read_ply(path, max_degree)?);
+        let splats = Arc::new(read_file(path, max_degree)?);
         let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
         // Read at the same time elsewhere: that one, so all share one copy.
         if let Some(c) = cache.iter().find(|c| c.0 == path && c.1 == max_degree && c.2 == modified) {
@@ -231,6 +231,216 @@ impl Splats {
         cache.push((path.to_path_buf(), max_degree, modified, splats.clone()));
         Ok(splats)
     }
+}
+
+/// The splats in the file at `path`, by its extension: `.splat`
+/// ([`read_splat`]), `.spz` ([`read_spz`]), else PLY ([`read_ply`]).
+pub fn read_file(path: &Path, max_degree: u8) -> Result<Splats> {
+    match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+        Some("splat") => read_splat(path),
+        Some("spz") => read_spz(path, max_degree),
+        _ => read_ply(path, max_degree),
+    }
+}
+
+/// Splats from per-splat values (`colors` as SH coefficients, `stride`
+/// a splat), placed nowhere yet.
+fn from_parts(positions: Vec<[f32; 3]>, scales: Vec<[f32; 3]>, rotations: Vec<[f32; 4]>, opacity: Vec<f32>, sh: Vec<f32>, sh_degree: u8) -> Splats {
+    Splats { positions: Arc::new(positions), scales: Arc::new(scales), rotations: Arc::new(rotations), opacity: Arc::new(opacity), sh: Arc::new(sh), sh_degree, world: Mat4::identity(), holdout: false, node: String::new() }
+}
+
+/// One splat's values as a reader makes them: position, scale, rotation,
+/// opacity, and its color's SH coefficients.
+type One<C> = ([f32; 3], [f32; 3], [f32; 4], f32, C);
+
+/// `q` (as [w, x, y, z]) of unit length, or no turn when it's nothing.
+fn unit(q: [f32; 4]) -> [f32; 4] {
+    let len = q.iter().map(|c| c * c).sum::<f32>().sqrt();
+    if len > 1e-12 { q.map(|c| c / len) } else { [1.0, 0.0, 0.0, 0.0] }
+}
+
+/// Read the splats in a `.splat` file (antimatter15's web viewer format,
+/// as many tools export: 32 bytes a splat, no header: position and linear
+/// scale as f32 × 3, color and opacity as 8-bit RGBA, rotation as 8-bit w,
+/// x, y, z). Degree 0: no change of color with the view.
+pub fn read_splat(path: &Path) -> Result<Splats> {
+    use rayon::prelude::*;
+    let bytes = std::fs::read(path).with_context(|| format!("can't read {}", path.display()))?;
+    if bytes.len() % 32 != 0 {
+        bail!("reading {}: not a .splat file (its size isn't a multiple of 32 bytes)", path.display());
+    }
+    let f = |b: &[u8], i: usize| f32::from_le_bytes(b[i * 4..i * 4 + 4].try_into().unwrap());
+    let each: Vec<One<[f32; 3]>> = bytes
+        .par_chunks_exact(32)
+        .map(|b| {
+            let color = [b[24], b[25], b[26]].map(|c| dc_of(c as f32 / 255.0));
+            let rot = unit([b[28], b[29], b[30], b[31]].map(|c| (c as f32 - 128.0) / 128.0));
+            ([f(b, 0), f(b, 1), f(b, 2)], [f(b, 3), f(b, 4), f(b, 5)], rot, b[27] as f32 / 255.0, color)
+        })
+        .collect();
+    Ok(from_parts(
+        each.iter().map(|e| e.0).collect(),
+        each.iter().map(|e| e.1).collect(),
+        each.iter().map(|e| e.2).collect(),
+        each.iter().map(|e| e.3).collect(),
+        each.iter().flat_map(|e| e.4).collect(),
+        0,
+    ))
+}
+
+/// Write `splats` (their own space) as a `.splat` file ([`read_splat`]):
+/// their color seen head-on at degree 0, 8-bit.
+pub fn write_splat(path: &Path, splats: &Splats) -> Result<()> {
+    let mut out = Vec::with_capacity(splats.len() * 32);
+    let byte = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+    for i in 0..splats.len() {
+        splats.positions[i].iter().chain(&splats.scales[i]).for_each(|v| out.extend(v.to_le_bytes()));
+        let c = sh_color(splats.sh_of(i), 0, [0.0, 0.0, 1.0]);
+        out.extend([byte(c[0]), byte(c[1]), byte(c[2]), byte(splats.opacity[i])]);
+        out.extend(splats.rotations[i].map(|q| (q * 128.0 + 128.0).round().clamp(0.0, 255.0) as u8));
+    }
+    std::fs::write(path, out).with_context(|| format!("can't write {}", path.display()))
+}
+
+/// What a `.spz` file starts with ("NGSP", little-endian).
+const SPZ_MAGIC: u32 = 0x5053_474e;
+/// How `.spz` scales its colors' DC term into 8 bits.
+const SPZ_COLOR_SCALE: f32 = 0.15;
+
+/// Read the splats in a `.spz` file (Niantic's compressed format, version 2
+/// or 3: gzip'd; positions in 24-bit fixed point; opacity, color, scale
+/// and SH in 8 bits; rotations in 3 bytes, or 4 in version 3), their colors
+/// at most SH degree `max_degree`. Its axes are Arclight's (right, up,
+/// back): Up axis y.
+pub fn read_spz(path: &Path, max_degree: u8) -> Result<Splats> {
+    use rayon::prelude::*;
+    let file = std::fs::File::open(path).with_context(|| format!("can't read {}", path.display()))?;
+    let mut data = Vec::new();
+    flate2::read::GzDecoder::new(BufReader::new(file)).read_to_end(&mut data).with_context(|| format!("reading {}: not a gzip'd .spz file", path.display()))?;
+    let at = |i: usize| u32::from_le_bytes(data[i..i + 4].try_into().unwrap());
+    if data.len() < 16 || at(0) != SPZ_MAGIC {
+        bail!("reading {}: not a .spz file", path.display());
+    }
+    let (version, n, file_degree, frac) = (at(4), at(8) as usize, data[12], data[13]);
+    if !(2..=3).contains(&version) {
+        bail!("reading {}: .spz version {version} isn't supported (2 or 3)", path.display());
+    }
+    if file_degree > 3 {
+        bail!("reading {}: SH degree {file_degree}", path.display());
+    }
+    let rest = sh_coeffs(file_degree) - 1;
+    let rot_size = if version >= 3 { 4 } else { 3 };
+    // The blocks, one after the other.
+    let sizes = [9, 1, 3, 3, rot_size, rest * 3];
+    let mut starts = [16usize; 6];
+    for k in 1..6 {
+        starts[k] = starts[k - 1] + n * sizes[k - 1];
+    }
+    if data.len() < starts[5] + n * sizes[5] {
+        bail!("reading {}: the data ends early", path.display());
+    }
+    let block = |k: usize, i: usize| &data[starts[k] + i * sizes[k]..starts[k] + (i + 1) * sizes[k]];
+    let degree = file_degree.min(max_degree.min(3));
+    let keep = sh_coeffs(degree) - 1;
+    let scale = 1.0 / (1u32 << frac) as f32;
+    let each: Vec<One<Vec<f32>>> = (0..n)
+        .into_par_iter()
+        .map(|i| {
+            let p = block(0, i);
+            let fixed = |j: usize| (((p[j * 3] as i32) | (p[j * 3 + 1] as i32) << 8 | (p[j * 3 + 2] as i32) << 16) << 8 >> 8) as f32 * scale;
+            let s = block(3, i);
+            let r = block(4, i);
+            // [x, y, z, w] as .spz has them.
+            let xyzw = if version >= 3 {
+                let mut comp = u32::from_le_bytes([r[0], r[1], r[2], r[3]]);
+                let largest = (comp >> 30) as usize;
+                let mut q = [0.0f32; 4];
+                let mut sum = 0.0;
+                for k in (0..4).rev().filter(|&k| k != largest) {
+                    let mag = (comp & 511) as f32 / 511.0 * std::f32::consts::FRAC_1_SQRT_2;
+                    q[k] = if (comp >> 9) & 1 == 1 { -mag } else { mag };
+                    sum += q[k] * q[k];
+                    comp >>= 10;
+                }
+                q[largest] = (1.0 - sum).max(0.0).sqrt();
+                q
+            } else {
+                let xyz = [r[0], r[1], r[2]].map(|c| c as f32 / 127.5 - 1.0);
+                [xyz[0], xyz[1], xyz[2], (1.0 - xyz.iter().map(|c| c * c).sum::<f32>()).max(0.0).sqrt()]
+            };
+            let c = block(2, i);
+            let mut sh: Vec<f32> = [c[0], c[1], c[2]].iter().map(|&c| (c as f32 / 255.0 - 0.5) / SPZ_COLOR_SCALE).collect();
+            // Coefficient by coefficient, R, G, B (as ours).
+            sh.extend(block(5, i)[..keep * 3].iter().map(|&v| (v as f32 - 128.0) / 128.0));
+            (
+                [fixed(0), fixed(1), fixed(2)],
+                [s[0], s[1], s[2]].map(|v| (v as f32 / 16.0 - 10.0).exp()),
+                unit([xyzw[3], xyzw[0], xyzw[1], xyzw[2]]),
+                block(1, i)[0] as f32 / 255.0,
+                sh,
+            )
+        })
+        .collect();
+    Ok(from_parts(
+        each.iter().map(|e| e.0).collect(),
+        each.iter().map(|e| e.1).collect(),
+        each.iter().map(|e| e.2).collect(),
+        each.iter().map(|e| e.3).collect(),
+        each.iter().flat_map(|e| e.4.iter().copied()).collect(),
+        degree,
+    ))
+}
+
+/// Write `splats` (their own space) as a `.spz` file of `version` 2 or 3
+/// ([`read_spz`]), positions with 12 fractional bits.
+pub fn write_spz(path: &Path, splats: &Splats, version: u32) -> Result<()> {
+    let n = splats.len();
+    let rest = sh_coeffs(splats.sh_degree) - 1;
+    let byte = |v: f32| v.round().clamp(0.0, 255.0) as u8;
+    let mut data = Vec::new();
+    for v in [SPZ_MAGIC, version, n as u32] {
+        data.extend(v.to_le_bytes());
+    }
+    data.extend([splats.sh_degree, 12, 0, 0]);
+    for p in splats.positions.iter() {
+        for v in p {
+            let fixed = ((v * 4096.0).round() as i32).clamp(-(1 << 23), (1 << 23) - 1);
+            data.extend(&fixed.to_le_bytes()[..3]);
+        }
+    }
+    data.extend(splats.opacity.iter().map(|a| byte(a * 255.0)));
+    for i in 0..n {
+        data.extend(splats.sh_of(i)[..3].iter().map(|dc| byte(dc * SPZ_COLOR_SCALE * 255.0 + 127.5)));
+    }
+    for s in splats.scales.iter() {
+        data.extend(s.map(|v| byte((v.max(1e-30).ln() + 10.0) * 16.0)));
+    }
+    for q in splats.rotations.iter() {
+        // [x, y, z, w], w kept positive (q and −q are the same turn).
+        let [w, x, y, z] = *q;
+        let xyzw = if w < 0.0 { [-x, -y, -z, -w] } else { [x, y, z, w] };
+        if version >= 3 {
+            let largest = (0..4).max_by(|&a, &b| xyzw[a].abs().total_cmp(&xyzw[b].abs())).unwrap();
+            let sign = if xyzw[largest] < 0.0 { -1.0 } else { 1.0 };
+            let mut comp = largest as u32;
+            for k in (0..4).filter(|&k| k != largest) {
+                let c = xyzw[k] * sign;
+                let mag = ((c.abs() / std::f32::consts::FRAC_1_SQRT_2) * 511.0).round().min(511.0) as u32;
+                comp = comp << 10 | ((c < 0.0) as u32) << 9 | mag;
+            }
+            data.extend(comp.to_le_bytes());
+        } else {
+            data.extend([xyzw[0], xyzw[1], xyzw[2]].map(|c| byte((c + 1.0) * 127.5)));
+        }
+    }
+    for i in 0..n {
+        data.extend(splats.sh_of(i)[3..3 + rest * 3].iter().map(|v| byte(v * 128.0 + 128.0)));
+    }
+    let file = std::fs::File::create(path).with_context(|| format!("can't write {}", path.display()))?;
+    let mut gz = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+    gz.write_all(&data)?;
+    gz.finish()?;
+    Ok(())
 }
 
 /// A property's type in a PLY file.
@@ -592,6 +802,61 @@ mod tests {
         assert!(read_ply(&dir.join("missing.ply"), 3).is_err());
         std::fs::write(dir.join("short.ply"), &std::fs::read(&path).unwrap()[..400]).unwrap();
         assert!(format!("{:#}", read_ply(&dir.join("short.ply"), 3).unwrap_err()).contains("ends early"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The sample written as .splat and as .spz (versions 2 and 3) reads
+    /// back within each format's quantization, by extension; .splat at
+    /// degree 0, .spz at its degree or capped; broken files say so.
+    #[test]
+    fn splat_and_spz_round_trip() {
+        let dir = std::env::temp_dir().join(format!("arclight_splat_formats_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = sample();
+        let near = |a: &[f32], b: &[f32], tol: f32| a.len() == b.len() && a.iter().zip(b).all(|(a, b)| (a - b).abs() <= tol);
+        // The same turn, whichever sign.
+        let same_turn = |a: &[[f32; 4]], b: &[[f32; 4]], tol: f32| a.iter().zip(b).all(|(p, q)| (p.iter().zip(q).map(|(x, y)| x * y).sum::<f32>().abs() - 1.0).abs() < tol);
+        let colors = |g: &Splats| (0..g.len()).flat_map(|i| g.color(i, [0.0, 0.0, 1.0])).collect::<Vec<f32>>();
+        let flat = s.view_independent();
+        // .splat: f32 positions and scales; 8-bit color, opacity, turn.
+        let path = dir.join("sample.splat");
+        write_splat(&path, &s).unwrap();
+        let back = read_file(&path, 3).unwrap();
+        assert_eq!((back.len(), back.sh_degree), (320, 0));
+        assert!(back.positions == s.positions && back.scales == s.scales);
+        assert!(near(&colors(&back), &colors(&flat), 0.003) && near(&back.opacity, &s.opacity, 0.003));
+        assert!(same_turn(&back.rotations, &s.rotations, 2e-3));
+        // .spz: positions to 1/4096, colors, scales and SH in 8 bits.
+        for version in [2, 3] {
+            let path = dir.join(format!("sample_v{version}.spz"));
+            write_spz(&path, &s, version).unwrap();
+            let back = read_file(&path, 3).unwrap();
+            assert_eq!((back.len(), back.sh_degree), (320, 1), "v{version}");
+            assert!(near(back.positions.as_flattened(), s.positions.as_flattened(), 1.0 / 8192.0 + 1e-6), "v{version}");
+            assert!(back.scales.iter().zip(s.scales.iter()).all(|(a, b)| (0..3).all(|k| (a[k] / b[k]).ln().abs() <= 1.0 / 32.0 + 1e-4)), "v{version}");
+            assert!(near(&colors(&back), &colors(&s), 0.01) && near(&back.opacity, &s.opacity, 0.003), "v{version}");
+            assert!(near(&back.sh[3..12], &s.sh[3..12], 1.0 / 256.0 + 1e-6), "v{version}: the rest");
+            assert!(same_turn(&back.rotations, &s.rotations, if version == 3 { 5e-5 } else { 2e-3 }), "v{version}");
+            assert_eq!(read_file(&path, 0).unwrap().sh_degree, 0);
+        }
+        // Broken: a .splat of the wrong size, a .spz that isn't gzip'd, or
+        // isn't one, or of another version.
+        std::fs::write(dir.join("bad.splat"), [0u8; 33]).unwrap();
+        assert!(format!("{:#}", read_file(&dir.join("bad.splat"), 3).unwrap_err()).contains("multiple of 32"));
+        std::fs::write(dir.join("plain.spz"), b"not gzip").unwrap();
+        assert!(format!("{:#}", read_file(&dir.join("plain.spz"), 3).unwrap_err()).contains("gzip"));
+        let gz = |name: &str, data: &[u8]| {
+            let mut e = flate2::write::GzEncoder::new(std::fs::File::create(dir.join(name)).unwrap(), flate2::Compression::default());
+            e.write_all(data).unwrap();
+            e.finish().unwrap();
+        };
+        gz("other.spz", &[0u8; 32]);
+        assert!(format!("{:#}", read_file(&dir.join("other.spz"), 3).unwrap_err()).contains("not a .spz file"));
+        let mut v9 = SPZ_MAGIC.to_le_bytes().to_vec();
+        v9.extend(9u32.to_le_bytes());
+        v9.extend([0u8; 8]);
+        gz("v9.spz", &v9);
+        assert!(format!("{:#}", read_file(&dir.join("v9.spz"), 3).unwrap_err()).contains("version 9"));
         std::fs::remove_dir_all(&dir).ok();
     }
 

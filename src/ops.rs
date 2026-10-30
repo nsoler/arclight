@@ -1005,7 +1005,8 @@ pub static OPS: &[OpInfo] = &[
         overlay: Overlay::None,
         mask_base: None,
         help: "Reads a Gaussian splat capture: a 3D Gaussian Splatting .ply file, as Postshot, Polycam, Luma, Nerfstudio, \
-               gsplat and the INRIA code export it. Up axis says which way is up in the capture: y (as Arclight, the \
+               gsplat and the INRIA code export it, a .splat file (the antimatter15 web format: one color per splat) or a \
+               .spz file (Niantic's compressed format, versions 2 and 3; already Y up). Up axis says which way is up in the capture: y (as Arclight, the \
                default), z (Z-up tools), or -y (Y down, Z forward: captures straight from COLMAP / OpenCV, which then \
                look upside down). Translate, Rotate and Scale then place it. Opacity fades every splat. Color detail \
                keeps the color's change with the viewing angle up to that spherical-harmonics degree (0: one color per \

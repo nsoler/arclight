@@ -1,6 +1,6 @@
 [package]
 name = "arclight"
-version = "0.10.11"
+version = "0.10.12"
 edition = "2021"
 description = "Arclight — an original node-graph image compositor"
 license = "MIT OR Apache-2.0"
@@ -27,6 +27,7 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
+flate2 = "1"
 image = "0.25"
 exr = "1.73"
 tiff = "0.11"
