@@ -425,7 +425,13 @@ fn rgba8_to_image(buf: &[u8], w: usize, h: usize) -> Image {
 // ---------------------------------------------------------------------------
 
 /// Media Out's codec choices.
-pub const VIDEO_CODECS: &[&str] = &["auto", "H.264 8-bit", "HEVC 10-bit", "ProRes 422 HQ 10-bit", "ProRes 4444 + alpha"];
+pub const VIDEO_CODECS: &[&str] = &[
+    "auto", "H.264 8-bit", "HEVC 10-bit", "ProRes 422 HQ 10-bit", "ProRes 4444 + alpha",
+    "DNxHR HQX 10-bit", "DNxHR 444 10-bit", "VP9 10-bit", "VP9 + alpha", "AV1 10-bit",
+];
+
+/// The video containers Media Out writes.
+pub const VIDEO_WRITE_EXTS: &[&str] = &["mp4", "mov", "mkv", "webm", "mxf", "m4v", "avi"];
 
 /// What a video file is encoded as.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -434,60 +440,177 @@ pub enum VideoCodec {
     Hevc10,
     ProRes422Hq,
     ProRes4444,
+    DnxhrHqx,
+    Dnxhr444,
+    Vp9,
+    /// 8-bit 4:2:0 with alpha: the transparent video browsers play.
+    Vp9Alpha,
+    Av1,
 }
 
 impl VideoCodec {
+    const ALL: [VideoCodec; 9] = [
+        VideoCodec::H264, VideoCodec::Hevc10, VideoCodec::ProRes422Hq, VideoCodec::ProRes4444,
+        VideoCodec::DnxhrHqx, VideoCodec::Dnxhr444, VideoCodec::Vp9, VideoCodec::Vp9Alpha, VideoCodec::Av1,
+    ];
+
     /// The codec for a `VIDEO_CODECS` choice; "auto" picks by container:
-    /// ProRes 422 HQ in `.mov`, H.264 elsewhere.
+    /// ProRes 422 HQ in `.mov`, VP9 in `.webm`, DNxHR HQX in `.mxf`,
+    /// H.264 elsewhere. Err for a container Media Out can't write, or one
+    /// the codec can't go in.
     pub fn choose(choice: &str, path: &Path) -> Result<VideoCodec> {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-        let codec = match choice {
-            "auto" | "" if ext == "mov" => VideoCodec::ProRes422Hq,
-            "auto" | "" | "H.264 8-bit" => VideoCodec::H264,
-            "HEVC 10-bit" => VideoCodec::Hevc10,
-            "ProRes 422 HQ 10-bit" => VideoCodec::ProRes422Hq,
-            "ProRes 4444 + alpha" => VideoCodec::ProRes4444,
-            other => bail!("unknown codec '{other}'"),
+        let dotted = |exts: &[&str]| {
+            let all: Vec<String> = exts.iter().map(|e| format!(".{e}")).collect();
+            match all.split_last() {
+                Some((last, [])) => last.clone(),
+                Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+                None => String::new(),
+            }
         };
-        let prores = matches!(codec, VideoCodec::ProRes422Hq | VideoCodec::ProRes4444);
-        if prores && !matches!(ext.as_str(), "mov" | "mkv") {
-            bail!("ProRes needs a .mov (or .mkv) file, not .{ext}");
+        if !VIDEO_WRITE_EXTS.contains(&ext.as_str()) {
+            bail!("can't write a .{ext} video: use {}", dotted(VIDEO_WRITE_EXTS));
+        }
+        let codec = match choice {
+            "auto" | "" => match ext.as_str() {
+                "mov" => VideoCodec::ProRes422Hq,
+                "webm" => VideoCodec::Vp9,
+                "mxf" => VideoCodec::DnxhrHqx,
+                _ => VideoCodec::H264,
+            },
+            name => *VideoCodec::ALL.iter().find(|c| c.name() == name).ok_or_else(|| anyhow!("unknown codec '{name}'"))?,
+        };
+        if !codec.containers().contains(&ext.as_str()) {
+            bail!("{} can't go in a .{ext} file: use {}", codec.name(), dotted(codec.containers()));
         }
         Ok(codec)
     }
 
+    /// Its name among `VIDEO_CODECS`.
+    pub fn name(self) -> &'static str {
+        match self {
+            VideoCodec::H264 => "H.264 8-bit",
+            VideoCodec::Hevc10 => "HEVC 10-bit",
+            VideoCodec::ProRes422Hq => "ProRes 422 HQ 10-bit",
+            VideoCodec::ProRes4444 => "ProRes 4444 + alpha",
+            VideoCodec::DnxhrHqx => "DNxHR HQX 10-bit",
+            VideoCodec::Dnxhr444 => "DNxHR 444 10-bit",
+            VideoCodec::Vp9 => "VP9 10-bit",
+            VideoCodec::Vp9Alpha => "VP9 + alpha",
+            VideoCodec::Av1 => "AV1 10-bit",
+        }
+    }
+
+    /// The containers it can go in (VP9's alpha only survives in WebM and
+    /// Matroska).
+    pub fn containers(self) -> &'static [&'static str] {
+        match self {
+            VideoCodec::H264 => &["mp4", "m4v", "mov", "mkv", "avi"],
+            VideoCodec::Hevc10 => &["mp4", "mov", "mkv"],
+            VideoCodec::ProRes422Hq | VideoCodec::ProRes4444 => &["mov", "mkv"],
+            VideoCodec::DnxhrHqx | VideoCodec::Dnxhr444 => &["mov", "mxf", "mkv"],
+            VideoCodec::Vp9 => &["webm", "mkv", "mp4"],
+            VideoCodec::Vp9Alpha => &["webm", "mkv"],
+            VideoCodec::Av1 => &["mp4", "mkv", "webm"],
+        }
+    }
+
+    /// The ffmpeg encoders that make it, the preferred first.
+    fn encoders(self) -> &'static [&'static str] {
+        match self {
+            VideoCodec::H264 => &["libx264"],
+            VideoCodec::Hevc10 => &["libx265"],
+            VideoCodec::ProRes422Hq | VideoCodec::ProRes4444 => &["prores_ks"],
+            VideoCodec::DnxhrHqx | VideoCodec::Dnxhr444 => &["dnxhd"],
+            VideoCodec::Vp9 | VideoCodec::Vp9Alpha => &["libvpx-vp9"],
+            VideoCodec::Av1 => &["libsvtav1", "libaom-av1"],
+        }
+    }
+
+    /// The encoder the installed ffmpeg has for it. Err naming the
+    /// encoder(s) it needs if it has none.
+    pub fn encoder(self) -> Result<&'static str> {
+        self.encoder_in(ffmpeg_encoders().as_ref().map_err(|e| anyhow!("{e}"))?)
+    }
+
+    /// The encoder for it among `have`, an ffmpeg's encoders.
+    fn encoder_in(self, have: &[String]) -> Result<&'static str> {
+        let wanted = self.encoders();
+        wanted.iter().copied().find(|e| have.iter().any(|h| h == e)).ok_or_else(|| {
+            let names = wanted.join(" or ");
+            anyhow!("{} needs ffmpeg's {names} encoder, which this ffmpeg ({}) doesn't have", self.name(), tool("ffmpeg").display())
+        })
+    }
+
     /// Fed 16-bit frames, so the encode keeps more than 8 bits.
     fn deep(self) -> bool {
-        self != VideoCodec::H264
+        !matches!(self, VideoCodec::H264 | VideoCodec::Vp9Alpha)
+    }
+
+    /// Keeps alpha (fed straight color).
+    fn alpha(self) -> bool {
+        matches!(self, VideoCodec::ProRes4444 | VideoCodec::Vp9Alpha)
+    }
+
+    /// The smallest frame its encoder takes.
+    fn min_size(self) -> (usize, usize) {
+        match self {
+            VideoCodec::DnxhrHqx | VideoCodec::Dnxhr444 => (256, 120),
+            _ => (1, 1),
+        }
     }
 
     /// The encoder's pixel format.
     fn pix_fmt(self) -> &'static str {
         match self {
             VideoCodec::H264 => "yuv420p",
-            VideoCodec::Hevc10 => "yuv420p10le",
-            VideoCodec::ProRes422Hq => "yuv422p10le",
+            VideoCodec::Hevc10 | VideoCodec::Vp9 | VideoCodec::Av1 => "yuv420p10le",
+            VideoCodec::ProRes422Hq | VideoCodec::DnxhrHqx => "yuv422p10le",
             VideoCodec::ProRes4444 => "yuva444p10le",
+            VideoCodec::Dnxhr444 => "yuv444p10le",
+            VideoCodec::Vp9Alpha => "yuva420p",
         }
     }
 
-    fn args(self) -> &'static [&'static str] {
-        match self {
-            VideoCodec::H264 => &["-c:v", "libx264", "-crf", "16", "-preset", "medium", "-pix_fmt", "yuv420p"],
-            VideoCodec::Hevc10 => &[
+    /// The encode's arguments, with `encoder` (one of its `encoders`).
+    fn args(self, encoder: &str) -> &'static [&'static str] {
+        match (self, encoder) {
+            (VideoCodec::H264, _) => &["-c:v", "libx264", "-crf", "16", "-preset", "medium", "-pix_fmt", "yuv420p"],
+            (VideoCodec::Hevc10, _) => &[
                 "-c:v", "libx265", "-crf", "16", "-preset", "medium", "-pix_fmt", "yuv420p10le",
                 "-x265-params", "log-level=error", "-tag:v", "hvc1",
             ],
-            VideoCodec::ProRes422Hq => &["-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", "yuv422p10le"],
-            VideoCodec::ProRes4444 => &["-c:v", "prores_ks", "-profile:v", "4", "-pix_fmt", "yuva444p10le", "-alpha_bits", "16"],
+            (VideoCodec::ProRes422Hq, _) => &["-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", "yuv422p10le"],
+            (VideoCodec::ProRes4444, _) => &["-c:v", "prores_ks", "-profile:v", "4", "-pix_fmt", "yuva444p10le", "-alpha_bits", "16"],
+            (VideoCodec::DnxhrHqx, _) => &["-c:v", "dnxhd", "-profile:v", "dnxhr_hqx", "-pix_fmt", "yuv422p10le"],
+            (VideoCodec::Dnxhr444, _) => &["-c:v", "dnxhd", "-profile:v", "dnxhr_444", "-pix_fmt", "yuv444p10le"],
+            (VideoCodec::Vp9, _) => &["-c:v", "libvpx-vp9", "-crf", "18", "-b:v", "0", "-row-mt", "1", "-pix_fmt", "yuv420p10le"],
+            (VideoCodec::Vp9Alpha, _) => &["-c:v", "libvpx-vp9", "-crf", "18", "-b:v", "0", "-row-mt", "1", "-auto-alt-ref", "0", "-pix_fmt", "yuva420p"],
+            (VideoCodec::Av1, "libsvtav1") => &["-c:v", "libsvtav1", "-crf", "22", "-preset", "6", "-pix_fmt", "yuv420p10le"],
+            (VideoCodec::Av1, _) => &["-c:v", "libaom-av1", "-crf", "22", "-b:v", "0", "-cpu-used", "6", "-row-mt", "1", "-pix_fmt", "yuv420p10le"],
         }
     }
 }
 
-/// Streams frames into an ffmpeg encode (see [`VideoCodec`]).
+/// The installed ffmpeg's encoders (`ffmpeg -encoders`, read once).
+fn ffmpeg_encoders() -> &'static Result<Vec<String>, String> {
+    static ENCODERS: LazyLock<Result<Vec<String>, String>> = LazyLock::new(|| {
+        let out = Command::new(tool("ffmpeg")).args(["-hide_banner", "-encoders"]).output().map_err(|e| format!("running ffmpeg (is it installed?): {e}"))?;
+        // After the legend, " V....D libx264   description" per encoder.
+        let text = String::from_utf8_lossy(&out.stdout);
+        let list = text.lines().skip_while(|l| !l.trim_start().starts_with("---")).skip(1);
+        Ok(list.filter_map(|l| l.split_whitespace().nth(1).map(str::to_string)).collect())
+    });
+    &ENCODERS
+}
+
+/// Streams frames into an ffmpeg encode (see [`VideoCodec`]). Dropped
+/// before [`VideoWriter::finish`] (a failed or cancelled render), the
+/// encode is stopped and its file removed.
 pub struct VideoWriter {
-    child: Child,
+    child: Option<Child>,
     stdin: Option<ChildStdin>,
+    path: PathBuf,
     width: usize,
     height: usize,
     codec: VideoCodec,
@@ -496,6 +619,11 @@ pub struct VideoWriter {
 
 impl VideoWriter {
     pub fn new(path: &Path, width: usize, height: usize, fps: f64, codec: VideoCodec) -> Result<Self> {
+        let (min_w, min_h) = codec.min_size();
+        if width < min_w || height < min_h {
+            bail!("{} needs frames at least {min_w}x{min_h} (these are {width}x{height})", codec.name());
+        }
+        let encoder = codec.encoder()?;
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent).ok();
@@ -516,8 +644,10 @@ impl VideoWriter {
                  setparams=color_primaries=bt709:color_trc=iec61966-2-1:colorspace=bt709:range=tv",
                 codec.pix_fmt()
             )])
-            .args(codec.args())
+            .args(codec.args(encoder))
             .arg(path)
+            // (SVT-AV1 logs its banner at info level otherwise.)
+            .env("SVT_LOG", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -525,8 +655,9 @@ impl VideoWriter {
             .context("starting ffmpeg (is it installed?)")?;
         let stdin = child.stdin.take();
         Ok(VideoWriter {
-            child,
+            child: Some(child),
             stdin,
+            path: path.to_path_buf(),
             width,
             height,
             codec,
@@ -543,8 +674,9 @@ impl VideoWriter {
             );
         }
         // Without alpha in the file, premultiplied color is already "over
-        // black"; ProRes 4444 keeps alpha, so it gets straight color.
-        let alpha = self.codec == VideoCodec::ProRes4444;
+        // black"; ProRes 4444 and VP9 + alpha keep alpha, so they get
+        // straight color.
+        let alpha = self.codec.alpha();
         let encode = |px: &[f32; 4]| -> [f32; 4] {
             let px = if alpha { color::unpremultiply(*px) } else { *px };
             [color::linear_to_srgb(px[0]), color::linear_to_srgb(px[1]), color::linear_to_srgb(px[2]), if alpha { px[3] } else { 1.0 }]
@@ -562,26 +694,59 @@ impl VideoWriter {
                 }
             }
         }
-        self.stdin
-            .as_mut()
-            .unwrap()
-            .write_all(&self.buf)
-            .context("writing frame to ffmpeg")
+        let wrote = self.stdin.as_mut().unwrap().write_all(&self.buf);
+        // ffmpeg stopped (say it can't write this container): its reason,
+        // not just the broken pipe.
+        wrote.or_else(|e| self.end().and_then(|_| Err(anyhow!("ffmpeg stopped taking frames: {e}")))).context("writing frame to ffmpeg")
     }
 
     pub fn finish(mut self) -> Result<()> {
+        self.end()
+    }
+
+    /// Close ffmpeg's input and wait for it; if it failed, remove what it
+    /// wrote and say why.
+    fn end(&mut self) -> Result<()> {
         drop(self.stdin.take());
-        let out = self.child.wait_with_output().context("waiting for ffmpeg")?;
+        let Some(child) = self.child.take() else { return Ok(()) };
+        let out = child.wait_with_output().context("waiting for ffmpeg")?;
         if !out.status.success() {
+            std::fs::remove_file(&self.path).ok();
             bail!("ffmpeg encode failed: {}", String::from_utf8_lossy(&out.stderr).trim());
         }
         Ok(())
     }
 }
 
+impl Drop for VideoWriter {
+    /// Not finished: stop the encode and remove its file.
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            drop(self.stdin.take());
+            child.kill().ok();
+            child.wait().ok();
+            std::fs::remove_file(&self.path).ok();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// AV1 prefers SVT and falls back to libaom; an ffmpeg with neither
+    /// (a Homebrew build, say) gets an error naming them.
+    #[test]
+    fn a_missing_encoder_is_named() {
+        let have = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        assert_eq!(VideoCodec::Av1.encoder_in(&have(&["libaom-av1", "libsvtav1"])).unwrap(), "libsvtav1");
+        assert_eq!(VideoCodec::Av1.encoder_in(&have(&["libaom-av1"])).unwrap(), "libaom-av1");
+        assert!(VideoCodec::Av1.args("libaom-av1").contains(&"libaom-av1"));
+        let err = VideoCodec::Av1.encoder_in(&have(&["libx264"])).unwrap_err().to_string();
+        assert!(err.starts_with("AV1 10-bit needs ffmpeg's libsvtav1 or libaom-av1 encoder, which this ffmpeg"), "{err}");
+        let err = VideoCodec::Dnxhr444.encoder_in(&[]).unwrap_err().to_string();
+        assert!(err.starts_with("DNxHR 444 10-bit needs ffmpeg's dnxhd encoder"), "{err}");
+    }
 
     #[test]
     fn patterns_substitute() {

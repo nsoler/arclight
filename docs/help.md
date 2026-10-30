@@ -153,6 +153,16 @@ fields change the same settings directly.
 in upper or lower case): Read plays a video from frame 1, Media In over the
 frame range it sets.
 
+**Media Out** renders the frame range to an image sequence
+(`shot.####.exr`, `.dpx`, `.tif`, `.png`, …) or a video: `.mp4`, `.mov`,
+`.mkv`, `.webm`, `.mxf`, `.m4v` or `.avi`. **Codec** auto picks ProRes 422
+HQ for `.mov`, VP9 for `.webm`, DNxHR HQX for `.mxf` and H.264 otherwise.
+Choose DNxHR HQX / 444 for editorial (`.mov` or `.mxf`), ProRes 4444 or
+VP9 + alpha to keep transparency (VP9 + alpha is the web's transparent
+video, in `.webm`), AV1 for small high-quality files. A codec the
+container can't hold, or one your ffmpeg lacks, is refused with a message
+saying what to use; a failed encode leaves no broken file.
+
 New **Read** and **Media In** nodes fit what they read to the project's
 size (**Fit to project**), and follow it when it changes:
 

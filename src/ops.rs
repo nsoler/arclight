@@ -1461,9 +1461,12 @@ pub static OPS: &[OpInfo] = &[
         overlay: Overlay::None,
         mask_base: None,
         help: "Renders a frame range to an image sequence (shot.####.exr) or a \
-               video. Codec: auto (.mov = ProRes 422 HQ, others H.264), H.264 8-bit, \
-               HEVC 10-bit, ProRes 422 HQ 10-bit, or ProRes 4444 with alpha (ProRes \
-               needs .mov or .mkv). The 10-bit codecs get the full 10 bits. DPX \
+               video (.mp4, .mov, .mkv, .webm, .mxf, .m4v, .avi). Codec: auto (.mov = \
+               ProRes 422 HQ, .webm = VP9, .mxf = DNxHR HQX, others H.264), H.264 8-bit, \
+               HEVC 10-bit, ProRes 422 HQ 10-bit, ProRes 4444 with alpha, DNxHR HQX \
+               10-bit, DNxHR 444 10-bit, VP9 10-bit, VP9 with alpha (8-bit, for the web) \
+               or AV1 10-bit; a codec its container can't hold is refused, naming the \
+               ones that can. The 10-bit codecs get the full 10 bits. DPX \
                encoding (for .dpx sequences): 10-bit log (keeps values above 1.0), \
                10/16-bit video (sRGB-coded, full range, marked Rec. 709) or 32-bit \
                float linear (exact); DPX alpha stores alpha too (straight).",

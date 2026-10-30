@@ -59,6 +59,10 @@ pub fn render_media_out_with(graph: &Graph, out_id: &str, progress: &Progress, m
     // Checked before rendering anything: a codec the container can't hold
     // fails here, not after the last frame.
     let codec = if video { Some(media::VideoCodec::choose(&p.codec, path).with_context(|| out_id.to_string())?) } else { None };
+    // (So is an encoder the installed ffmpeg lacks.)
+    if let Some(c) = codec {
+        c.encoder().with_context(|| out_id.to_string())?;
+    }
     if !video && last > first && !media::is_sequence_pattern(&p.path) {
         bail!("{out_id}: to write several frames, put #### or %04d in the file name");
     }
@@ -155,7 +159,101 @@ mod tests {
             }
         }
         let err = render("bad.mp4", "ProRes 422 HQ 10-bit").unwrap_err();
-        assert!(format!("{err:#}").contains("ProRes needs a .mov"), "{err:#}");
+        assert!(format!("{err:#}").contains("ProRes 422 HQ 10-bit can't go in a .mp4 file: use .mov or .mkv"), "{err:#}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// What ffprobe reads of a video's first stream: codec, pixel format
+    /// and, for VP9 with alpha, its alpha_mode tag.
+    fn probe(path: &std::path::Path) -> String {
+        let out = Command::new(media::tool("ffprobe"))
+            .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name,pix_fmt:stream_tags=alpha_mode", "-of", "csv=p=0"])
+            .arg(path)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn checker_out(dir: &std::path::Path, file: &str, codec: &str, size: [i64; 2], fps: f64) -> Graph {
+        serde_json::from_value(serde_json::json!({ "nodes": [
+            { "id": "c", "op": "checkerboard", "params": { "width": size[0], "height": size[1] } },
+            { "id": "out", "op": "media_out", "inputs": ["c"], "params": {
+                "path": dir.join(file).to_string_lossy(), "first_frame": 1, "last_frame": 2, "fps": fps, "codec": codec } },
+        ]}))
+        .unwrap()
+    }
+
+    /// Every codec in every container it goes in writes a video ffprobe
+    /// reads back as that codec and pixel format (each skipped if ffmpeg
+    /// lacks its encoder); every other container, and one Media Out can't
+    /// write, is refused before anything is written; 'auto' picks by
+    /// container (VP9 for .webm, which once wrote a broken file).
+    #[test]
+    fn every_codec_goes_in_its_containers_and_no_other() {
+        if Command::new(media::tool("ffmpeg")).arg("-version").output().is_err() {
+            eprintln!("skipping: no ffmpeg");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("arclight_containers_{}", std::process::id()));
+        let render = |file: &str, codec: &str| render_media_out(&checker_out(&dir, file, codec, [320, 128], 24.0), "out", &Progress::default());
+        for (codec, probed) in [
+            ("H.264 8-bit", "h264,yuv420p"),
+            ("HEVC 10-bit", "hevc,yuv420p10le"),
+            ("ProRes 422 HQ 10-bit", "prores,yuv422p10le"),
+            ("ProRes 4444 + alpha", "prores,yuva444p12le"),
+            ("DNxHR HQX 10-bit", "dnxhd,yuv422p10le"),
+            ("DNxHR 444 10-bit", "dnxhd,yuv444p10le"),
+            ("VP9 10-bit", "vp9,yuv420p10le"),
+            ("VP9 + alpha", "vp9,yuv420p,1"),
+            ("AV1 10-bit", "av1,yuv420p10le"),
+        ] {
+            let c = media::VideoCodec::choose(codec, std::path::Path::new("x.mkv")).unwrap();
+            if let Err(e) = c.encoder() {
+                eprintln!("skipping {codec}: {e:#}");
+                continue;
+            }
+            for ext in media::VIDEO_WRITE_EXTS {
+                let file = format!("{}.{ext}", codec.replace([' ', '+', '.'], "_"));
+                if c.containers().contains(ext) {
+                    render(&file, codec).unwrap_or_else(|e| panic!("{file}: {e:#}"));
+                    assert_eq!(probe(&dir.join(&file)), probed, "{file}");
+                } else {
+                    let err = format!("{:#}", render(&file, codec).unwrap_err());
+                    assert!(err.contains(&format!("{codec} can't go in a .{ext} file")), "{file}: {err}");
+                    assert!(!dir.join(&file).exists(), "{file}: nothing written");
+                }
+            }
+        }
+        for (file, probed) in [("auto.webm", "vp9,yuv420p10le"), ("auto.mxf", "dnxhd,yuv422p10le"), ("auto.mov", "prores,yuv422p10le"), ("auto.mkv", "h264,yuv420p"), ("auto.avi", "h264,yuv420p")] {
+            let codec = media::VideoCodec::choose("auto", std::path::Path::new(file)).unwrap();
+            if codec.encoder().is_ok() {
+                render(file, "auto").unwrap_or_else(|e| panic!("{file}: {e:#}"));
+                assert_eq!(probe(&dir.join(file)), probed, "{file}");
+            }
+        }
+        let err = format!("{:#}", render("x.mpg", "auto").unwrap_err());
+        assert!(err.contains("can't write a .mpg video: use .mp4, .mov, .mkv, .webm, .mxf, .m4v or .avi"), "{err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An encode ffmpeg fails (MXF takes only broadcast frame rates) fails
+    /// the render with ffmpeg's reason and leaves no file; so does a frame
+    /// too small for DNxHR, before ffmpeg starts.
+    #[test]
+    fn a_failed_encode_fails_the_render_and_leaves_no_file() {
+        if media::VideoCodec::DnxhrHqx.encoder().is_err() {
+            eprintln!("skipping: no ffmpeg with dnxhd");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("arclight_failed_encode_{}", std::process::id()));
+        for size in [[320, 128], [1920, 1080]] {
+            let err = render_media_out(&checker_out(&dir, "odd.mxf", "auto", size, 13.0), "out", &Progress::default()).unwrap_err();
+            assert!(format!("{err:#}").contains("Unsupported frame rate"), "{size:?}: {err:#}");
+            assert!(!dir.join("odd.mxf").exists(), "{size:?}: no broken file left");
+        }
+        let err = render_media_out(&checker_out(&dir, "small.mov", "DNxHR HQX 10-bit", [64, 64], 24.0), "out", &Progress::default()).unwrap_err();
+        assert!(format!("{err:#}").contains("DNxHR HQX 10-bit needs frames at least 256x120 (these are 64x64)"), "{err:#}");
+        assert!(!dir.join("small.mov").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -57,7 +57,7 @@ const READ_EXTS: &[&str] = &[
 /// What Read Geo's file browser offers.
 const GEO_EXTS: &[&str] = &["obj", "gltf", "glb", "abc"];
 /// …and to write.
-const WRITE_EXTS: &[&str] = &["exr", "dpx", "tif", "tiff", "tga", "png", "jpg", "webp", "mp4", "mov"];
+const WRITE_EXTS: &[&str] = &["exr", "dpx", "tif", "tiff", "tga", "png", "jpg", "webp", "mp4", "mov", "mkv", "webm", "mxf", "m4v", "avi"];
 
 /// A layer's name and its planes' names.
 type Layer = (String, Vec<String>);

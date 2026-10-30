@@ -12,6 +12,21 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.32 — 2026-10-30
+
+- **Media Out writes DNxHR, VP9 and AV1**: DNxHR HQX and DNxHR 444
+  (10-bit, `.mov` / `.mxf` / `.mkv`), VP9 10-bit and VP9 with alpha (the
+  web's transparent video, `.webm` / `.mkv`), and AV1 10-bit (SVT-AV1, or
+  libaom if that's what ffmpeg has). `auto` picks VP9 for `.webm` and
+  DNxHR HQX for `.mxf`.
+- A codec its container can't hold, a container Media Out can't write,
+  or an encoder missing from the installed ffmpeg is refused before
+  rendering, with a message saying what works. A failed encode reports
+  ffmpeg's reason and leaves no broken file (a `.webm` used to fail with
+  "Broken pipe" and leave a 262-byte one).
+- The Media Out save dialog lists `.mkv`, `.webm`, `.mxf`, `.m4v` and
+  `.avi`.
+
 ## 0.10.31 — 2026-10-30
 
 - The Media Out **Render** button goes on from the particles the viewer
