@@ -100,7 +100,7 @@ static TOOLS: &[Tool] = &[
             "origin": {"type": "integer"},
             "scale": {"type": "object", "properties": {"points": {"type": "array", "items": {"type": "integer"}}, "distance": {"type": "number"}}}
         }, "required": ["node"]}),
-    tool!("export_camera", "From a Camera Tracker's solve, add a Camera, a Point Cloud, a Scene of the two and a Scanline Render of it over the plate. 'linked' (default true) makes the Camera follow the solve live, so re-solving or reorienting it updates the Camera; false keys a copy on every solved frame instead. Returns their names.",
+    tool!("export_camera", "From a Camera Tracker's solve, add a Camera, a Point Cloud, a Scene of the two and a Scanline Render of it over the plate (when the lens distortion was solved, over a Lens Distort undistorting the plate, returned as 'lens'; to match the original plate instead, bend the render with a Lens Distort set to distort, same K1/K2). 'linked' (default true) makes the Camera follow the solve live, so re-solving or reorienting it updates the Camera; false keys a copy on every solved frame instead. Returns their names.",
         {"type": "object", "properties": {
             "node": {"type": "string"},
             "linked": {"type": "boolean", "description": "Follow the solve live (default true), or key a copy (false)."}
@@ -760,7 +760,7 @@ mod tests {
         let sol = crate::camtrack::Solution {
             format: [96, 54], focal: 35.0, film_back: [36.0, 24.0], frames: vec![1, 2],
             cameras: vec![[0.0, 0.0, 0.0, -20.0, 0.0, 0.0], [0.5, 0.0, 0.0, -20.0, 0.0, 0.0]],
-            points, rms: 0.2, frame_rms: vec![0.2, 0.2], point_rms: Vec::new(), pnp_frames: Vec::new(), tripod: false,
+            points, rms: 0.2, frame_rms: vec![0.2, 0.2], point_rms: Vec::new(), pnp_frames: Vec::new(), tripod: false, k1: 0.0, k2: 0.0,
         };
         s.session.graph.nodes[1].params["solution"] = sol.to_value();
         let r = call(&mut s, "camera_points", json!({"node": "ct", "frame": 2}))["structuredContent"].clone();

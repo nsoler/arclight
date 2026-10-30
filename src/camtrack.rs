@@ -72,6 +72,8 @@ pub struct Settings {
     pub focal: f64,
     pub film_back: [f64; 2],
     pub solve_focal: bool,
+    /// Solve the lens's radial distortion too (not on a tripod).
+    pub solve_distortion: bool,
     /// Pixels a track may miss by and still count.
     pub max_error: f64,
     pub mode: Mode,
@@ -96,6 +98,7 @@ impl Settings {
             focal: num("focal", 35.0),
             film_back: [p["film_back"][0].as_f64().unwrap_or(36.0), p["film_back"][1].as_f64().unwrap_or(24.0)],
             solve_focal: p["solve_focal"].as_bool().unwrap_or(false),
+            solve_distortion: p["solve_distortion"].as_bool().unwrap_or(false),
             max_error: num("max_error", 1.0),
             mode: p["solve_mode"].as_str().and_then(Mode::parse).unwrap_or(Mode::Auto),
             distance: num("distance", 10.0).max(1e-3),
@@ -134,6 +137,12 @@ pub struct Solution {
     /// points lie on a sphere around it.
     #[serde(default)]
     pub tripod: bool,
+    /// The lens's radial distortion (solved, else 0), as Lens Distort's K1
+    /// and K2 about the frame's center.
+    #[serde(default)]
+    pub k1: f64,
+    #[serde(default)]
+    pub k2: f64,
 }
 
 /// Computer-vision frame (y down, z forward) ↔ the scene's (y up, z back).
@@ -169,6 +178,8 @@ impl Solution {
             point_rms: sol.points.iter().zip(&sol.point_rms).filter(|(p, _)| p.is_some()).map(|(_, e)| e.unwrap_or(0.0)).collect(),
             pnp_frames: sol.pnp.iter().copied().collect(),
             tripod,
+            k1: sol.intr.k1,
+            k2: sol.intr.k2,
         }
     }
 
@@ -357,7 +368,7 @@ pub fn run(frames: &mut dyn FnMut(i64) -> Result<Frame>, s: &Settings, progress:
     }
     let format = format.unwrap();
     let intr = Intrinsics::new(s.focal, s.film_back[0], format);
-    let settings = sfm::Settings { max_error: s.max_error, solve_focal: s.solve_focal, ..sfm::Settings::default() };
+    let settings = sfm::Settings { max_error: s.max_error, solve_focal: s.solve_focal, solve_distortion: s.solve_distortion, ..sfm::Settings::default() };
     let mut solving = |frac: f32| {
         progress.done.store(n + (frac * n as f32) as i64, Ordering::Relaxed);
         !progress.cancel.load(Ordering::Relaxed)
@@ -450,6 +461,19 @@ pub fn baked_value(p: &Value, what: &str) -> Option<Value> {
     camera_params(&Solution::from_params(p)?).remove(what)
 }
 
+/// A Lens Distort node's params undistorting the plate as `sol`'s lens
+/// bends it (Distort with the same values bends CG to match), or None for
+/// a perfect lens.
+pub fn lens_params(sol: &Solution) -> Option<Map<String, Value>> {
+    (sol.k1 != 0.0 || sol.k2 != 0.0).then(|| {
+        let mut out = Map::new();
+        out.insert("mode".into(), json!("undistort"));
+        out.insert("k1".into(), json!(sol.k1));
+        out.insert("k2".into(), json!(sol.k2));
+        out
+    })
+}
+
 /// The world point a solved pose (computer-vision frame) has as its
 /// center, in scene terms: for tests comparing against a solve.
 pub fn scene_center(p: &Pose) -> Vec3 {
@@ -476,6 +500,8 @@ mod tests {
             point_rms: Vec::new(),
             pnp_frames: Vec::new(),
             tripod: false,
+            k1: 0.0,
+            k2: 0.0,
         }
     }
 
@@ -694,6 +720,65 @@ mod tests {
             assert!(tracker.live().all(|t| !b.near(*t.points.last().unwrap(), 0)), "frame {f}: a feature on the card");
         }
         assert!(covered > 24 * 40, "the card crosses the shot: {covered} rows");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A rendered shot bent by a Lens Distort (Distort, pincushion): with
+    /// Solve lens distortion its K1 and K2 come back as that node's, and
+    /// Export undistorts the plate with them; without it, a perfect lens
+    /// and no Lens Distort. (The camera moves and turns well past cards at
+    /// many depths: over a nearly flat set, a bend of the lens and a bend of
+    /// the points look much alike.)
+    #[test]
+    fn a_lens_distort_plate_solves_back_to_its_values() {
+        use crate::session::Session;
+        let dir = std::env::temp_dir().join(format!("arclight_camtrack_lens_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tex: Vec<String> = (0..3)
+            .map(|i| {
+                let path = dir.join(format!("tex{i}.exr"));
+                crate::features::tests::blob_texture(2500, 768, 768, 61 + i).write(&path).unwrap();
+                path.to_string_lossy().into_owned()
+            })
+            .collect();
+        let keys = |a: [f64; 3], b: [f64; 3]| json!({ "keys": [[1, a], [24, b]], "interp": "linear" });
+        let (k1, k2) = (0.06, 0.015);
+        let graph: crate::graph::Graph = serde_json::from_value(json!({
+            "project": { "first_frame": 1, "last_frame": 24, "fps": 24, "format": { "width": 480, "height": 270 } },
+            "nodes": [
+                { "id": "t0", "op": "read", "params": { "path": tex[0] } },
+                { "id": "t1", "op": "read", "params": { "path": tex[1] } },
+                { "id": "t2", "op": "read", "params": { "path": tex[2] } },
+                { "id": "wall", "op": "card", "inputs": ["t0"], "params": { "translate": [0, 3, -16], "size": [36, 24] } },
+                { "id": "floor", "op": "card", "inputs": ["t1"], "params": { "translate": [0, -1.5, -10], "rotate": [-90, 0, 0], "size": [30, 24] } },
+                { "id": "panel", "op": "card", "inputs": ["t2"], "params": { "translate": [-2.5, 1.5, -7], "rotate": [0, 25, 0], "size": [3, 3] } },
+                { "id": "panel2", "op": "card", "inputs": ["t1"], "params": { "translate": [2.5, 0.5, -5], "rotate": [0, -30, 0], "size": [2.5, 2.5] } },
+                { "id": "panel3", "op": "card", "inputs": ["t0"], "params": { "translate": [5.0, 2.0, -11], "rotate": [0, -40, 0], "size": [4, 4] } },
+                { "id": "truecam", "op": "camera", "params": { "focal": 24, "translate": keys([0.0, 0.0, 0.0], [3.5, 0.8, -2.5]), "rotate": keys([0.0, 0.0, 0.0], [-5.0, 16.0, 3.0]) } },
+                { "id": "set", "op": "scene", "inputs": ["wall", "floor", "panel", "panel2", "panel3"] },
+                { "id": "render", "op": "scanline_render", "inputs": ["set", "truecam", ""], "params": { "samples": 2 } },
+                { "id": "bent", "op": "lens_distort", "inputs": ["render"], "params": { "mode": "distort", "k1": k1, "k2": k2 } },
+                { "id": "ct", "op": "camera_tracker", "inputs": ["bent"], "params": { "focal": 24, "solve_distortion": true } },
+                { "id": "ct_off", "op": "camera_tracker", "inputs": ["bent"], "params": { "focal": 24 } },
+            ] })).unwrap();
+        let mut s = Session::new(graph);
+        let summary = s.track_camera("ct", None, None, &Progress::default()).unwrap();
+        assert_eq!(summary["frames_solved"], 24, "{summary}");
+        assert!(summary["rms_error_px"].as_f64().unwrap() < 0.3, "{summary}");
+        let sol = s.camera_solution("ct").unwrap();
+        assert!((sol.k1 - k1).abs() < 0.004 && (sol.k2 - k2).abs() < 0.006, "K1 {} K2 {}", sol.k1, sol.k2);
+        assert_eq!((summary["k1"].as_f64(), summary["k2"].as_f64()), (Some((sol.k1 * 1e4).round() / 1e4), Some((sol.k2 * 1e4).round() / 1e4)));
+        let names = s.export_camera("ct").unwrap();
+        let lens = names["lens"].as_str().unwrap().to_string();
+        let n = s.node(&lens).unwrap();
+        assert_eq!((n.op.as_str(), n.inputs[0].as_str(), n.params["mode"].as_str(), n.params["k1"].as_f64(), n.params["k2"].as_f64()), ("lens_distort", "ct", Some("undistort"), Some(sol.k1), Some(sol.k2)));
+        assert_eq!(s.node(names["render"].as_str().unwrap()).unwrap().inputs[2], lens, "the render goes over the undistorted plate");
+        // Off: a perfect lens, more error, and nothing to undistort.
+        let off = s.track_camera("ct_off", None, None, &Progress::default()).unwrap();
+        let off_sol = s.camera_solution("ct_off").unwrap();
+        assert!(off_sol.k1 == 0.0 && off_sol.k2 == 0.0 && off["rms_error_px"].as_f64().unwrap() > summary["rms_error_px"].as_f64().unwrap(), "{off} vs {summary}");
+        let names = s.export_camera("ct_off").unwrap();
+        assert!(names.get("lens").is_none() && s.node(names["render"].as_str().unwrap()).unwrap().inputs[2] == "ct_off");
         std::fs::remove_dir_all(&dir).ok();
     }
 

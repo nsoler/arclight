@@ -548,6 +548,14 @@ sun coming from one side.
   the shot (people, cars): no features are found under it and features
   that move into it are dropped, so only the set drives the solve.
   **Mask channel** and **Invert mask** read it as on other nodes.
+- **Solve lens distortion** also solves the lens's barrel or pincushion
+  bend (Lens Distort's **K1** and **K2**, about the frame's center), shown
+  in the panel. **Export** then adds a **Lens Distort** that undistorts the
+  plate, with the render over it; to put CG back on the original plate
+  instead, bend the render with a Lens Distort set to **Distort** with the
+  same values. It needs a shot with depth and camera movement (over a flat
+  wall a bend of the lens and of the scene look alike), and isn't solved
+  for Tripod shots.
 
 ## Preferences
 

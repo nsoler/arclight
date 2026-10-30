@@ -185,7 +185,8 @@ class Node:
     def export_camera(self, linked: bool = True) -> dict[str, "Node"]:
         """From a solved Camera Tracker: a Camera following the solve live
         (``linked=False``: keyed with a copy), a Point Cloud, a Scene and a
-        Scanline Render over the plate, by role."""
+        Scanline Render over the plate, by role; with a solved lens, also
+        ``"lens"``, a Lens Distort undistorting the plate under the render."""
         return {k: Node(v) for k, v in _call("export_camera", node=self._name, linked=linked).items()}
 
     def place_on_points(self, points: list[int], what: str = "card", frame: int | None = None,

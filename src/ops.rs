@@ -1163,6 +1163,7 @@ pub static OPS: &[OpInfo] = &[
             fixed!("focal", "Focal length (mm)", ParamKind::Float { min: 1.0, max: 1000.0 }, 35.0),
             fixed!("film_back", "Film back (mm)", ParamKind::Vec2, [36.0, 24.0]),
             fixed!("solve_focal", "Solve focal length", ParamKind::Bool, false),
+            fixed!("solve_distortion", "Solve lens distortion", ParamKind::Bool, false),
             fixed!("max_error", "Max error (px)", ParamKind::Float { min: 0.2, max: 5.0 }, 1.0),
             fixed!("solve_mode", "Solve", ParamKind::Choice(SOLVE_MODES), "auto"),
             fixed!("distance", "Tripod distance", ParamKind::Float { min: 0.1, max: 10000.0 }, 10.0),
@@ -1176,7 +1177,8 @@ pub static OPS: &[OpInfo] = &[
                shows the solved points, to select and place a Card or a Locator on, or to set the origin, ground and \
                scale. Export makes a keyed Camera, the point cloud, a Scene and a Scanline Render over the plate. \
                The focal length is used as given, or as a starting guess with Solve focal length (which needs the camera to move, \
-               or to turn enough on a tripod). Solve: Free move for a camera that travels, Tripod for one that only turns about \
+               or to turn enough on a tripod). Solve lens distortion also solves the lens's radial K1 and K2 (as Lens Distort's, \
+               about the frame's center; not for a Tripod solve), and Export then undistorts the plate with them. Solve: Free move for a camera that travels, Tripod for one that only turns about \
                its center (its points go on a sphere Tripod distance away, as they have no depth), or Auto (picks Tripod when \
                the camera only turns). A mask (its Mask channel, frame by frame, so an animated Roto follows along) keeps the \
                tracker off what it covers, such as people or cars moving through the shot: no features are found there, and \

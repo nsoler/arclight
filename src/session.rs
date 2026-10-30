@@ -307,7 +307,9 @@ impl Session {
     }
 
     /// [`Session::export_camera`], the Camera (`linked`) following the
-    /// solve live instead, so re-solving or reorienting moves it too.
+    /// solve live instead, so re-solving or reorienting moves it too. A
+    /// solved lens adds a Lens Distort undistorting the plate, which the
+    /// render goes over ("lens").
     pub fn export_camera_linked(&mut self, id: &str, linked: bool) -> Result<Value> {
         let sol = self.camera_solution(id)?;
         let params = if linked { camtrack::camera_links(id) } else { camtrack::camera_params(&sol) };
@@ -316,8 +318,14 @@ impl Session {
         cloud.insert("points".into(), json!(sol.points.iter().flatten().collect::<Vec<_>>()));
         let points = self.create_node("point_cloud", None, &cloud, &[])?;
         let scene = self.create_node("scene", None, &Map::new(), &[camera.clone(), points.clone()])?;
-        let render = self.create_node("scanline_render", None, &Map::new(), &[scene.clone(), String::new(), id.to_string()])?;
-        Ok(json!({ "camera": camera, "points": points, "scene": scene, "render": render }))
+        let lens = camtrack::lens_params(&sol).map(|p| self.create_node("lens_distort", None, &p, &[id.to_string()])).transpose()?;
+        let plate = lens.clone().unwrap_or_else(|| id.to_string());
+        let render = self.create_node("scanline_render", None, &Map::new(), &[scene.clone(), String::new(), plate])?;
+        let mut out = json!({ "camera": camera, "points": points, "scene": scene, "render": render });
+        if let Some(lens) = lens {
+            out["lens"] = json!(lens);
+        }
+        Ok(out)
     }
 
     /// Place a node on points `ids` of Camera Tracker `id`'s solve: `what`
@@ -872,6 +880,8 @@ pub fn solution_summary(sol: &camtrack::Solution, first: i64, last: i64) -> Valu
         "rms_error_px": round(sol.rms),
         "worst_frame_rms_px": round(sol.frame_rms.iter().copied().fold(0.0, f64::max)),
         "focal_mm": round(sol.focal),
+        "k1": round(sol.k1),
+        "k2": round(sol.k2),
         "mode": if sol.tripod { "tripod" } else { "free move" },
         "pnp_frames": sol.pnp_frames,
     })

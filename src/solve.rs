@@ -71,11 +71,17 @@ impl Pose {
     }
 }
 
-/// Focal length and principal point, in frame pixels.
+/// Focal length and principal point, in frame pixels, and the lens's
+/// radial distortion about that point: Brown's K1 and K2, a point `r` half
+/// frame widths (`scale` pixels each) out moving to r (1 + K1 r² + K2 r⁴),
+/// exactly as Lens Distort's (centered) [`geom::Distortion`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Intrinsics {
     pub f: f64,
     pub c: [f64; 2],
+    pub k1: f64,
+    pub k2: f64,
+    pub scale: f64,
 }
 
 impl Intrinsics {
@@ -83,17 +89,31 @@ impl Intrinsics {
     /// wide, centered in a frame of `format`.
     pub fn new(focal: f64, film_width: f64, format: Size) -> Intrinsics {
         let cam = geom::Camera { focal, film_back: [film_width, 1.0], ..geom::Camera::default() };
-        Intrinsics { f: cam.focal_pixels(format), c: [format.width as f64 / 2.0, format.height as f64 / 2.0] }
+        let c = [format.width as f64 / 2.0, format.height as f64 / 2.0];
+        Intrinsics { f: cam.focal_pixels(format), c, k1: 0.0, k2: 0.0, scale: c[0].max(1e-9) }
     }
 
-    /// The normalized ray through frame position `p`.
+    /// Its lens, as Lens Distort's.
+    pub fn lens(&self) -> geom::Distortion {
+        geom::Distortion { k1: self.k1, k2: self.k2, center: self.c, scale: self.scale }
+    }
+
+    fn distorted(&self) -> bool {
+        self.k1 != 0.0 || self.k2 != 0.0
+    }
+
+    /// The normalized ray through frame position `p` (where the lens put
+    /// it).
     pub fn ray(&self, p: [f64; 2]) -> V3 {
+        let p = if self.distorted() { self.lens().undistort(p).unwrap_or(p) } else { p };
         V3::new((p[0] - self.c[0]) / self.f, (p[1] - self.c[1]) / self.f, 1.0)
     }
 
-    /// Where camera-frame point `x` lands (None behind the camera).
+    /// Where camera-frame point `x` lands, through the lens (None behind
+    /// the camera).
     pub fn project(&self, x: &V3) -> Option<[f64; 2]> {
-        (x.z > 1e-9).then(|| [self.c[0] + self.f * x.x / x.z, self.c[1] + self.f * x.y / x.z])
+        let p = (x.z > 1e-9).then(|| [self.c[0] + self.f * x.x / x.z, self.c[1] + self.f * x.y / x.z])?;
+        Some(if self.distorted() { self.lens().distort(p) } else { p })
     }
 }
 
@@ -572,6 +592,7 @@ fn refine_pose(x: &[V3], px: &[[f64; 2]], k: &Intrinsics, use_: &[usize], start:
         fixed: vec![false],
         points_fixed: true,
         solve_focal: false,
+        solve_distortion: false,
         huber: max_error,
     };
     p.adjust(30);

@@ -12,6 +12,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.19 — 2026-10-30
+
+- Camera Tracker: **Solve lens distortion** solves the lens's radial
+  distortion (K1, K2) with the camera, as Lens Distort's values about the
+  frame's center (not for Tripod solves). The panel shows them, and
+  Export (GUI, MCP, Python) adds a Lens Distort undistorting the plate
+  under the render (Distort with the same values bends CG to match the
+  original plate). Old solves load as a perfect lens.
+
 ## 0.10.18 — 2026-10-30
 
 - Fixed: a Scanline Render whose saved params leave out some settings (a

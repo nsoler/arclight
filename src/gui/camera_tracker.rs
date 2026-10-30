@@ -60,6 +60,7 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, id: &str, jobs: &mut std::collect
     if let Some(job) = jobs.get_mut(id).filter(|j| j.handle.as_ref().is_some_and(|h| h.is_finished())) {
         job.result = Some(match job.handle.take().unwrap().join() {
             Ok(Ok(sol)) => {
+                let settings_lens = doc.node(id).is_some_and(|n| n.params["solve_distortion"].as_bool().unwrap_or(false));
                 let first = sol.frames.first().copied().unwrap_or(0);
                 let mut msg = format!(
                     "Solved {} frame(s) from {first}: {} points, error {:.2} px, focal {:.1} mm.",
@@ -73,6 +74,11 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, id: &str, jobs: &mut std::collect
                 }
                 if sol.tripod {
                     msg += " Tripod solve: the camera only turns, so its points are on a sphere around it.";
+                    if settings_lens {
+                        msg += " The lens distortion isn't solved on a tripod.";
+                    }
+                } else if sol.k1 != 0.0 || sol.k2 != 0.0 {
+                    msg += &format!(" Lens K1 {:.4}, K2 {:.4}.", sol.k1, sol.k2);
                 }
                 doc.set_param(id, "solution", sol.to_value());
                 (true, msg)
@@ -108,6 +114,9 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, id: &str, jobs: &mut std::collect
         let worst = sol.frame_rms.iter().copied().fold(0.0, f64::max);
         let mode = if sol.tripod { " · tripod" } else { "" };
         ui.label(format!("{} frames, {} points · error {:.2} px (worst frame {:.2}) · {:.1} mm{mode}", sol.frames.len(), sol.points.len(), sol.rms, worst, sol.focal));
+        if sol.k1 != 0.0 || sol.k2 != 0.0 {
+            ui.label(format!("Lens: K1 {:.4}, K2 {:.4}", sol.k1, sol.k2)).on_hover_text("Lens Distort's values (about the frame's center): Export undistorts the plate with them");
+        }
         frame_list(ui, id, sol);
         ui.weak("Select points in the viewer (click, ⇧-click, drag a box) to place a Card or Locator, or to set the origin, ground and scale.");
         ui.horizontal(|ui| {
@@ -198,9 +207,19 @@ fn export(doc: &mut Doc, id: &str, sol: &Solution, linked: bool) -> String {
     doc.connect(&points, &scene, 1);
     let render = doc.add_node("scanline_render", at(0.0, 2.0 * (NODE_H + 40.0)));
     doc.connect(&scene, &render, 0);
-    doc.connect(id, &render, 2);
+    // A solved lens: the render goes over the plate undistorted.
+    let lens = camtrack::lens_params(sol).map(|params| {
+        let lens = doc.add_node("lens_distort", at(NODE_W + 30.0, NODE_H + 40.0));
+        for (k, v) in params {
+            doc.set_param(&lens, &k, v);
+        }
+        doc.connect(id, &lens, 0);
+        lens
+    });
+    doc.connect(lens.as_deref().unwrap_or(id), &render, 2);
     doc.selected = Some(render.clone());
-    format!("Added {camera}{}, {points}, {scene} and {render}.", if linked { " (linked)" } else { "" })
+    let lens = lens.map(|l| format!(", {l} (undistorts the plate; Distort with the same K1/K2 bends CG to match the original)")).unwrap_or_default();
+    format!("Added {camera}{}, {points}, {scene}{lens} and {render}.", if linked { " (linked)" } else { "" })
 }
 
 /// Add a Card lying on points `ids` of `sol` (Camera Tracker `id`'s),
@@ -441,7 +460,7 @@ mod tests {
     fn solved() -> Doc {
         let sol = Solution {
             format: [200, 100], focal: 35.0, film_back: [36.0, 24.0], frames: vec![1], cameras: vec![[0.0, 0.0, 0.0, -15.0, 0.0, 0.0]],
-            points: (0..9).map(|i| [(i % 3) as f64 - 1.0, -2.0, -8.0 - (i / 3) as f64]).collect(), rms: 0.1, frame_rms: vec![0.1], point_rms: Vec::new(), pnp_frames: Vec::new(), tripod: false,
+            points: (0..9).map(|i| [(i % 3) as f64 - 1.0, -2.0, -8.0 - (i / 3) as f64]).collect(), rms: 0.1, frame_rms: vec![0.1], point_rms: Vec::new(), pnp_frames: Vec::new(), tripod: false, k1: 0.0, k2: 0.0,
         };
         let node = NodeSpec { id: "ct".into(), op: "camera_tracker".into(), inputs: vec![String::new()], params: json!({ "solution": sol.to_value() }), pos: Some([0.0, 0.0]) };
         let mut d = Doc::new(Graph { nodes: vec![node], ..Default::default() }, None);
@@ -518,6 +537,24 @@ mod tests {
         let copy = d.graph.nodes.iter().filter(|n| n.op == "camera").nth(1).unwrap().id.clone();
         assert_eq!(d.param(&copy, "rotate")["keys"][0], json!([1, [-15.0, 0.0, 0.0]]));
         assert_eq!(camtrack::baked_value(&d.node("ct").unwrap().params, "rotate"), Some(d.param(&copy, "rotate")));
+    }
+
+    /// A solved lens: Export adds a Lens Distort undistorting the plate,
+    /// with the solve's K1 and K2, under the render; a perfect lens, none.
+    #[test]
+    fn export_undistorts_the_plate_for_a_solved_lens() {
+        let mut d = solved();
+        let mut sol = Solution::from_params(&d.node("ct").unwrap().params).unwrap();
+        export(&mut d, "ct", &sol, true);
+        assert!(!d.graph.nodes.iter().any(|n| n.op == "lens_distort"));
+        (sol.k1, sol.k2) = (-0.05, 0.01);
+        let msg = export(&mut d, "ct", &sol, true);
+        let lens = d.graph.nodes.iter().find(|n| n.op == "lens_distort").unwrap().id.clone();
+        assert_eq!((d.param(&lens, "mode"), d.param(&lens, "k1"), d.param(&lens, "k2")), (json!("undistort"), json!(-0.05), json!(0.01)));
+        assert_eq!(d.node(&lens).unwrap().inputs[0], "ct");
+        let render = d.graph.nodes.iter().filter(|n| n.op == "scanline_render").nth(1).unwrap();
+        assert_eq!(render.inputs[2], lens);
+        assert!(msg.contains(&lens) && msg.contains("Distort"), "{msg}");
     }
 
     /// Over a Scanline Render of the solve (its camera linked, or baked

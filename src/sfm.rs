@@ -39,11 +39,13 @@ pub struct Settings {
     /// Tracks two frames must share to start from them.
     pub min_shared: usize,
     pub solve_focal: bool,
+    /// Solve the lens's radial distortion (K1, K2) too.
+    pub solve_distortion: bool,
 }
 
 impl Default for Settings {
     fn default() -> Settings {
-        Settings { max_error: 1.0, min_parallax: 1f64.to_radians(), start_parallax: 4f64.to_radians(), min_shared: 30, solve_focal: false }
+        Settings { max_error: 1.0, min_parallax: 1f64.to_radians(), start_parallax: 4f64.to_radians(), min_shared: 30, solve_focal: false, solve_distortion: false }
     }
 }
 
@@ -127,18 +129,21 @@ impl State<'_> {
             fixed: frames.iter().map(|&f| fixed(f)).collect(),
             points_fixed,
             solve_focal: false,
+            solve_distortion: false,
             huber: self.s.max_error,
         };
         (p, ids)
     }
 
-    /// Adjust every solved frame and point (the first frame held), then drop
-    /// points that still miss by more than three times the allowed error.
-    fn adjust_all(&mut self, solve_focal: bool, iterations: usize) {
+    /// Adjust every solved frame and point (the first frame held), with the
+    /// focal length and the lens's distortion when asked, then drop points
+    /// that still miss by more than three times the allowed error.
+    fn adjust_all(&mut self, solve_focal: bool, solve_distortion: bool, iterations: usize) {
         let frames: Vec<i64> = self.poses.keys().copied().collect();
         let first = frames[0];
         let (mut p, ids) = self.problem(&frames, &|f| f == first, false);
         p.solve_focal = solve_focal;
+        p.solve_distortion = solve_distortion;
         p.adjust(iterations);
         self.intr = p.intr;
         for (i, f) in frames.iter().enumerate() {
@@ -305,7 +310,7 @@ pub fn solve(tracks: &[FeatureTrack], first: i64, last: i64, intr: Intrinsics, s
     for (t, x) in tv.points {
         st.points[t] = Some(x);
     }
-    st.adjust_all(false, 30);
+    st.adjust_all(false, false, 30);
     let total = (last - first + 1) as f32;
     let mut failed: BTreeSet<i64> = BTreeSet::new();
     let mut since_adjust = 0;
@@ -349,18 +354,20 @@ pub fn solve(tracks: &[FeatureTrack], first: i64, last: i64, intr: Intrinsics, s
             st.triangulate_new();
             since_adjust += 1;
             if since_adjust * 5 >= st.poses.len().max(10) {
-                st.adjust_all(false, 20);
+                // The lens as it goes, so its bending isn't taken for
+                // bad tracks.
+                st.adjust_all(false, s.solve_distortion, 20);
                 since_adjust = 0;
             }
         } else {
             failed.insert(f);
         }
     }
-    // Last, everything together (with the focal length if asked), twice:
-    // points dropped the first time no longer pull the second.
-    st.adjust_all(s.solve_focal, 50);
+    // Last, everything together (with the focal length and lens if asked),
+    // twice: points dropped the first time no longer pull the second.
+    st.adjust_all(s.solve_focal, s.solve_distortion, 50);
     st.triangulate_new();
-    st.adjust_all(s.solve_focal, 50);
+    st.adjust_all(s.solve_focal, s.solve_distortion, 50);
     progress(st.poses.len() as f32 / total);
     let frames: Vec<i64> = st.poses.keys().copied().collect();
     let (p, ids) = st.problem(&frames, &|_| true, true);
@@ -425,7 +432,11 @@ mod tests {
     /// track runs while it's in view, with noise; one track in ten jumps
     /// off once.
     fn shot() -> (Intrinsics, Vec<Pose>, Vec<V3>, Vec<FeatureTrack>, Vec<usize>) {
-        let k = Intrinsics::new(30.0, 36.0, FMT);
+        shot_through(Intrinsics::new(30.0, 36.0, FMT))
+    }
+
+    /// [`shot`] through lens `k`.
+    fn shot_through(k: Intrinsics) -> (Intrinsics, Vec<Pose>, Vec<V3>, Vec<FeatureTrack>, Vec<usize>) {
         let poses: Vec<Pose> = (0..40)
             .map(|f| {
                 let t = f as f64;
@@ -519,6 +530,33 @@ mod tests {
         assert!((sol.intr.f / k.f - 1.0).abs() < 0.01, "focal {} vs {}", sol.intr.f, k.f);
         let (center, rot) = compare(&sol, &truth, &pts, &which);
         assert!(center < 0.01 && rot < 0.2, "center {center}, rotation {rot}°");
+    }
+
+    /// Tracks bent by a barrel lens: with the distortion solved, its K1
+    /// and K2 come back (as Lens Distort takes them) and the camera with
+    /// them; left out, the solve keeps a perfect lens and misses more.
+    #[test]
+    fn the_lens_distortion_can_be_solved_too() {
+        let lens = Intrinsics { k1: -0.12, k2: 0.03, ..Intrinsics::new(30.0, 36.0, FMT) };
+        let (_, truth, pts, tracks, which) = shot_through(lens);
+        let perfect = Intrinsics::new(30.0, 36.0, FMT);
+        let sol = solve(&tracks, 0, 39, perfect, &Settings { solve_distortion: true, ..Settings::default() }, &mut |_| true).unwrap();
+        assert!((sol.intr.k1 - lens.k1).abs() < 0.003 && (sol.intr.k2 - lens.k2).abs() < 0.005, "K1 {} K2 {}", sol.intr.k1, sol.intr.k2);
+        assert_eq!((sol.poses.len(), sol.intr.f, sol.intr.c), (40, perfect.f, perfect.c), "the focal length and center as given");
+        assert!(sol.rms < 0.5, "rms {}", sol.rms);
+        let (center, rot) = compare(&sol, &truth, &pts, &which);
+        assert!(center < 0.005 && rot < 0.1, "center {center} of the path, rotation {rot}°");
+        // Its rays and projections go through the lens: a point projected
+        // and cast back lands on its ray.
+        let x = V3::new(2.0, -1.0, 5.0);
+        assert!((sol.intr.ray(sol.intr.project(&x).unwrap()) - x / x.z).norm() < 1e-9);
+        // Off: no lens solved, and the bending shows as error.
+        let off = solve(&tracks, 0, 39, perfect, &Settings::default(), &mut |_| true).unwrap();
+        assert!(off.intr == perfect && off.rms > sol.rms * 1.5, "rms {} off, {} on", off.rms, sol.rms);
+        // Solved on a perfect lens's tracks, it stays (nearly) perfect.
+        let (k, _, _, tracks, _) = shot();
+        let still = solve(&tracks, 0, 39, k, &Settings { solve_distortion: true, ..Settings::default() }, &mut |_| true).unwrap();
+        assert!(still.intr.k1.abs() < 0.002 && still.intr.k2.abs() < 0.004, "K1 {} K2 {}", still.intr.k1, still.intr.k2);
     }
 
     #[test]

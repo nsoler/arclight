@@ -6,14 +6,15 @@
 //! few bad tracks pull less than they would squared. Each step solves the
 //! normal equations by the Schur complement: the points' 3×3 blocks are
 //! eliminated first, leaving a dense system in the camera parameters only
-//! (six per free camera, plus one for the focal length), which stays small
+//! (six per free camera, plus one for the focal length and two for the
+//! lens's distortion when they're solved), which stays small
 //! even with thousands of points. Rotations are updated by a small turn
 //! applied on the left, R ← exp(ω) R. The first camera is usually held
 //! fixed (`fixed`) to pin the solution down; the overall scale is left to
 //! the damping.
 
 use crate::solve::{Intrinsics, Pose, V3};
-use nalgebra::{DMatrix, DVector, Matrix3, Rotation3, Vector3};
+use nalgebra::{DMatrix, DVector, Matrix2, Matrix3, Rotation3, Vector3};
 
 /// One tracked position: camera `cam` saw point `point` at `px`.
 #[derive(Clone, Copy, Debug)]
@@ -34,6 +35,8 @@ pub struct Problem {
     /// Points left as they are (adjust cameras only).
     pub points_fixed: bool,
     pub solve_focal: bool,
+    /// Solve the lens's K1 and K2 ([`Intrinsics`]) too.
+    pub solve_distortion: bool,
     /// Errors past this many pixels count linearly, not squared.
     pub huber: f64,
 }
@@ -92,6 +95,10 @@ impl Problem {
             nc += 1;
             nc - 1
         });
+        let lens_at = self.solve_distortion.then(|| {
+            nc += 2;
+            nc - 2
+        });
         let np = if self.points_fixed { 0 } else { self.points.len() };
         let mut by_point: Vec<Vec<usize>> = vec![Vec::new(); np];
         for (k, o) in self.obs.iter().enumerate() {
@@ -120,15 +127,25 @@ impl Problem {
                 if xc.z <= 1e-9 {
                     continue;
                 }
-                let f = self.intr.f;
+                let (f, c, lens) = (self.intr.f, self.intr.c, &self.intr);
                 let (iz, x, y) = (1.0 / xc.z, xc.x, xc.y);
-                let r = [self.intr.c[0] + f * x * iz - o.px[0], self.intr.c[1] + f * y * iz - o.px[1]];
+                // Through a perfect lens, then this one: q = c + (p − c) g,
+                // g = 1 + K1 r² + K2 r⁴, r = |p − c| / scale.
+                let d = [f * x * iz, f * y * iz];
+                let r2 = (d[0] * d[0] + d[1] * d[1]) / (lens.scale * lens.scale);
+                let g = 1.0 + lens.k1 * r2 + lens.k2 * r2 * r2;
+                let r = [c[0] + d[0] * g - o.px[0], c[1] + d[1] * g - o.px[1]];
                 let len = r[0].hypot(r[1]);
                 let w = if len <= self.huber { 1.0 } else { self.huber / len };
+                // d q / d p: g I + (p − c) (dg / dp)ᵀ.
+                let dg = 2.0 * (lens.k1 + 2.0 * lens.k2 * r2) / (lens.scale * lens.scale);
+                let bent = Matrix2::new(g + dg * d[0] * d[0], dg * d[0] * d[1], dg * d[1] * d[0], g + dg * d[1] * d[1]);
+                let bend = |j: [f64; 2]| [bent[(0, 0)] * j[0] + bent[(0, 1)] * j[1], bent[(1, 0)] * j[0] + bent[(1, 1)] * j[1]];
                 // d residual / d camera-frame point.
-                let du = Vector3::new(f * iz, 0.0, -f * x * iz * iz);
-                let dv = Vector3::new(0.0, f * iz, -f * y * iz * iz);
-                let mut cols: Vec<(usize, [f64; 2])> = Vec::with_capacity(7);
+                let (pu, pv) = (Vector3::new(f * iz, 0.0, -f * x * iz * iz), Vector3::new(0.0, f * iz, -f * y * iz * iz));
+                let du = pu * bent[(0, 0)] + pv * bent[(0, 1)];
+                let dv = pu * bent[(1, 0)] + pv * bent[(1, 1)];
+                let mut cols: Vec<(usize, [f64; 2])> = Vec::with_capacity(9);
                 if offset[o.cam] != usize::MAX {
                     let base = offset[o.cam];
                     // d xc / d ω = −[R X]×, d xc / d t = I.
@@ -142,7 +159,11 @@ impl Problem {
                     }
                 }
                 if let Some(fi) = focal_at {
-                    cols.push((fi, [x * iz, y * iz]));
+                    cols.push((fi, bend([x * iz, y * iz])));
+                }
+                if let Some(li) = lens_at {
+                    cols.push((li, [d[0] * r2, d[1] * r2]));
+                    cols.push((li + 1, [d[0] * r2 * r2, d[1] * r2 * r2]));
                 }
                 for &(a, ja) in &cols {
                     gc[a] += w * (ja[0] * r[0] + ja[1] * r[1]);
@@ -233,6 +254,10 @@ impl Problem {
                 if let Some(fi) = focal_at {
                     self.intr.f += dc[fi];
                 }
+                if let Some(li) = lens_at {
+                    self.intr.k1 += dc[li];
+                    self.intr.k2 += dc[li + 1];
+                }
                 for (x, d) in self.points.iter_mut().zip(&dp) {
                     *x += d;
                 }
@@ -296,7 +321,7 @@ mod tests {
             .collect();
         let points: Vec<V3> = pts.iter().map(|x| x + V3::new(noise(&mut r, 0.1), noise(&mut r, 0.1), noise(&mut r, 0.1))).collect();
         let fixed = (0..8).map(|i| i < 2).collect();
-        let mut p = Problem { poses, points, obs, intr: k, fixed, points_fixed: false, solve_focal: false, huber: 1.0 };
+        let mut p = Problem { poses, points, obs, intr: k, fixed, points_fixed: false, solve_focal: false, solve_distortion: false, huber: 1.0 };
         let rep = p.adjust(50);
         assert!(rep.start_rms > 3.0 && rep.end_rms < 0.45, "{rep:?}");
         for (a, b) in p.poses.iter().zip(&truth) {
@@ -315,7 +340,7 @@ mod tests {
         }
         let fixed = (0..10).map(|i| i < 2).collect();
         let wrong_f = Intrinsics { f: k.f * 1.15, ..k };
-        let mut p = Problem { poses: truth.clone(), points: pts.clone(), obs, intr: wrong_f, fixed, points_fixed: false, solve_focal: true, huber: 1.0 };
+        let mut p = Problem { poses: truth.clone(), points: pts.clone(), obs, intr: wrong_f, fixed, points_fixed: false, solve_focal: true, solve_distortion: false, huber: 1.0 };
         p.adjust(100);
         assert!((p.intr.f / k.f - 1.0).abs() < 0.005, "focal {} vs {}", p.intr.f, k.f);
         for (a, b) in p.poses.iter().zip(&truth) {
@@ -326,7 +351,7 @@ mod tests {
         let mut poses = truth.clone();
         poses[3].t += V3::new(0.2, -0.1, 0.05);
         let fixed = vec![true, true, true, false];
-        let mut p = Problem { poses, points: pts, obs, intr: k, fixed, points_fixed: true, solve_focal: false, huber: 1.0 };
+        let mut p = Problem { poses, points: pts, obs, intr: k, fixed, points_fixed: true, solve_focal: false, solve_distortion: false, huber: 1.0 };
         p.adjust(30);
         assert!((p.poses[3].t - truth[3].t).norm() < 1e-6);
     }
