@@ -7,23 +7,23 @@ they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
-- [ ] 0.9.48: Scanline Render motion blur (incl. particles), the 3D
+- [X] 0.9.48: Scanline Render motion blur (incl. particles), the 3D
       view's Solid / Lit (⇧Z) (the camera setup before the Viewer:
       user tested it, which led to 0.9.49–0.9.51)
-- [ ] 0.9.47: the viewer's frame size labels, the square About logo
+- [X] 0.9.47: the viewer's frame size labels, the square About logo
       (Card Opacity checked by the user with 0.9.51)
-- [ ] 0.9.34–0.9.46: node graph Tab / ⇧R / ⇧T / ⇧M; Area Light, falloff,
+- [X] 0.9.34–0.9.46: node graph Tab / ⇧R / ⇧T / ⇧M; Area Light, falloff,
       radius, exposure, Look at; light handles and Look through (0);
       shadows and the shadow pass; Light 2D; particles
-- [ ] 0.9.33: Merge Swap A / B, Mask channel / Invert, the centered
+- [X] 0.9.33: Merge Swap A / B, Mask channel / Invert, the centered
       playback strip, the node graph Fit button
-- [ ] 0.9.32: `examples/media/musicmen.MP4` reads and plays through Read
+- [X] 0.9.32: `examples/media/musicmen.MP4` reads and plays through Read
       and Media In
-- [ ] 0.9.31: the file picker no longer triggers "Not Responding" while
+- [X] 0.9.31: the file picker no longer triggers "Not Responding" while
       navigating folders
-- [ ] 0.9.30: Fit to project, Project Settings
-- [ ] The macOS DMG on Apple Silicon (M4 Pro), and on an Intel Mac
-- [ ] The 3D view with a real mouse and trackpad (orbit / pan / zoom,
+- [X] 0.9.30: Fit to project, Project Settings
+- [X] The macOS DMG on Apple Silicon (M4 Pro), and on an Intel Mac
+- [X] The 3D view with a real mouse and trackpad (orbit / pan / zoom,
       pie, gizmos, G / R / S typing)
 
 ## Motion blur follow-ups

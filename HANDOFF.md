@@ -38,7 +38,7 @@ done), `docs/help.md` (the in-app help) and
   all five assets checked). Earlier: v0.9.47, v0.9.46, v0.9.33, v0.9.32,
   v0.9.31, v0.9.30, v0.9.27, v0.9.11. The stray v0.9.7 draft release was deleted
   at the user's request (the published v0.9.7 release and tag remain).
-- **Ask the user first:** how 0.9.34–0.9.48 test (0.9.48: motion blur, Lit / Solid view, and the camera setup now placed before the Viewer — the user hand-tested the 0.9.30 setup and asked for that, so ask if it now feels right; 0.9.47: Card Opacity, frame size labels, square About logo); node graph Tab /
+- **Answered (session 12):** the user hand-tested everything through 0.9.51, the macOS DMG (Apple Silicon and Intel) and the 3D view with mouse / trackpad, and ticked it all in TODO.md. **Was:** ask the user how 0.9.34–0.9.48 test (0.9.48: motion blur, Lit / Solid view, and the camera setup now placed before the Viewer — the user hand-tested the 0.9.30 setup and asked for that, so ask if it now feels right; 0.9.47: Card Opacity, frame size labels, square About logo); node graph Tab /
   ⇧R / ⇧T / ⇧M; Area Light, falloff, radius, exposure, Look at; light
   handles and Look through selected (0); shadows and the shadow pass;
   Light 2D; particles (Emitter → forces → Particle Render → Scanline
@@ -96,7 +96,7 @@ done), `docs/help.md` (the in-app help) and
   handles (0.9.46).
 - **Release v0.9.46 checked:** both GitHub workflows passed, all five
   assets attached, marked Latest.
-- **Still unanswered from earlier:** whether `musicmen.MP4` plays from
+- **Answered in session 12 (all work), was unanswered from earlier:** whether `musicmen.MP4` plays from
   the GUI (0.9.32), the file-dialog fix when navigating folders (0.9.31),
   0.9.30 features (Fit to project, Project Settings, 3D setup), 0.9.33
   (Merge swap, mask channel, centered transport, Fit), and the Mac DMG.
