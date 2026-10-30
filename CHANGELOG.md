@@ -12,6 +12,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.9 — 2026-10-30
+
+- **Splat Color** (Dev1, splat plan S4): grades Gaussian splat captures
+  (Exposure, Saturation, Gain, exactly from every viewing angle) and
+  their opacity; View independent drops the color's change with the
+  angle (quicker, and steadier where reflections flicker).
+
 ## 0.10.8 — 2026-10-30
 
 - **Splats in Scanline Render's passes** (Dev2, splat plan S3): depth

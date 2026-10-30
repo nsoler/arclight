@@ -91,7 +91,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1032,6 +1032,26 @@ pub static OPS: &[OpInfo] = &[
                is cropped; everything else passes through.",
     },
     OpInfo {
+        name: "splat_color",
+        label: "Splat Color",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN],
+        params: &[
+            p!("exposure", "Exposure (stops)", ParamKind::Float { min: -10.0, max: 10.0 }, 0.0),
+            p!("saturation", "Saturation", ParamKind::Float { min: 0.0, max: 4.0 }, 1.0),
+            p!("gain", "Gain", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]),
+            p!("opacity", "Opacity", ParamKind::Float { min: 0.0, max: 4.0 }, 1.0),
+            fixed!("view_independent", "View independent", ParamKind::Bool, false),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Grades Gaussian splat captures' colors: Exposure (stops), Saturation (0: gray, by Rec. 709 luminance) and \
+               Gain (a tint, red, green and blue), exactly at every viewing angle; and multiplies their opacity by \
+               Opacity (at most fully opaque). View independent drops the change of color with the viewing angle (to \
+               SH degree 0: quicker to render, and steadier where a capture's reflections flicker). Every capture in the \
+               scene is graded; everything else passes through.",
+    },
+    OpInfo {
         name: "light_ambient",
         label: "Ambient Light",
         category: Category::Scene,
@@ -1822,6 +1842,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "read_geo" => read_geo(params),
         "read_splat" => read_splat(params),
         "splat_crop" => splat_crop(params, inputs),
+        "splat_color" => splat_color(params, inputs),
         "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => {
             let target = inputs.first().copied().flatten().and_then(|t| t.scene.as_deref());
             let light = scene::light(op, params, target).context("unknown light")?;
@@ -3168,6 +3189,39 @@ fn splat_crop(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     Ok(scene_output(DEFAULT_FORMAT, out))
 }
 
+/// The linear color transform a Splat Color's params describe: gain and
+/// exposure after saturation (by Rec. 709 luminance), row-major.
+fn splat_grade(params: &Value) -> [[f32; 3]; 3] {
+    let k = 2f64.powf(params["exposure"].as_f64().unwrap_or(0.0)) as f32;
+    let s = params["saturation"].as_f64().unwrap_or(1.0) as f32;
+    let gain = scene::numbers::<3>(&params["gain"], 1.0).map(|g| g as f32 * k);
+    let luma = [0.2126f32, 0.7152, 0.0722];
+    std::array::from_fn(|r| std::array::from_fn(|c| gain[r] * ((1.0 - s) * luma[c] + if r == c { s } else { 0.0 })))
+}
+
+/// A Splat Color: every capture's colors through [`splat_grade`] (at SH
+/// degree 0 first, when view independent) and opacities faded or raised;
+/// the arrays shared where nothing changes.
+fn splat_color(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
+    let mut out = input_scene(inputs);
+    let m = splat_grade(params);
+    let fade = params["opacity"].as_f64().unwrap_or(1.0).max(0.0) as f32;
+    let flat = params["view_independent"].as_bool().unwrap_or(false);
+    out.splats = out
+        .splats
+        .iter()
+        .map(|g| {
+            let mut g = if flat { g.view_independent() } else { (**g).clone() };
+            g.sh = g.graded_sh(m);
+            if fade != 1.0 {
+                g.opacity = std::sync::Arc::new(g.opacity.iter().map(|a| (a * fade).min(1.0)).collect());
+            }
+            std::sync::Arc::new(g)
+        })
+        .collect();
+    Ok(scene_output(DEFAULT_FORMAT, out))
+}
+
 /// A Read Splat's capture: read (once per file, change and SH degree; see
 /// [`crate::splat::Splats::read`]), turned so its up is +Y, placed, and
 /// faded by Opacity (a copy of the opacities only when that isn't 1).
@@ -3478,6 +3532,53 @@ mod tests {
         let all = crop(json!({ "size": [100, 100, 100] }));
         assert!(std::sync::Arc::ptr_eq(&all.splats[0].positions, &g.positions) && std::sync::Arc::ptr_eq(&all.splats[0].sh, &g.sh), "kept whole: shared");
         assert!(eval("splat_crop", &json!({}), &[None], &CTX).unwrap().scene.as_ref().unwrap().splats.is_empty(), "nothing in: nothing out");
+    }
+
+    /// Splat Color on the sample (degree 1: its color changes with the
+    /// view): graded exactly from every side, opacity faded and capped,
+    /// flattened to degree 0 when asked, shared where nothing changes.
+    #[test]
+    fn splat_color_grades_from_every_side() {
+        let file = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/geo/splats.ply");
+        let mut input = eval("read_splat", &json!({ "file": file }), &[], &CTX).unwrap().scene.clone().unwrap();
+        std::sync::Arc::make_mut(&mut input).extend(eval("cube", &json!({}), &[None], &CTX).unwrap().scene.as_ref().unwrap());
+        let plate = scene_output(DEFAULT_FORMAT, (*input).clone());
+        let graded = |p: Value| eval("splat_color", &p, &[Some(&plate)], &CTX).unwrap().scene.clone().unwrap();
+        let g = &input.splats[0];
+        assert_eq!(output_kind("splat_color"), Kind::Scene);
+        let same = graded(json!({}));
+        assert!(std::sync::Arc::ptr_eq(&same.splats[0].sh, &g.sh) && std::sync::Arc::ptr_eq(&same.splats[0].opacity, &g.opacity) && same.meshes.len() == 1);
+        let dirs = [[0.0, -1.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.6, 0.0, 0.8]];
+        let check = |p: Value, want: &dyn Fn([f32; 3]) -> [f32; 3]| {
+            let s = graded(p);
+            let mut compared = 0;
+            for i in [0, 100, 255, 300] {
+                for d in dirs {
+                    let (was, now) = (g.color(i, d), s.splats[0].color(i, d));
+                    let want = want(was);
+                    // (Colors clamp at 0: compare where they don't.)
+                    if was.iter().all(|&c| c > 1e-3) && want.iter().all(|&c| c > 1e-3) {
+                        assert!(now.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-4), "splat {i} from {d:?}: {now:?} vs {want:?}");
+                        compared += 1;
+                    }
+                }
+            }
+            assert!(compared >= 8, "only {compared} compared");
+        };
+        assert!(g.color(0, dirs[0]) != g.color(0, dirs[1]), "the sample's color changes with the view");
+        check(json!({ "exposure": 1 }), &|c| c.map(|v| v * 2.0));
+        check(json!({ "saturation": 0 }), &|c| [0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; 3]);
+        check(json!({ "gain": [1, 0.5, 0.25, 1], "exposure": -1 }), &|c| [c[0] * 0.5, c[1] * 0.25, c[2] * 0.125]);
+        // Opacity: faded, or raised to at most opaque.
+        let (half, more) = (graded(json!({ "opacity": 0.5 })), graded(json!({ "opacity": 4 })));
+        assert!((half.splats[0].opacity[0] - g.opacity[0] / 2.0).abs() < 1e-6 && more.splats[0].opacity[0] == 1.0);
+        // View independent: degree 0, the DC color from every side.
+        let flat = graded(json!({ "view_independent": true }));
+        let f = &flat.splats[0];
+        assert_eq!((f.sh_degree, f.sh.len()), (0, 3 * g.len()));
+        assert_eq!(f.color(5, dirs[0]), f.color(5, dirs[1]));
+        assert_eq!(f.color(5, dirs[0]), crate::splat::sh_color(g.sh_of(5), 0, dirs[0]));
+        assert!(std::sync::Arc::ptr_eq(&f.positions, &g.positions));
     }
 
     #[test]

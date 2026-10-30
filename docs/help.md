@@ -288,6 +288,10 @@ selected object.
 - **Splat Crop** keeps a capture's splats inside a box or sphere
   (Center, Size, Rotate; **Invert** keeps those outside), to cut it down
   or clear floaters; everything else in the scene passes through.
+- **Splat Color** grades captures (**Exposure**, **Saturation**, **Gain**,
+  exact from every viewing angle) and their **Opacity**; **View
+  independent** drops the color's change with the angle (quicker, and
+  steadier where reflections flicker).
 - **Read Geo** reads an OBJ file (with its MTL colors and textures) or a
   glTF file (.gltf, .glb).
 - Each has Translate / Rotate / Scale, like a Card; wire them into a Scene

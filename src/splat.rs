@@ -114,6 +114,40 @@ impl Splats {
         }
     }
 
+    /// Its colors through the linear color transform `m` (row-major, on
+    /// linear RGB), exactly at every viewing angle: the view-dependent
+    /// coefficients each through `m`, the DC term so that the color it
+    /// gives (0.5 + C0·dc) goes through `m` too. None changed when `m` is
+    /// the identity: the same array.
+    pub fn graded_sh(&self, m: [[f32; 3]; 3]) -> Arc<Vec<f32>> {
+        const IDENTITY: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        if m == IDENTITY {
+            return self.sh.clone();
+        }
+        use rayon::prelude::*;
+        let mul = |v: [f32; 3]| -> [f32; 3] { std::array::from_fn(|r| m[r][0] * v[0] + m[r][1] * v[1] + m[r][2] * v[2]) };
+        let mut sh = (*self.sh).clone();
+        sh.par_chunks_mut(self.sh_stride().max(3)).for_each(|c| {
+            let color = mul([0, 1, 2].map(|ch| 0.5 + SH_C0 * c[ch]));
+            for ch in 0..3 {
+                c[ch] = dc_of(color[ch]);
+            }
+            for k in c[3..].as_chunks_mut::<3>().0 {
+                *k = mul(*k);
+            }
+        });
+        Arc::new(sh)
+    }
+
+    /// Itself with its colors at SH degree 0 (the same whatever the view).
+    pub fn view_independent(&self) -> Splats {
+        if self.sh_degree == 0 {
+            return self.clone();
+        }
+        let n = self.sh_stride();
+        Splats { sh: Arc::new(self.sh.chunks_exact(n).flat_map(|c| c[..3].iter().copied()).collect()), sh_degree: 0, ..self.clone() }
+    }
+
     /// Splat `i`'s center in the scene (placed by `world`).
     pub fn placed(&self, i: usize) -> Vec3 {
         let p = self.positions[i];
