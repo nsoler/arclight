@@ -66,8 +66,9 @@ pub(super) fn draw(scene: &Scene, cam: &Camera, format: Size, mut render: Image,
     render
 }
 
-/// Lay `particles`' motion (pixels each moves by the next frame: its
-/// velocity's frame through `next_cam`, less where it is through `cam`)
+/// Lay `particles`' motion (pixels each moves by the next frame: where it
+/// is a frame on, along its velocity and acceleration, through `next_cam`,
+/// less where it is through `cam`)
 /// over `render`'s motion pass as their sprites lie (untextured, laid over
 /// each other), hidden where its depth is nearer. Where a sprite is only
 /// partly over nothing, its motion is its own; over a surface, the two are
@@ -77,7 +78,7 @@ fn motion(stream: &ParticleStream, particles: &[Particle], cam: &Camera, next_ca
     let colored: Vec<Particle> = particles
         .iter()
         .map(|p| {
-            let m = match (cam.project(&p.position, format), next_cam.project(&(p.position + p.velocity / fps), format)) {
+            let m = match (cam.project(&p.position, format), next_cam.project(&p.moved(1.0 / fps).0, format)) {
                 (Some((a, _)), Some((b, _))) => [(b[0] - a[0]) as f32, (b[1] - a[1]) as f32],
                 _ => [0.0; 2],
             };

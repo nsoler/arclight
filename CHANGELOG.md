@@ -11,6 +11,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.56 — 2026-10-29
+
+- **Motion-blurred particles curve** (Dev2): under gravity and other
+  forces their streaks follow the path instead of the tangent (each
+  particle keeps its acceleration), and their motion vectors include it.
+  Constant-velocity particles are unchanged.
+
 ## 0.9.55 — 2026-10-29
 
 - **Motion blur jitters each pixel's times** (Dev2): Scanline Render

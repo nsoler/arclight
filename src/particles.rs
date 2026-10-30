@@ -46,6 +46,9 @@ pub struct Particle {
     pub position: Vec3,
     /// Units per second.
     pub velocity: Vec3,
+    /// Units per second per second: what the modifiers pulled it by in its
+    /// last step (0 when born), to move it on between frames.
+    pub accel: Vec3,
     /// Frames since birth.
     pub age: f64,
     /// Frames it lives (it's removed once its age reaches this).
@@ -62,6 +65,14 @@ pub struct Particle {
     pub axis: Vec3,
     /// The size it was born with.
     pub start_size: f64,
+}
+
+impl Particle {
+    /// It `secs` seconds on (or back), along its velocity and pulled by its
+    /// acceleration: where it is, and how fast it goes then.
+    pub fn moved(&self, secs: f64) -> (Vec3, Vec3) {
+        (self.position + self.velocity * secs + self.accel * (0.5 * secs * secs), self.velocity + self.accel * secs)
+    }
 }
 
 /// Where an emitter's particles are born, in its own space (moved by
@@ -368,6 +379,7 @@ impl Emitter {
             id,
             position,
             velocity: dir * speed + normal * self.along_normal,
+            accel: Vec3::zeros(),
             age: 0.0,
             life,
             size,
@@ -658,6 +670,7 @@ impl System {
                     let a: Vec3 = prev.modifiers.iter().filter(|m| m.active(from)).map(|m| m.accel(&p, from / fps)).sum();
                     p.position += p.velocity * secs + a * (0.5 * secs * secs);
                     p.velocity += a * secs;
+                    p.accel = a;
                     p.rotation += p.spin * secs;
                     p.age += dt;
                 }

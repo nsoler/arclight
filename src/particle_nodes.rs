@@ -309,7 +309,8 @@ pub struct ParticleStream {
     /// modifiers each made (for showing and moving them in 3D).
     pub parts: Vec<Part>,
     /// Frames past `frame` it is shown at (within a render's shutter, for
-    /// motion blur): each particle moved on along its velocity.
+    /// motion blur): each particle moved on along its velocity, curving by
+    /// its acceleration (see [`Particle::moved`]).
     pub shift: f64,
 }
 
@@ -341,7 +342,7 @@ impl ParticleStream {
         if self.shift != 0.0 {
             let secs = self.shift / self.fps();
             for p in &mut out {
-                p.position += p.velocity * secs;
+                (p.position, p.velocity) = p.moved(secs);
                 p.rotation += p.spin * secs;
             }
         }
@@ -716,6 +717,26 @@ mod tests {
         assert_eq!(next.particles().len(), 14);
         assert_eq!(next.steps(), 11);
         assert!(src.particles_at(10).iter().all(|p| p.position.y == 0.0));
+    }
+
+    /// Within a shutter, falling particles curve as they do frame to
+    /// frame: shifted a frame on, where the next frame has them.
+    #[test]
+    fn shifted_particles_keep_falling() {
+        let mut state = ParticleState::default();
+        let src = run("particle_emitter", cx("emit", 10, fixed(json!({ "burst": 3, "rate": 0, "speed": 4, "life": 1000 })), &[], &[], None), &mut state);
+        let gravity = fixed(json!({ "acceleration": [0, -10, 0] }));
+        let now = run("particle_gravity", cx("fall", 10, gravity.clone(), &[], &[], Some(&src)), &mut state);
+        let next = run("particle_gravity", cx("fall", 11, gravity, &[], &[], Some(&src)), &mut state);
+        assert!(now.particles().iter().all(|p| p.accel == Vec3::new(0.0, -10.0, 0.0)));
+        for (a, b) in now.shifted(1.0).particles().iter().zip(next.particles()) {
+            assert!((a.position - b.position).norm() < 1e-9 && (a.velocity - b.velocity).norm() < 1e-9, "{a:?} vs {b:?}");
+        }
+        // Back half a frame, as a centered shutter opens.
+        let half = now.shifted(-0.5).particles()[0].clone();
+        let p = &now.particles()[0];
+        let t = -0.5 / 24.0;
+        assert!((half.position - (p.position + p.velocity * t + Vec3::new(0.0, -5.0, 0.0) * t * t)).norm() < 1e-12);
     }
 
     #[test]

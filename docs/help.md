@@ -342,8 +342,9 @@ color).
   shutter), **centered** on the frame, or starting or ending at it
   (**Shutter offset**), and averages them. Each pixel's times are shifted a little within the shutter, in a fixed dither pattern, so a very fast move at a low count shows fine grain rather than separate copies (and the same frame always renders the same). Cameras, cards, meshes (their
   vertices too, if they deform) and lights move between where they are at
-  the frames round each time; particles move along their velocities, so
-  fast ones streak. The picture, mattes and light passes blur; depth, P,
+  the frames round each time; particles move along their velocities,
+  curving with their acceleration (gravity, wind, …), so fast ones
+  streak. The picture, mattes and light passes blur; depth, P,
   N, uv, motion and id stay the frame's own. 8 is usually smooth (16 for
   fast moves); each one costs about a render.
 - **Holdout** on a Cube, Sphere, Cylinder, Plane or Read Geo makes it draw
@@ -406,8 +407,8 @@ drag its position, size and angle in the viewer.
   particle, one at random when there are several, scaled by size and
   facing along their velocity, spinning, or as modelled). Rendered by
   Scanline Render with everything else, behind nearer surfaces; its
-  **Motion blur** streaks them along their velocities, and its **motion**
-  pass gives their motion vectors.
+  **Motion blur** streaks them along their paths (curving under gravity
+  and other forces), and its **motion** pass gives their motion vectors.
 - **Particles 2D:** no camera: x and y are frame pixels (y down) and size
   is pixels, drawn over the **background** as Particle Render says. Pair it
   with an emitter's **mask** shape to emit where an image is.

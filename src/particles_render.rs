@@ -308,6 +308,7 @@ mod tests {
             id: 0,
             position,
             velocity: Vec3::zeros(),
+            accel: Vec3::zeros(),
             age: 0.0,
             life: f64::INFINITY,
             size,
