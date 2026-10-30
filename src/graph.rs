@@ -289,34 +289,34 @@ pub struct Evaluator {
     others: std::collections::BTreeMap<i64, Evaluator>,
     /// Particle nodes' simulation caches and shapes.
     particles: particle_nodes::ParticleState,
-    /// Particle Renders' texture sequences, by node.
-    sequences: HashMap<String, Sequence>,
+    /// Particle nodes' inputs at other frames (a Particle Render's
+    /// texture sequence, an emitter's geometry), by node.
+    elsewhen: HashMap<String, Elsewhen>,
 }
 
-/// A Particle Render's texture input at its sequence's frames: rendered
-/// in an evaluator of its own, each frame kept by its cache key (so a
-/// frame renders once, until it changes).
+/// A particle node's input at other frames (see
+/// [`particle_nodes::input_frames`]): rendered in an evaluator of its own;
+/// a texture sequence's frames kept by their cache keys (so a frame
+/// renders once, until it changes; an emitter keeps shapes made from them
+/// instead).
 #[derive(Default)]
-struct Sequence {
+struct Elsewhen {
     eval: Evaluator,
     images: HashMap<u64, Arc<Image>>,
 }
 
-/// A texture sequence's input, frames, and their cache keys.
-type SequenceKeys = (String, Vec<i64>, Vec<u64>);
+/// An input needed at other frames, the frames, and their cache keys.
+type FramesKeys = (String, Vec<i64>, Vec<u64>);
 
-/// The input a particle node with (resolved) `params` takes a sequence
-/// of (see [`particle_nodes::texture_sequence`]), its frames, and their
-/// cache keys. None when it takes none.
-fn sequence_keys(graph: &Graph, node: &NodeSpec, params: &Value) -> Result<Option<SequenceKeys>, NodeError> {
-    let frames = particle_nodes::texture_sequence(&node.op, params).map_err(|e| node_err(&node.id, format!("{e:#}")))?;
-    let (Some(frames), Some(dep)) = (frames, node.inputs.get(1).filter(|d| !d.is_empty())) else { return Ok(None) };
+/// The input a particle node with (resolved) `params` at `frame` needs at
+/// other frames (see [`particle_nodes::input_frames`]), the frames, and
+/// their cache keys. None when it needs none.
+fn input_frames(graph: &Graph, node: &NodeSpec, params: &Value, frame: i64) -> Result<Option<FramesKeys>, NodeError> {
+    let wanted = particle_nodes::input_frames(&node.op, params, frame).map_err(|e| node_err(&node.id, format!("{e:#}")))?;
+    let Some((port, frames)) = wanted else { return Ok(None) };
+    let Some(dep) = node.inputs.get(port).filter(|d| !d.is_empty()) else { return Ok(None) };
     let frames: Vec<i64> = frames.collect();
-    let keys = frames
-        .iter()
-        .map(|&g| Evaluator::key(graph, dep, &EvalContext { frame: g, write_outputs: false }))
-        .collect::<Result<Vec<u64>, NodeError>>()
-        .map_err(|e| node_err(&node.id, format!("its texture sequence: {e}")))?;
+    let keys = Evaluator::keys(graph, dep, &frames).map_err(|e| node_err(&node.id, format!("its input '{dep}': {e}")))?;
     Ok(Some((dep.clone(), frames, keys)))
 }
 
@@ -335,7 +335,7 @@ impl Evaluator {
         let index = graph.index()?;
         self.cache.retain(|id, _| index.contains_key(id.as_str()));
         self.particles.retain(|id| index.contains_key(id));
-        self.sequences.retain(|id, _| index.contains_key(id.as_str()));
+        self.elsewhen.retain(|id, _| index.contains_key(id.as_str()));
         let order = Graph::order(&index, [target.to_string()])?;
         self.run(&index, &order, ctx, &graph.project)?;
         Ok(self.cache[target].1.clone())
@@ -350,7 +350,7 @@ impl Evaluator {
         let index = graph.index()?;
         self.cache.retain(|id, _| index.contains_key(id.as_str()));
         self.particles.retain(|id| index.contains_key(id));
-        self.sequences.retain(|id, _| index.contains_key(id.as_str()));
+        self.elsewhen.retain(|id, _| index.contains_key(id.as_str()));
         let order = Graph::order(&index, graph.nodes.iter().map(|n| n.id.clone()))?;
         self.run(&index, &order, ctx, &graph.project)?;
         Ok(order
@@ -367,14 +367,26 @@ impl Evaluator {
     pub fn key(graph: &Graph, target: &str, ctx: &EvalContext) -> Result<u64, NodeError> {
         let index = graph.index()?;
         let order = Graph::order(&index, [target.to_string()])?;
+        Self::key_in(graph, &index, &order, target, ctx)
+    }
+
+    /// [`key`](Self::key) at each of `frames` (not writing outputs).
+    pub fn keys(graph: &Graph, target: &str, frames: &[i64]) -> Result<Vec<u64>, NodeError> {
+        let index = graph.index()?;
+        let order = Graph::order(&index, [target.to_string()])?;
+        frames.iter().map(|&frame| Self::key_in(graph, &index, &order, target, &EvalContext { frame, write_outputs: false })).collect()
+    }
+
+    /// [`key`](Self::key) with `graph`'s index and `target`'s order made.
+    fn key_in(graph: &Graph, index: &HashMap<&str, &NodeSpec>, order: &[String], target: &str, ctx: &EvalContext) -> Result<u64, NodeError> {
         let mut keys = HashMap::new();
-        for id in &order {
+        for id in order {
             let node = index[id.as_str()];
-            let mut params = linked_params(&index, node, ctx.frame, &graph.project)?;
+            let mut params = linked_params(index, node, ctx.frame, &graph.project)?;
             ops::apply_format(&node.op, &mut params, graph.project.format);
             let mut k = node_key(node, &params, &keys, ctx);
-            if let Some((_, _, seq)) = sequence_keys(graph, node, &params)? {
-                k = mix(k, &seq);
+            if let Some((_, _, more)) = input_frames(graph, node, &params, ctx.frame)? {
+                k = mix(k, &more);
             }
             for off in ops::other_frames(&node.op, &params) {
                 let later = EvalContext { frame: ctx.frame + off, write_outputs: false };
@@ -431,36 +443,37 @@ impl Evaluator {
                 key = mix(key, &found.iter().flatten().map(|f| f.0).collect::<Vec<_>>());
                 others.push((off, found.into_iter().map(|f| f.map(|f| f.1)).collect()));
             }
-            // A texture sequence: keyed on its frames' keys too.
-            let sequence = if !matches!(particle_nodes::texture_sequence(&node.op, &params), Ok(None)) {
+            // An input needed at other frames (a texture sequence, an
+            // emitter's geometry): keyed on its keys then too.
+            let elsewhen = if !matches!(particle_nodes::input_frames(&node.op, &params, ctx.frame), Ok(None)) {
                 let snap = snapshot.get_or_insert_with(|| Arc::new(index.values().map(|n| (*n).clone()).collect())).clone();
                 let graph = Graph { nodes: (*snap).clone(), project: project.clone(), ..Graph::default() };
-                sequence_keys(&graph, node, &params)?.map(|s| (graph, s))
+                input_frames(&graph, node, &params, ctx.frame)?.map(|s| (graph, s))
             } else {
                 None
             };
-            if let Some((_, (_, _, seq))) = &sequence {
-                key = mix(key, seq);
+            if let Some((_, (_, _, more))) = &elsewhen {
+                key = mix(key, more);
             }
             keys.insert(id.as_str(), key);
             if self.cache.get(id).is_some_and(|(k, _)| *k == key) {
                 continue;
             }
-            // Its frames, those not kept rendered now.
-            let sequence: Option<Vec<Arc<Image>>> = match sequence {
-                None => None,
-                Some((graph, (dep, frames, seq))) => {
-                    let kept = self.sequences.entry(id.clone()).or_default();
-                    kept.images.retain(|k, _| seq.contains(k));
-                    for (&g, k) in frames.iter().zip(&seq) {
+            let mut kept = elsewhen.as_ref().map(|_| self.elsewhen.entry(id.clone()).or_default());
+            // A texture sequence's frames, those not kept rendered now.
+            let sequence: Option<Vec<Arc<Image>>> = match (&elsewhen, kept.as_deref_mut()) {
+                (Some((graph, (dep, frames, more))), Some(kept)) if node.op == "particle_render" => {
+                    kept.images.retain(|k, _| more.contains(k));
+                    for (&g, k) in frames.iter().zip(more) {
                         if !kept.images.contains_key(k) {
-                            let img = kept.eval.evaluate(&graph, &dep, &EvalContext { frame: g, write_outputs: false });
+                            let img = kept.eval.evaluate(graph, dep, &EvalContext { frame: g, write_outputs: false });
                             let img = img.map_err(|e| node_err(id, format!("its texture sequence at frame {g}: {e}")))?;
                             kept.images.insert(*k, img);
                         }
                     }
-                    Some(seq.iter().map(|k| kept.images[k].clone()).collect())
+                    Some(more.iter().map(|k| kept.images[k].clone()).collect())
                 }
+                _ => None,
             };
 
             let particle = particle_nodes::info(&node.op);
@@ -497,7 +510,16 @@ impl Evaluator {
                 _ if particle.is_some() => {
                     let snap = snapshot.get_or_insert_with(|| Arc::new(index.values().map(|n| (*n).clone()).collect())).clone();
                     let input_keys: Vec<u64> = node.inputs.iter().map(|d| keys.get(d.as_str()).copied().unwrap_or(0)).collect();
-                    particle_node(node, snap, project, &inputs, &input_keys, sequence.as_deref(), ctx.frame, &mut self.particles)
+                    // An emitter's geometry then, rendered as its shapes need it.
+                    let mut render_then = |g: i64| -> Result<Arc<Image>> {
+                        let (Some((graph, (dep, _, _))), Some(kept)) = (&elsewhen, kept.as_deref_mut()) else { anyhow::bail!("not available") };
+                        kept.eval.evaluate(graph, dep, &EvalContext { frame: g, write_outputs: false }).map_err(|e| anyhow::anyhow!("{e}"))
+                    };
+                    let history = elsewhen
+                        .as_ref()
+                        .filter(|_| node.op != "particle_render")
+                        .map(|(_, (_, frames, more))| particle_nodes::History { frames, keys: more, render: &mut render_then });
+                    particle_node(node, snap, project, &inputs, &input_keys, sequence.as_deref(), history, ctx.frame, &mut self.particles)
                 }
                 others if !others.is_empty() => {
                     let others: Vec<(i64, Vec<Option<&Image>>)> = others.iter().map(|(k, v)| (*k, v.iter().map(|i| i.as_deref()).collect())).collect();
@@ -520,13 +542,14 @@ impl Evaluator {
 /// any frame read from `graph` (a snapshot), its particles input's stream
 /// as its upstream, a stream out as a scene.
 #[allow(clippy::too_many_arguments)]
-fn particle_node(
-    node: &NodeSpec,
+fn particle_node<'a>(
+    node: &'a NodeSpec,
     graph: Arc<Vec<NodeSpec>>,
     project: &Project,
-    inputs: &[Option<&Image>],
-    keys: &[u64],
-    sequence: Option<&[Arc<Image>]>,
+    inputs: &'a [Option<&'a Image>],
+    keys: &'a [u64],
+    sequence: Option<&'a [Arc<Image>]>,
+    history: Option<particle_nodes::History<'a>>,
     frame: i64,
     state: &mut particle_nodes::ParticleState,
 ) -> Result<Image> {
@@ -536,7 +559,7 @@ fn particle_node(
         index.get(id.as_str()).and_then(|n| linked_params(&index, n, g, &at).ok()).unwrap_or(Value::Null)
     });
     let upstream = inputs.first().copied().flatten().and_then(|i| i.scene.as_ref()).and_then(|s| s.particles.first());
-    let cx = particle_nodes::Context { node: &node.id, frame, fps: project.fps, format: project.format, own, inputs, keys, upstream, sequence };
+    let cx = particle_nodes::Context { node: &node.id, frame, fps: project.fps, format: project.format, own, inputs, keys, upstream, sequence, history };
     Ok(match particle_nodes::eval(&node.op, cx, state)? {
         particle_nodes::Output::Image(img) => img,
         particle_nodes::Output::Stream(stream) => {
@@ -710,7 +733,7 @@ mod tests {
         let played: Vec<f32> = (1..=7).map(|f| shown(&mut ev, &g, f)).collect();
         assert_eq!(played, [3.0, 4.0, 5.0, 6.0, 6.0, 6.0, 6.0]);
         // The four frames rendered once and kept, not again for each frame.
-        let kept = |ev: &Evaluator| ev.sequences["look"].images.values().cloned().collect::<Vec<_>>();
+        let kept = |ev: &Evaluator| ev.elsewhen["look"].images.values().cloned().collect::<Vec<_>>();
         let before = kept(&ev);
         assert_eq!(before.len(), 4);
         shown(&mut ev, &g, 2);
@@ -732,5 +755,53 @@ mod tests {
         g.nodes[2].params["sequence_last"] = json!(2);
         let err = ev.evaluate(&g, "draw", &ctx4).err().unwrap().to_string();
         assert!(err.contains("look") && err.contains("before it starts"), "{err}");
+    }
+
+    /// An emitter on animated geometry: each frame's births come from the
+    /// geometry at that frame, and going on a frame steps on from the one
+    /// before (as for a plain emitter), giving exactly what simulating
+    /// from scratch gives. An edit to the geometry re-simulates from the
+    /// first frame it changes.
+    #[test]
+    fn emitters_on_animated_geometry_step_on_frame_by_frame() {
+        use serde_json::json;
+        let node = |id: &str, op: &str, inputs: &[&str], params: Value| NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None };
+        let mut g = Graph::default();
+        // A card 1 across sliding from x −4 (frame 1) to 4 (frame 17), 0.5 a frame.
+        let slide = |keys: Value| json!({ "translate": { "keys": keys, "interp": "linear" }, "size": [1, 1] });
+        g.nodes = vec![
+            node("plate", "constant", &[], json!({ "width": 4, "height": 4 })),
+            node("geo", "card", &["plate"], slide(json!([[1, [-4, 0, -5]], [17, [4, 0, -5]]]))),
+            node("emit", "particle_emitter", &["geo", ""], json!({ "shape": "geometry surface", "rate": 5, "speed": 0, "life": 1000, "seed": 3 })),
+            node("fall", "particle_gravity", &["emit"], json!({ "acceleration": [0, -1, 0] })),
+        ];
+        let ctx = |frame: i64| EvalContext { frame, write_outputs: false };
+        let stream = |ev: &mut Evaluator, g: &Graph, frame: i64| ev.evaluate(g, "fall", &ctx(frame)).unwrap().scene.as_ref().unwrap().particles[0].clone();
+        let mut ev = Evaluator::new();
+        // (Simulated as shown: each frame's particles asked for.)
+        for f in 1..=20 {
+            stream(&mut ev, &g, f).particles();
+        }
+        let stepped = stream(&mut ev, &g, 20);
+        let fresh = stream(&mut Evaluator::new(), &g, 20);
+        let all = |s: &particle_nodes::ParticleStream| format!("{:?}", s.particles());
+        assert_eq!(all(&stepped), all(&fresh), "the same as from scratch");
+        assert_eq!(stepped.steps(), fresh.steps(), "each frame simulated once, not again every frame");
+        // Born along the card's way, not all where it is now.
+        let xs: Vec<f64> = stepped.particles().iter().map(|p| p.position.x).collect();
+        assert_eq!(xs.len(), 100);
+        assert!(xs.iter().any(|&x| x < -3.0) && xs.iter().any(|&x| x > 3.0), "{xs:?}");
+        // The card moved on after frame 17 (it held there): frames 18–20
+        // again, and only frames that use them change their key.
+        let (k10, k20) = (Evaluator::key(&g, "fall", &ctx(10)).unwrap(), Evaluator::key(&g, "fall", &ctx(20)).unwrap());
+        g.nodes[1].params = slide(json!([[1, [-4, 0, -5]], [17, [4, 0, -5]], [20, [4, 3, -5]]]));
+        assert_eq!(Evaluator::key(&g, "fall", &ctx(10)).unwrap(), k10);
+        assert_ne!(Evaluator::key(&g, "fall", &ctx(20)).unwrap(), k20);
+        let before = stepped.steps();
+        let edited = stream(&mut ev, &g, 20);
+        let now = all(&edited);
+        assert_eq!(edited.steps() - before, 3, "frames 18 to 20 again");
+        assert_eq!(now, all(&stream(&mut Evaluator::new(), &g, 20)));
+        assert_ne!(now, all(&fresh));
     }
 }

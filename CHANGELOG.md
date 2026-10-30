@@ -11,6 +11,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.64 — 2026-10-29
+
+- **Particle Emitter on animated geometry steps on frame by frame**
+  (Dev1): on animated geometry (or an animated mask), particles are born
+  where the geometry is at each frame, so a moving object leaves a trail
+  (before, every particle jumped onto the geometry's current place), and
+  playing or scrubbing forward steps the simulation on a frame instead of
+  re-simulating from the start. Editing the geometry re-simulates only
+  from the first frame it changes.
+
 ## 0.9.63 — 2026-10-29
 
 - **Calls through an attached GUI share its evaluator** (Dev2): MCP /

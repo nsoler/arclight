@@ -23,9 +23,9 @@ use crate::ops::{Category, DefaultValue, Kind, OpInfo, Overlay, ParamKind, Param
 use crate::particles::{Cache, Effect, Emitter, Modifier, Particle, Region, Shape, System};
 use crate::particles_render::{self, Blend, Orient, Outline, Pick, Sprites, Texture};
 use crate::scene::Scene;
-use anyhow::{bail, Result};
+use anyhow::{bail, Context as _, Result};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 /// What particle ports carry.
@@ -68,6 +68,8 @@ const PICKS: &[&str] = &["by age", "cycle", "play", "loop"];
 const TEXTURE_FRAMES: &[&str] = &["current frame", "sequence"];
 /// The most frames a texture sequence takes.
 pub const MAX_SEQUENCE: i64 = 1000;
+/// The most frames an emitter takes its geometry (or mask) at.
+pub const MAX_HISTORY: i64 = 100_000;
 
 const STRENGTH: ParamSpec = p!("strength", "Strength", SIGNED, 1.0);
 const START: ParamSpec = p!("start", "Start frame", FRAME, ALWAYS_FROM);
@@ -398,7 +400,8 @@ impl ParticleStream {
 #[derive(Default)]
 pub struct ParticleState {
     caches: HashMap<String, Arc<Mutex<Cache>>>,
-    shapes: HashMap<String, (u64, Shape)>,
+    /// Per emitter, the shapes made from its input, by the input's key.
+    shapes: HashMap<String, HashMap<u64, Shape>>,
 }
 
 impl ParticleState {
@@ -436,6 +439,53 @@ pub struct Context<'a> {
     /// A Particle Render's texture input at its sequence's frames, when
     /// it takes a sequence (see [`texture_sequence`]).
     pub sequence: Option<&'a [Arc<Image>]>,
+    /// An emitter's shape input at the frames it emits at (see
+    /// [`input_frames`]).
+    pub history: Option<History<'a>>,
+}
+
+/// An emitter's shape input (geometry or mask) at the frames it emits at:
+/// their cache keys, and how to render it at one (asked only for frames
+/// whose key has no shape kept).
+pub struct History<'a> {
+    pub frames: &'a [i64],
+    pub keys: &'a [u64],
+    pub render: &'a mut dyn FnMut(i64) -> Result<Arc<Image>>,
+}
+
+/// The input a particle node with (resolved) `params` at `frame` needs at
+/// other frames, and those frames: a Particle Render's texture at its
+/// sequence's (see [`texture_sequence`]); an emitter's geometry or mask
+/// at every frame of its simulation so far (its first, see
+/// [`System::first_frame`], to `frame` or its end), so the shape is the
+/// one at each frame. None when it needs none.
+pub fn input_frames(op: &str, p: &Value, frame: i64) -> Result<Option<(usize, std::ops::RangeInclusive<i64>)>> {
+    if let Some(frames) = texture_sequence(op, p)? {
+        return Ok(Some((1, frames)));
+    }
+    if op != "particle_emitter" {
+        return Ok(None);
+    }
+    let p = with_defaults(op, p);
+    let Some(port) = shape_port(&p) else { return Ok(None) };
+    let first = int(&p, "start").saturating_sub(int(&p, "preroll").max(0).saturating_add(1));
+    let last = frame.min(end_frame(&p, "end"));
+    if last < first {
+        return Ok(None);
+    }
+    if last - first >= MAX_HISTORY {
+        bail!("it emits from its {} over {} frames, more than {MAX_HISTORY}", if port == 1 { "mask" } else { "geometry" }, last - first + 1);
+    }
+    Ok(Some((port, first..=last)))
+}
+
+/// The input an emitter with params `p` takes its shape from, if any.
+fn shape_port(p: &Value) -> Option<usize> {
+    match text(p, "shape") {
+        "geometry surface" | "geometry vertices" => Some(0),
+        "mask" => Some(1),
+        _ => None,
+    }
 }
 
 /// The frames of its texture input a Particle Render with (resolved)
@@ -471,11 +521,27 @@ pub fn eval(op: &str, cx: Context, state: &mut ParticleState) -> Result<Output> 
     match op {
         "particle_emitter" => {
             let shape = emitter_shape(&at_frame, cx.node, input(0), input(1), cx.keys, state)?;
+            // The shape at each frame (the input then), so births follow
+            // the geometry as it moves and a frame's shape stays the same
+            // Arc while its input's key holds: the cache steps on from
+            // the frame before instead of starting over.
+            let (shapes, used) = match (&shape, cx.history) {
+                (Some(_), Some(history)) => {
+                    let (shapes, used) = shape_history(&at_frame, cx.node, history, state)?;
+                    (Some(Arc::new(shapes)), used)
+                }
+                _ => Default::default(),
+            };
+            keep_shapes(cx.node, &at_frame, cx.keys, &used, state);
             let fps = cx.fps;
             let system: Sampler = Arc::new(move |g| {
                 let p = own(g);
+                let shape = match &shapes {
+                    Some(at) => at.range(..=g).next_back().or_else(|| at.iter().next()).map(|(_, s)| s.clone()),
+                    None => shape.clone(),
+                };
                 System {
-                    emitters: vec![emitter(&p, shape.clone())],
+                    emitters: vec![emitter(&p, shape)],
                     modifiers: vec![],
                     fps,
                     substeps: int(&p, "substeps").max(1) as u32,
@@ -555,31 +621,66 @@ pub fn emitter(p: &Value, shape: Option<Shape>) -> Emitter {
 /// params make), kept while the input is unchanged.
 fn emitter_shape(p: &Value, node: &str, geometry: Option<&Image>, mask: Option<&Image>, keys: &[u64], state: &mut ParticleState) -> Result<Option<Shape>> {
     let kind = text(p, "shape");
-    let (source, key) = match kind {
-        "geometry surface" | "geometry vertices" => (geometry, keys.first()),
-        "mask" => (mask, keys.get(1)),
-        _ => return Ok(None),
-    };
-    let Some(source) = source else {
+    let Some(port) = shape_port(p) else { return Ok(None) };
+    let Some(source) = (if port == 1 { mask } else { geometry }) else {
         bail!("its shape is '{kind}': connect the {} input", if kind == "mask" { "mask" } else { "geometry" });
     };
-    // Keyed by the input and which shape, so switching makes a new one.
-    let key = key.copied().unwrap_or(0) ^ (kind.len() as u64).rotate_left(40);
-    if let Some((k, shape)) = state.shapes.get(node) {
-        if *k == key {
-            return Ok(Some(shape.clone()));
-        }
+    let key = shape_key(kind, keys.get(port).copied().unwrap_or(0));
+    if let Some(shape) = state.shapes.get(node).and_then(|s| s.get(&key)) {
+        return Ok(Some(shape.clone()));
     }
-    let shape = match kind {
+    let shape = make_shape(kind, source)?;
+    state.shapes.entry(node.to_string()).or_default().insert(key, shape.clone());
+    Ok(Some(shape))
+}
+
+/// A shape's key: its input's, and which shape (so switching makes a new
+/// one).
+fn shape_key(kind: &str, input: u64) -> u64 {
+    input ^ (kind.len() as u64).rotate_left(40)
+}
+
+/// The shape `kind` from `source` (a mask image, or a scene's geometry).
+fn make_shape(kind: &str, source: &Image) -> Result<Shape> {
+    Ok(match kind {
         "mask" => Shape::mask(source),
         _ => {
             let Some(scene) = source.scene.as_deref() else { bail!("the geometry input needs a scene (a card or a mesh)") };
             let mesh = Arc::new(world_mesh(scene));
             if kind == "geometry surface" { Shape::mesh_surface(mesh) } else { Shape::MeshVertices(mesh) }
         }
-    };
-    state.shapes.insert(node.to_string(), (key, shape.clone()));
-    Ok(Some(shape))
+    })
+}
+
+/// An emitter's shape at each of `history`'s frames: kept ones by their
+/// key, the rest made from its input rendered then. Also the keys used.
+fn shape_history(p: &Value, node: &str, history: History, state: &mut ParticleState) -> Result<(BTreeMap<i64, Shape>, HashSet<u64>)> {
+    let kind = text(p, "shape");
+    let kept = state.shapes.entry(node.to_string()).or_default();
+    let (mut out, mut used) = (BTreeMap::new(), HashSet::new());
+    for (&g, &k) in history.frames.iter().zip(history.keys) {
+        let key = shape_key(kind, k);
+        used.insert(key);
+        let shape = match kept.get(&key) {
+            Some(shape) => shape.clone(),
+            None => {
+                let source = (history.render)(g).with_context(|| format!("its {} at frame {g}", if kind == "mask" { "mask" } else { "geometry" }))?;
+                let shape = make_shape(kind, &source).with_context(|| format!("at frame {g}"))?;
+                kept.insert(key, shape.clone());
+                shape
+            }
+        };
+        out.insert(g, shape);
+    }
+    Ok((out, used))
+}
+
+/// Forget an emitter's shapes but those in use: by key, `used` and its
+/// input's now (params `p`, input keys `keys`).
+fn keep_shapes(node: &str, p: &Value, keys: &[u64], used: &HashSet<u64>, state: &mut ParticleState) {
+    let Some(kept) = state.shapes.get_mut(node) else { return };
+    let now = shape_port(p).map(|port| shape_key(text(p, "shape"), keys.get(port).copied().unwrap_or(0)));
+    kept.retain(|k, _| Some(*k) == now || used.contains(k));
 }
 
 /// Every card and mesh of `scene` as one mesh in scene space.
@@ -702,7 +803,7 @@ mod tests {
     }
 
     fn cx<'a>(node: &'a str, frame: i64, own: Own, inputs: &'a [Option<&'a Image>], keys: &'a [u64], upstream: Option<&'a ParticleStream>) -> Context<'a> {
-        Context { node, frame, fps: 24.0, format: Size { width: 100, height: 80 }, own, inputs, keys, upstream, sequence: None }
+        Context { node, frame, fps: 24.0, format: Size { width: 100, height: 80 }, own, inputs, keys, upstream, sequence: None, history: None }
     }
 
     fn run(op: &str, cx: Context, state: &mut ParticleState) -> ParticleStream {

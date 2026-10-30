@@ -392,7 +392,10 @@ drag its position, size and angle in the viewer.
   rectangle, disk, sphere, box, placed by Translate / Rotate / Scale; **On
   the surface** for a sphere's or box's skin), the surface or vertices of
   the **geometry** input (a card, a primitive, a file), or where the
-  **mask** input's alpha is (for Particles 2D). **Rate** a frame from
+  **mask** input's alpha is (for Particles 2D); an animated geometry or
+  mask emits from where it is at each frame (a moving object leaves a
+  trail), stepping on frame by frame, and an edit to it re-simulates
+  only from the first frame it changes. **Rate** a frame from
   **Start** to **End frame**, plus a **Burst** at the start. They leave
   along **Direction** at **Speed** (units a second) within a **Spread**
   cone, with variations; **Life** (frames), **Size** and **Color** change
