@@ -5,7 +5,8 @@ one master + workers; see "Several agent sessions" below). Read this,
 then `README.md` (user-facing features, file format, shortcuts,
 scripting, the "3D view" section), `docs/phase-4-plan.md` (3D plan: M1–M13
 done), `docs/help.md` (the in-app help) and
-`docs/spec-coverage.md` (planning docs vs. what exists).
+`docs/spec-coverage.md` (planning docs vs. what exists), and `docs/splat-plan.md` (Gaussian splats, S1–S5:
+proposed 2026-10-30, not started; after the Particles round).
 
 ## Start here (next session)
 

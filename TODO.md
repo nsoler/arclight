@@ -41,6 +41,17 @@ they come up and strike them (or delete them) when they ship.
 - [ ] Reuse the GUI's evaluator in the MCP bridge, so `particles` via an
       attached GUI doesn't re-simulate each call
 
+## Gaussian splats (plan: `docs/splat-plan.md`, proposed)
+
+- [ ] S1: Read Splat (`.ply`) and a CPU splat renderer in Scanline
+      Render, composited with cards and meshes by depth
+- [ ] S2: the 3D view (dots while moving, full once settled), picking,
+      framing; `scene_objects` / a paged `splats` query in MCP and Python
+- [ ] S3: render passes, holdouts and motion blur for splats
+- [ ] S4: Splat Crop, Splat Color (and transform) nodes
+- [ ] S5: `.splat` / `.spz` readers, faster rendering (a GPU path if the
+      wgpu item lands)
+
 ## 3D and rendering
 
 - [ ] A true orthographic texture path in render3d (ortho views use a
