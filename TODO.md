@@ -7,6 +7,10 @@ they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
+- [ ] 0.10.2–0.10.6: Read Splat a real capture (.ply from Postshot /
+      Polycam / Luma…; try Up axis -y if it's upside down), render it
+      with a card in front / behind, the 3D view's dots then full render,
+      F, click to select
 - [ ] 0.9.65–0.9.68: Edit ▸ Preferences (scale, theme, snap, straight
       wires, autosave, Open Recent, undo levels, New project defaults,
       3D view mouse / trackpad / shading); File ▸ New's project folder;
@@ -52,11 +56,11 @@ they come up and strike them (or delete them) when they ship.
 
 ## Gaussian splats (plan: `docs/splat-plan.md`, proposed)
 
-Starts phase 10: version 0.10.0 on a new branch `wip-ns-splats`.
+Phase 10: 0.10.x on branch `wip-ns-splats` (started 0.10.0).
 
-- [ ] S1: Read Splat (`.ply`) and a CPU splat renderer in Scanline
+- [x] S1 (0.10.1–0.10.3): Read Splat (`.ply`) and a CPU splat renderer in Scanline
       Render, composited with cards and meshes by depth
-- [ ] S2: the 3D view (dots while moving, full once settled), picking,
+- [x] S2 (0.10.4–0.10.6): the 3D view (dots while moving, full once settled), picking,
       framing; `scene_objects` / a paged `splats` query in MCP and Python
 - [ ] S3: render passes, holdouts and motion blur for splats
 - [ ] S4: Splat Crop, Splat Color (and transform) nodes
