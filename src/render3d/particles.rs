@@ -131,7 +131,7 @@ mod tests {
 
     /// Particle node `op` with `params`, after `upstream`.
     fn node(op: &str, params: Value, inputs: &[Option<&Image>], upstream: Option<&ParticleStream>, state: &mut ParticleState) -> ParticleStream {
-        let cx = Context { node: op, frame: 1, fps: 24.0, format: FMT, own: Arc::new(move |_| params.clone()), inputs, keys: &[], upstream };
+        let cx = Context { node: op, frame: 1, fps: 24.0, format: FMT, own: Arc::new(move |_| params.clone()), inputs, keys: &[], upstream, sequence: None };
         match eval(op, cx, state).unwrap() {
             Output::Stream(s) => s,
             Output::Image(_) => unreachable!(),

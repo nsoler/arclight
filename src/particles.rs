@@ -348,7 +348,7 @@ enum Draw {
 }
 
 /// A repeatable random number in 0..1 for (`seed`, `id`, `slot`).
-fn random(seed: u64, id: u64, slot: u64) -> f64 {
+pub(crate) fn random(seed: u64, id: u64, slot: u64) -> f64 {
     let mut h = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ id.rotate_left(21) ^ slot.wrapping_mul(0xd6e8_feb8_6659_fd93);
     for _ in 0..2 {
         // splitmix64's finalizer, twice so nearby ids decorrelate.

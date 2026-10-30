@@ -2945,7 +2945,7 @@ fn particle_node(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &Eval
     let fixed = params.clone();
     let upstream = inputs.first().copied().flatten().and_then(|i| i.scene.as_ref()).and_then(|s| s.particles.first());
     let keys = vec![0; inputs.len()];
-    let cx = particle_nodes::Context { node: op, frame: ctx.frame, fps: 24.0, format: DEFAULT_FORMAT, own: std::sync::Arc::new(move |_| fixed.clone()), inputs, keys: &keys, upstream };
+    let cx = particle_nodes::Context { node: op, frame: ctx.frame, fps: 24.0, format: DEFAULT_FORMAT, own: std::sync::Arc::new(move |_| fixed.clone()), inputs, keys: &keys, upstream, sequence: None };
     Ok(match particle_nodes::eval(op, cx, &mut particle_nodes::ParticleState::default())? {
         particle_nodes::Output::Image(img) => img,
         particle_nodes::Output::Stream(stream) => scene_output(DEFAULT_FORMAT, Scene { particles: vec![stream], ..Scene::default() }),

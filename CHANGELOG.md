@@ -11,6 +11,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.62 — 2026-10-29
+
+- **Particle Render sprites can play an image sequence** (Dev1): set
+  Texture frames to sequence and the texture input is taken at frames
+  Sequence first to Sequence last; each sprite shows the image its age
+  picks: by age (once over its life), cycle, play (from the first at
+  Rate images a frame, holding the last) or loop, optionally from a
+  random start per particle. Each frame of the sequence is rendered once
+  and kept until it changes (up to 1000 frames). Current frame (the
+  default) works as before.
+
 ## 0.9.61 — 2026-10-29
 
 - **The 3D view's motion blur preview includes a looked-through camera's

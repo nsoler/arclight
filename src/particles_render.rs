@@ -48,6 +48,10 @@ pub enum Pick {
     /// Round and round, `rate` images a frame, each particle starting on
     /// its own one.
     Cycle { rate: f64 },
+    /// Played from the first image as the particle ages, `rate` images a
+    /// frame, round and round (`looped`) or holding the last; from an
+    /// image of its own at random (`random`, the same every time).
+    Play { rate: f64, looped: bool, random: bool },
 }
 
 /// The image (or sequence) on each sprite: its whole frame spans the
@@ -111,6 +115,11 @@ impl Sprites {
                 (f * n as f64) as usize
             }
             Pick::Cycle { rate } => (p.age * rate).max(0.0) as usize + (p.id as usize),
+            Pick::Play { rate, looped, random } => {
+                let start = if random { (crate::particles::random(0, p.id, 0) * n as f64) as usize } else { 0 };
+                let i = (p.age * rate).max(0.0) as usize + start;
+                return Some(if looped { i % n } else { i.min(n - 1) });
+            }
         };
         Some(if matches!(t.pick, Pick::ByAge) { i.min(n - 1) } else { i % n })
     }
@@ -417,6 +426,20 @@ mod tests {
         let cycle = Sprites { texture: Some(Texture { pick: Pick::Cycle { rate: 0.5 }, ..s.texture.clone().unwrap() }), ..Sprites::default() };
         let p = |age: f64| Particle { age, ..particle(Vec3::zeros(), 1.0, [1.0; 4]) };
         assert_eq!([0.0, 1.0, 2.0, 4.0].map(|a| cycle.image(&p(a))), [Some(0), Some(0), Some(1), Some(0)]);
+        // Played by age: a frame of the sequence a frame of life, from the
+        // first, looping or holding the last; from a random one each.
+        let seq: Vec<Arc<Image>> = (0..4).map(|k| Arc::new(Image::filled(1, 1, [k as f32, 0.0, 0.0, 1.0]))).collect();
+        let play = |looped: bool, random: bool| Sprites { texture: Some(Texture { images: seq.clone(), pick: Pick::Play { rate: 1.0, looped, random } }), ..Sprites::default() };
+        let ages = [0.0, 1.0, 2.5, 3.0, 4.0, 9.0];
+        assert_eq!(ages.map(|a| play(false, false).image(&p(a))), [0, 1, 2, 3, 3, 3].map(Some));
+        assert_eq!(ages.map(|a| play(true, false).image(&p(a))), [0, 1, 2, 3, 0, 1].map(Some));
+        let starts: Vec<usize> = (0..40).map(|id| play(true, true).image(&Particle { id, ..p(0.0) }).unwrap()).collect();
+        assert!((0..4).all(|k| starts.contains(&k)), "{starts:?}");
+        for id in 0..40 {
+            let q = |age: f64| Particle { id, ..p(age) };
+            assert_eq!(play(true, true).image(&q(1.0)), Some((starts[id as usize] + 1) % 4), "each steps on from its own start");
+            assert_eq!(play(false, true).image(&q(9.0)), Some(3), "and holds the last");
+        }
     }
 
     #[test]

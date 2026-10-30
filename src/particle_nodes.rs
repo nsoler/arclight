@@ -64,7 +64,10 @@ const LOOKS: &[&str] = &["points", "sprites", "objects"];
 const OUTLINES: &[&str] = &["round", "square"];
 const BLENDS: &[&str] = &["over", "additive"];
 const ORIENTS: &[&str] = &["none", "velocity", "spin"];
-const PICKS: &[&str] = &["by age", "cycle"];
+const PICKS: &[&str] = &["by age", "cycle", "play", "loop"];
+const TEXTURE_FRAMES: &[&str] = &["current frame", "sequence"];
+/// The most frames a texture sequence takes.
+pub const MAX_SEQUENCE: i64 = 1000;
 
 const STRENGTH: ParamSpec = p!("strength", "Strength", SIGNED, 1.0);
 const START: ParamSpec = p!("start", "Start frame", FRAME, ALWAYS_FROM);
@@ -195,8 +198,12 @@ pub static OPS: &[OpInfo] = &[
             p!("scale", "Size scale", ParamKind::Float { min: 0.0, max: 100.0 }, 1.0),
             p!("opacity", "Opacity", FRACTION, 1.0),
             p!("opacity_end", "Opacity at end of life", FRACTION, 1.0),
+            fixed!("texture_frames", "Texture frames", ParamKind::Choice(TEXTURE_FRAMES), "current frame"),
+            fixed!("sequence_first", "Sequence first frame", FRAME, 1),
+            fixed!("sequence_last", "Sequence last frame", FRAME, 24),
             fixed!("pick", "Texture images", ParamKind::Choice(PICKS), "by age"),
-            p!("cycle_rate", "Cycle rate (images a frame)", ParamKind::Float { min: 0.0, max: 100.0 }, 1.0),
+            p!("cycle_rate", "Rate (images a frame)", ParamKind::Float { min: 0.0, max: 100.0 }, 1.0),
+            fixed!("random_start", "Random start", ParamKind::Bool, false),
             fixed!("orient", "Objects face", ParamKind::Choice(ORIENTS), "velocity"),
         ],
         mask_base: None,
@@ -204,6 +211,11 @@ pub static OPS: &[OpInfo] = &[
         help: "How particles look where they're rendered. Points: small dots. Sprites: squares or disks facing the \
                camera, Size scale × each particle's size across, tinted by its color, textured by the texture input, \
                faded from Opacity to Opacity at end of life, laid Over each other or Additive (for sparks and fire). \
+               Texture frames: the texture input at the frame rendered, or a sequence of it (its frames Sequence first \
+               frame to Sequence last frame), each sprite showing an image of it as Texture images says: by age (the \
+               sequence once over its life), cycle (round and round at Rate images a frame, each particle starting on \
+               its own), play (from the first at Rate images a frame as it ages, holding the last) or loop (the same, \
+               round and round); with Random start, play and loop start each particle on an image of its own. \
                Objects: a copy of the objects input's meshes at each particle (one at random per particle when there \
                are several), scaled by its size and facing along its velocity, spinning, or as modelled.",
     },
@@ -421,6 +433,30 @@ pub struct Context<'a> {
     pub keys: &'a [u64],
     /// The stream on its particles input, if it has one.
     pub upstream: Option<&'a ParticleStream>,
+    /// A Particle Render's texture input at its sequence's frames, when
+    /// it takes a sequence (see [`texture_sequence`]).
+    pub sequence: Option<&'a [Arc<Image>]>,
+}
+
+/// The frames of its texture input a Particle Render with (resolved)
+/// params `p` shows: None for the frame rendered, else Sequence first
+/// frame to Sequence last frame (an error past [`MAX_SEQUENCE`] frames).
+pub fn texture_sequence(op: &str, p: &Value) -> Result<Option<std::ops::RangeInclusive<i64>>> {
+    if op != "particle_render" {
+        return Ok(None);
+    }
+    let p = with_defaults(op, p);
+    if text(&p, "texture_frames") != "sequence" || text(&p, "look") != "sprites" {
+        return Ok(None);
+    }
+    let (first, last) = (int(&p, "sequence_first"), int(&p, "sequence_last"));
+    if last < first {
+        bail!("its texture sequence ends (frame {last}) before it starts (frame {first})");
+    }
+    if last - first >= MAX_SEQUENCE {
+        bail!("its texture sequence is {} frames long, more than {MAX_SEQUENCE}", last - first + 1);
+    }
+    Ok(Some(first..=last))
 }
 
 /// Evaluate particle node `op`.
@@ -451,7 +487,7 @@ pub fn eval(op: &str, cx: Context, state: &mut ParticleState) -> Result<Output> 
         }
         "particle_render" => {
             let up = cx.upstream.ok_or_else(|| anyhow::anyhow!("connect particles to its particles input"))?;
-            let look = look(&at_frame, input(1), input(2).and_then(|i| i.scene.as_deref()))?;
+            let look = look(&at_frame, input(1), cx.sequence, input(2).and_then(|i| i.scene.as_deref()))?;
             Ok(Output::Stream(ParticleStream { look, ..stream(up.system.clone(), Look::Points, up.parts.clone(), state) }))
         }
         "particles_2d" => {
@@ -609,9 +645,9 @@ pub fn modifier(op: &str, p: &Value) -> Modifier {
     Modifier { effect, strength: num(p, "strength"), start: start_frame(p, "start"), end: end_frame(p, "end") }
 }
 
-/// The look Particle Render's params `p` describe, with its texture and
-/// objects inputs.
-fn look(p: &Value, texture: Option<&Image>, objects: Option<&Scene>) -> Result<Look> {
+/// The look Particle Render's params `p` describe, with its texture input
+/// (at the frame, or the sequence's frames) and objects input.
+fn look(p: &Value, texture: Option<&Image>, sequence: Option<&[Arc<Image>]>, objects: Option<&Scene>) -> Result<Look> {
     Ok(match text(p, "look") {
         "points" => Look::Points,
         "objects" => {
@@ -636,9 +672,17 @@ fn look(p: &Value, texture: Option<&Image>, objects: Option<&Scene>) -> Result<L
         }
         _ => Look::Sprites(Sprites {
             outline: if text(p, "outline") == "square" { Outline::Square } else { Outline::Round },
-            texture: texture.map(|t| Texture {
-                images: vec![Arc::new(t.clone())],
-                pick: if text(p, "pick") == "cycle" { Pick::Cycle { rate: num(p, "cycle_rate") } } else { Pick::ByAge },
+            texture: match sequence {
+                Some(images) => Some(images.to_vec()),
+                None => texture.map(|t| vec![Arc::new(t.clone())]),
+            }
+            .map(|images| Texture {
+                images,
+                pick: match text(p, "pick") {
+                    "cycle" => Pick::Cycle { rate: num(p, "cycle_rate") },
+                    pick @ ("play" | "loop") => Pick::Play { rate: num(p, "cycle_rate"), looped: pick == "loop", random: p["random_start"] == true },
+                    _ => Pick::ByAge,
+                },
             }),
             scale: num(p, "scale"),
             opacity: num(p, "opacity") as f32,
@@ -658,7 +702,7 @@ mod tests {
     }
 
     fn cx<'a>(node: &'a str, frame: i64, own: Own, inputs: &'a [Option<&'a Image>], keys: &'a [u64], upstream: Option<&'a ParticleStream>) -> Context<'a> {
-        Context { node, frame, fps: 24.0, format: Size { width: 100, height: 80 }, own, inputs, keys, upstream }
+        Context { node, frame, fps: 24.0, format: Size { width: 100, height: 80 }, own, inputs, keys, upstream, sequence: None }
     }
 
     fn run(op: &str, cx: Context, state: &mut ParticleState) -> ParticleStream {

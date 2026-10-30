@@ -408,9 +408,16 @@ drag its position, size and angle in the viewer.
   **Speed Limit**.
 - **Particle Render:** how they look. **Points**; **sprites** (camera-facing
   squares or disks, tinted by their color, textured by the **texture**
-  input, which cycles or picks by age through a sequence, faded from
-  **Opacity** to its end value, **over** or **additive** for sparks and
-  fire); or **objects** (a copy of the **objects** input's meshes at each
+  input, faded from **Opacity** to its end value, **over** or
+  **additive** for sparks and fire); **Texture frames** takes the texture
+  at the frame rendered, or as a **sequence** (its frames Sequence first
+  to Sequence last, each rendered once and kept until it changes), each
+  sprite showing the image **Texture images** picks: **by age** (the
+  sequence once over its life), **cycle** (round and round at Rate images
+  a frame, each particle starting on its own), **play** (from the first
+  at Rate images a frame as it ages, holding the last) or **loop** (the
+  same, round and round); with **Random start**, play and loop start
+  each particle on an image of its own; or **objects** (a copy of the **objects** input's meshes at each
   particle, one at random when there are several, scaled by size and
   facing along their velocity, spinning, or as modelled). Rendered by
   Scanline Render with everything else, behind nearer surfaces; its
