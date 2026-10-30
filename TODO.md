@@ -7,7 +7,7 @@ they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
-- [ ] 0.9.52–0.9.57: Read Geo Opacity; view preferences remembered
+- [X] 0.9.52–0.9.57: Read Geo Opacity; view preferences remembered
       between runs (Show frame size, Solid / Lit, wireframe, shadows);
       motion blur grain instead of copies at low counts; particle streaks
       curving under gravity; motion blur in the 3D view once it settles
