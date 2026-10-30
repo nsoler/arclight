@@ -27,7 +27,9 @@ proposed 2026-10-30, not started; after the Particles round).
   (Dev1) relative paths at the file boundary (`Graph::save` /
   `to_json_at`, `Project::resolve_path`). Splat plan written
   (`docs/splat-plan.md`); the user wants it to start phase 10 (0.10.0) on
-  a new branch `wip-ns-splats`. Not released since v0.9.57.
+  a new branch `wip-ns-splats`. **Released as v0.9.68** (Latest): Linux
+  tarball, Linux wheel + sdist built locally (Actions still billing-blocked);
+  the macOS DMG and universal2 wheel await the user's Mac or Actions.
 - **Session 12, third round:** 0.9.58 (Dev1) the active Viewer
   (`Doc.active_viewer`, `Doc::viewer()`: last wired / viewed / clicked,
   else the first) fixes the user's "black background" Merge report (a
