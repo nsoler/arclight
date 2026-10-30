@@ -9,6 +9,10 @@
 //! - `{"link": {"node": N, "motion": M, "stabilize": B, "pivot": [x, y]}}`:
 //!   Tracker N's solved motion as a Transform's `translate`, `rotate` or
 //!   `scale` (M) about `pivot`, match-move or (B) stabilize.
+//! - `{"link": {"node": N, "solve": S}}`: Camera Tracker N's solved camera
+//!   as a Camera's `translate`, `rotate`, `focal` or `film_back` (S),
+//!   between solved frames as their keys would be (see
+//!   [`crate::camtrack::solved_value`]).
 //!
 //! - `{"link": {"expr": F}}`: formula F (see [`crate::expr`]), reading any
 //!   number of nodes' params, e.g. `"sin(frame / 8) * 5 + t.track1.x"`.
@@ -80,6 +84,12 @@ pub fn motion(node: &str, what: &str, stabilize: bool, pivot: track::Pt) -> Valu
     json!({ "link": { "node": node, "motion": what, "stabilize": stabilize, "pivot": pivot } })
 }
 
+/// A link to Camera Tracker `node`'s solved camera, as a Camera's
+/// `translate`, `rotate`, `focal` or `film_back` (`what`).
+pub fn solve(node: &str, what: &str) -> Value {
+    json!({ "link": { "node": node, "solve": what } })
+}
+
 /// A link's value at frame `t` (`clock`: the project's timing, for a
 /// formula's `time` and `fps`), reading nodes through `lookup`; any other
 /// value is returned with its keyframes evaluated. Null when the link's
@@ -117,7 +127,12 @@ fn evaluate<'a>(lookup: &dyn Fn(&str) -> Option<&'a NodeSpec>, v: &Value, t: f64
     }
     let node = l["node"].as_str().ok_or("a link needs a \"node\"")?;
     let n = lookup(node).ok_or_else(|| format!("no node '{node}'"))?;
-    let value = if let Some(what) = l["motion"].as_str() {
+    let value = if let Some(what) = l["solve"].as_str() {
+        if n.op != "camera_tracker" {
+            return Err(format!("'{node}' isn't a Camera Tracker"));
+        }
+        crate::camtrack::solved_value(&n.params, what, t).map_err(|e| format!("'{node}': {e:#}"))?
+    } else if let Some(what) = l["motion"].as_str() {
         let pivot = [l["pivot"][0].as_f64().unwrap_or(0.0) as f32, l["pivot"][1].as_f64().unwrap_or(0.0) as f32];
         let (translate, rotate, scale) = track::motion_at(&n.params, t, l["stabilize"].as_bool().unwrap_or(false), pivot);
         match what {
@@ -194,12 +209,15 @@ pub fn rename(params: &mut Value, old: &str, new: &str) {
 }
 
 /// What a link reads, for the panel: "tracker1 · track1",
-/// "tracker1 · track1 at the reference frame", "tracker1 · stabilize".
+/// "tracker1 · track1 at the reference frame", "tracker1 · stabilize",
+/// "camera_tracker1 · solved rotate".
 pub fn describe(v: &Value) -> String {
     let l = &v["link"];
     let node = l["node"].as_str().unwrap_or("?");
     let what = if let Some(f) = l["expr"].as_str() {
         format!("= {f}")
+    } else if let Some(what) = l["solve"].as_str() {
+        format!("{node} · solved {what}")
     } else if l.get("motion").is_some() {
         let how = if l["stabilize"].as_bool() == Some(true) { "stabilize" } else { "match-move" };
         format!("{node} · {how}")
@@ -433,5 +451,77 @@ mod tests {
         let (sharp, blurred, copied) = (get(&mut ev, "sharp"), get(&mut ev, "blurred"), get(&mut ev, "copy_blurred"));
         assert!(diff(&sharp, &blurred) > 0.1, "blurred: {}", diff(&sharp, &blurred));
         assert!(diff(&blurred, &copied) < 2e-3, "as a keyed copy blurs: {}", diff(&blurred, &copied));
+    }
+
+    /// A Camera linked to a Camera Tracker's solve matches one keyed with a
+    /// copy, between frames too (and so renders and blurs the same), and
+    /// follows a re-solve that the copy misses.
+    #[test]
+    fn cameras_linked_to_a_solve_match_a_keyed_copy_and_follow_re_solves() {
+        use crate::camtrack::{self, Solution};
+        let mut sol = Solution {
+            format: [64, 40],
+            focal: 30.0,
+            film_back: [36.0, 24.0],
+            frames: vec![1, 3, 6],
+            cameras: vec![[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.5, 0.1, -0.2, 1.0, 4.0, 0.0], [1.5, 0.2, -0.4, 2.0, 9.0, 1.0]],
+            points: vec![[0.0, 0.0, -5.0]],
+            rms: 0.1,
+            frame_rms: vec![0.1; 3],
+            point_rms: Vec::new(),
+            pnp_frames: Vec::new(),
+            tripod: false,
+        };
+        let mut g = graph(json!([
+            { "id": "plate", "op": "checkerboard", "params": { "width": 64, "height": 40, "size": 4 } },
+            { "id": "ct", "op": "camera_tracker", "inputs": ["plate"], "params": { "solution": sol.to_value() } },
+            { "id": "live", "op": "camera", "params": camtrack::camera_links("ct") },
+            { "id": "copy", "op": "camera", "params": camtrack::camera_params(&sol) },
+            { "id": "card", "op": "card", "inputs": ["plate"], "params": { "translate": [0, 0, -5], "size": [4, 2.5] } },
+        ]));
+        for (cam, blur) in [("live", 0), ("copy", 0), ("live", 4), ("copy", 4)] {
+            g.nodes.push(serde_json::from_value(json!({ "id": format!("set_{cam}{blur}"), "op": "scene", "inputs": ["card", cam] })).unwrap());
+            let params = json!({ "width": 64, "height": 40, "samples": 1, "motion_blur": blur, "shutter": 1.0, "jitter": false });
+            g.nodes.push(serde_json::from_value(json!({ "id": format!("r_{cam}{blur}"), "op": "scanline_render", "inputs": [format!("set_{cam}{blur}"), "", ""], "params": params })).unwrap());
+        }
+        let at = |g: &Graph, id: &str, what: &str, t: f64| {
+            let v = resolve(&|n: &str| g.node(n), &g.node(id).unwrap().params[what], t, Clock::default());
+            crate::anim::sample(&v, t)
+        };
+        for what in camtrack::SOLVED {
+            for t in [0.0, 1.0, 2.0, 2.25, 3.0, 4.5, 6.0, 8.0] {
+                let (a, b) = (at(&g, "live", what, t), at(&g, "copy", what, t));
+                assert!(a.len() == b.len() && a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-12), "{what} at {t}: {a:?} vs {b:?}");
+            }
+        }
+        assert_eq!(at(&g, "live", "translate", 2.0), vec![0.25, 0.05, -0.1]);
+        assert_eq!(describe(&g.node("live").unwrap().params["rotate"]), "ct · solved rotate");
+        let render = |g: &Graph, id: &str, frame: i64| Evaluator::new().evaluate(g, id, &EvalContext { frame, write_outputs: false }).unwrap().flat().into_owned();
+        let diff = |a: &Image, b: &Image| a.pixels.iter().zip(&b.pixels).flat_map(|(p, q)| (0..4).map(move |c| (p[c] - q[c]).abs())).fold(0.0, f32::max);
+        for blur in [0, 4] {
+            let (live, copy) = (render(&g, &format!("r_live{blur}"), 2), render(&g, &format!("r_copy{blur}"), 2));
+            assert!(diff(&live, &copy) < 1e-5, "blur {blur}: {}", diff(&live, &copy));
+        }
+        let d = diff(&render(&g, "r_live0", 2), &render(&g, "r_live4", 2));
+        assert!(d > 0.05, "the move blurs: {d}");
+        // Reoriented (as Set origin does): the linked Camera follows.
+        let before = render(&g, "r_live0", 3);
+        sol.transform(1.0, &nalgebra::Rotation3::identity(), &crate::geom::Vec3::new(0.0, 0.3, 0.0));
+        g.nodes[1].params["solution"] = sol.to_value();
+        assert_eq!(at(&g, "live", "translate", 3.0), vec![0.5, 0.4, -0.2]);
+        assert!(diff(&before, &render(&g, "r_live0", 3)) > 0.05, "the linked render moved");
+        assert!(diff(&before, &render(&g, "r_copy0", 3)) < 1e-6, "the copy stays");
+        // Baked, it's the copy's keys; tripod solves hold the camera still.
+        let baked = camtrack::baked_value(&g.nodes[1].params, "rotate").unwrap();
+        assert_eq!(baked, camtrack::camera_params(&sol)["rotate"]);
+        sol.tripod = true;
+        g.nodes[1].params["solution"] = sol.to_value();
+        assert_eq!(at(&g, "live", "translate", 4.5), at(&g, "live", "translate", 1.0));
+        // No solve, or not a Camera Tracker: a message, not a value.
+        g.nodes[1].params = json!({});
+        let e = error(&|n: &str| g.node(n), &g.node("live").unwrap().params["focal"], 1.0, Clock::default()).unwrap();
+        assert!(e.contains("no solve yet"), "{e}");
+        let e = error(&|n: &str| g.node(n), &solve("plate", "focal"), 1.0, Clock::default()).unwrap();
+        assert!(e.contains("isn't a Camera Tracker"), "{e}");
     }
 }

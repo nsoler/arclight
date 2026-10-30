@@ -12,6 +12,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.16 — 2026-10-30
+
+- Camera Tracker **Export can link the Camera to the solve live** (the
+  Linked checkbox, on by default): its translate, rotate, focal and film
+  back follow the solve, so re-solving or setting the origin, ground or
+  scale moves it; between frames (motion blur) it moves as the keyed copy
+  would. In Properties, **Bake** keys it on every solved frame; Unlink
+  keeps that frame's value. MCP `export_camera` now links by default
+  (`"linked": false` keys a copy as before); Python
+  `export_camera(linked=True)`.
+
 ## 0.10.15 — 2026-10-30
 
 - Camera Tracker has a **mask** input: features aren't found where the

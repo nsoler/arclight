@@ -182,10 +182,11 @@ class Node:
         _call("orient_camera", node=self._name, ground=ground, origin=origin, scale=sc)
         return self
 
-    def export_camera(self) -> dict[str, "Node"]:
-        """From a solved Camera Tracker: a keyed Camera, a Point Cloud, a
-        Scene and a Scanline Render over the plate, by role."""
-        return {k: Node(v) for k, v in _call("export_camera", node=self._name).items()}
+    def export_camera(self, linked: bool = True) -> dict[str, "Node"]:
+        """From a solved Camera Tracker: a Camera following the solve live
+        (``linked=False``: keyed with a copy), a Point Cloud, a Scene and a
+        Scanline Render over the plate, by role."""
+        return {k: Node(v) for k, v in _call("export_camera", node=self._name, linked=linked).items()}
 
     def place_on_points(self, points: list[int], what: str = "card", frame: int | None = None,
                         input: "Node | str | None" = None, name: str | None = None) -> "Node":

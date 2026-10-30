@@ -441,6 +441,13 @@ impl Properties {
                 if ui.small_button("Unlink").on_hover_text("Keep this frame's value as a plain one and stop following").clicked() {
                     doc.set_param(id, spec.name, now.clone());
                 }
+                // A Camera following a Camera Tracker's solve can keep it as keys.
+                let baked = raw["link"]["solve"].as_str().zip(arclight::link::source(&raw)).and_then(|(what, n)| arclight::camtrack::baked_value(&doc.node(n)?.params, what));
+                if let Some(keys) = baked {
+                    if ui.small_button("Bake").on_hover_text("Key it on every solved frame and stop following").clicked() {
+                        doc.set_param(id, spec.name, keys);
+                    }
+                }
             });
             ui.horizontal(|ui| {
                 ui.weak("×").on_hover_text("Multiply the linked value (0.5: half of it; -1: mirrored)");

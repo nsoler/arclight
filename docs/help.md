@@ -518,8 +518,15 @@ sun coming from one side.
 ## Camera Tracker
 
 - **Track & Solve** in its panel follows features through the frame range
-  and solves the camera; **Export** adds a keyed Camera, the point cloud, a
+  and solves the camera; **Export** adds a Camera, the point cloud, a
   Scene and a Scanline Render over the plate.
+- With **Linked** on (the default) the exported Camera follows the solve
+  live: its Translate, Rotate, Focal and Film back read the Camera
+  Tracker's solve at every frame, so re-solving or setting the origin,
+  ground or scale updates it. In Properties each linked param shows
+  "← camera_tracker1 · solved rotate"; **Bake** keys it on every solved
+  frame instead, **Unlink** keeps the current frame's value. With Linked
+  off, Export keys a copy as before.
 - With it selected, select solved points in the viewer (click, **⇧**-click,
   drag a box) to place a Card or Locator on them, or to set the origin,
   ground plane and scale.

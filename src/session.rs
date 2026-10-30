@@ -303,8 +303,15 @@ impl Session {
     /// frame, a Point Cloud of the points, a Scene of the two and a Scanline
     /// Render of it over the tracker's plate. Their names.
     pub fn export_camera(&mut self, id: &str) -> Result<Value> {
+        self.export_camera_linked(id, false)
+    }
+
+    /// [`Session::export_camera`], the Camera (`linked`) following the
+    /// solve live instead, so re-solving or reorienting moves it too.
+    pub fn export_camera_linked(&mut self, id: &str, linked: bool) -> Result<Value> {
         let sol = self.camera_solution(id)?;
-        let camera = self.create_node("camera", None, &camtrack::camera_params(&sol), &[])?;
+        let params = if linked { camtrack::camera_links(id) } else { camtrack::camera_params(&sol) };
+        let camera = self.create_node("camera", None, &params, &[])?;
         let mut cloud = Map::new();
         cloud.insert("points".into(), json!(sol.points.iter().flatten().collect::<Vec<_>>()));
         let points = self.create_node("point_cloud", None, &cloud, &[])?;

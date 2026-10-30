@@ -401,6 +401,55 @@ pub fn camera_params(sol: &Solution) -> Map<String, Value> {
     out
 }
 
+/// The Camera params a live link follows on a solve.
+pub const SOLVED: [&str; 4] = ["translate", "rotate", "focal", "film_back"];
+
+/// A Camera node's params following Camera Tracker `node`'s solve live
+/// ([`crate::link::solve`]): re-solving moves it too.
+pub fn camera_links(node: &str) -> Map<String, Value> {
+    SOLVED.iter().map(|what| (what.to_string(), crate::link::solve(node, what))).collect()
+}
+
+/// Camera Tracker params `p`'s solve as a Camera's `what` (one of
+/// [`SOLVED`]) at frame `t`: between solved frames, linear as the keys of
+/// [`camera_params`] are (so motion blur sees the same), held before the
+/// first and after the last.
+pub fn solved_value(p: &Value, what: &str, t: f64) -> Result<Value> {
+    let s = p.get("solution").filter(|s| s.is_object()).context("it has no solve yet: track it first")?;
+    let k = match what {
+        "focal" | "film_back" => return Ok(s[what].clone()),
+        "translate" => 0,
+        "rotate" => 3,
+        other => bail!("a solve has no '{other}' (only {})", SOLVED.join(", ")),
+    };
+    let frames: Vec<i64> = serde_json::from_value(s["frames"].clone()).context("a broken solve")?;
+    let cameras: Vec<[f64; 6]> = serde_json::from_value(s["cameras"].clone()).context("a broken solve")?;
+    let n = frames.len().min(cameras.len());
+    if n == 0 {
+        bail!("its solve has no frames");
+    }
+    let at = |i: usize| [cameras[i][k], cameras[i][k + 1], cameras[i][k + 2]];
+    // A tripod solve's camera doesn't move.
+    let still = k == 0 && s["tripod"].as_bool() == Some(true);
+    let v = if still || n == 1 || t <= frames[0] as f64 {
+        at(0)
+    } else if t >= frames[n - 1] as f64 {
+        at(n - 1)
+    } else {
+        let i = frames[..n].partition_point(|&f| f as f64 <= t) - 1;
+        let u = (t - frames[i] as f64) / (frames[i + 1] - frames[i]) as f64;
+        let (a, b) = (at(i), at(i + 1));
+        std::array::from_fn(|d| a[d] + (b[d] - a[d]) * u)
+    };
+    Ok(json!(v))
+}
+
+/// Camera param `what` keyed from Camera Tracker params `p`'s solve, as
+/// [`camera_params`] gives it: what a linked one bakes to.
+pub fn baked_value(p: &Value, what: &str) -> Option<Value> {
+    camera_params(&Solution::from_params(p)?).remove(what)
+}
+
 /// The world point a solved pose (computer-vision frame) has as its
 /// center, in scene terms: for tests comparing against a solve.
 pub fn scene_center(p: &Pose) -> Vec3 {

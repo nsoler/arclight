@@ -110,9 +110,14 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, id: &str, jobs: &mut std::collect
         frame_list(ui, id, sol);
         ui.weak("Select points in the viewer (click, ⇧-click, drag a box) to place a Card or Locator, or to set the origin, ground and scale.");
         ui.horizontal(|ui| {
-            if ui.button("Export").on_hover_text("Add a keyed Camera, the point cloud, a Scene and a Scanline Render over the plate").clicked() {
-                let msg = export(doc, id, sol);
+            let key = egui::Id::unique("camera_tracker_linked_export");
+            let mut linked = ui.data_mut(|d| *d.get_persisted_mut_or(key, true));
+            if ui.button("Export").on_hover_text("Add a Camera, the point cloud, a Scene and a Scanline Render over the plate").clicked() {
+                let msg = export(doc, id, sol, linked);
                 jobs.insert(id.to_string(), CamJob { progress: Default::default(), handle: None, result: Some((true, msg)) });
+            }
+            if ui.checkbox(&mut linked, "Linked").on_hover_text("The exported Camera follows this solve live, so re-solving or setting the origin, ground or scale moves it. Off: it gets a copy of the keys").changed() {
+                ui.data_mut(|d| d.insert_persisted(key, linked));
             }
             if ui.button("Clear solve").clicked() {
                 doc.remove_param(id, "solution");
@@ -174,13 +179,15 @@ fn frame_list(ui: &mut egui::Ui, id: &str, sol: &Solution) {
     });
 }
 
-/// Add a keyed Camera, a Point Cloud, a Scene of both and a Scanline Render
-/// over the tracker's plate (as `Session::export_camera`). A message.
-fn export(doc: &mut Doc, id: &str, sol: &Solution) -> String {
+/// Add a Camera (`linked` to the solve, else keyed with a copy), a Point
+/// Cloud, a Scene of both and a Scanline Render over the tracker's plate
+/// (as `Session::export_camera_linked`). A message.
+fn export(doc: &mut Doc, id: &str, sol: &Solution, linked: bool) -> String {
     let base = spot_below(doc, id);
     let at = |dx: f32, dy: f32| [base[0] + dx, base[1] + dy];
     let camera = doc.add_node("camera", at(0.0, 0.0));
-    for (k, v) in camtrack::camera_params(sol) {
+    let params = if linked { camtrack::camera_links(id) } else { camtrack::camera_params(sol) };
+    for (k, v) in params {
         doc.set_param(&camera, &k, v);
     }
     let points = doc.add_node("point_cloud", at(NODE_W + 30.0, 0.0));
@@ -192,7 +199,7 @@ fn export(doc: &mut Doc, id: &str, sol: &Solution) -> String {
     doc.connect(&scene, &render, 0);
     doc.connect(id, &render, 2);
     doc.selected = Some(render.clone());
-    format!("Added {camera}, {points}, {scene} and {render}.")
+    format!("Added {camera}{}, {points}, {scene} and {render}.", if linked { " (linked)" } else { "" })
 }
 
 /// Add a Card lying on points `ids` of `sol` (Camera Tracker `id`'s),
@@ -451,5 +458,20 @@ mod tests {
         assert!((normal - Vec3::y()).norm() < 1e-9, "{normal}");
         let loc = place_locator(&mut d, "ct", &sol, &[4]).unwrap();
         assert_eq!(d.node(&loc).unwrap().params["translate"], json!([0.0, -2.0, -9.0]));
+    }
+
+    #[test]
+    fn export_links_the_camera_or_keys_a_copy() {
+        let mut d = solved();
+        let sol = Solution::from_params(&d.node("ct").unwrap().params).unwrap();
+        export(&mut d, "ct", &sol, true);
+        let live = d.graph.nodes.iter().find(|n| n.op == "camera").unwrap().id.clone();
+        assert_eq!(arclight::link::source(&d.param(&live, "rotate")), Some("ct"));
+        assert_eq!(d.param_at(&live, "rotate", 1), json!([-15.0, 0.0, 0.0]));
+        assert_eq!(d.param_at(&live, "focal", 1), json!(35.0));
+        export(&mut d, "ct", &sol, false);
+        let copy = d.graph.nodes.iter().filter(|n| n.op == "camera").nth(1).unwrap().id.clone();
+        assert_eq!(d.param(&copy, "rotate")["keys"][0], json!([1, [-15.0, 0.0, 0.0]]));
+        assert_eq!(camtrack::baked_value(&d.node("ct").unwrap().params, "rotate"), Some(d.param(&copy, "rotate")));
     }
 }
