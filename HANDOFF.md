@@ -14,6 +14,17 @@ done), `docs/help.md` (the in-app help) and
   larger items. Keep it current: add items as they come up, tick or
   remove them when they ship.
 
+- **Session 12, second round (user approved the master's picks):**
+  0.9.52 viewer.rs scene_of takes extra inputs (Dev2); 0.9.53 Read Geo
+  Opacity (Dev1); 0.9.54 view prefs in `$XDG_STATE_HOME/arclight/view.json`
+  (`config::ViewPrefs`, `Viewport3d.new_view`) (Dev1); 0.9.55 per-pixel
+  Bayer-interleaved shutter jitter in render3d (blurred renders differ in
+  grain from earlier versions) (Dev2); 0.9.56 `Particle.accel`,
+  `Particle::moved` (Dev2); 0.9.57 `render_preview_blurred`,
+  `ops::blur_times`, viewport blur when settled (≤ 8 samples) (Dev2).
+  **Released as v0.9.57.** Master workflow: a ship script snapshots the
+  reported paths, tests them alone at HEAD with the bump, commits those
+  blobs only; workers keep README / help / CHANGELOG / TODO to the master.
 - **Session 12 (2026-10-29, master wD:p1; workers **Dev1** = herdr `dev1`
   (wD:p3, formerly mathwiz / MathWiz) and **Dev2** = herdr `dev2` (wD:p4,
   formerly worker3d / 3DWorker), renamed at the user's word):** from the user's hand test of the 0.9.48 camera setup:

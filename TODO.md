@@ -1,12 +1,16 @@
 # Arclight — TODO
 
-A running list of what's still wanted, as of v0.9.51 (2026-10-29). The
+A running list of what's still wanted, as of v0.9.57 (2026-10-29). The
 3D plan (`docs/phase-4-plan.md`, M1–M13) is done; this is what's left
 around it. `HANDOFF.md` has the details and history; add items here as
 they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
+- [ ] 0.9.52–0.9.57: Read Geo Opacity; view preferences remembered
+      between runs (Show frame size, Solid / Lit, wireframe, shadows);
+      motion blur grain instead of copies at low counts; particle streaks
+      curving under gravity; motion blur in the 3D view once it settles
 - [X] 0.9.48: Scanline Render motion blur (incl. particles), the 3D
       view's Solid / Lit (⇧Z) (the camera setup before the Viewer:
       user tested it, which led to 0.9.49–0.9.51)
@@ -28,11 +32,9 @@ they come up and strike them (or delete them) when they ship.
 
 ## Motion blur follow-ups
 
-- [ ] Per-pixel time jitter, so low sample counts don't band on very
-      fast moves
-- [ ] Acceleration in particle streaks (½·a·t²; needs acceleration
-      stored per particle)
-- [ ] Motion blur in the 3D view preview
+- [ ] Blur the 3D view preview by a looked-through camera's own motion
+- [ ] Blur particles (dots) in the 3D view preview
+- [ ] An option to turn off per-pixel jitter (old banded look), if wanted
 
 ## Particles
 
@@ -45,8 +47,6 @@ they come up and strike them (or delete them) when they ship.
 
 - [ ] A true orthographic texture path in render3d (ortho views use a
       very long lens today)
-- [ ] Opacity on Read Geo (fade a file's materials without Override
-      material)
 - [ ] Mipmaps for minified cards
 - [ ] Alembic import for animated caches
 
@@ -59,12 +59,7 @@ they come up and strike them (or delete them) when they ship.
 
 ## Interface
 
-- [ ] Save view preferences between runs (e.g. Show frame size, Solid /
-      Lit default; eframe persistence is off)
 - [ ] Backdrop tools in MCP / Python
-- [ ] `viewer::scene_of` (gui/viewer.rs) gates the 3D view on a Scanline
-      Render's first connected scene input: one with only extra inputs
-      (3..) connected says "no 3D scene"
 - [ ] Shift+Tab over the viewer also toggles 2D / 3D (main.rs's plain
       Tab match ignores Shift); harmless, could be tightened
 
