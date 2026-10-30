@@ -57,6 +57,13 @@ const UNGROUP: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(
 const PROJECT_SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::P);
 const PREFERENCES: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
 
+/// Take `key` pressed with no modifier at all. egui's `consume_key` ignores
+/// an extra Shift or Alt, so `Modifiers::NONE` there takes Shift+Tab too.
+fn consume_plain(i: &mut egui::InputState, key: Key) -> bool {
+    let plain = i.events.iter().any(|e| matches!(e, egui::Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.matches_exact(Modifiers::NONE)));
+    plain && i.consume_key(Modifiers::NONE, key)
+}
+
 fn main() -> eframe::Result {
     arclight::plugin::init();
     let doc = match std::env::args_os().nth(1).map(PathBuf::from) {
@@ -864,8 +871,9 @@ impl App {
         }
         // Tab over the viewer switches it between 2D and 3D (elsewhere, and
         // in text fields, which returned above, Tab keeps its usual job).
+        // Plain Tab only: Shift+Tab is the node browser's, over the graph.
         let over_viewer = ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| self.viewer.rect.contains(p));
-        if over_viewer && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab)) {
+        if over_viewer && ctx.input_mut(|i| consume_plain(i, Key::Tab)) {
             self.viewer.toggle_3d();
             // egui read the Tab already, to move keyboard focus this frame.
             ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
@@ -1628,6 +1636,23 @@ fn starter_graph() -> Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Tab over the viewer toggles 2D / 3D; Shift+Tab (or Alt / Ctrl+Tab)
+    /// is left alone and kept for whoever wants it.
+    #[test]
+    fn only_a_plain_tab_is_taken_as_plain() {
+        let tab = |modifiers| egui::Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers };
+        for (modifiers, plain) in [(Modifiers::NONE, true), (Modifiers::SHIFT, false), (Modifiers::ALT, false), (Modifiers::COMMAND, false)] {
+            let ctx = egui::Context::default();
+            let (mut took, mut left) = (false, false);
+            let raw = egui::RawInput { events: vec![tab(modifiers)], ..Default::default() };
+            let _ = ctx.run_ui(raw, |ui| {
+                took = ui.input_mut(|i| consume_plain(i, Key::Tab));
+                left = ui.input(|i| i.key_pressed(Key::Tab));
+            });
+            assert_eq!((took, left), (plain, !plain), "{modifiers:?}");
+        }
+    }
 
     /// New projects and the 3D view as the preferences say; their defaults
     /// as without settings.

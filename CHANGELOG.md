@@ -12,6 +12,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.23 — 2026-10-30
+
+- Shift+Tab over the viewer no longer also switches it between 2D and
+  3D; only a plain Tab does (Shift+Tab is the node browser's, over the
+  node graph).
+
 ## 0.10.22 — 2026-10-30
 
 - **Read Geo reads Alembic caches** (`.abc`, Ogawa): polygon and
