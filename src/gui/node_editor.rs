@@ -5,7 +5,7 @@
 //! to reroute or disconnect. Drop a wire dragged from an output onto another
 //! wire to join the two with a new Merge (the dragged node into A, over
 //! the wire's source in B). Inputs are yellow squares, outputs green circles.
-//! Right-click the canvas, or press Shift+E (or Tab over the graph) for a
+//! Right-click the canvas, or press Shift+E (or Shift+Tab over the graph) for a
 //! searchable node browser, to add nodes; over a wire, the new node goes into
 //! it. Over the graph Shift+R, Shift+T and Shift+M add a Media In, a
 //! Transform and a Merge at the pointer, wired the same way. Drop an
@@ -359,8 +359,9 @@ impl NodeEditor {
         doc.selected = Some(id);
     }
 
-    /// Keys over the graph (not while typing): Tab opens the node browser
-    /// at the pointer, as a right-click does; Shift+R, Shift+T and Shift+M
+    /// Keys over the graph (not while typing): Shift+Tab opens the node
+    /// browser at the pointer, as a right-click does (plain Tab does
+    /// nothing here: over the viewer it switches 2D / 3D); Shift+R, Shift+T and Shift+M
     /// add a Media In, a Transform and a Merge there, placed as the browser
     /// would (into the wire under the pointer or the selected one, else
     /// after the selected node).
@@ -370,10 +371,22 @@ impl NodeEditor {
             return;
         }
         let Some(p) = ctx.input(|i| i.pointer.hover_pos()) else { return };
-        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab)) {
+        // egui read a Tab already, to move keyboard focus (back, with
+        // Shift) this frame: called off either way, and a plain Tab lets go
+        // of what it focused (no text field had focus, see above). Shift+Tab
+        // first: matching a plain Tab ignores Shift.
+        if ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Tab)) {
             self.open_browser(Some(p));
-            // egui read the Tab already, to move keyboard focus this frame.
             ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab)) {
+            ctx.memory_mut(|m| {
+                m.move_focus(egui::FocusDirection::None);
+                if let Some(id) = m.focused() {
+                    m.surrender_focus(id);
+                }
+            });
             return;
         }
         let keys = [(Key::R, "media_in"), (Key::T, "transform"), (Key::M, "merge")];
@@ -1814,11 +1827,18 @@ mod tests {
         };
         let op = |doc: &Doc, id: &Option<String>| doc.node(id.as_ref().unwrap()).unwrap().op.clone();
 
-        // Tab: the browser at the pointer, aimed at the wire under it.
+        // Plain Tab: nothing (it switches 2D / 3D over the viewer), and
+        // keyboard focus stays put.
         let (a, b) = (h.rect(&doc, &plate), h.rect(&doc, &grade));
         let mid = NodeEditor::out_port(a).lerp(NodeEditor::in_port(b, 0, 2), 0.5);
         h.frame(&mut doc, vec![egui::Event::PointerMoved(mid), key(Key::Tab, Modifiers::NONE)]);
-        assert!(h.ed.browser.as_ref().is_some_and(|b| b.at == mid), "Tab opens the browser there");
+        h.frame(&mut doc, vec![]);
+        assert!(!h.ed.browser_open() && h.ctx.memory(|m| m.focused()).is_none(), "plain Tab does nothing");
+        // Shift+Tab: the browser at the pointer, aimed at the wire under it.
+        h.mods = Modifiers::SHIFT;
+        h.frame(&mut doc, vec![key(Key::Tab, Modifiers::SHIFT)]);
+        h.mods = Modifiers::NONE;
+        assert!(h.ed.browser.as_ref().is_some_and(|b| b.at == mid), "Shift+Tab opens the browser there");
         assert_eq!(h.ed.target_wire.as_ref().map(|w| (w.src.as_str(), w.dst.as_str())), Some((plate.as_str(), grade.as_str())));
         h.frame(&mut doc, vec![]);
         h.frame(&mut doc, vec![key(Key::Escape, Modifiers::NONE)]);
@@ -1852,7 +1872,9 @@ mod tests {
         // search field.
         h.frame(&mut doc, vec![egui::Event::PointerMoved(empty), key(Key::R, Modifiers::NONE), key(Key::M, Modifiers::NONE)]);
         assert_eq!(doc.graph.nodes.len(), 6);
-        h.frame(&mut doc, vec![key(Key::Tab, Modifiers::NONE)]);
+        h.mods = Modifiers::SHIFT;
+        h.frame(&mut doc, vec![key(Key::Tab, Modifiers::SHIFT)]);
+        h.mods = Modifiers::NONE;
         h.frame(&mut doc, vec![]);
         assert!(h.ctx.text_edit_focused(), "the browser's search field has focus");
         shift(&mut h, &mut doc, empty, Key::M);
@@ -1883,7 +1905,7 @@ mod tests {
         };
         let over_viewer = Pos2::new(600.0, 150.0);
         assert!(run(&mut ed, &mut doc, vec![egui::Event::PointerMoved(over_viewer), key(Key::R, Modifiers::SHIFT)], Modifiers::SHIFT), "the viewer still gets its key");
-        run(&mut ed, &mut doc, vec![egui::Event::PointerMoved(over_viewer), key(Key::Tab, Modifiers::NONE), key(Key::M, Modifiers::SHIFT)], Modifiers::SHIFT);
+        run(&mut ed, &mut doc, vec![egui::Event::PointerMoved(over_viewer), key(Key::Tab, Modifiers::SHIFT), key(Key::M, Modifiers::SHIFT)], Modifiers::SHIFT);
         run(&mut ed, &mut doc, vec![], Modifiers::NONE);
         assert!(ed.browser.is_none() && doc.graph.nodes.len() == 1, "nothing added from over the viewer");
         run(&mut ed, &mut doc, vec![egui::Event::PointerMoved(Pos2::new(600.0, 500.0)), key(Key::M, Modifiers::SHIFT)], Modifiers::SHIFT);

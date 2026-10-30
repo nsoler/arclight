@@ -21,7 +21,7 @@ selected node in **Properties** on the right. On macOS, ⌘ stands for Ctrl.
 
 **Fit** (top-right corner of the Node Graph) or **F** with the pointer over it frames every node and backdrop.
 
-Over the Node Graph: **Tab** opens the node browser at the pointer (like right-click); **Shift+R**, **Shift+T**, **Shift+M** add a Media In, Transform or Merge there, into the wire under the pointer (or the selected wire), else after the selected node.
+Over the Node Graph: **Shift+Tab** opens the node browser at the pointer (like right-click); **Shift+R**, **Shift+T**, **Shift+M** add a Media In, Transform or Merge there, into the wire under the pointer (or the selected wire), else after the selected node.
 
 A node's inputs are yellow squares (hollow when optional); a **mask**
 input is violet and labelled **mask**.

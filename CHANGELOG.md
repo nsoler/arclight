@@ -11,6 +11,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.49 — 2026-10-29
+
+- **Node browser on Shift+Tab** (MathWiz): over the node graph,
+  **Shift+Tab** (not Tab) opens the node browser at the pointer, so Tab
+  only switches the viewer between 2D and 3D; plain Tab over the graph
+  does nothing.
+
 ## 0.9.48 — 2026-10-29
 
 - **Scanline Render motion blur** (3DWorker): **Motion blur** (samples
