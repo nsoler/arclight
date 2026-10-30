@@ -12,6 +12,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.27 — 2026-10-30
+
+- The `arclt` source package (sdist) leaves out the repo's `examples/`
+  (sample media and splat captures): 851 KB instead of 20 MB. Nothing
+  compiled reads them; the wheels and the Linux tarball are unchanged.
+
 ## 0.10.26 — 2026-10-30
 
 - A real Gaussian splat capture to try: `examples/geo/hornedlizard.spz`
