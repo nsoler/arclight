@@ -12,6 +12,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.4 — 2026-10-30
+
+- **Splats in the 3D view: framing, box selection, picking** (Dev2): F
+  frames splat captures by their extent, the selection box takes them,
+  and clicking near any of a capture's splat centers selects its Read
+  Splat. Read Splat's Browse lists `.ply` files.
+
 ## 0.10.3 — 2026-10-30
 
 - **Scanline Render draws Gaussian splats** (Dev2, splat plan S1): a CPU

@@ -282,7 +282,7 @@ impl Projector {
 }
 
 /// The scene's extent: a center and radius holding its cameras, cards,
-/// meshes, lights and points (None when it's empty).
+/// meshes, lights, points and splats (None when it's empty).
 fn bounds(scene: &Scene, only: Option<&dyn Fn(&str) -> bool>) -> Option<(Vec3, f64)> {
     let keep = |n: &str| only.is_none_or(|f| f(n));
     let mut pts: Vec<Vec3> = Vec::new();
@@ -310,6 +310,9 @@ fn bounds(scene: &Scene, only: Option<&dyn Fn(&str) -> bool>) -> Option<(Vec3, f
     }
     for g in gadgets(scene).iter().filter(|g| keep(&g.node)) {
         pts.push(geom::transform_point(&g.world, &Vec3::zeros()));
+    }
+    for (lo, hi) in scene.splats.iter().filter(|s| keep(&s.node)).filter_map(|s| s.bounds()) {
+        pts.extend([lo, hi]);
     }
     if pts.is_empty() {
         return None;
@@ -548,7 +551,7 @@ fn ring_local(world: &Mat4, axes: [usize; 2], r: f64) -> Vec<(Vec3, Vec3)> {
 /// What a click picked.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Hit {
-    /// A card, mesh, camera, light or locator: its node.
+    /// A card, mesh, camera, light, locator or splat set: its node.
     Object(String),
     /// Point `.1` of the point cloud (or Camera Tracker) node `.0`.
     Point(String, usize),
@@ -558,8 +561,8 @@ pub enum Hit {
 const PICK_RADIUS: f32 = 7.0;
 
 /// What's under screen point `s` in `scene` seen through `p`: the nearest
-/// point, locator, camera or light within reach, else the nearest card or mesh
-/// the ray through `s` hits. `is_locator` tells a locator's point from a
+/// point, locator, camera, light or splat center within reach, else the
+/// nearest card or mesh the ray through `s` hits. `is_locator` tells a locator's point from a
 /// cloud's.
 pub fn pick(scene: &Scene, p: &Projector, s: Pos2, is_locator: &dyn Fn(&str) -> bool) -> Option<Hit> {
     let mut best: Option<(f32, f64, Hit)> = None;
@@ -583,6 +586,14 @@ pub fn pick(scene: &Scene, p: &Projector, s: Pos2, is_locator: &dyn Fn(&str) -> 
     }
     for g in gadgets(scene) {
         consider(geom::transform_point(&g.world, &Vec3::zeros()), Hit::Object(g.node));
+    }
+    // Splats: the nearest center (only the set's node is picked).
+    for sp in scene.splats.iter().filter(|sp| !sp.node.is_empty()) {
+        if let Some((d, depth)) = nearest_splat(sp, p, s) {
+            if d <= PICK_RADIUS && best.as_ref().is_none_or(|b| (d, depth) < (b.0, b.1)) {
+                best = Some((d, depth, Hit::Object(sp.node.clone())));
+            }
+        }
     }
     if let Some((_, _, hit)) = best {
         return Some(hit);
@@ -609,6 +620,18 @@ pub fn pick(scene: &Scene, p: &Projector, s: Pos2, is_locator: &dyn Fn(&str) -> 
         .chain(meshes)
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, n)| Hit::Object(n))
+}
+
+/// The nearest of splat set `s`'s centers to screen point `at` seen
+/// through `p`: how far from it on screen, and its depth.
+fn nearest_splat(s: &arclight::splat::Splats, p: &Projector, at: Pos2) -> Option<(f32, f64)> {
+    s.positions
+        .iter()
+        .filter_map(|c| {
+            let (q, depth) = p.project(geom::transform_point(&s.world, &Vec3::from(c.map(f64::from))))?;
+            Some((q.distance(at), depth))
+        })
+        .min_by(|a, b| (a.0, a.1).partial_cmp(&(b.0, b.1)).unwrap_or(std::cmp::Ordering::Equal))
 }
 
 /// How far along ray (`o`, unit `d`) it first meets model `m`'s triangles
@@ -675,7 +698,8 @@ fn mesh_edges(m: &arclight::mesh::Mesh) -> Vec<[u32; 2]> {
 }
 
 /// What a box from `a` to `b` (screen) holds: objects whose centers fall
-/// inside (cards, meshes, cameras, lights, locators) and points.
+/// inside (cards, meshes, cameras, lights, locators; a splat set's middle)
+/// and points.
 pub fn box_pick(scene: &Scene, p: &Projector, a: Pos2, b: Pos2, is_locator: &dyn Fn(&str) -> bool) -> (Vec<String>, Vec<(String, usize)>) {
     let r = Rect::from_two_pos(a, b);
     let inside = |x: Vec3| p.project(x).is_some_and(|(q, _)| r.contains(q));
@@ -701,6 +725,9 @@ pub fn box_pick(scene: &Scene, p: &Projector, a: Pos2, b: Pos2, is_locator: &dyn
     }
     for g in gadgets(scene).iter().filter(|g| inside(geom::transform_point(&g.world, &Vec3::zeros()))) {
         add(&g.node);
+    }
+    for s in scene.splats.iter().filter(|s| s.bounds().is_some_and(|(lo, hi)| inside((lo + hi) / 2.0))) {
+        add(&s.node);
     }
     let mut points = Vec::new();
     for (i, pt) in scene.points.iter().enumerate() {
@@ -2427,6 +2454,36 @@ mod tests {
         let doc = Doc::new(Graph { nodes: nodes.collect(), ..Default::default() }, None);
         let p = ViewCam { center: [0.0, 0.0, -8.0], yaw: 0.0, pitch: 0.0, distance: 8.0, ortho: false, auto_ortho: false, wireframe: false, shading: None, shadows: false }.projector(rect());
         (s, p, doc)
+    }
+
+    #[test]
+    fn splats_are_picked_by_their_nearest_center_framed_and_boxed() {
+        use arclight::splat::{dc_of, Splats};
+        let (mut s, p, _) = picking_scene();
+        let loc = |_: &str| false;
+        let at = |x: Vec3| p.project(x).unwrap().0;
+        // A capture of three splats around (−3, 2, −9), placed 1 to the right.
+        let centers = vec![[-4.0f32, 2.0, -9.0], [-3.0, 2.0, -9.0], [-2.0, 2.0, -9.0]];
+        s.splats.push(Arc::new(Splats {
+            positions: Arc::new(centers),
+            scales: Arc::new(vec![[0.1; 3]; 3]),
+            rotations: Arc::new(vec![[1.0, 0.0, 0.0, 0.0]; 3]),
+            opacity: Arc::new(vec![1.0; 3]),
+            sh: Arc::new([0.5f32; 3].map(dc_of).repeat(3)),
+            sh_degree: 0,
+            world: geom::trs([1.0, 0.0, 0.0], [0.0; 3], [1.0; 3]),
+            node: "capture".into(),
+        }));
+        assert_eq!(pick(&s, &p, at(Vec3::new(-1.0, 2.0, -9.0)) + Vec2::new(3.0, 2.0), &loc), Some(Hit::Object("capture".into())), "near a center");
+        assert_eq!(pick(&s, &p, at(Vec3::new(-0.5, 2.0, -9.0)), &loc), Some(Hit::Object("far".into())), "between centers, out of reach: the card behind");
+        assert_eq!(pick(&s, &p, rect().center(), &loc), Some(Hit::Object("near".into())), "the cards as before");
+        // Framed by its centers' box; boxed by its middle.
+        let only = |n: &str| n == "capture";
+        let (c, _) = bounds(&s, Some(&only)).unwrap();
+        assert!((c - Vec3::new(-2.0, 2.0, -9.0)).norm() < 1e-6, "{c:?}");
+        let mid = at(Vec3::new(-2.0, 2.0, -9.0));
+        let (objects, _) = box_pick(&s, &p, mid - Vec2::splat(4.0), mid + Vec2::splat(4.0), &loc);
+        assert_eq!(objects, ["capture"]);
     }
 
     #[test]
