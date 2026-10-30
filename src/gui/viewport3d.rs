@@ -871,6 +871,9 @@ pub struct Viewport3d {
     light_hot: Option<LightHandle>,
     /// Alt + left-drag navigates, as Blender's "emulate 3-button mouse".
     pub emulate_three_button: bool,
+    /// The view a project without a saved one starts with (the saved view
+    /// preferences), and the Solid / Lit for one that never chose.
+    pub new_view: ViewCam,
     worker: Option<SceneWorker>,
     scene: Option<Arc<Scene>>,
     /// What was last asked of the worker (see [`Ask`]).
@@ -916,6 +919,7 @@ impl Default for Viewport3d {
             light_drag: None,
             light_hot: None,
             emulate_three_button: false,
+            new_view: ViewCam::default(),
             worker: None,
             scene: None,
             asked: None,
@@ -1285,11 +1289,11 @@ impl Viewport3d {
         self.restored = Some(doc.path.clone());
         match doc.graph.view.0.get("viewport3d").and_then(|v| serde_json::from_value::<ViewCam>(v.clone()).ok()) {
             Some(v) => {
-                self.view = v;
+                self.view = ViewCam { shading: v.shading.or(self.new_view.shading), ..v };
                 self.frame_first_scene = false;
             }
             None => {
-                self.view = ViewCam::default();
+                self.view = self.new_view;
                 self.frame_first_scene = true;
             }
         }

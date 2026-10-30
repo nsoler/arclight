@@ -21,6 +21,7 @@ mod viewport3d;
 mod worker;
 
 use arclight::bridge;
+use arclight::config::ViewPrefs;
 use arclight::graph::{Graph, NodeError};
 use arclight::session::Session;
 use arclight::image::Image;
@@ -90,6 +91,26 @@ fn app_icon() -> egui::IconData {
     egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() }
 }
 
+/// The view preferences `viewer` shows now.
+fn view_prefs(viewer: &Viewer) -> ViewPrefs {
+    let view = &viewer.viewport3d.view;
+    let shading = view.shading.map(|s| if s == viewport3d::Shading::Lit { "lit" } else { "solid" }.to_string());
+    ViewPrefs { show_frame_size: viewer.show_frame_size, shading, wireframe: view.wireframe, lit_shadows: view.shadows }
+}
+
+/// Set `viewer` up as `prefs` say: its frame size labels now, and the 3D
+/// view for projects without their own.
+fn apply_prefs(prefs: &ViewPrefs, viewer: &mut Viewer) {
+    viewer.show_frame_size = prefs.show_frame_size;
+    let shading = match prefs.shading.as_deref() {
+        Some("lit") => Some(viewport3d::Shading::Lit),
+        Some("solid") => Some(viewport3d::Shading::Solid),
+        _ => None,
+    };
+    let new = &mut viewer.viewport3d.new_view;
+    (new.shading, new.wireframe, new.shadows) = (shading, prefs.wireframe, prefs.lit_shadows);
+}
+
 /// The square region of a `size` (pixels) texture centered on `uv` (a
 /// region of it, as fractions) and just holding it, kept inside the texture
 /// where it fits: drawn in a square, `uv` shows whole and unstretched.
@@ -133,6 +154,10 @@ struct App {
     /// `ARCLIGHT_SCREENSHOT=<png>`: save one screenshot of the window after
     /// `ARCLIGHT_SCREENSHOT_DELAY` seconds (default 2), then quit. For docs/CI.
     screenshot: Option<(PathBuf, std::time::Instant, f32)>,
+    /// The view preferences as last saved (see [`ViewPrefs`]), and where
+    /// (None: not saved, as for screenshot runs).
+    prefs: ViewPrefs,
+    prefs_path: Option<PathBuf>,
     /// Socket that MCP servers and Python scripts (`arclt.attach()`) drive
     /// this window through.
     bridge: Option<bridge::Server>,
@@ -165,12 +190,18 @@ impl App {
             .ok();
         let mut transport = Transport::default();
         transport.frame = doc.graph.project.first_frame;
+        let prefs = ViewPrefs::load(&ViewPrefs::path());
+        let mut viewer = Viewer::default();
+        apply_prefs(&prefs, &mut viewer);
+        // Until a project's own is restored (so the first frames don't
+        // read as a change and save the defaults over them).
+        viewer.viewport3d.view = viewer.viewport3d.new_view;
         App {
             doc,
             editor: NodeEditor::default(),
             curves: CurveEditor::default(),
             tab: BottomTab::Graph,
-            viewer: Viewer::default(),
+            viewer,
             transport,
             props: Properties::default(),
             worker: Worker::spawn(ctx),
@@ -187,6 +218,8 @@ impl App {
                 let delay = std::env::var("ARCLIGHT_SCREENSHOT_DELAY").ok().and_then(|d| d.parse().ok()).unwrap_or(2.0);
                 (PathBuf::from(p), std::time::Instant::now(), delay)
             }),
+            prefs,
+            prefs_path: std::env::var_os("ARCLIGHT_SCREENSHOT").is_none().then(ViewPrefs::path),
             bridge,
             scripts: ScriptJobs::default(),
             closing: false,
@@ -733,6 +766,22 @@ impl App {
         }
     }
 
+    /// Save the view preferences when they've changed (also making them
+    /// what a project without its own 3D view starts with).
+    fn save_prefs(&mut self) {
+        let now = view_prefs(&self.viewer);
+        if now == self.prefs {
+            return;
+        }
+        apply_prefs(&now, &mut self.viewer);
+        if let Some(path) = &self.prefs_path {
+            if let Err(e) = now.save(path) {
+                eprintln!("arclight-gui: can't save {}: {e}", path.display());
+            }
+        }
+        self.prefs = now;
+    }
+
     /// Help > About: logo, name, author, build time, version, OK.
     fn about_dialog(&mut self, ctx: &egui::Context) {
         if !self.about {
@@ -1032,6 +1081,7 @@ impl eframe::App for App {
         self.sync_render();
         self.update_title(&ctx);
         self.maybe_screenshot(&ctx);
+        self.save_prefs();
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         self.about_dialog(&ctx);
@@ -1180,6 +1230,27 @@ fn starter_graph() -> Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn view_prefs_come_from_the_viewer_and_set_it_up() {
+        let mut viewer = Viewer::default();
+        assert_eq!(view_prefs(&viewer), ViewPrefs::default(), "the defaults are the viewer's");
+        viewer.show_frame_size = false;
+        viewer.viewport3d.set_shading(viewport3d::Shading::Lit);
+        viewer.viewport3d.view.wireframe = true;
+        viewer.viewport3d.view.shadows = true;
+        let prefs = view_prefs(&viewer);
+        assert_eq!(prefs, ViewPrefs { show_frame_size: false, shading: Some("lit".into()), wireframe: true, lit_shadows: true });
+        // Next run: the labels off, and a project without its own 3D view
+        // starts Lit, wireframe, with shadows.
+        let mut next = Viewer::default();
+        apply_prefs(&prefs, &mut next);
+        let new = next.viewport3d.new_view;
+        assert!(!next.show_frame_size && new.shading == Some(viewport3d::Shading::Lit) && new.wireframe && new.shadows);
+        apply_prefs(&ViewPrefs { shading: Some("solid".into()), ..ViewPrefs::default() }, &mut next);
+        assert_eq!(next.viewport3d.new_view.shading, Some(viewport3d::Shading::Solid));
+        assert!(next.show_frame_size);
+    }
 
     #[test]
     fn the_about_logo_shows_square_and_whole() {

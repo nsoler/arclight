@@ -11,6 +11,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.54 — 2026-10-29
+
+- **View preferences are remembered between runs** (Dev1): View ▸ Show
+  frame size, and the 3D view's Solid / Lit, wireframe and Lit shadows
+  (for projects that haven't saved their own), in
+  `~/.local/state/arclight/view.json` (`$XDG_STATE_HOME`), apart from
+  projects and settings.json.
+
 ## 0.9.53 — 2026-10-29
 
 - **Read Geo Opacity** (Dev1): fades the whole file (each material's

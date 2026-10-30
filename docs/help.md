@@ -99,6 +99,10 @@ choose in Properties:
 - **View ▸ Show frame size**: labels the viewed frame's bottom-left
   corner 0,0 and its top-right corner with its width,height (the image's
   format); on by default.
+- View preferences (Show frame size; the 3D view's Solid / Lit, wireframe
+  and shadows) are remembered between runs in
+  `~/.local/state/arclight/view.json`; a project that saved its own 3D
+  view keeps it.
 
 ## Player
 

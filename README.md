@@ -495,6 +495,7 @@ what loaded, and `arclight ops [OP]` to see the op catalog.
 | What | Where |
 |------|-------|
 | Settings | `$XDG_CONFIG_HOME/arclight/settings.json`: `plugin_paths`, `frame_cache_mb` (GUI frame cache, default 1536), `mcp_http_addr` |
+| View preferences | `$XDG_STATE_HOME/arclight/view.json` (`~/.local/state/arclight/view.json`), written by the GUI: View ▸ Show frame size and the 3D view's Solid / Lit, wireframe and Lit shadows, remembered between runs (a project that saved its own 3D view keeps it); not part of projects or settings.json |
 | User plugins | `$XDG_DATA_HOME/arclight/plugins/` |
 | Running-GUI registry and sockets | `$XDG_RUNTIME_DIR/arclight/` |
 
