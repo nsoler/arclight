@@ -14,6 +14,20 @@ done), `docs/help.md` (the in-app help) and
   larger items. Keep it current: add items as they come up, tick or
   remove them when they ship.
 
+- **Session 12, third round:** 0.9.58 (Dev1) the active Viewer
+  (`Doc.active_viewer`, `Doc::viewer()`: last wired / viewed / clicked,
+  else the first) fixes the user's "black background" Merge report (a
+  second Viewer never showed); side notes: a Merge works in B's frame, an
+  identity Transform grows the data window by 1 px. 0.9.59 (Dev2) particle
+  dots streak in the settled blurred 3D preview (`SceneResponse.blur_times`,
+  `streak`); 0.9.60 (Dev1) Scanline Render `jitter` (Jitter shutter,
+  default on; off = the 0.9.54 render exactly; `Blur.jitter`,
+  `ops::blur_jitter`); 0.9.61 (Dev2) looked-through camera motion in the
+  blurred preview (`SceneRequest.through`, `frame_camera`). Motion blur
+  follow-ups all done. Not released yet (user: "not yet"); Actions was
+  billing-blocked at v0.9.57 (user built the DMG on a Mac). The user
+  turned down narrowing Blur's Radius to 0–100. `examples/mad-martian.png`
+  is the user's test PNG, untracked (ask before adding).
 - **Session 12, second round (user approved the master's picks):**
   0.9.52 viewer.rs scene_of takes extra inputs (Dev2); 0.9.53 Read Geo
   Opacity (Dev1); 0.9.54 view prefs in `$XDG_STATE_HOME/arclight/view.json`

@@ -1,12 +1,16 @@
 # Arclight — TODO
 
-A running list of what's still wanted, as of v0.9.57 (2026-10-29). The
+A running list of what's still wanted, as of 0.9.61 (2026-10-30). The
 3D plan (`docs/phase-4-plan.md`, M1–M13) is done; this is what's left
 around it. `HANDOFF.md` has the details and history; add items here as
 they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
+- [ ] 0.9.58–0.9.61: several Viewer nodes (the active one shows, eye
+      icon); 3D view motion blur preview: particle dots streak, looking
+      through a moving camera blurs by its motion; Scanline Render
+      Jitter shutter on / off
 - [X] 0.9.52–0.9.57: Read Geo Opacity; view preferences remembered
       between runs (Show frame size, Solid / Lit, wireframe, shadows);
       motion blur grain instead of copies at low counts; particle streaks
@@ -29,12 +33,6 @@ they come up and strike them (or delete them) when they ship.
 - [X] The macOS DMG on Apple Silicon (M4 Pro), and on an Intel Mac
 - [X] The 3D view with a real mouse and trackpad (orbit / pan / zoom,
       pie, gizmos, G / R / S typing)
-
-## Motion blur follow-ups
-
-- [ ] Blur the 3D view preview by a looked-through camera's own motion
-- [ ] Blur particles (dots) in the 3D view preview
-- [ ] An option to turn off per-pixel jitter (old banded look), if wanted
 
 ## Particles
 
