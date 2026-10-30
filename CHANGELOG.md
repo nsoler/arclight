@@ -12,6 +12,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.15 — 2026-10-30
+
+- Camera Tracker has a **mask** input: features aren't found where the
+  mask covers (its Mask channel, Invert mask), and features that move
+  into it are dropped on that frame. Mask out people or cars crossing the
+  shot so they don't pull on the solve; an animated Roto follows them
+  frame by frame.
+
 ## 0.10.14 — 2026-10-30
 
 - Read Splat's Up axis defaults to -y (Y down, Z forward), the way most

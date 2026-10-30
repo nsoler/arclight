@@ -24,6 +24,10 @@
 //!   Tomasi's affine feature tracking): the deformation is modelled
 //!   instead of becoming error, and nothing accumulates.
 //!
+//! A mask can keep features off part of the frame (something moving
+//! through the shot): none are found there, and a feature coming into it
+//! is lost ([`Blocked`]).
+//!
 //! Positions are frame pixels, y down, pixel i spanning i..i+1 (as the 2D
 //! tracker's and shapes'), so a pixel's center is at i + 0.5.
 
@@ -134,11 +138,46 @@ impl Default for Settings {
     }
 }
 
+/// Where features mustn't be on a frame: its pixels a mask covers, summed
+/// (an integral image) so a window's worth is quick to check.
+pub struct Blocked {
+    w: usize,
+    h: usize,
+    /// Blocked pixels above and left of each corner, (w + 1) × (h + 1).
+    sums: Vec<u32>,
+}
+
+impl Blocked {
+    /// A `w` × `h` frame's, pixel (x, y) blocked where `at` says.
+    pub fn new(w: usize, h: usize, at: impl Fn(usize, usize) -> bool + Sync) -> Blocked {
+        let px: Vec<bool> = (0..w * h).into_par_iter().map(|i| at(i % w, i / w)).collect();
+        let mut sums = vec![0u32; (w + 1) * (h + 1)];
+        for y in 0..h {
+            let mut row = 0;
+            for x in 0..w {
+                row += px[y * w + x] as u32;
+                sums[(y + 1) * (w + 1) + x + 1] = sums[y * (w + 1) + x + 1] + row;
+            }
+        }
+        Blocked { w, h, sums }
+    }
+
+    /// Whether any pixel of the (2r + 1)² window round `p`'s pixel is
+    /// blocked (past the frame's edges nothing is).
+    pub fn near(&self, p: Pt, r: usize) -> bool {
+        let (x, y) = (p[0].floor() as isize, p[1].floor() as isize);
+        let clip = |v: isize, n: usize| v.clamp(0, n as isize) as usize;
+        let (x0, x1, y0, y1) = (clip(x - r as isize, self.w), clip(x + r as isize + 1, self.w), clip(y - r as isize, self.h), clip(y + r as isize + 1, self.h));
+        let at = |x: usize, y: usize| self.sums[y * (self.w + 1) + x];
+        x1 > x0 && y1 > y0 && at(x1, y1) + at(x0, y0) > at(x0, y1) + at(x1, y0)
+    }
+}
+
 /// Corners of `g`: up to `max` of them, strongest first, at least
-/// `min_distance` apart and from every point of `avoid`, and `border`
-/// pixels clear of the edges. Each with its strength (the structure
-/// tensor's smaller eigenvalue).
-pub fn detect(g: &Gray, max: usize, min_distance: f32, quality: f32, border: usize, avoid: &[Pt]) -> Vec<(Pt, f32)> {
+/// `min_distance` apart and from every point of `avoid`, `border` pixels
+/// clear of the edges, and with no `blocked` pixel within `border`. Each
+/// with its strength (the structure tensor's smaller eigenvalue).
+pub fn detect(g: &Gray, max: usize, min_distance: f32, quality: f32, border: usize, avoid: &[Pt], blocked: Option<&Blocked>) -> Vec<(Pt, f32)> {
     let (w, h) = (g.w, g.h);
     if w < 2 * border + 3 || h < 2 * border + 3 || max == 0 {
         return Vec::new();
@@ -229,7 +268,7 @@ pub fn detect(g: &Gray, max: usize, min_distance: f32, quality: f32, border: usi
     let mut out = Vec::new();
     for (i, s) in candidates {
         let p = [(i % w) as f32 + 0.5, (i / w) as f32 + 0.5];
-        if far_enough(&grid, p) {
+        if far_enough(&grid, p) && !blocked.is_some_and(|b| b.near(p, border)) {
             grid[cell_of(p)].push(p);
             out.push((p, s));
             if out.len() == max {
@@ -404,6 +443,13 @@ impl FeatureTracker {
     /// the live features into it, drop those that fail the check, and top
     /// up with new features when fewer than nine in ten are left.
     pub fn push(&mut self, frame: i64, img: &Image) {
+        self.push_masked(frame, img, None);
+    }
+
+    /// [`push`](Self::push), keeping features off `blocked`: a feature
+    /// whose window reaches it is lost there, and none are found in reach
+    /// of it.
+    pub fn push_masked(&mut self, frame: i64, img: &Image, blocked: Option<&Blocked>) {
         let s = self.settings.clone();
         let pyr = Pyramid::new(Gray::new(img), s.levels);
         if let Some((pf, prev)) = &self.prev {
@@ -420,7 +466,7 @@ impl FeatureTracker {
                     let half = |p: Pt| [p[0] - 0.5, p[1] - 0.5];
                     let (a, r) = affine_refine(&self.anchors[&t.start], &pyr.levels[0], half(t.points[0]), self.warps[i], half(q), s.radius + 2)?;
                     let r = [r[0] + 0.5, r[1] + 0.5];
-                    ((r[0] - q[0]).hypot(r[1] - q[1]) < 2.0).then_some((a, r))
+                    ((r[0] - q[0]).hypot(r[1] - q[1]) < 2.0 && !blocked.is_some_and(|b| b.near(r, s.radius))).then_some((a, r))
                 })
                 .collect();
             let mut still = Vec::with_capacity(self.live.len());
@@ -436,7 +482,7 @@ impl FeatureTracker {
         if self.live.len() * 10 < s.max_features * 9 {
             let avoid: Vec<Pt> = self.live().map(|t| *t.points.last().unwrap()).collect();
             let border = s.radius + 2;
-            let found = detect(&pyr.levels[0], s.max_features - self.live.len(), s.min_distance, s.quality, border, &avoid);
+            let found = detect(&pyr.levels[0], s.max_features - self.live.len(), s.min_distance, s.quality, border, &avoid, blocked);
             if !found.is_empty() {
                 self.anchors.insert(frame, std::sync::Arc::new(pyr.levels[0].clone()));
             }
@@ -507,17 +553,23 @@ pub(crate) mod tests {
                 img.set(x, y, [1.0; 4]);
             }
         }
-        let found = detect(&Gray::new(&img), 10, 5.0, 0.1, 4, &[]);
+        let found = detect(&Gray::new(&img), 10, 5.0, 0.1, 4, &[], None);
         assert_eq!(found.len(), 4, "{found:?}");
         for c in [[30.0, 20.0], [55.0, 20.0], [55.0, 40.0], [30.0, 40.0]] {
             assert!(found.iter().any(|(p, _)| (p[0] - c[0]).abs() <= 2.0 && (p[1] - c[1]).abs() <= 2.0), "{c:?} in {found:?}");
         }
         // Avoiding a corner, or with a spacing wider than the square, fewer.
-        assert_eq!(detect(&Gray::new(&img), 10, 5.0, 0.1, 4, &[[30.0, 20.0]]).len(), 3);
-        assert_eq!(detect(&Gray::new(&img), 10, 40.0, 0.1, 4, &[]).len(), 1);
+        assert_eq!(detect(&Gray::new(&img), 10, 5.0, 0.1, 4, &[[30.0, 20.0]], None).len(), 3);
+        // Blocked over the square's right half (and within the border of
+        // it): its left corners only.
+        let right = Blocked::new(80, 60, |x, _| x >= 45);
+        let left = detect(&Gray::new(&img), 10, 5.0, 0.1, 4, &[], Some(&right));
+        assert!(left.len() == 2 && left.iter().all(|(p, _)| p[0] < 40.0), "{left:?}");
+        assert!(right.near([40.5, 30.0], 5) && !right.near([40.5, 30.0], 4) && !right.near([200.0, 30.0], 4) && right.near([79.5, 59.5], 0));
+        assert_eq!(detect(&Gray::new(&img), 10, 40.0, 0.1, 4, &[], None).len(), 1);
         // Plenty of blobs: spaced as asked, kept off the border.
         let blobs = Blobs::new(300, 320.0, 240.0, 7);
-        let found = detect(&Gray::new(&blobs.image(320, 240, 0.0, 0.0)), 100, 10.0, 0.01, 9, &[]);
+        let found = detect(&Gray::new(&blobs.image(320, 240, 0.0, 0.0)), 100, 10.0, 0.01, 9, &[], None);
         assert_eq!(found.len(), 100);
         for (i, (p, _)) in found.iter().enumerate() {
             assert!(p[0] > 9.0 && p[1] > 9.0 && p[0] < 311.0 && p[1] < 231.0, "{p:?}");
@@ -531,7 +583,7 @@ pub(crate) mod tests {
         let blobs = Blobs::new(1200, 700.0, 540.0, 3);
         let a = Pyramid::new(Gray::new(&blobs.image(640, 480, 0.0, 0.0)), 4);
         assert_eq!(a.levels.len(), 4);
-        let found = detect(&a.levels[0], 60, 12.0, 0.01, 40, &[]);
+        let found = detect(&a.levels[0], 60, 12.0, 0.01, 40, &[], None);
         assert!(found.len() >= 40, "{}", found.len());
         // Content moving by (−d): features move by −d too.
         for d in [[0.3f32, -0.2], [3.6, 1.25], [-18.4, 11.7]] {

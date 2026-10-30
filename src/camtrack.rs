@@ -13,7 +13,9 @@
 //! [`Solution::set_scale`] move it to something meaningful, and
 //! [`card_on_points`] / [`Solution::centroid`] place things on the points.
 
-use crate::features::{FeatureTracker, Settings as TrackSettings};
+use crate::features::{Blocked, FeatureTracker, Settings as TrackSettings};
+use crate::graph::{Evaluator, Graph};
+use crate::ops::EvalContext;
 use crate::geom::{self, Camera, Vec3};
 use crate::image::{Image, Size};
 use crate::render::Progress;
@@ -25,6 +27,7 @@ use nalgebra::{Matrix3, Matrix4, Rotation3};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 /// Which solve to use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,6 +77,11 @@ pub struct Settings {
     pub mode: Mode,
     /// How far from a tripod solve's camera its points go.
     pub distance: f64,
+    /// How to read a connected mask (where it covers, nothing is
+    /// tracked): one of [`crate::ops::MASK_CHANNELS`], and whether it's
+    /// flipped.
+    pub mask_channel: String,
+    pub mask_invert: bool,
 }
 
 impl Settings {
@@ -91,6 +99,8 @@ impl Settings {
             max_error: num("max_error", 1.0),
             mode: p["solve_mode"].as_str().and_then(Mode::parse).unwrap_or(Mode::Auto),
             distance: num("distance", 10.0).max(1e-3),
+            mask_channel: p["mask_channel"].as_str().unwrap_or("alpha").to_string(),
+            mask_invert: p["mask_invert"].as_bool().unwrap_or(false),
         }
     }
 }
@@ -300,10 +310,34 @@ pub fn card_on_points(sol: &Solution, ids: &[usize], frame: i64) -> Result<Map<S
     Ok(out)
 }
 
-/// Track the features of frames `s.first..=s.last` (from `frames`) and solve
-/// the camera. `progress` counts tracked frames, then solved ones (out of
-/// twice the frame count) and is checked for a cancel.
-pub fn run(frames: &mut dyn FnMut(i64) -> Result<Image>, s: &Settings, progress: &Progress) -> Result<Solution> {
+/// A frame to track, and its mask's frame when one is connected.
+pub type Frame = (Image, Option<Arc<Image>>);
+
+/// Camera Tracker `node`'s input frames ([`crate::track::input_frames`]),
+/// each with its mask input's, evaluated on the same frame.
+pub fn input_frames(graph: &Graph, node: &str) -> Result<impl FnMut(i64) -> Result<Frame> + use<>> {
+    let mut plate = crate::track::input_frames(graph, node)?;
+    let mask = graph.node(node).and_then(|n| n.inputs.get(1)).filter(|m| !m.is_empty()).cloned();
+    let graph = graph.clone();
+    let mut eval = Evaluator::new();
+    Ok(move |frame| {
+        let img = plate(frame)?;
+        let ctx = EvalContext { frame, write_outputs: false };
+        let mask = mask.as_ref().map(|m| eval.evaluate(&graph, m, &ctx).with_context(|| format!("the mask {m}"))).transpose()?;
+        Ok((img, mask))
+    })
+}
+
+/// The pixels of a `format` frame that `mask` covers (more than half).
+fn blocked(mask: &Image, format: Size, s: &Settings) -> Blocked {
+    Blocked::new(format.width, format.height, |x, y| crate::ops::mask_coverage(mask, &s.mask_channel, s.mask_invert, x as i32, y as i32) > 0.5)
+}
+
+/// Track the features of frames `s.first..=s.last` (from `frames`; none
+/// where their masks cover) and solve the camera. `progress` counts
+/// tracked frames, then solved ones (out of twice the frame count) and is
+/// checked for a cancel.
+pub fn run(frames: &mut dyn FnMut(i64) -> Result<Frame>, s: &Settings, progress: &Progress) -> Result<Solution> {
     if s.last <= s.first {
         bail!("the frame range needs at least two frames");
     }
@@ -316,9 +350,9 @@ pub fn run(frames: &mut dyn FnMut(i64) -> Result<Image>, s: &Settings, progress:
         if progress.cancel.load(Ordering::Relaxed) {
             bail!("cancelled");
         }
-        let img = frames(f).with_context(|| format!("frame {f}"))?;
+        let (img, mask) = frames(f).with_context(|| format!("frame {f}"))?;
         format.get_or_insert(img.format);
-        tracker.push(f, &img);
+        tracker.push_masked(f, &img, mask.map(|m| blocked(&m, img.format, s)).as_ref());
         progress.done.fetch_add(1, Ordering::Relaxed);
     }
     let format = format.unwrap();
@@ -540,6 +574,77 @@ mod tests {
             let got = [sum[0] / n, sum[1] / n];
             assert!((got[0] - want[0]).hypot(got[1] - want[1]) < 2.0, "frame {f}: marker at {got:?}, floor spot at {want:?}");
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A rendered shot with a card moving across it in front of the set:
+    /// masked out (by a render of the card alone, frame by frame), no
+    /// feature is ever on it and the camera solves as well as without it.
+    #[test]
+    fn a_masked_moving_object_is_left_out_of_the_solve() {
+        use crate::session::Session;
+        let dir = std::env::temp_dir().join(format!("arclight_camtrack_mask_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tex: Vec<String> = (0..4)
+            .map(|i| {
+                let path = dir.join(format!("tex{i}.exr"));
+                crate::features::tests::blob_texture(2500, 768, 768, 51 + i).write(&path).unwrap();
+                path.to_string_lossy().into_owned()
+            })
+            .collect();
+        let keys = |a: [f64; 3], b: [f64; 3]| json!({ "keys": [[1, a], [24, b]], "interp": "linear" });
+        let graph: crate::graph::Graph = serde_json::from_value(json!({
+            "project": { "first_frame": 1, "last_frame": 24, "fps": 24, "format": { "width": 480, "height": 270 } },
+            "nodes": [
+                { "id": "t0", "op": "read", "params": { "path": tex[0] } },
+                { "id": "t1", "op": "read", "params": { "path": tex[1] } },
+                { "id": "t2", "op": "read", "params": { "path": tex[2] } },
+                { "id": "t3", "op": "read", "params": { "path": tex[3] } },
+                { "id": "wall", "op": "card", "inputs": ["t0"], "params": { "translate": [0, 3, -16], "size": [36, 24] } },
+                { "id": "floor", "op": "card", "inputs": ["t1"], "params": { "translate": [0, -1.5, -10], "rotate": [-90, 0, 0], "size": [30, 24] } },
+                { "id": "panel", "op": "card", "inputs": ["t2"], "params": { "translate": [-2.5, 1.5, -7], "rotate": [0, 25, 0], "size": [3, 3] } },
+                // Crossing the frame, turning as it goes.
+                { "id": "mover", "op": "card", "inputs": ["t3"], "params": { "translate": keys([-4.0, 0.5, -6.0], [4.5, 1.0, -5.0]), "rotate": keys([0.0, 0.0, 0.0], [10.0, 40.0, 20.0]), "size": [3.5, 3.5] } },
+                { "id": "truecam", "op": "camera", "params": { "focal": 24, "translate": keys([0.0, 0.0, 0.0], [1.8, 0.4, -0.8]), "rotate": keys([0.0, 0.0, 0.0], [-2.0, 6.0, 0.0]) } },
+                { "id": "still", "op": "scene", "inputs": ["wall", "floor", "panel"] },
+                { "id": "busy", "op": "scene", "inputs": ["wall", "floor", "panel", "mover"] },
+                { "id": "only", "op": "scene", "inputs": ["mover"] },
+                { "id": "clean", "op": "scanline_render", "inputs": ["still", "truecam", ""], "params": { "samples": 2 } },
+                { "id": "plate", "op": "scanline_render", "inputs": ["busy", "truecam", ""], "params": { "samples": 2 } },
+                { "id": "matte", "op": "scanline_render", "inputs": ["only", "truecam", ""], "params": { "samples": 2 } },
+                { "id": "ct_clean", "op": "camera_tracker", "inputs": ["clean"], "params": { "focal": 24 } },
+                { "id": "ct", "op": "camera_tracker", "inputs": ["plate", "matte"], "params": { "focal": 24 } },
+            ] })).unwrap();
+        // The truth: the camera's centers, to compare a solve's with (up
+        // to its arbitrary scale and placement).
+        let truth: Vec<Vec3> = (1..=24).map(|f| Vec3::new(1.8, 0.4, -0.8) * ((f - 1) as f64 / 23.0)).collect();
+        let off = |sol: &Solution| {
+            let got: Vec<Vec3> = (1..=24).map(|f| geom::transform_point(&sol.camera(f).unwrap().world, &Vec3::zeros())).collect();
+            let (k, r, t) = sfm::similarity(&got, &truth);
+            got.iter().zip(&truth).map(|(a, b)| (k * (r * a) + t - b).norm()).fold(0.0, f64::max)
+        };
+        let mut s = Session::new(graph);
+        for id in ["ct_clean", "ct"] {
+            let summary = s.track_camera(id, None, None, &Progress::default()).unwrap();
+            assert_eq!(summary["frames_solved"], 24, "{id}: {summary}");
+            assert!(summary["rms_error_px"].as_f64().unwrap() < 0.3, "{id}: {summary}");
+        }
+        let (clean, masked) = (off(&s.camera_solution("ct_clean").unwrap()), off(&s.camera_solution("ct").unwrap()));
+        assert!(masked < 0.01 && masked < clean * 2.0 + 0.002, "masked: {masked} off; without the card: {clean}");
+        // Tracked again by hand: the card is in the shot, and no live
+        // feature ever touches its matte.
+        let settings = Settings::from_params(&crate::ops::params_with_defaults("camera_tracker", &json!({})), 1, 24);
+        let mut frames = input_frames(&s.graph, "ct").unwrap();
+        let mut tracker = FeatureTracker::new(TrackSettings { max_features: settings.features, min_distance: settings.min_distance, ..TrackSettings::default() });
+        let mut covered = 0;
+        for f in 1..=24 {
+            let (img, mask) = frames(f).unwrap();
+            let b = blocked(mask.as_ref().unwrap(), img.format, &settings);
+            covered += (0..img.format.height).filter(|&y| (0..img.format.width).any(|x| b.near([x as f32, y as f32], 0))).count();
+            tracker.push_masked(f, &img, Some(&b));
+            assert!(tracker.live().all(|t| !b.near(*t.points.last().unwrap(), 0)), "frame {f}: a feature on the card");
+        }
+        assert!(covered > 24 * 40, "the card crosses the shot: {covered} rows");
         std::fs::remove_dir_all(&dir).ok();
     }
 

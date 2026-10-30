@@ -1156,7 +1156,7 @@ pub static OPS: &[OpInfo] = &[
         name: "camera_tracker",
         label: "Camera Tracker",
         category: Category::Scene,
-        inputs: &[IN],
+        inputs: &[IN, MASK],
         params: &[
             fixed!("features", "Features", ParamKind::Int { min: 20, max: 2000 }, 300),
             fixed!("min_distance", "Feature spacing (px)", ParamKind::Float { min: 2.0, max: 100.0 }, 12.0),
@@ -1166,6 +1166,8 @@ pub static OPS: &[OpInfo] = &[
             fixed!("max_error", "Max error (px)", ParamKind::Float { min: 0.2, max: 5.0 }, 1.0),
             fixed!("solve_mode", "Solve", ParamKind::Choice(SOLVE_MODES), "auto"),
             fixed!("distance", "Tripod distance", ParamKind::Float { min: 0.1, max: 10000.0 }, 10.0),
+            MASK_CHANNEL,
+            MASK_INVERT,
         ],
         overlay: Overlay::CameraTracker,
         mask_base: None,
@@ -1176,7 +1178,9 @@ pub static OPS: &[OpInfo] = &[
                The focal length is used as given, or as a starting guess with Solve focal length (which needs the camera to move, \
                or to turn enough on a tripod). Solve: Free move for a camera that travels, Tripod for one that only turns about \
                its center (its points go on a sphere Tripod distance away, as they have no depth), or Auto (picks Tripod when \
-               the camera only turns).",
+               the camera only turns). A mask (its Mask channel, frame by frame, so an animated Roto follows along) keeps the \
+               tracker off what it covers, such as people or cars moving through the shot: no features are found there, and \
+               features going into it are dropped.",
     },
     OpInfo {
         name: "point_cloud",
@@ -1783,6 +1787,12 @@ fn mask_value(mask: &Mask, x: i32, y: i32) -> f32 {
     }
     .clamp(0.0, 1.0);
     if mask.invert { 1.0 - v } else { v }
+}
+
+/// How much `mask` covers at (x, y), 0–1: its `channel` (one of
+/// [`MASK_CHANNELS`]), flipped when `invert`, as a masked op reads it.
+pub fn mask_coverage(mask: &Image, channel: &str, invert: bool, x: i32, y: i32) -> f32 {
+    mask_value(&Mask { image: mask, channel, invert }, x, y)
 }
 
 /// `result` blended back toward `base` by `mix × mask` ([`mask_value`]).

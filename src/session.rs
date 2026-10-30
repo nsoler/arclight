@@ -260,7 +260,7 @@ impl Session {
             p[*k] = v.clone();
         }
         let settings = camtrack::Settings::from_params(&p, self.graph.project.first_frame, self.graph.project.last_frame);
-        let mut frames = track::input_frames(&self.graph, id)?;
+        let mut frames = camtrack::input_frames(&self.graph, id)?;
         let sol = camtrack::run(&mut frames, &settings, progress)?;
         let summary = solution_summary(&sol, settings.first, settings.last);
         self.checkpoint();

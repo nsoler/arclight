@@ -532,6 +532,10 @@ sun coming from one side.
   keyed on rotation only) and puts the points on a sphere **Tripod
   distance** away, as they have no depth. Cards still go on them; setting
   the scale only changes the sphere's size.
+- Connect a **mask** (an animated Roto, say) over anything moving through
+  the shot (people, cars): no features are found under it and features
+  that move into it are dropped, so only the set drives the solve.
+  **Mask channel** and **Invert mask** read it as on other nodes.
 
 ## Preferences
 

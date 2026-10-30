@@ -33,7 +33,7 @@ fn start(doc: &Doc, id: &str) -> CamJob {
     let Some(node) = doc.node(id) else { return fail(anyhow::anyhow!("no node {id}")) };
     let p = ops::params_with_defaults("camera_tracker", &node.params);
     let settings = camtrack::Settings::from_params(&p, doc.graph.project.first_frame, doc.graph.project.last_frame);
-    let mut frames = match arclight::track::input_frames(&doc.graph, id) {
+    let mut frames = match camtrack::input_frames(&doc.graph, id) {
         Ok(f) => f,
         Err(e) => return fail(e),
     };
