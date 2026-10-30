@@ -422,11 +422,14 @@ pub enum GadgetKind {
     Attractor { radius: f64 },
     Vortex { axis: Vec3, radius: f64 },
     Bounce { normal: Vec3 },
+    /// A Splat Crop's region: the box or ball (radius ½) of side 1 its
+    /// world places (Center, Rotate, Size).
+    Crop { sphere: bool },
 }
 
 /// The emitters, attractors, vortices and bounce planes of `scene`'s
-/// particle streams, as their systems are at the streams' frames (each
-/// node once).
+/// particle streams, as their systems are at the streams' frames, and its
+/// Splat Crops' regions (each node once).
 pub fn gadgets(scene: &Scene) -> Vec<Gadget> {
     let mut out: Vec<Gadget> = Vec::new();
     for stream in &scene.particles {
@@ -449,6 +452,13 @@ pub fn gadgets(scene: &Scene) -> Vec<Gadget> {
                 },
             };
             out.push(Gadget { node: part.node.clone(), world, kind });
+        }
+    }
+    for r in &scene.regions {
+        if !out.iter().any(|g| g.node == r.node) {
+            // (A region's world takes the cube of side 2 onto it; the
+            // gadget's, Center / Rotate / Size as the gizmo sets them.)
+            out.push(Gadget { node: r.node.clone(), world: r.world * Mat4::new_scaling(2.0), kind: GadgetKind::Crop { sphere: r.sphere } });
         }
     }
     out
@@ -532,6 +542,11 @@ pub fn gadget_lines(g: &Gadget, size: f64) -> Vec<(Vec3, Vec3)> {
             let mut out: Vec<(Vec3, Vec3)> = (0..4).map(|i| (c[i], c[(i + 1) % 4])).collect();
             out.extend(arrow_lines(at, at + normal * size));
             out
+        }
+        GadgetKind::Crop { sphere: true } => [[0, 1], [1, 2], [0, 2]].into_iter().flat_map(|a| ring_local(&g.world, a, 0.5)).collect(),
+        GadgetKind::Crop { sphere: false } => {
+            let corner = |i: usize| local([-0.5, 0.5][i & 1], [-0.5, 0.5][(i >> 1) & 1], [-0.5, 0.5][(i >> 2) & 1]);
+            BOX_EDGES.iter().map(|&(a, b)| (corner(a), corner(b))).collect()
         }
     }
 }
@@ -1099,6 +1114,8 @@ const SELECTED: Color32 = Color32::from_rgb(255, 160, 40);
 const LIGHT: Color32 = Color32::from_rgb(250, 225, 120);
 /// Particle emitters and forces.
 const GADGET: Color32 = Color32::from_rgb(150, 220, 130);
+/// Splat Crop regions.
+const CROP: Color32 = Color32::from_rgb(200, 150, 235);
 
 // `projector`, `has_scene` and `object_world` are the seam for the
 // transform gizmos (gizmo3d.rs) and the viewer.
@@ -1949,10 +1966,12 @@ impl Viewport3d {
                 painter.circle_filled(s, if on { 3.0 } else { 1.8 }, if on { SELECTED } else { color });
             }
         }
-        // Particle emitters, attractors, vortices and bounce planes.
+        // Particle emitters, attractors, vortices and bounce planes; Splat
+        // Crops' regions.
         for g in gadgets(&scene) {
             let on = selected(&g.node);
-            let stroke = Stroke::new(if on { 2.0 } else { 1.2 }, if on { SELECTED } else { GADGET });
+            let color = if matches!(g.kind, GadgetKind::Crop { .. }) { CROP } else { GADGET };
+            let stroke = Stroke::new(if on { 2.0 } else { 1.2 }, if on { SELECTED } else { color });
             for (a, b) in gadget_lines(&g, size) {
                 line(a, b, stroke);
             }
@@ -2876,6 +2895,62 @@ mod tests {
         let bend = (line[0] + line[2]) / 2.0 - line[1];
         assert!(bend.norm() > 1e-6, "curves with the acceleration");
         assert!(streak(pt, &[], fps).is_empty(), "a dot when not blurred");
+    }
+
+    #[test]
+    fn splat_crop_regions_are_drawn_picked_and_resized() {
+        use crate::gizmo3d::{tests::front, GestureKey, Input, Mode, Outcome, Transforming};
+        use arclight::graph::{Evaluator, Graph, NodeSpec};
+        let file = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/geo/splats.ply");
+        let node = |id: &str, op: &str, input: &str, params: serde_json::Value| NodeSpec { id: id.into(), op: op.into(), inputs: vec![input.into()], params, pos: None };
+        let graph = Graph {
+            nodes: vec![
+                node("cap", "read_splat", "", json!({ "file": file, "translate": [0, 0, -12] })),
+                node("crop", "splat_crop", "cap", json!({ "center": [3, 0, -8], "size": [2, 4, 6], "rotate": [0, 30, 0] })),
+            ],
+            ..Default::default()
+        };
+        let mut doc = Doc::new(graph, None);
+        let scene = |doc: &Doc| {
+            let img = Evaluator::new().evaluate(&doc.graph, "crop", &arclight::ops::EvalContext { frame: 1, write_outputs: false }).unwrap();
+            img.scene.as_deref().unwrap().clone()
+        };
+        let s = scene(&doc);
+        let gs = gadgets(&s);
+        assert_eq!(gs.len(), 1);
+        let g = &gs[0];
+        assert!(matches!(g.kind, GadgetKind::Crop { sphere: false }) && g.node == "crop");
+        // Its world is Center / Rotate / Size, as the gizmo sets them.
+        assert!((g.world - geom::trs([3.0, 0.0, -8.0], [0.0, 30.0, 0.0], [2.0, 4.0, 6.0])).norm() < 1e-9);
+        let lines = gadget_lines(g, 1.0);
+        assert_eq!(lines.len(), 12, "a box's edges");
+        let top = lines.iter().map(|(a, b)| a.y.max(b.y)).fold(f64::MIN, f64::max);
+        assert!((top - 2.0).abs() < 1e-9, "4 high: {top}");
+        let mut ball = s.clone();
+        ball.regions[0].sphere = true;
+        assert_eq!(gadget_lines(&gadgets(&ball)[0], 1.0).len(), 96, "three rings");
+        // Picked by its middle; framed; the gizmo finds it.
+        let (_, p, _) = picking_scene();
+        let loc = |_: &str| false;
+        let mid = p.project(Vec3::new(3.0, 0.0, -8.0)).unwrap().0;
+        assert_eq!(pick(&s, &p, mid + Vec2::new(2.0, 1.0), &loc), Some(Hit::Object("crop".into())));
+        assert!(bounds(&s, Some(&|n: &str| n == "crop")).is_some_and(|(c, _)| (c - Vec3::new(3.0, 0.0, -8.0)).norm() < 1e-9));
+        let v = Viewport3d { scene: Some(Arc::new(s.clone())), ..Viewport3d::default() };
+        assert_eq!(v.object_world("crop"), Some(g.world));
+        // S X 2 Enter: twice as wide (its Size); G Y 1 Enter: up 1 (its Center).
+        doc.commit(false);
+        let view = front();
+        let mut t = Transforming::start(&doc, "crop", Mode::Scale, &g.world, Pos2::new(400.0, 300.0), 1).unwrap();
+        t.step(&Input { mouse: Some(Pos2::new(400.0, 300.0)), keys: vec![GestureKey::Axis(0, false), GestureKey::Digit('2')], ..Input::default() }, &view, &mut doc);
+        assert_eq!(t.step(&Input { confirm: true, ..Input::default() }, &view, &mut doc), Outcome::Done);
+        let size: Vec<f64> = serde_json::from_value(doc.param("crop", "size")).unwrap();
+        assert!((size[0] - 4.0).abs() < 1e-9 && (size[1] - 4.0).abs() < 1e-9 && (size[2] - 6.0).abs() < 1e-9, "{size:?}");
+        let mut m = Transforming::start(&doc, "crop", Mode::Move, &gadgets(&scene(&doc))[0].world, Pos2::new(400.0, 300.0), 1).unwrap();
+        m.step(&Input { mouse: Some(Pos2::new(400.0, 300.0)), keys: vec![GestureKey::Axis(1, false), GestureKey::Digit('1')], ..Input::default() }, &view, &mut doc);
+        m.step(&Input { confirm: true, ..Input::default() }, &view, &mut doc);
+        let center: Vec<f64> = serde_json::from_value(doc.param("crop", "center")).unwrap();
+        assert!((center[1] - 1.0).abs() < 1e-9 && (center[0] - 3.0).abs() < 1e-9, "{center:?}");
+        assert_eq!(gadgets(&scene(&doc))[0].world.column(3).xyz(), Vec3::new(3.0, 1.0, -8.0), "the box follows");
     }
 
     #[test]

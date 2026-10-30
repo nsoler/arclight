@@ -12,6 +12,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.11 — 2026-10-30
+
+- **Splat Crop's region in the 3D view** (Dev2, splat plan S4): its box
+  or sphere shows (purple; orange when selected) for any viewed node
+  downstream; click its middle to select it, and move, turn or resize it
+  with G / R / S or the gizmo (its Center, Rotate and Size).
+
 ## 0.10.10 — 2026-10-30
 
 - **Scene regions** (Dev1, internal, for the Splat Crop handle): Splat

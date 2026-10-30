@@ -287,7 +287,10 @@ selected object.
   and **F** frames splats too.
 - **Splat Crop** keeps a capture's splats inside a box or sphere
   (Center, Size, Rotate; **Invert** keeps those outside), to cut it down
-  or clear floaters; everything else in the scene passes through.
+  or clear floaters; everything else in the scene passes through. Its
+  box or sphere shows in the 3D view (purple; orange when selected):
+  click its middle to select it, then G / R / S or the gizmo place, turn
+  and size it.
 - **Splat Color** grades captures (**Exposure**, **Saturation**, **Gain**,
   exact from every viewing angle) and their **Opacity**; **View
   independent** drops the color's change with the angle (quicker, and

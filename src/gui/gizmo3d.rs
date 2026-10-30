@@ -495,13 +495,16 @@ pub fn param_of(mode: Mode) -> &'static str {
 }
 
 /// The param `mode` changes on a node of `op`: its translate, rotate or
-/// scale, or a particle force's point (an Attractor's position, a
-/// Vortex's center, a Bounce plane's point), which only moves.
+/// scale, a particle force's point (an Attractor's position, a Vortex's
+/// center, a Bounce plane's point), which only moves, or a Splat Crop's
+/// center and size.
 pub fn param_for(op: &str, mode: Mode) -> &'static str {
     match (op, mode) {
         ("particle_attractor", Mode::Move) => "position",
         ("particle_vortex", Mode::Move) => "center",
         ("particle_bounce", Mode::Move) => "point",
+        ("splat_crop", Mode::Move) => "center",
+        ("splat_crop", Mode::Scale) => "size",
         _ => param_of(mode),
     }
 }
