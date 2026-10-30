@@ -145,8 +145,8 @@ fn linear(m: &Mat4) -> nalgebra::Matrix3<f64> {
 }
 
 /// Splat `i` of `s` seen through `cam` in a frame of `format` (`to_cam`:
-/// its space to the camera's; `eye_own`: the camera in its space), or None
-/// if it doesn't show.
+/// its space to the camera's; `eye_own`: the camera in its space, or for
+/// an orthographic camera the way it looks), or None if it doesn't show.
 #[allow(clippy::too_many_arguments)]
 fn project(s: &Splats, i: usize, cam: &Camera, format: Size, to_cam: &Mat4, eye_own: &Vec3, set: usize, degree: u8) -> Option<Projected> {
     let opacity = s.opacity[i];
@@ -160,13 +160,19 @@ fn project(s: &Splats, i: usize, cam: &Camera, format: Size, to_cam: &Mat4, eye_
         return None;
     }
     let f = cam.focal_pixels(format);
-    let center = [format.width as f64 / 2.0 + f * p.x / depth, format.height as f64 / 2.0 - f * p.y / depth];
+    let (center, j) = if cam.is_ortho() {
+        // Flat: the same scale everywhere, nothing for depth.
+        let k = cam.pixels_per_unit(depth, format);
+        ([format.width as f64 / 2.0 + k * p.x, format.height as f64 / 2.0 - k * p.y], nalgebra::Matrix2x3::new(k, 0.0, 0.0, 0.0, -k, 0.0))
+    } else {
+        let center = [format.width as f64 / 2.0 + f * p.x / depth, format.height as f64 / 2.0 - f * p.y / depth];
+        (center, nalgebra::Matrix2x3::new(f / depth, 0.0, f * p.x / (depth * depth), 0.0, -f / depth, -f * p.y / (depth * depth)))
+    };
     // Its covariance in camera space, then on the frame.
     let r = rotation(s.rotations[i]);
     let sc = s.scales[i].map(f64::from);
     let m = linear(to_cam) * r * nalgebra::Matrix3::from_diagonal(&nalgebra::Vector3::new(sc[0], sc[1], sc[2]));
     let cov = m * m.transpose();
-    let j = nalgebra::Matrix2x3::new(f / depth, 0.0, f * p.x / (depth * depth), 0.0, -f / depth, -f * p.y / (depth * depth));
     let c2 = j * cov * j.transpose();
     let (a, b, c) = (c2[(0, 0)] + DILATE, c2[(0, 1)], c2[(1, 1)] + DILATE);
     let det = a * c - b * b;
@@ -178,7 +184,8 @@ fn project(s: &Splats, i: usize, cam: &Camera, format: Size, to_cam: &Mat4, eye_
     if center[0] + reach < 0.0 || center[1] + reach < 0.0 || center[0] - reach > format.width as f64 || center[1] - reach > format.height as f64 {
         return None;
     }
-    let dir = (pos - eye_own).try_normalize(1e-300).map_or([0.0, 0.0, 1.0], |d| [d.x as f32, d.y as f32, d.z as f32]);
+    let look = if cam.is_ortho() { *eye_own } else { pos - eye_own };
+    let dir = look.try_normalize(1e-300).map_or([0.0, 0.0, 1.0], |d| [d.x as f32, d.y as f32, d.z as f32]);
     let color = crate::splat::sh_color(s.sh_of(i), degree.min(s.sh_degree), dir);
     Some(Projected { center: center.map(|v| v as f32), conic: [(c / det) as f32, (-b / det) as f32, (a / det) as f32], depth: depth as f32, color, opacity: opacity.min(ALPHA_MAX), set: set as u32, src: i as u32 })
 }
@@ -265,7 +272,7 @@ fn project_all(sets: &[Arc<Splats>], cam: &Camera, format: Size, degree: u8) -> 
         .flat_map(|(k, s)| {
             let to_cam = view * s.world;
             let own = s.world.try_inverse().unwrap_or_else(Mat4::identity);
-            let eye_own = geom::transform_point(&own, &eye);
+            let eye_own = if cam.is_ortho() { linear(&own) * -cam.to_eye(&Vec3::zeros()) } else { geom::transform_point(&own, &eye) };
             let n = s.positions.len().min(s.scales.len()).min(s.rotations.len()).min(s.opacity.len());
             let n = n.min(s.sh.len() / s.sh_stride().max(1));
             (0..n).into_par_iter().filter_map(|i| project(s, i, cam, format, &to_cam, &eye_own, k, degree)).collect::<Vec<_>>()
@@ -371,7 +378,6 @@ impl Prepared {
     /// (through the placement's inverse transpose, as normals go), turned
     /// toward the camera at `cam`.
     pub(super) fn add_normals(&mut self, sets: &[Arc<Splats>], cam: &Camera) {
-        let eye = geom::transform_point(&cam.world, &Vec3::zeros());
         let normal_of: Vec<nalgebra::Matrix3<f64>> = sets.iter().map(|s| linear(&s.world).try_inverse().unwrap_or_else(nalgebra::Matrix3::identity).transpose()).collect();
         self.normals = self
             .view
@@ -384,7 +390,7 @@ impl Prepared {
                 let n = normal_of[p.set as usize] * rotation(s.rotations[i]).column(k);
                 let at = geom::transform_point(&s.world, &Vec3::from(s.positions[i].map(f64::from)));
                 let n = n.try_normalize(1e-300).unwrap_or_else(Vec3::z);
-                let n = if n.dot(&(eye - at)) < 0.0 { -n } else { n };
+                let n = if n.dot(&cam.to_eye(&at)) < 0.0 { -n } else { n };
                 [n.x as f32, n.y as f32, n.z as f32]
             })
             .collect();
@@ -707,5 +713,21 @@ mod tests {
         assert_eq!(out.at(64, 32), [0.0; 4], "held out");
         let alone = render(&scene(s), &camera(), FMT, 1, None);
         assert!(alone.at(64, 32)[3] > 0.9);
+    }
+
+    /// Through an orthographic camera a round splat is as wide at any
+    /// distance: its size times the pixels per unit.
+    #[test]
+    fn an_orthographic_splat_keeps_its_size() {
+        let cam = Camera { ortho: 16.0, ..camera() };
+        let k = cam.pixels_per_unit(1.0, FMT);
+        let sigma = ((k * 0.5).powi(2) + DILATE).sqrt();
+        for z in [-4.0, -400.0] {
+            let out = render(&scene(splats(&[([0.0, 0.0, z], 0.5, 0.99, [1.0; 3])])), &cam, FMT, 1, None);
+            let at_sigma = (64..128).find(|&x| (out.at(x, 32)[3] as f64) < 0.99 * (-0.5f64).exp()).unwrap();
+            let measured = at_sigma as f64 + 0.5 - 64.0;
+            assert!((measured - sigma).abs() < 1.0, "at {z}: 1σ {measured} px, expected {sigma:.2}");
+            assert!((out.plane_at("depth", 64, 32) as f64 + z as f64).abs() < 1e-3);
+        }
     }
 }

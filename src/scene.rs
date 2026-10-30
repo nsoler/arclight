@@ -222,7 +222,8 @@ pub fn placement(p: &Value) -> Mat4 {
     geom::trs(numbers(&p["translate"], 0.0), numbers(&p["rotate"], 0.0), numbers(&p["scale"], 1.0))
 }
 
-/// A Camera node's camera, from its resolved params.
+/// A Camera node's camera, from its resolved params (orthographic with
+/// `projection` "orthographic", `ortho_width` across).
 pub fn camera(p: &Value) -> Camera {
     let film = numbers::<2>(&p["film_back"], 0.0);
     let d = Camera::default();
@@ -232,6 +233,10 @@ pub fn camera(p: &Value) -> Camera {
         world: placement(p),
         near: p["near"].as_f64().filter(|v| *v > 0.0).unwrap_or(d.near),
         far: p["far"].as_f64().filter(|v| *v > 0.0).unwrap_or(d.far),
+        ortho: match p["projection"].as_str() {
+            Some("orthographic") => p["ortho_width"].as_f64().filter(|w| *w > 0.0).unwrap_or(10.0),
+            _ => 0.0,
+        },
     }
 }
 

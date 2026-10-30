@@ -141,7 +141,9 @@ pub fn render_sprites(particles: &[Particle], sprites: &Sprites, cam: &Camera, f
         .filter_map(|p| {
             let c = crate::geom::transform_point(&view, &p.position);
             let (at, depth) = cam.project_camera(&c, format)?;
-            (depth <= cam.far).then(|| sprites.splat(p, at, p.size * sprites.scale / 2.0 * f / depth, depth))
+            let half = p.size * sprites.scale / 2.0;
+            let radius = if cam.is_ortho() { half * cam.pixels_per_unit(depth, format) } else { half * f / depth };
+            (depth <= cam.far).then(|| sprites.splat(p, at, radius, depth))
         })
         .collect();
     draw(splats, sprites, format, background, true)

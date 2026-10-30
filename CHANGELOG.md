@@ -12,6 +12,18 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.20 — 2026-10-30
+
+- **Orthographic cameras**: a Camera's new **Projection** (perspective /
+  orthographic) and **Ortho width** (scene units across the frame,
+  animatable) make a Scanline Render see straight down the camera's
+  axis, with no perspective, for plan and elevation views. Cards, meshes,
+  splats and particles all render orthographically, with exact textures
+  and depth / P passes. The 3D view's orthographic mode (5, axis views)
+  now renders through a true orthographic camera instead of a very long
+  lens, and looks through orthographic Cameras (drawn as a box).
+  Directional lights' shadow maps are orthographic too.
+
 ## 0.10.19 — 2026-10-30
 
 - Camera Tracker: **Solve lens distortion** solves the lens's radial

@@ -305,6 +305,8 @@ const LIGHT_RADIUS: ParamSpec = p!("radius", "Radius (soft size)", ParamKind::Fl
 /// A light's optional target: it aims at whatever this scene holds first.
 const LOOK_AT: Port = scene_in("look at");
 /// How a 3D object takes light (see [`crate::shade`]).
+/// A Camera's projections.
+pub const PROJECTIONS: &[&str] = &["perspective", "orthographic"];
 const SHADING: ParamSpec = fixed!("shading", "Shading", ParamKind::Choice(&["unlit", "lambert", "blinn"]), "lambert");
 const SPECULAR: ParamSpec = p!("specular", "Specular", ParamKind::Float { min: 0.0, max: 1.0 }, 0.0);
 const ROUGHNESS: ParamSpec = p!("roughness", "Roughness", ParamKind::Float { min: 0.0, max: 1.0 }, 0.5);
@@ -816,6 +818,8 @@ pub static OPS: &[OpInfo] = &[
         params: &[
             p!("focal", "Focal length (mm)", ParamKind::Float { min: 1.0, max: 1000.0 }, 35.0),
             p!("film_back", "Film back (mm)", ParamKind::Vec2, [36.0, 24.0]),
+            fixed!("projection", "Projection", ParamKind::Choice(PROJECTIONS), "perspective"),
+            p!("ortho_width", "Ortho width", ParamKind::Float { min: 0.001, max: 100000.0 }, 10.0),
             p!("translate", "Translate", ParamKind::Vec3, [0.0, 0.0, 0.0]),
             p!("rotate", "Rotate", ParamKind::Vec3, [0.0, 0.0, 0.0]),
             p!("scale", "Scale", ParamKind::Vec3, [1.0, 1.0, 1.0]),
@@ -826,6 +830,8 @@ pub static OPS: &[OpInfo] = &[
         mask_base: None,
         help: "A pinhole camera for a Scanline Render: it looks down its −Z axis (Y up), placed by Translate, \
                then Rotate (degrees about X, then Y, then Z). The film back's width spans the frame's width. \
+               Projection orthographic makes it see straight down its axis instead, Ortho width scene units \
+               across the frame at any distance (no perspective: a plan or elevation view). \
                Outputs a scene holding the camera.",
     },
     OpInfo {

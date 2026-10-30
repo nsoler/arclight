@@ -1,7 +1,7 @@
 //! 3D geometry for the scene system and the camera tracker: placing
-//! things in 3D (translate, rotate, scale), the pinhole camera that turns
-//! scene points into frame pixels and back, and Brown radial lens
-//! distortion.
+//! things in 3D (translate, rotate, scale), the camera (a pinhole, or
+//! orthographic) that turns scene points into frame pixels and back, and
+//! Brown radial lens distortion.
 //!
 //! Conventions: right-handed, Y up, a camera looks down its −Z axis.
 //! Rotations are in degrees, applied about X, then Y, then Z. Frame
@@ -64,11 +64,14 @@ pub struct Camera {
     /// Nothing nearer than this (scene units) is seen.
     pub near: f64,
     pub far: f64,
+    /// Orthographic: the frame's width in scene units, whatever the depth
+    /// (focal and film back then don't count). 0: a pinhole (perspective).
+    pub ortho: f64,
 }
 
 impl Default for Camera {
     fn default() -> Camera {
-        Camera { focal: 35.0, film_back: [36.0, 24.0], world: Mat4::identity(), near: 0.1, far: 10000.0 }
+        Camera { focal: 35.0, film_back: [36.0, 24.0], world: Mat4::identity(), near: 0.1, far: 10000.0, ortho: 0.0 }
     }
 }
 
@@ -78,9 +81,34 @@ impl Camera {
         self.world.try_inverse().unwrap_or_else(Mat4::identity)
     }
 
-    /// The focal length in frame pixels for `format`.
+    /// The focal length in frame pixels for `format` (a pinhole's).
     pub fn focal_pixels(&self, format: Size) -> f64 {
         self.focal / self.film_back[0].max(1e-9) * format.width as f64
+    }
+
+    pub fn is_ortho(&self) -> bool {
+        self.ortho > 0.0
+    }
+
+    /// Frame pixels per scene unit across the view, `depth` units in front
+    /// (the same at any depth when orthographic).
+    pub fn pixels_per_unit(&self, depth: f64, format: Size) -> f64 {
+        if self.is_ortho() {
+            format.width as f64 / self.ortho
+        } else {
+            self.focal_pixels(format) / depth
+        }
+    }
+
+    /// The unit direction from scene point `p` towards the camera: to its
+    /// center, or (orthographic) back along its view.
+    pub fn to_eye(&self, p: &Vec3) -> Vec3 {
+        let back = if self.is_ortho() {
+            self.world.fixed_view::<3, 1>(0, 2).into_owned()
+        } else {
+            transform_point(&self.world, &Vec3::zeros()) - p
+        };
+        back.try_normalize(1e-300).unwrap_or_else(Vec3::z)
     }
 
     /// The horizontal field of view, degrees.
@@ -96,8 +124,12 @@ impl Camera {
         if depth < self.near.max(1e-9) {
             return None;
         }
-        let f = self.focal_pixels(format);
         let (cx, cy) = (format.width as f64 / 2.0, format.height as f64 / 2.0);
+        if self.is_ortho() {
+            let s = self.pixels_per_unit(depth, format);
+            return Some(([cx + s * p.x, cy - s * p.y], depth));
+        }
+        let f = self.focal_pixels(format);
         Some(([cx + f * p.x / depth, cy - f * p.y / depth], depth))
     }
 
@@ -110,9 +142,14 @@ impl Camera {
     /// The scene point seen at frame position `px`, `depth` units in front
     /// of the camera.
     pub fn unproject(&self, px: [f64; 2], depth: f64, format: Size) -> Vec3 {
-        let f = self.focal_pixels(format);
         let (cx, cy) = (format.width as f64 / 2.0, format.height as f64 / 2.0);
-        let p = Vec3::new((px[0] - cx) / f * depth, -(px[1] - cy) / f * depth, -depth);
+        let p = if self.is_ortho() {
+            let s = self.pixels_per_unit(depth, format);
+            Vec3::new((px[0] - cx) / s, -(px[1] - cy) / s, -depth)
+        } else {
+            let f = self.focal_pixels(format);
+            Vec3::new((px[0] - cx) / f * depth, -(px[1] - cy) / f * depth, -depth)
+        };
         transform_point(&self.world, &p)
     }
 }

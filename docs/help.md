@@ -48,6 +48,14 @@ its Properties (spot and area lights have it too): the viewer switches to
 3D through that lens; click again to come back out. The **0** key does the
 same for the selected camera or light.
 
+A Camera's **Projection** is Perspective (a pinhole: Focal length and Film
+back set the view) or Orthographic: the camera sees straight down its −Z
+axis with no perspective. Things stay the same size however far away, as
+in a plan or elevation drawing, and **Ortho width** sets how many scene
+units span the frame's width (animate it to zoom). Near and Far still cut
+what's seen. In the 3D view an orthographic Camera is drawn as a box, and
+looking through it (0) shows its flat view.
+
 The first setup in a project switches the viewer to its **3D** view,
 framed on the new scene, and says how to switch back (**Tab**). The
 viewer's **3D** button shows a dot whenever the viewed node has a 3D

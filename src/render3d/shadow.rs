@@ -5,8 +5,8 @@
 //! texel, how far the nearest caster is: one through a spot light's cone;
 //! a cube of six around a point light, and around each sample point of an
 //! area light (so its shadows soften as its samples see past an edge);
-//! for a directional light one looking down its direction from far away,
-//! covering the scene. A point is in shadow where something in the map is
+//! for a directional light an orthographic one looking down its
+//! direction, covering the scene. A point is in shadow where something in the map is
 //! nearer the light than it. Edges are filtered over a square of texels
 //! (percentage-closer filtering, `shadow_softness` texels across each way,
 //! each tap bilinear); a point or spot light with a radius widens the
@@ -224,7 +224,7 @@ enum Source {
 /// A pinhole at `world` seeing `fov` degrees across a square frame.
 fn pinhole(world: geom::Mat4, fov: f64, near: f64, far: f64) -> Camera {
     let film = 36.0;
-    Camera { focal: film / (2.0 * (fov / 2.0).to_radians().tan()), film_back: [film, film], world, near, far }
+    Camera { focal: film / (2.0 * (fov / 2.0).to_radians().tan()), film_back: [film, film], world, near, far, ortho: 0.0 }
 }
 
 /// Texel width at one unit away for a square map `fov` across.
@@ -312,10 +312,8 @@ impl Shadows {
                     LightKind::Ambient => return None,
                     LightKind::Directional => {
                         let dir = l.direction();
-                        let d = r * 1000.0;
-                        let from = c - dir * d;
-                        let fov = 2.0 * (r * 1.02 / d).atan().to_degrees();
-                        let cam = pinhole(aim(from, c)?, fov, d - r * 1.1, d + r * 1.1);
+                        let d = r * 2.0;
+                        let cam = Camera { world: aim(c - dir * d, c)?, ortho: 2.0 * r * 1.02, near: d - r * 1.1, far: d + r * 1.1, ..Camera::default() };
                         vec![Source::One(Box::new(Map::draw(surfs, cam, SUN_RES, Some(dir), 2.0 * r * 1.02 / SUN_RES as f64)))]
                     }
                     LightKind::Spot { cone, .. } if cone + 10.0 <= 170.0 => {

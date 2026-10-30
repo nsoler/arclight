@@ -146,7 +146,8 @@ impl Vert {
 
 /// A projected triangle of surface `surf`: frame positions and 1 / depth
 /// at each corner, its corners, and the pixel rows and columns it can
-/// touch.
+/// touch. `ortho`: projected orthographically, so depth and everything
+/// else vary linearly across the frame.
 struct Tri {
     surf: usize,
     p: [[f64; 2]; 3],
@@ -154,6 +155,7 @@ struct Tri {
     inv_depth: [f64; 3],
     area: f64,
     bounds: IRect,
+    ortho: bool,
 }
 
 /// The part of `poly` at least `near` in front of the camera
@@ -184,6 +186,7 @@ fn edge(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
 fn triangles(surfs: &[Surface], cam: &Camera, format: Size, next: Option<&[Vec<Vec3>]>) -> Vec<Tri> {
     let view = cam.view();
     let f = cam.focal_pixels(format);
+    let (ortho, k) = (cam.is_ortho(), cam.pixels_per_unit(1.0, format));
     let (cx, cy) = (format.width as f64 / 2.0, format.height as f64 / 2.0);
     let near = cam.near.max(1e-6);
     let frame = IRect::frame(format);
@@ -216,7 +219,11 @@ fn triangles(surfs: &[Surface], cam: &Camera, format: Size, next: Option<&[Vec<V
             }
             let project = |v: &Vert| {
                 let d = -v.p.z;
-                ([cx + f * v.p.x / d, cy - f * v.p.y / d], 1.0 / d)
+                if ortho {
+                    ([cx + k * v.p.x, cy - k * v.p.y], 1.0 / d)
+                } else {
+                    ([cx + f * v.p.x / d, cy - f * v.p.y / d], 1.0 / d)
+                }
             };
             let projected: Vec<([f64; 2], f64)> = poly.iter().map(project).collect();
             for k in 1..poly.len() - 1 {
@@ -232,7 +239,7 @@ fn triangles(surfs: &[Surface], cam: &Camera, format: Size, next: Option<&[Vec<V
                 if bounds.is_empty() {
                     continue;
                 }
-                tris.push(Tri { surf: si, p, v: idx.map(|i| poly[i]), inv_depth: idx.map(|i| projected[i].1), area, bounds });
+                tris.push(Tri { surf: si, p, v: idx.map(|i| poly[i]), inv_depth: idx.map(|i| projected[i].1), area, bounds, ortho });
             }
         }
     }
@@ -260,6 +267,10 @@ impl Tri {
         let b2 = 1.0 - b0 - b1;
         if b0 < 0.0 || b1 < 0.0 || b2 < 0.0 {
             return None;
+        }
+        if self.ortho {
+            let d = b0 / self.inv_depth[0] + b1 / self.inv_depth[1] + b2 / self.inv_depth[2];
+            return (d >= near && d <= far).then_some((d, [b0, b1, b2]));
         }
         let inv = b0 * self.inv_depth[0] + b1 * self.inv_depth[1] + b2 * self.inv_depth[2];
         let d = 1.0 / inv;
@@ -498,7 +509,7 @@ impl Blur<'_> {
         let w = t - t.floor();
         let find = |k: i64| self.frames.iter().find(|f| f.0 == k).map(|f| &f.2);
         match (find(k), find(k + 1)) {
-            (Some(a), Some(b)) => Camera { world: crate::scene::between(&a.world, &b.world, w), focal: a.focal + (b.focal - a.focal) * w, ..cam.clone() },
+            (Some(a), Some(b)) => Camera { world: crate::scene::between(&a.world, &b.world, w), focal: a.focal + (b.focal - a.focal) * w, ortho: a.ortho + (b.ortho - a.ortho) * w, ..cam.clone() },
             (Some(a), None) if w == 0.0 => a.clone(),
             _ => cam.clone(),
         }
@@ -763,7 +774,6 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
     });
     let tris = triangles(surfs, cam, format, next_world.as_deref());
     let rows = bin_rows(&tris, format.height);
-    let eye = geom::transform_point(&cam.world, &Vec3::zeros());
     let frame = IRect::frame(format);
     let (w, h) = (format.width, format.height);
     // Objects (for id and mattes): the surfaces' nodes, then the splat
@@ -872,13 +882,13 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                             let at = |f: fn(&Vert) -> Vec3| t.v.iter().zip(&bary).map(|(v, b)| f(v) * *b).sum::<Vec3>();
                             if s.headlight {
                                 let (n, p) = (at(|v| v.n), at(|v| v.world));
-                                let facing = n.try_normalize(1e-300).zip((eye - p).try_normalize(1e-300)).map_or(1.0, |(n, v)| n.dot(&v).abs());
+                                let facing = n.try_normalize(1e-300).map_or(1.0, |n| n.dot(&cam.to_eye(&p)).abs());
                                 let k = (0.25 + 0.75 * facing) as f32;
                                 (0..3).for_each(|c| color[c] *= k);
                             }
                             let hit_at = || {
                                 let p = at(|v| v.world);
-                                let view = (eye - p).try_normalize(1e-300).unwrap_or_else(Vec3::z);
+                                let view = cam.to_eye(&p);
                                 let n = at(|v| v.n).try_normalize(1e-300).unwrap_or_else(Vec3::z);
                                 let normal = if s.two_sided && n.dot(&view) < 0.0 { -n } else { n };
                                 shade::Hit { position: p, normal, view }
@@ -2256,5 +2266,39 @@ mod tests {
         assert_eq!((out.plane_at("depth", 2, 2), out.plane_at("depth", 32, 16)), (50.0, 3.0));
         // The point 4 left at 5 away: 32 − 32 × 4 / 5 = 6.4 px across.
         assert_eq!(out.at(6, 16), [1.0; 4]);
+    }
+
+    /// An orthographic camera sees a card the same size at any distance,
+    /// its texture mapped without perspective even when the card slants,
+    /// its depth and P passes back on the surface; a Camera node set to
+    /// Orthographic gives one.
+    #[test]
+    fn orthographic_cameras_see_without_perspective() {
+        let ortho = Camera { ortho: 10.0, near: 0.1, ..Camera::default() };
+        let img = checker();
+        let worst = |out: &Image| out.pixels.iter().zip(&img.pixels).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0, f32::max);
+        // 10 across fills the frame's 64 pixels, 5 away or 500.
+        for z in [-5.0, -500.0] {
+            let scene = Scene { cards: vec![card(img.clone(), [0.0, 0.0, z], [0.0; 3], [10.0, 5.0])], ..Scene::default() };
+            let out = render(&scene, &ortho, FMT, 1, None);
+            assert!(worst(&out) < 1e-4, "at {z}: {}", worst(&out));
+            assert!((out.plane_at("depth", 10, 10) as f64 + z).abs() < 1e-3);
+        }
+        // Turned 60° about Y and twice as wide: it still spans the frame,
+        // texel for texel (a pinhole would bunch up the far side).
+        let slanted = Scene { cards: vec![card(img.clone(), [0.0, 0.0, -20.0], [0.0, 60.0, 0.0], [20.0, 5.0])], ..Scene::default() };
+        let out = render_passes(&slanted, &ortho, FMT, 1, None, ALL);
+        assert!(worst(&out) < 1e-3, "{}", worst(&out));
+        let normal = geom::rotation([0.0, 60.0, 0.0]) * Vec3::z();
+        for (x, y) in [(3, 4), (32, 16), (60, 28)] {
+            let at = |n: &str| out.plane_at(n, x, y) as f64;
+            let p = Vec3::new(at("P.x"), at("P.y"), at("P.z"));
+            assert!((p - ortho.unproject([x as f64 + 0.5, y as f64 + 0.5], at("depth"), FMT)).norm() < 1e-4, "({x}, {y})");
+            assert!((p - Vec3::new(0.0, 0.0, -20.0)).dot(&normal).abs() < 1e-4, "on the card");
+        }
+        // Lit, its view is the same everywhere: straight back along the axis.
+        assert_eq!(ortho.to_eye(&Vec3::new(3.0, -2.0, -9.0)), Vec3::z());
+        let cam = crate::scene::camera(&serde_json::json!({ "projection": "orthographic", "ortho_width": 7.5 }));
+        assert_eq!((cam.ortho, crate::scene::camera(&serde_json::json!({ "ortho_width": 7.5 })).ortho), (7.5, 0.0));
     }
 }

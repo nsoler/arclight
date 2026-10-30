@@ -219,8 +219,8 @@ impl Projector {
         let room = rect.shrink(rect.width().min(rect.height()) * 0.04);
         let (w, h) = if room.width() / room.height() > aspect { (room.height() * aspect, room.height()) } else { (room.width(), room.width() / aspect) };
         let frame = Rect::from_center_size(room.center(), Vec2::new(w, h));
-        let f = cam.focal / cam.film_back[0].max(1e-9) * frame.width() as f64;
-        Projector { world: cam.world, view: cam.view(), f, c: frame.center(), ortho: false, near: cam.near, rect, frame: Some(frame) }
+        let f = if cam.is_ortho() { frame.width() as f64 / cam.ortho } else { cam.focal / cam.film_back[0].max(1e-9) * frame.width() as f64 };
+        Projector { world: cam.world, view: cam.view(), f, c: frame.center(), ortho: cam.is_ortho(), near: cam.near, rect, frame: Some(frame) }
     }
 
     /// `p` in camera space (looking down −Z).
@@ -233,12 +233,19 @@ impl Projector {
         Pos2::new((self.c.x as f64 + q.x * s) as f32, (self.c.y as f64 - q.y * s) as f32)
     }
 
+    /// Whether what's nearer than `near` is cut: in perspective, and
+    /// through a scene camera (as it renders); the free orthographic view
+    /// sees everything.
+    fn clips(&self) -> bool {
+        !self.ortho || self.frame.is_some()
+    }
+
     /// Where `p` lands on screen and how far in front of the camera it is;
-    /// None behind (or, in perspective, too near).
+    /// None behind (or too near: see [`clips`](Self::clips)).
     pub fn project(&self, p: Vec3) -> Option<(Pos2, f64)> {
         let q = self.camera_space(&p);
         let depth = -q.z;
-        (self.ortho || depth >= self.near).then(|| (self.screen(&q), depth))
+        (!self.clips() || depth >= self.near).then(|| (self.screen(&q), depth))
     }
 
     /// The ray through screen point `s`: origin and unit direction.
@@ -268,7 +275,7 @@ impl Projector {
     /// the near plane.
     pub fn segment(&self, a: Vec3, b: Vec3) -> Option<(Pos2, Pos2)> {
         let (mut qa, mut qb) = (self.camera_space(&a), self.camera_space(&b));
-        if !self.ortho {
+        if self.clips() {
             let z = -self.near;
             match (qa.z <= z, qb.z <= z) {
                 (false, false) => return None,
@@ -322,13 +329,14 @@ fn bounds(scene: &Scene, only: Option<&dyn Fn(&str) -> bool>) -> Option<(Vec3, f
     Some((c, pts.iter().map(|p| (p - c).norm()).fold(0.0, f64::max).max(0.5)))
 }
 
-/// A camera's frustum corners at a depth showing its focal length, and its
-/// apex: (apex, [four corners]).
-fn frustum(cam: &geom::Camera, size: f64, aspect: f64) -> (Vec3, [Vec3; 4]) {
-    let depth = size * cam.focal / cam.film_back[0].max(1e-9);
+/// A camera's frustum, `size` across: its corners at the camera (all its
+/// apex for a pinhole; a frame `size` across, orthographic) and at a depth
+/// showing its focal length (`size` on for orthographic).
+fn frustum(cam: &geom::Camera, size: f64, aspect: f64) -> ([Vec3; 4], [Vec3; 4]) {
+    let depth = if cam.is_ortho() { size } else { size * cam.focal / cam.film_back[0].max(1e-9) };
     let (w, h) = (size / 2.0, size / 2.0 / aspect.max(1e-3));
-    let corner = |x: f64, y: f64| geom::transform_point(&cam.world, &Vec3::new(x, y, -depth));
-    (geom::transform_point(&cam.world, &Vec3::zeros()), [corner(-w, h), corner(w, h), corner(w, -h), corner(-w, -h)])
+    let corners = |z: f64, k: f64| [(-w, h), (w, h), (w, -h), (-w, -h)].map(|(x, y)| geom::transform_point(&cam.world, &Vec3::new(x * k, y * k, z)));
+    (corners(0.0, if cam.is_ortho() { 1.0 } else { 0.0 }), corners(-depth, 1.0))
 }
 
 /// A light's icon as line segments in the scene, `size` across (none for
@@ -823,7 +831,7 @@ pub fn light_camera(l: &Light, format: Size) -> Option<geom::Camera> {
     };
     let aspect = format.width.max(1) as f64 / format.height.max(1) as f64;
     let across = (high / 2.0).to_radians().tan() * aspect;
-    Some(geom::Camera { focal: FILM / (2.0 * across), film_back: [FILM, FILM / aspect], world: l.world, near: 0.01, far: 1e5 })
+    Some(geom::Camera { focal: FILM / (2.0 * across), film_back: [FILM, FILM / aspect], world: l.world, near: 0.01, far: 1e5, ortho: 0.0 })
 }
 
 /// A light handle: a dot on a spot's cone edge (at its X, Y, −X, −Y), or
@@ -975,7 +983,9 @@ impl Navigation {
 
 /// The camera and frame size that render the cards for projector `p` at
 /// `pixels`, matching what it draws: the scene camera through it; the free
-/// camera; for orthographic, a long lens from far away (as good as flat).
+/// camera; for orthographic, an orthographic camera as wide as the view
+/// shows at its orbit center, pulled back along its axis so it cuts off
+/// nothing the view draws.
 fn render_camera(view: &ViewCam, p: &Projector, through: Option<geom::Camera>, pixels: [usize; 2]) -> (geom::Camera, Size) {
     let format = Size { width: pixels[0].max(1), height: pixels[1].max(1) };
     if let Some(cam) = through {
@@ -983,14 +993,13 @@ fn render_camera(view: &ViewCam, p: &Projector, through: Option<geom::Camera>, p
     }
     let film = [FILM, FILM * format.height as f64 / format.width as f64];
     if view.ortho {
-        let far = 1000.0;
+        let back = view.distance * 1000.0;
         let mut v = *view;
-        v.distance *= far;
-        let world = v.world();
-        let cam = geom::Camera { focal: FOCAL * far, film_back: film, world, near: v.distance * 1e-3, far: v.distance * 10.0 };
+        v.distance += back;
+        let cam = geom::Camera { film_back: film, world: v.world(), near: back * 1e-3, far: back * 10.0, ortho: p.rect.width() as f64 / p.f, ..geom::Camera::default() };
         return (cam, format);
     }
-    (geom::Camera { focal: FOCAL, film_back: film, world: view.world(), near: p.near, far: view.distance * 1e4 }, format)
+    (geom::Camera { focal: FOCAL, film_back: film, world: view.world(), near: p.near, far: view.distance * 1e4, ortho: 0.0 }, format)
 }
 
 /// The 3D viewport (see the module notes).
@@ -1904,10 +1913,13 @@ impl Viewport3d {
             let node = scene.camera_node(i);
             let color = if selected(node) { SELECTED } else { CAMERA };
             let stroke = Stroke::new(if selected(node) { 2.0 } else { 1.2 }, color);
-            let (apex, k) = frustum(cam, size, aspect);
+            let (back, k) = frustum(cam, size, aspect);
             for j in 0..4 {
-                line(apex, k[j], stroke);
+                line(back[j], k[j], stroke);
                 line(k[j], k[(j + 1) % 4], stroke);
+                if cam.is_ortho() {
+                    line(back[j], back[(j + 1) % 4], stroke);
+                }
             }
             // A notch on the frame's top edge shows which way is up.
             let up = (k[0] + k[1]) / 2.0 + (k[0] - k[3]) * 0.2;
@@ -2386,6 +2398,33 @@ mod tests {
             // (Screen positions are f32.)
             assert!(off.norm() < 1e-5, "ortho {ortho}: {off}");
         }
+        // The cards render through a camera landing points where the view
+        // draws them (orthographic: a true one, even behind the orbit eye),
+        // at twice the screen's pixels.
+        for ortho in [false, true] {
+            let v = ViewCam { center: [1.0, 0.5, -2.0], yaw: 40.0, pitch: 20.0, distance: 9.0, ortho, ..ViewCam::default() };
+            let p = v.projector(rect());
+            let pixels = [(rect().width() * 2.0) as usize, (rect().height() * 2.0) as usize];
+            let (cam, format) = render_camera(&v, &p, None, pixels);
+            assert_eq!(cam.is_ortho(), ortho);
+            for x in [Vec3::new(2.0, 1.0, -1.0), v.eye() + (v.eye() - Vec3::from(v.center)) * if ortho { 0.5 } else { -0.5 }] {
+                let (s, _) = p.project(x).unwrap();
+                let (q, _) = cam.project(&x, format).unwrap();
+                let back = rect().min + Vec2::new(q[0] as f32, q[1] as f32) / 2.0;
+                assert!(close(s, back), "ortho {ortho}: {s:?} vs {back:?}");
+            }
+        }
+        // Through an orthographic scene camera: its frame, flat; nothing
+        // behind it.
+        let cam = geom::Camera { ortho: 6.0, world: geom::trs([0.0, 1.0, 4.0], [-10.0, 20.0, 0.0], [1.0; 3]), ..geom::Camera::default() };
+        let fmt = Size { width: 160, height: 90 };
+        let p = Projector::through(&cam, fmt, rect());
+        let frame = p.frame.unwrap();
+        let x = Vec3::new(1.0, 0.0, -3.0);
+        let (q, _) = cam.project(&x, fmt).unwrap();
+        let want = frame.min + Vec2::new(q[0] as f32, q[1] as f32) * (frame.width() / 160.0);
+        assert!(p.ortho && close(p.project(x).unwrap().0, want));
+        assert!(p.project(geom::transform_point(&cam.world, &Vec3::new(0.0, 0.0, 1.0))).is_none());
         // A segment crossing behind the camera is cut at the near plane.
         let v = ViewCam::default();
         let p = v.projector(rect());
