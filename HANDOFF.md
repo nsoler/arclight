@@ -15,7 +15,8 @@ done), `docs/help.md` (the in-app help) and
   (the Python `.so` is 0.9.46). Both workers idle; nothing uncommitted.
 - **Latest release: v0.9.47** (marked **Latest**;
   github.com/nsoler/arclight/releases/latest): Linux x86_64 tarball,
-  macOS universal DMG, `arclt` wheels + sdist. Earlier: v0.9.46, v0.9.33, v0.9.32,
+  macOS universal DMG, `arclt` wheels + sdist (both workflows passed,
+  all five assets checked). Earlier: v0.9.46, v0.9.33, v0.9.32,
   v0.9.31, v0.9.30, v0.9.27, v0.9.11. The stray v0.9.7 draft release was deleted
   at the user's request (the published v0.9.7 release and tag remain).
 - **Ask the user first:** how 0.9.34–0.9.47 test (0.9.47: Card Opacity, frame size labels, square About logo); node graph Tab /
@@ -28,9 +29,15 @@ done), `docs/help.md` (the in-app help) and
   scratch; particles have no motion vectors; sprite texture is one image
   (no sequence input); the GUI bridge re-simulates particles per MCP
   call. Shadows cost time (soft spot + 6×6 area ≈ 3.5× unshadowed).
-- **Next (no plan yet):** M12/M13 follow-ups above; the M9 leftover
-  (true ortho texture path), the viewport's solid view lit by scene
-  lights; other items under "Next steps". Ask the user what's next.
+- **Next (no plan yet; ask the user):** M12/M13 follow-ups above
+  (motion vectors for particles, a sprite sequence input, reusing the
+  GUI's evaluator in the MCP bridge); an Opacity on Read Geo to fade file
+  materials without Override material (3DWorker's suggestion); saving
+  view preferences (e.g. Show frame size) between runs (eframe
+  persistence is off); the M9 leftover (true ortho texture path); the
+  viewport's solid view lit by scene lights; newer clippy flags old code
+  (graph.rs `from_str` naming, plugins/example `chunks_exact`), harmless
+  but could be tidied; other items under "Next steps".
 - **0.9.47 (after M12 / M13, user requests):** Card **Opacity**
   (3DWorker; `Card.opacity`, surface color [opacity;4]; data passes take
   the nearest hit with alpha × opacity ≥ 0.5, else the nearest; shadows
