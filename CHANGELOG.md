@@ -12,6 +12,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.2 — 2026-10-30
+
+- **Read Splat** (Dev1, splat plan S1): reads a Gaussian splat capture
+  (`.ply`, as Postshot, Polycam, Luma, Nerfstudio, gsplat and the INRIA
+  3DGS code export it: binary or ASCII, color detail up to
+  spherical-harmonics degree 3) into the 3D scene, with Up axis (as is,
+  Z-up, or Y-down for COLMAP captures), Translate / Rotate / Scale,
+  Opacity and a Color detail cap. 1 M splats read in about 0.1 s. A
+  sample capture is in `examples/geo/splats.ply`. The renderer follows.
+
 ## 0.10.1 — 2026-10-30
 
 - **Splat data model** (Dev1, internal, splat plan S1): `splat::Splats`

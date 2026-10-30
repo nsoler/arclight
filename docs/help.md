@@ -268,6 +268,14 @@ selected object.
 - **Cube**, **Sphere**, **Cylinder** and **Plane** (3D category) make
   meshes with their own size and segments; connect an image to their
   **texture** input to wrap it on, times **Color**.
+- **Read Splat** reads a Gaussian splat capture (`.ply`, as Postshot,
+  Polycam, Luma, Nerfstudio, gsplat and the INRIA 3DGS code export it:
+  binary or ASCII, color detail up to spherical-harmonics degree 3), with
+  **Up axis** (as is, Z-up, or Y-down for COLMAP captures, which
+  otherwise look upside down), Translate / Rotate / Scale, **Opacity** and
+  a **Color detail** cap (lower is faster). A sample is in
+  `examples/geo/splats.ply`. (Rendering it in Scanline Render and the 3D
+  view is coming next.)
 - **Read Geo** reads an OBJ file (with its MTL colors and textures) or a
   glTF file (.gltf, .glb).
 - Each has Translate / Rotate / Scale, like a Card; wire them into a Scene

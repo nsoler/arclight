@@ -91,7 +91,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -280,6 +280,10 @@ pub const MASK_CHANNELS: &[&str] = &["alpha", "red", "green", "blue", "luminance
 const MASK_CHANNEL: ParamSpec = fixed!("mask_channel", "Mask channel", ParamKind::Choice(MASK_CHANNELS), "alpha");
 const MASK_INVERT: ParamSpec = fixed!("mask_invert", "Invert mask", ParamKind::Bool, false);
 /// A 3D object's placement (as Card's) and a primitive's color.
+/// Read Splat's Up axis: the capture's up as it is, Z-up, or Y down (Z
+/// forward, as COLMAP / OpenCV).
+const SPLAT_UPS: &[&str] = &["y", "z", "-y"];
+
 const PLACE_T: ParamSpec = p!("translate", "Translate", ParamKind::Vec3, [0.0, 0.0, 0.0]);
 const PLACE_R: ParamSpec = p!("rotate", "Rotate", ParamKind::Vec3, [0.0, 0.0, 0.0]);
 const PLACE_S: ParamSpec = p!("scale", "Scale", ParamKind::Vec3, [1.0, 1.0, 1.0]);
@@ -980,6 +984,29 @@ pub static OPS: &[OpInfo] = &[
                file (.gltf or .glb), then scales, rotates and moves them all. Opacity fades them all (each material's own \
                opacity times it, their shadows too), with or without Override material. Outputs a scene holding one mesh \
                per object and material in the file.",
+    },
+    OpInfo {
+        name: "read_splat",
+        label: "Read Splat",
+        category: Category::Scene,
+        inputs: &[],
+        params: &[
+            fixed!("file", "File", ParamKind::Path { save: false }, ""),
+            fixed!("up", "Up axis", ParamKind::Choice(SPLAT_UPS), "y"),
+            PLACE_T,
+            PLACE_R,
+            PLACE_S,
+            p!("opacity", "Opacity", OPACITY, 1.0),
+            fixed!("sh_degree", "Color detail (SH degree)", ParamKind::Int { min: 0, max: 3 }, 3),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Reads a Gaussian splat capture: a 3D Gaussian Splatting .ply file, as Postshot, Polycam, Luma, Nerfstudio, \
+               gsplat and the INRIA code export it. Up axis says which way is up in the capture: y (as Arclight, the \
+               default), z (Z-up tools), or -y (Y down, Z forward: captures straight from COLMAP / OpenCV, which then \
+               look upside down). Translate, Rotate and Scale then place it. Opacity fades every splat. Color detail \
+               keeps the color's change with the viewing angle up to that spherical-harmonics degree (0: one color per \
+               splat, the quickest; 3: all of it). Outputs a scene holding the capture.",
     },
     OpInfo {
         name: "light_ambient",
@@ -1770,6 +1797,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
             Ok(scene_output(texture.map_or(DEFAULT_FORMAT, |t| t.format), Scene { meshes: vec![model], ..Scene::default() }))
         }
         "read_geo" => read_geo(params),
+        "read_splat" => read_splat(params),
         "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => {
             let target = inputs.first().copied().flatten().and_then(|t| t.scene.as_deref());
             let light = scene::light(op, params, target).context("unknown light")?;
@@ -3085,6 +3113,31 @@ fn read_geo(params: &Value) -> Result<Image> {
     Ok(scene_output(DEFAULT_FORMAT, Scene { meshes, ..Scene::default() }))
 }
 
+/// A Read Splat's capture: read (once per file, change and SH degree; see
+/// [`crate::splat::Splats::read`]), turned so its up is +Y, placed, and
+/// faded by Opacity (a copy of the opacities only when that isn't 1).
+fn read_splat(params: &Value) -> Result<Image> {
+    use crate::splat::Splats;
+    let file = params["file"].as_str().unwrap_or("");
+    if file.is_empty() {
+        bail!("no file: choose a Gaussian splat .ply file");
+    }
+    let degree = params["sh_degree"].as_i64().unwrap_or(3).clamp(0, 3) as u8;
+    let read = Splats::read(std::path::Path::new(file), degree)?;
+    // Its up to +Y: Z-up turns −90° about X; Y-down (Z forward) 180°.
+    let up = match params["up"].as_str().unwrap_or("y") {
+        "z" => geom::Mat4::new(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+        "-y" => geom::Mat4::new(1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+        _ => geom::Mat4::identity(),
+    };
+    let mut splats = Splats { world: scene::placement(params) * up, ..(*read).clone() };
+    let fade = params["opacity"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) as f32;
+    if fade != 1.0 {
+        splats.opacity = std::sync::Arc::new(read.opacity.iter().map(|a| a * fade).collect());
+    }
+    Ok(scene_output(DEFAULT_FORMAT, Scene { splats: vec![std::sync::Arc::new(splats)], ..Scene::default() }))
+}
+
 /// Everything in the connected scenes, in port order; the first one's
 /// frame.
 fn gather(inputs: &[Option<&Image>]) -> Result<Image> {
@@ -3314,6 +3367,31 @@ fn write(params: &Value, inputs: &[Option<&Image>], ctx: &EvalContext) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Read Splat: the sample capture as a scene, turned up as asked,
+    /// placed, faded, its color detail capped; errors that say what's
+    /// wrong.
+    #[test]
+    fn read_splat_places_fades_and_caps_a_capture() {
+        let file = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/geo/splats.ply");
+        assert_eq!(output_kind("read_splat"), Kind::Scene);
+        let scene = |p: Value| eval("read_splat", &p, &[], &CTX).unwrap().scene.clone().unwrap();
+        let s = scene(json!({ "file": file }));
+        let g = &s.splats[0];
+        assert_eq!((s.splats.len(), g.len(), g.sh_degree, g.world), (1, 320, 1, crate::geom::Mat4::identity()));
+        let at = |p: Value, v: [f64; 3]| crate::geom::transform_point(&scene(p).splats[0].world, &crate::geom::Vec3::from(v));
+        // Up: Z-up's +Z and COLMAP's −Y come out as +Y; placed after.
+        assert!((at(json!({ "file": file, "up": "z" }), [0.0, 0.0, 1.0]) - crate::geom::Vec3::y()).norm() < 1e-12);
+        assert!((at(json!({ "file": file, "up": "-y" }), [0.0, -1.0, 0.0]) - crate::geom::Vec3::y()).norm() < 1e-12);
+        assert!((at(json!({ "file": file, "up": "-y", "translate": [5, 0, 0] }), [0.0, 0.0, 1.0]) - crate::geom::Vec3::new(5.0, 0.0, -1.0)).norm() < 1e-12, "Z forward: toward the default camera");
+        // Faded: a copy of the opacities; unfaded: the read ones, shared.
+        let faded = scene(json!({ "file": file, "opacity": 0.5 }));
+        assert!((faded.splats[0].opacity[0] - g.opacity[0] * 0.5).abs() < 1e-6);
+        assert!(std::sync::Arc::ptr_eq(&g.positions, &faded.splats[0].positions) && std::sync::Arc::ptr_eq(&g.opacity, &scene(json!({ "file": file })).splats[0].opacity));
+        assert_eq!(scene(json!({ "file": file, "sh_degree": 0 })).splats[0].sh_degree, 0);
+        assert!(eval("read_splat", &json!({}), &[], &CTX).err().unwrap().to_string().contains("no file"));
+        assert!(eval("read_splat", &json!({ "file": "/no/such.ply" }), &[], &CTX).is_err());
+    }
 
     #[test]
     fn read_geo_opacity_fades_the_files_materials() {
