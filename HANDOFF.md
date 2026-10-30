@@ -1,6 +1,6 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-30, session 12 (through 0.10.22): **phase 10 (Gaussian splats) on
+Last updated 2026-10-30, session 12 (through 0.10.27, released v0.10.26): **phase 10 (Gaussian splats) on
 branch `wip-ns-splats`, 0.10.x**; phase 9 ended at 0.9.68 (v0.9.68) on
 `wip-ns-3dwork`, now frozen (herdr multi-agent sessions:
 one Supervisor (formerly "master") + workers; see "Several agent sessions" below). Read this,
@@ -16,6 +16,38 @@ done), `docs/help.md` (the in-app help) and
   larger items. Keep it current: add items as they come up, tick or
   remove them when they ship.
 
+- **Session 12, latest, 0.10.23–0.10.27 (released v0.10.25 and
+  v0.10.26; v0.10.26 has its DMG, v0.10.25 has none and the user skipped
+  it):** Interface group: 0.10.23 (Dev2) `consume_plain` in
+  `gui/main.rs` (egui's `consume_key(Modifiers::NONE, ..)` matches
+  logically and ignores an extra Shift / Alt), so Shift+Tab over the
+  viewer no longer toggles 2D / 3D; 0.10.24 (Dev1) backdrops from scripts
+  (`Session::backdrops` / `create_backdrop` / `update_backdrop` /
+  `delete_backdrop`, one undo step each; MCP `list_backdrops` …; Python
+  `arclt.backdrops()`, `create_backdrop`, `Backdrop`; `NODE_W` / `NODE_H`
+  moved to `graph.rs`, `Backdrop::COLOR_NAMES`); 0.10.25 (Dev2, from its
+  key audit) `player_keys` with exact modifier matching (Alt only for
+  arrows), Home / F over a hovered 3D view stay there (no transport seek),
+  plain-Tab-only formula completion (Shift+Tab moves focus back), viewer
+  G / R / S plain only. 0.10.26 a real splat sample,
+  `examples/geo/hornedlizard.spz` (18 MB, 786 k splats, SH 3, unchanged
+  from nianticlabs/spz under MIT, notice in
+  `examples/geo/hornedlizard.LICENSE.txt`) and `examples/hornedlizard.json`
+  (Read Splat → Splat Crop box 6 → Camera → Scanline Render → Viewer; the
+  capture has a background shell of big splats ~46 units out, so a
+  camera inside it sees a flat colour until cropped). Reads upright with
+  the -y default: real-file confirmation of 0.10.14's `.spz` turn. Graph
+  files resolve relative media paths only when `project.folder` is set
+  (`Graph::from_file` → `resolve_paths`), and a `project` block needs
+  `format`, `fps`, `first_frame`, `last_frame`. 0.10.27 root `Cargo.toml`
+  `exclude = ["examples/"]`: the arclt sdist bundles the crate with cargo's
+  file list (maturin's own `exclude` didn't drop it), now 851 KB instead
+  of 20 MB; checked by building arclt from the sdist (14 tests pass).
+  v0.10.26's sdist is still the 20 MB one. **Next (proposed to the user,
+  not yet approved):** a small round (Dev1 `set_node_position` + the
+  clippy warnings; Dev2 the bridge calls that hold the shared evaluator
+  while simulating), then GPU acceleration (wgpu) as phase 11 with a
+  written plan first. Both workers idle.
 - **Session 12, phase 10 continued, 0.10.14–0.10.22 (released v0.10.14
   and v0.10.22; Linux assets built locally, the user uploads the macOS
   DMG while Actions is billing-blocked):** 0.10.14 (Dev1) Read Splat Up
@@ -643,6 +675,21 @@ done), `docs/help.md` (the in-app help) and
   24 px inner margin on every side; the logo is drawn trimmed to its
   opaque pixels (UV rect computed once; `App.logo` is `(TextureHandle,
   Rect)`), since the PNG's transparent border made the top gap larger.
+- **While Actions is billing-blocked (since v0.9.57; still so at
+  v0.10.26):** the Supervisor tags `v<ver>` from `main`, builds the Linux
+  tarball in a clean worktree (`env -u CARGO_TARGET_DIR
+  packaging/linux/build-tarball.sh`), the Linux wheel and sdist (a venv
+  with `maturin` + `ziglang`: `maturin build --release --zig
+  --compatibility manylinux2014 --target x86_64-unknown-linux-gnu -m
+  python/Cargo.toml`, `maturin sdist -m python/Cargo.toml`), tests the
+  wheel in a fresh venv run from `python/tests` (from `python/` the source
+  package shadows the installed one) with `ARCLIGHT_PLUGIN_PATH` at the
+  example plugin's build, and `gh release create … --latest` with notes
+  ending "macOS DMG to follow". The user builds the DMG on a Mac
+  (`packaging/macos/build-dmg.sh` at the tag) and uploads it; then the
+  notes' Assets line is updated. Check the asset really arrived (`gh api
+  repos/nsoler/arclight/releases/tags/v<ver>`) before editing the notes:
+  one upload silently didn't. No macOS wheel until Actions works.
 - **Release rule (user, 2026-10-29):** every release carries the Linux
   x86_64 tarball, the **macOS universal DMG** (Apple Silicon *and*
   Intel; `Arclight-<ver>-universal.dmg`, since v0.8.4; before that only
