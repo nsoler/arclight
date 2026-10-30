@@ -530,6 +530,11 @@ sun coming from one side.
 - With it selected, select solved points in the viewer (click, **⇧**-click,
   drag a box) to place a Card or Locator on them, or to set the origin,
   ground plane and scale.
+- The same picking works over a Scanline Render of the solved scene, so
+  you can place things while looking at the render: select the render (or
+  its camera, or the node you're viewing downstream of it) and the solved
+  points show over it. This works for an Export with Linked on, and for a
+  baked Export as long as the tracker is still the render's background.
 - **Solve**: **Free move** for a camera that travels, **Tripod** for one that
   only turns about its center (a pan or tilt), or **Auto** (the default),
   which solves as Tripod when no frames show parallax and the camera only

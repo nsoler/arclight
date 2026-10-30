@@ -1,9 +1,10 @@
 //! The Camera Tracker in the GUI: its panel (Track & Solve on a worker
 //! thread with progress and Stop, the result with its per-frame list,
 //! Export) and the viewer's
-//! point picker (the solved points drawn through the frame's camera;
-//! click, ⇧-click or drag a box to select, then place a Card or a Locator
-//! on them, or set the origin, ground and scale).
+//! point picker (the solved points drawn through the frame's camera, over
+//! the plate or a Scanline Render of the solved scene; click, ⇧-click or
+//! drag a box to select, then place a Card or a Locator on them, or set
+//! the origin, ground and scale).
 
 use crate::doc::{Doc, NODE_H, NODE_W};
 use crate::overlay::Xf;
@@ -222,7 +223,49 @@ pub(crate) fn place_locator(doc: &mut Doc, id: &str, sol: &Solution, ids: &[usiz
     Some(loc)
 }
 
-/// The viewer's point picker for a selected, solved Camera Tracker.
+/// The Camera Tracker whose solved points the viewer shows and picks: the
+/// selected one, or the one behind the Scanline Render the viewer shows
+/// (or shows downstream of) while that, the render or its camera is
+/// selected. A render is behind the tracker its camera follows live, or,
+/// a baked export, the one that's its background (as Export wires it).
+pub(crate) fn tracker_for(doc: &Doc) -> Option<String> {
+    let selected = doc.selected.as_deref()?;
+    if doc.node(selected)?.op == "camera_tracker" {
+        return Some(selected.to_string());
+    }
+    let viewed = doc.viewed()?;
+    let render = upstream(doc, &viewed, |op| op == "scanline_render")?;
+    let n = doc.node(&render)?;
+    // Its camera: on the camera input, else in the scene.
+    let camera = n.inputs.get(1).filter(|c| !c.is_empty()).and_then(|c| upstream(doc, c, |op| op == "camera"));
+    let camera = camera.or_else(|| upstream(doc, n.inputs.first()?, |op| op == "camera"));
+    let is_tracker = |id: &str| doc.node(id).is_some_and(|t| t.op == "camera_tracker");
+    let follows = camera.as_deref().and_then(|c| {
+        let params = doc.node(c)?.params.as_object()?;
+        params.values().filter_map(arclight::link::source).find(|s| is_tracker(s)).map(str::to_string)
+    });
+    let tracker = follows.or_else(|| n.inputs.get(2).filter(|b| is_tracker(b)).cloned())?;
+    let near = [Some(viewed.as_str()), Some(render.as_str()), camera.as_deref()];
+    near.contains(&Some(selected)).then_some(tracker)
+}
+
+/// The nearest node from `id` up its inputs (itself first) whose op passes
+/// `want`.
+fn upstream(doc: &Doc, id: &str, want: impl Fn(&str) -> bool) -> Option<String> {
+    let mut queue = std::collections::VecDeque::from([id.to_string()]);
+    let mut seen = std::collections::HashSet::new();
+    while let Some(id) = queue.pop_front() {
+        let Some(n) = doc.node(&id).filter(|_| seen.insert(id.clone())) else { continue };
+        if want(&n.op) {
+            return Some(id);
+        }
+        queue.extend(n.inputs.iter().filter(|i| !i.is_empty()).cloned());
+    }
+    None
+}
+
+/// The viewer's point picker for a solved Camera Tracker (see
+/// [`tracker_for`]).
 #[derive(Default)]
 pub struct PointPicker {
     node: Option<String>,
@@ -233,10 +276,12 @@ pub struct PointPicker {
     message: Option<(bool, String)>,
 }
 
-/// Points of `sol` on screen at `frame`: (index, screen position).
-fn on_screen(sol: &Solution, xf: &Xf, frame: i64) -> Vec<(usize, Pos2)> {
+/// Points of `sol` on screen at `frame`, over an image `size` pixels
+/// (the plate, or a render of it at another size): (index, screen
+/// position).
+fn on_screen(sol: &Solution, xf: &Xf, frame: i64, size: Vec2) -> Vec<(usize, Pos2)> {
     let Some(cam) = sol.camera(frame) else { return Vec::new() };
-    let format = Size { width: sol.format[0], height: sol.format[1] };
+    let format = Size { width: (size.x.round() as usize).max(1), height: (size.y.round() as usize).max(1) };
     sol.points
         .iter()
         .enumerate()
@@ -253,11 +298,10 @@ impl PointPicker {
         self.marquee.is_some()
     }
 
-    /// The selected node's solve, when it's a solved Camera Tracker.
+    /// The solve to pick on (see [`tracker_for`]).
     fn solve(&mut self, doc: &Doc) -> Option<(String, Solution)> {
-        let id = doc.selected.clone()?;
-        let node = doc.node(&id).filter(|n| n.op == "camera_tracker")?;
-        let sol = Solution::from_params(&node.params)?;
+        let id = tracker_for(doc)?;
+        let sol = Solution::from_params(&doc.node(&id)?.params)?;
         if self.node.as_deref() != Some(&id) {
             *self = PointPicker { node: Some(id.clone()), distance: 1.0, ..PointPicker::default() };
         }
@@ -265,11 +309,12 @@ impl PointPicker {
         Some((id, sol))
     }
 
-    /// Handle the pointer and the actions panel. True when it applies (a
-    /// solved Camera Tracker is selected), so other overlays stand aside.
-    pub fn interact(&mut self, ui: &egui::Ui, resp: &Response, xf: &Xf, doc: &mut Doc, frame: i64) -> bool {
+    /// Handle the pointer and the actions panel over an image `size`
+    /// pixels. True when it applies (see [`tracker_for`]), so other
+    /// overlays stand aside.
+    pub fn interact(&mut self, ui: &egui::Ui, resp: &Response, xf: &Xf, size: Vec2, doc: &mut Doc, frame: i64) -> bool {
         let Some((id, sol)) = self.solve(doc) else { return false };
-        let pts = on_screen(&sol, xf, frame);
+        let pts = on_screen(&sol, xf, frame, size);
         let shift = ui.input(|i| i.modifiers.shift);
         if ui.input(|i| i.pointer.primary_pressed()) {
             if let Some(o) = ui.input(|i| i.pointer.press_origin()).filter(|o| resp.rect.contains(*o)) {
@@ -367,14 +412,14 @@ impl PointPicker {
 
     /// Draw the points (selected ones larger, in yellow) and a box being
     /// dragged.
-    pub fn draw(&self, painter: &egui::Painter, xf: &Xf, doc: &Doc, frame: i64) {
-        let Some(id) = doc.selected.as_deref() else { return };
-        let Some(sol) = doc.node(id).filter(|n| n.op == "camera_tracker").and_then(|n| Solution::from_params(&n.params)) else { return };
-        for (i, p) in on_screen(&sol, xf, frame) {
+    pub fn draw(&self, painter: &egui::Painter, xf: &Xf, size: Vec2, doc: &Doc, frame: i64) {
+        let Some(id) = tracker_for(doc) else { return };
+        let Some(sol) = doc.node(&id).and_then(|n| Solution::from_params(&n.params)) else { return };
+        for (i, p) in on_screen(&sol, xf, frame, size) {
             if !painter.clip_rect().contains(p) {
                 continue;
             }
-            if self.node.as_deref() == Some(id) && self.selected.contains(&i) {
+            if self.node.as_deref() == Some(id.as_str()) && self.selected.contains(&i) {
                 painter.circle(p, 3.5, Color32::from_rgb(255, 210, 60), Stroke::new(1.0, Color32::BLACK));
             } else {
                 painter.circle(p, 2.0, Color32::from_rgb(90, 175, 225), Stroke::new(0.5, Color32::from_black_alpha(200)));
@@ -425,7 +470,7 @@ mod tests {
         let mut pick = PointPicker::default();
         let (_, sol) = pick.solve(&d).unwrap();
         let xf = Xf::new(Rect::from_min_size(Pos2::ZERO, Vec2::new(200.0, 100.0)), 1.0);
-        let pts = on_screen(&sol, &xf, 1);
+        let pts = on_screen(&sol, &xf, 1, Vec2::new(200.0, 100.0));
         assert_eq!(pts.len(), 9, "all in view");
         let at = |i: usize| pts.iter().find(|p| p.0 == i).unwrap().1;
         // A click picks one, ⇧-click adds and removes.
@@ -473,5 +518,53 @@ mod tests {
         let copy = d.graph.nodes.iter().filter(|n| n.op == "camera").nth(1).unwrap().id.clone();
         assert_eq!(d.param(&copy, "rotate")["keys"][0], json!([1, [-15.0, 0.0, 0.0]]));
         assert_eq!(camtrack::baked_value(&d.node("ct").unwrap().params, "rotate"), Some(d.param(&copy, "rotate")));
+    }
+
+    /// Over a Scanline Render of the solve (its camera linked, or baked
+    /// with the tracker as background), the points are picked while the
+    /// render, what's viewed downstream or its camera is selected.
+    #[test]
+    fn points_are_picked_over_a_render_of_the_solve() {
+        let mut d = solved();
+        let sol = Solution::from_params(&d.node("ct").unwrap().params).unwrap();
+        export(&mut d, "ct", &sol, true);
+        let id_of = |d: &Doc, op: &str, nth: usize| d.graph.nodes.iter().filter(|n| n.op == op).nth(nth).unwrap().id.clone();
+        let (camera, render) = (id_of(&d, "camera", 0), id_of(&d, "scanline_render", 0));
+        // (Not as the background: the linked camera alone tells.)
+        d.disconnect(&render, 2);
+        let grade = d.add_node("grade", [0.0, 600.0]);
+        d.connect(&render, &grade, 0);
+        let plate = d.add_node("checkerboard", [300.0, 0.0]);
+        for (sel, want) in [(&render, true), (&camera, false), (&grade, true), (&plate, false)] {
+            d.selected = Some(sel.clone());
+            assert_eq!(tracker_for(&d).is_some(), want, "{sel} selected and viewed");
+        }
+        // Viewing the grade with its render (or camera) selected.
+        d.view_node(&grade);
+        for sel in [&render, &camera] {
+            d.selected = Some(sel.clone());
+            assert_eq!(tracker_for(&d).as_deref(), Some("ct"), "{sel}");
+        }
+        d.selected = Some(plate.clone());
+        assert_eq!(tracker_for(&d), None);
+        // Baked: found through the background.
+        export(&mut d, "ct", &sol, false);
+        let baked = id_of(&d, "scanline_render", 1);
+        d.view_node(&baked);
+        d.selected = Some(baked.clone());
+        assert_eq!(tracker_for(&d).as_deref(), Some("ct"));
+        d.disconnect(&baked, 2);
+        assert_eq!(tracker_for(&d), None, "a keyed camera alone doesn't tell");
+        // At twice the plate's size, the points land twice as far out.
+        let mut pick = PointPicker::default();
+        d.selected = Some(render.clone());
+        d.view_node(&render);
+        let (id, sol) = pick.solve(&d).unwrap();
+        assert_eq!(id, "ct");
+        let xf = Xf::new(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 200.0)), 1.0);
+        let (small, big) = (on_screen(&sol, &Xf::new(Rect::from_min_size(Pos2::ZERO, Vec2::new(200.0, 100.0)), 1.0), 1, Vec2::new(200.0, 100.0)), on_screen(&sol, &xf, 1, Vec2::new(400.0, 200.0)));
+        assert!(small.iter().zip(&big).all(|(a, b)| a.0 == b.0 && (b.1.to_vec2() - a.1.to_vec2() * 2.0).length() < 1e-3));
+        pick.press(&big, big[4].1, false);
+        assert_eq!(pick.selected, vec![big[4].0]);
     }
 }

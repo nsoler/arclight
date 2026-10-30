@@ -12,6 +12,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.17 — 2026-10-30
+
+- The Camera Tracker's **point picking also works over a Scanline Render**
+  of the solved scene (or anything downstream of it): with the render,
+  the viewed node or its camera selected, the solved points show over
+  the render. Click, ⇧-click or drag a box to place a Card or Locator, or
+  to set the origin, ground and scale. A render counts when its camera is
+  linked to the solve, or when the tracker is its background (a baked
+  Export).
+
 ## 0.10.16 — 2026-10-30
 
 - Camera Tracker **Export can link the Camera to the solve live** (the

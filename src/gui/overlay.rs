@@ -795,7 +795,7 @@ impl Overlays {
             self.drag = None;
             return;
         }
-        if self.picker.interact(ui, resp, xf, doc, frame) {
+        if self.picker.interact(ui, resp, xf, size, doc, frame) {
             return;
         }
         let (pressed, released, mods) = ui.input(|i| {
@@ -991,7 +991,7 @@ impl Overlays {
     }
 
     pub fn draw(&self, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, size: Vec2, doc: &Doc, frame: i64) {
-        self.picker.draw(painter, xf, doc, frame);
+        self.picker.draw(painter, xf, size, doc, frame);
         let Some(id) = doc.selected.as_deref() else { return };
         let Some(g) = self.node_geo(doc, id, frame, size) else { return };
         let xf = &self.drag.as_ref().map_or_else(|| xf.for_node(doc, id, frame), |d| d.xf);
