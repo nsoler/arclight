@@ -7,6 +7,12 @@ they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
+- [ ] 0.10.15–0.10.19: Camera Tracker on real footage: a Roto mask over
+      something moving through the shot; Export Linked (re-solve or Set
+      origin and the Camera follows; Bake / Unlink in Properties); pick
+      points over the exported Scanline Render; Solve lens distortion on
+      a wide-lens shot with camera movement (K1/K2 in the panel, the
+      Lens Distort under the render)
 - [ ] 0.10.2–0.10.14: Splat Crop (drag its box in 3D), Splat Color, .splat /
       .spz files; Read Splat a real capture (.ply from Postshot /
       Polycam / Luma…; Up axis now defaults to -y (0.10.14)), render it
@@ -79,10 +85,10 @@ Phase 10: 0.10.x on branch `wip-ns-splats` (started 0.10.0).
 
 ## Camera tracker
 
-- [ ] A live link from a Camera to the solve (Export bakes keys today)
-- [ ] Lens-distortion solve
-- [ ] A mask input to ignore moving objects
-- [ ] Point picking over a Scanline Render of the solved scene
+- [x] A mask input to ignore moving objects (0.10.15)
+- [x] A live link from a Camera to the solve (0.10.16)
+- [x] Point picking over a Scanline Render of the solved scene (0.10.17)
+- [x] Lens-distortion solve, K1/K2; Export undistorts the plate (0.10.19)
 
 ## Interface
 
