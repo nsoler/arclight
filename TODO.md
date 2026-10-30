@@ -1,12 +1,17 @@
 # Arclight — TODO
 
-A running list of what's still wanted, as of 0.9.61 (2026-10-30). The
+A running list of what's still wanted, as of 0.9.68 (2026-10-30). The
 3D plan (`docs/phase-4-plan.md`, M1–M13) is done; this is what's left
 around it. `HANDOFF.md` has the details and history; add items here as
 they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
+- [ ] 0.9.65–0.9.68: Edit ▸ Preferences (scale, theme, snap, straight
+      wires, autosave, Open Recent, undo levels, New project defaults,
+      3D view mouse / trackpad / shading); File ▸ New's project folder;
+      media dialogs start there; move a saved project folder (or copy it
+      to the Mac) and it opens with its plates
 - [ ] 0.9.62–0.9.64: Particle Render texture sequences (play / loop /
       random start); an emitter on a moving card leaves a trail and plays
       fast; MCP / Python calls to a running GUI share its caches

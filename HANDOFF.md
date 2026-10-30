@@ -15,6 +15,19 @@ proposed 2026-10-30, not started; after the Particles round).
   larger items. Keep it current: add items as they come up, tick or
   remove them when they ship.
 
+- **Session 12, fourth round:** 0.9.62 (Dev1) sprite texture sequences;
+  0.9.63 (Dev2) the bridge shares the GUI's evaluator
+  (`Session.eval: Arc<Mutex<Evaluator>>`, `gui/bridge_calls.rs`); 0.9.64
+  (Dev1) emitters on animated geometry step on (`particle_nodes::
+  input_frames`, `History`); 0.9.65 (Dev1) Preferences window
+  (`gui/preferences.rs`, `config::{InterfacePrefs, NewProjectPrefs,
+  FilePrefs, View3dPrefs, RecentFiles}`, autosave, Open Recent); 0.9.66
+  (Dev2) New project defaults, undo levels, 3D view `Navigation`; 0.9.67
+  (Dev1) `Project.folder`, New project modal, dialogs start there; 0.9.68
+  (Dev1) relative paths at the file boundary (`Graph::save` /
+  `to_json_at`, `Project::resolve_path`). Splat plan written
+  (`docs/splat-plan.md`); the user wants it to start phase 10 (0.10.0) on
+  a new branch `wip-ns-splats`. Not released since v0.9.57.
 - **Session 12, third round:** 0.9.58 (Dev1) the active Viewer
   (`Doc.active_viewer`, `Doc::viewer()`: last wired / viewed / clicked,
   else the first) fixes the user's "black background" Merge report (a
