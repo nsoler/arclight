@@ -14,7 +14,21 @@ done), `docs/help.md` (the in-app help) and
   larger items. Keep it current: add items as they come up, tick or
   remove them when they ship.
 
-- **State:** version **0.9.48** on branch **`wip-ns-3dwork`**, merged to
+- **Session 12 (2026-10-29, master wD:p1; workers **Dev1** = herdr `dev1`
+  (wD:p3, formerly mathwiz / MathWiz) and **Dev2** = herdr `dev2` (wD:p4,
+  formerly worker3d / 3DWorker), renamed at the user's word):** from the user's hand test of the 0.9.48 camera setup:
+  0.9.49 node browser on ⇧Tab (MathWiz); 0.9.50 Card **Shading**
+  (unlit default, lambert / blinn, two-sided, Receives shadows;
+  `Card.material: Option<Material>`, `Surface.two_sided`) (MathWiz);
+  0.9.51 (3DWorker) the setup's Camera starts at z = focal / film back
+  width (it sat at the origin, in a new Card's plane, so the render was
+  black), `worker::scene_of` includes a render's extra inputs (lights
+  there had no icon / handles), Look through toggle in Camera / Spot /
+  Area Light Properties. **Released as v0.9.51.** Ask the user how these
+  test; their old test project still has its camera at z = 0. v0.9.51 checked: both workflows passed, all five assets attached, marked Latest. A Card
+  can't go into the render's background (image) port: Scene or the
+  render's last input.
+- **State (before session 12):** version **0.9.48** on branch **`wip-ns-3dwork`**, merged to
   `main`; **M12 (lights) and M13 (particles) are DONE**. The local build
   (`target/release`) is 0.9.48, so the Omarchy launcher runs 0.9.48
   (the Python `.so` is 0.9.46). Both workers idle; nothing uncommitted.

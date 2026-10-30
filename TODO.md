@@ -1,15 +1,19 @@
 # Arclight — TODO
 
-A running list of what's still wanted, as of v0.9.48 (2026-10-29). The
+A running list of what's still wanted, as of v0.9.51 (2026-10-29). The
 3D plan (`docs/phase-4-plan.md`, M1–M13) is done; this is what's left
 around it. `HANDOFF.md` has the details and history; add items here as
 they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
+- [ ] 0.9.49–0.9.51: node browser on ⇧Tab; Card Shading (lambert /
+      blinn, lit by an Area Light on the render's extra input); a new 3D
+      setup renders a Card (not black); the light's icon and handles in
+      the 3D view; Look through in 3D view in Camera / light Properties
 - [ ] 0.9.48: Scanline Render motion blur (incl. particles), the 3D
-      view's Solid / Lit (⇧Z), 3D Camera Setup now placed just before
-      the Viewer
+      view's Solid / Lit (⇧Z) (the camera setup before the Viewer:
+      user tested it, which led to 0.9.49–0.9.51)
 - [ ] 0.9.47: Card Opacity, the viewer's frame size labels, the square
       About logo
 - [ ] 0.9.34–0.9.46: node graph Tab / ⇧R / ⇧T / ⇧M; Area Light, falloff,
@@ -62,6 +66,11 @@ they come up and strike them (or delete them) when they ship.
 - [ ] Save view preferences between runs (e.g. Show frame size, Solid /
       Lit default; eframe persistence is off)
 - [ ] Backdrop tools in MCP / Python
+- [ ] `viewer::scene_of` (gui/viewer.rs) gates the 3D view on a Scanline
+      Render's first connected scene input: one with only extra inputs
+      (3..) connected says "no 3D scene"
+- [ ] Shift+Tab over the viewer also toggles 2D / 3D (main.rs's plain
+      Tab match ignores Shift); harmless, could be tightened
 
 ## Engine and platform (larger)
 
