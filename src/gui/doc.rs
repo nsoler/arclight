@@ -8,13 +8,12 @@
 
 use arclight::anim::{self, Interp};
 use arclight::graph::{Backdrop, Graph, NodeSpec};
+pub use arclight::graph::{NODE_H, NODE_W};
 use arclight::ops;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-pub const NODE_W: f32 = 150.0;
-pub const NODE_H: f32 = 46.0;
 /// Undo steps kept unless the preferences say otherwise.
 pub const UNDO_LEVELS: usize = 200;
 
@@ -292,8 +291,7 @@ impl Doc {
 
     /// A node's box in graph units: its corner and the opposite one.
     pub fn node_box(n: &NodeSpec) -> ([f32; 2], [f32; 2]) {
-        let p = n.pos.unwrap_or([0.0, 0.0]);
-        (p, [p[0] + NODE_W, p[1] + NODE_H])
+        n.bounds()
     }
 
     /// Put a backdrop behind the selected nodes, fitted to them, and select

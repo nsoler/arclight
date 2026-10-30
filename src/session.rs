@@ -7,7 +7,7 @@
 
 use crate::anim;
 use crate::camtrack;
-use crate::graph::{Evaluator, Graph, NodeSpec};
+use crate::graph::{Backdrop, Evaluator, Graph, NodeSpec};
 use crate::image::{Image, Size};
 use crate::ops::{self, EvalContext, OpInfo, ParamKind};
 use crate::render::{self, Progress};
@@ -189,7 +189,7 @@ impl Session {
         let info = op_info(op)?;
         let id = match id {
             Some(id) => {
-                check_id(id)?;
+                check_id(id).map_err(|_| anyhow!("invalid backdrop name '{id}': use letters, digits, '_', '-' or '.'"))?;
                 if self.node(id).is_some() {
                     bail!("'{id}' is already used");
                 }
@@ -527,6 +527,111 @@ impl Session {
         false
     }
 
+    // -- backdrops ----------------------------------------------------------
+
+    /// Every backdrop, back to front: id, title, pos, size, color (and its
+    /// palette name, when it's one), font_size and the nodes fully inside it
+    /// (the ones that move with it in the node editor).
+    pub fn backdrops(&self) -> Value {
+        Value::Array(self.graph.backdrops.iter().map(|b| self.backdrop_info(b)).collect())
+    }
+
+    fn backdrop_info(&self, b: &Backdrop) -> Value {
+        let nodes: Vec<&str> = self.graph.nodes.iter().filter(|n| {
+            let (lo, hi) = n.bounds();
+            b.contains(lo, hi)
+        }).map(|n| n.id.as_str()).collect();
+        let name = Backdrop::COLORS.iter().position(|c| *c == b.color).map(|i| Backdrop::COLOR_NAMES[i]);
+        json!({"id": b.id, "title": b.title, "pos": b.pos, "size": b.size, "color": b.color, "color_name": name, "font_size": b.font_size, "nodes": nodes})
+    }
+
+    fn backdrop_index(&self, id: &str) -> Result<usize> {
+        self.graph.backdrops.iter().position(|b| b.id == id).ok_or_else(|| anyhow!("no backdrop named '{id}'"))
+    }
+
+    /// Add a backdrop in front of the others (behind every node): fitted
+    /// around nodes as the node editor's Group does, or at a pos and size.
+    /// Its title defaults to "Group", its id to backdrop1, backdrop2, …
+    /// Returns its id.
+    pub fn create_backdrop(&mut self, id: Option<&str>, edit: &BackdropEdit) -> Result<String> {
+        let id = match id {
+            Some(id) => {
+                check_id(id)?;
+                if self.graph.backdrop(id).is_some() {
+                    bail!("a backdrop '{id}' already exists");
+                }
+                id.to_string()
+            }
+            None => self.graph.new_backdrop_id(),
+        };
+        if edit.around.is_none() && (edit.pos.is_none() || edit.size.is_none()) {
+            bail!("give 'around' (nodes to fit) or both 'pos' and 'size'");
+        }
+        let mut b = Backdrop { id: id.clone(), title: "Group".into(), pos: [0.0; 2], size: Backdrop::MIN_SIZE, color: Backdrop::COLORS[0], font_size: Backdrop::FONT_SIZE };
+        self.apply_backdrop(&mut b, edit)?;
+        self.checkpoint();
+        self.graph.backdrops.push(b);
+        Ok(id)
+    }
+
+    /// Change a backdrop (one undo step): what `edit` gives; 'around'
+    /// refits it to those nodes.
+    pub fn update_backdrop(&mut self, id: &str, edit: &BackdropEdit) -> Result<()> {
+        let i = self.backdrop_index(id)?;
+        let mut b = self.graph.backdrops[i].clone();
+        self.apply_backdrop(&mut b, edit)?;
+        if b != self.graph.backdrops[i] {
+            self.checkpoint();
+            self.graph.backdrops[i] = b;
+        }
+        Ok(())
+    }
+
+    /// Remove a backdrop; the nodes in it stay (the node editor's Ungroup).
+    pub fn delete_backdrop(&mut self, id: &str) -> Result<()> {
+        let i = self.backdrop_index(id)?;
+        self.checkpoint();
+        self.graph.backdrops.remove(i);
+        Ok(())
+    }
+
+    /// `edit` checked and applied to `b`.
+    fn apply_backdrop(&self, b: &mut Backdrop, edit: &BackdropEdit) -> Result<()> {
+        if edit.around.is_some() && (edit.pos.is_some() || edit.size.is_some()) {
+            bail!("give 'around' or 'pos'/'size', not both");
+        }
+        if let Some(nodes) = &edit.around {
+            let boxes = nodes.iter().map(|n| Ok(self.graph.nodes[self.node_index(n)?].bounds())).collect::<Result<Vec<_>>>()?;
+            let fit = Backdrop::around(&b.id, "", boxes).ok_or_else(|| anyhow!("'around' needs at least one node"))?;
+            (b.pos, b.size) = (fit.pos, fit.size);
+        }
+        if let Some(p) = edit.pos {
+            if !p.iter().all(|v| v.is_finite()) {
+                bail!("'pos' must be two finite numbers");
+            }
+            b.pos = p;
+        }
+        if let Some(s) = edit.size {
+            if !s.iter().all(|v| v.is_finite()) || s[0] < Backdrop::MIN_SIZE[0] || s[1] < Backdrop::MIN_SIZE[1] {
+                bail!("'size' must be at least {} x {}", Backdrop::MIN_SIZE[0], Backdrop::MIN_SIZE[1]);
+            }
+            b.size = s;
+        }
+        if let Some(t) = &edit.title {
+            b.title = t.clone();
+        }
+        if let Some(c) = edit.color {
+            b.color = c;
+        }
+        if let Some(f) = edit.font_size {
+            if !Backdrop::FONT_RANGE.contains(&f) {
+                bail!("'font_size' must be {} to {}", Backdrop::FONT_RANGE.start(), Backdrop::FONT_RANGE.end());
+            }
+            b.font_size = f;
+        }
+        Ok(())
+    }
+
     // -- rendering ----------------------------------------------------------
 
     /// Render node `id` at `frame`. Results are cached between calls.
@@ -732,6 +837,58 @@ fn normalize(graph: &mut Graph) {
                 n.inputs.resize(info.inputs.len(), String::new());
             }
         }
+    }
+}
+
+/// A backdrop's settings to change ([`Session::create_backdrop`],
+/// [`Session::update_backdrop`]); None leaves one as it is.
+#[derive(Clone, Debug, Default)]
+pub struct BackdropEdit {
+    pub title: Option<String>,
+    /// sRGB, 0..1.
+    pub color: Option<[f32; 3]>,
+    pub font_size: Option<f32>,
+    /// Top-left corner and size, in node editor coordinates.
+    pub pos: Option<[f32; 2]>,
+    pub size: Option<[f32; 2]>,
+    /// Nodes to fit it around (in place of pos and size).
+    pub around: Option<Vec<String>>,
+}
+
+impl BackdropEdit {
+    /// From tool arguments: title, color (a palette name such as "teal", an
+    /// index into the palette or [r, g, b] 0-1), font_size, pos, size and
+    /// around (node names).
+    pub fn from_args(args: &Value) -> Result<BackdropEdit> {
+        let arg = |k: &str| args.get(k).filter(|v| !v.is_null());
+        let pair = |k: &str| -> Result<Option<[f32; 2]>> {
+            arg(k).map(|v| serde_json::from_value(v.clone()).map_err(|_| anyhow!("'{k}' must be [x, y]"))).transpose()
+        };
+        Ok(BackdropEdit {
+            title: arg("title").map(|v| v.as_str().map(str::to_string).ok_or_else(|| anyhow!("'title' must be text"))).transpose()?,
+            color: arg("color").map(backdrop_color).transpose()?,
+            font_size: arg("font_size").map(|v| v.as_f64().map(|f| f as f32).ok_or_else(|| anyhow!("'font_size' must be a number"))).transpose()?,
+            pos: pair("pos")?,
+            size: pair("size")?,
+            around: arg("around").map(|v| serde_json::from_value(v.clone()).map_err(|_| anyhow!("'around' must be a list of node names"))).transpose()?,
+        })
+    }
+}
+
+/// A backdrop color: a palette name, an index into the palette, or
+/// [r, g, b] 0-1.
+pub fn backdrop_color(v: &Value) -> Result<[f32; 3]> {
+    let names = Backdrop::COLOR_NAMES.join(", ");
+    if let Some(name) = v.as_str() {
+        let i = Backdrop::COLOR_NAMES.iter().position(|n| n.eq_ignore_ascii_case(name)).ok_or_else(|| anyhow!("unknown color '{name}' (use {names}, an index 0-7 or [r, g, b])"))?;
+        return Ok(Backdrop::COLORS[i]);
+    }
+    if let Some(i) = v.as_u64() {
+        return Backdrop::COLORS.get(i as usize).copied().ok_or_else(|| anyhow!("color index {i} is past the palette (0-7)"));
+    }
+    match serde_json::from_value::<[f32; 3]>(v.clone()) {
+        Ok(c) if c.iter().all(|x| (0.0..=1.0).contains(x)) => Ok(c),
+        _ => bail!("'color' must be {names}, an index 0-7 or [r, g, b] with each 0-1"),
     }
 }
 
@@ -1019,5 +1176,54 @@ mod tests {
         assert_eq!(s.port_index(&m, &json!("B")).unwrap(), 1);
         s.connect(&c, &m, s.port_index(&m, &json!("b")).unwrap()).unwrap();
         assert_eq!(s.node(&m).unwrap().inputs[1], c);
+    }
+
+    #[test]
+    fn backdrops_fit_nodes_change_and_undo() {
+        let mut s = Session::default();
+        let a = s.create_node("constant", None, &Map::new(), &[]).unwrap();
+        let b = s.create_node("blur", None, &Map::new(), std::slice::from_ref(&a)).unwrap();
+        let far = s.create_node("constant", None, &Map::new(), &[]).unwrap();
+        s.graph.nodes[0].pos = Some([0.0, 0.0]);
+        s.graph.nodes[1].pos = Some([200.0, 100.0]);
+        s.graph.nodes[2].pos = Some([900.0, 900.0]);
+        let edit = |v: Value| BackdropEdit::from_args(&v).unwrap();
+        // Around nodes: as the node editor's Group fits them.
+        let id = s.create_backdrop(None, &edit(json!({"around": [a, b], "title": "Keying", "color": "teal"}))).unwrap();
+        assert_eq!(id, "backdrop1");
+        let fit = Backdrop::around("x", "", [s.node(&a).unwrap().bounds(), s.node(&b).unwrap().bounds()]).unwrap();
+        let listed = s.backdrops();
+        assert_eq!(listed[0]["nodes"], json!([a, b]), "{listed}");
+        assert_eq!((&listed[0]["pos"], &listed[0]["size"]), (&json!(fit.pos), &json!(fit.size)));
+        assert_eq!((&listed[0]["title"], &listed[0]["color_name"], &listed[0]["font_size"]), (&json!("Keying"), &json!("teal"), &json!(14.0)));
+        // At a place, with an id; refused edits leave no undo step.
+        s.create_backdrop(Some("notes"), &edit(json!({"pos": [800, 800], "size": [400, 300], "color": [0.1, 0.2, 0.3]}))).unwrap();
+        assert_eq!(s.backdrops()[1]["nodes"], json!([far]));
+        let depth = s.undo.len();
+        assert!(s.create_backdrop(Some("notes"), &edit(json!({"around": [a]}))).unwrap_err().to_string().contains("already"));
+        assert!(s.create_backdrop(None, &edit(json!({"pos": [0, 0]}))).unwrap_err().to_string().contains("'around'"));
+        assert!(s.create_backdrop(None, &edit(json!({"around": ["nope"]}))).unwrap_err().to_string().contains("nope"));
+        assert!(s.create_backdrop(None, &edit(json!({"around": []}))).is_err());
+        assert!(s.update_backdrop("notes", &edit(json!({"font_size": 200}))).is_err());
+        assert!(s.update_backdrop("notes", &edit(json!({"size": [10, 10]}))).is_err());
+        assert!(s.update_backdrop("notes", &edit(json!({"around": [a], "pos": [0, 0]}))).is_err());
+        assert!(s.update_backdrop("gone", &edit(json!({"title": "x"}))).is_err());
+        for bad in [json!("mauve"), json!(8), json!([2.0, 0.0, 0.0]), json!([1, 1])] {
+            assert!(BackdropEdit::from_args(&json!({"color": bad})).is_err(), "{bad}");
+        }
+        assert_eq!(s.undo.len(), depth);
+        // Changed (one step each), refitted, undone, deleted with its nodes kept.
+        s.update_backdrop("notes", &edit(json!({"title": "Notes", "color": 7, "font_size": 20}))).unwrap();
+        let n = &s.graph.backdrops[1];
+        assert_eq!((n.title.as_str(), n.color, n.font_size, n.pos), ("Notes", Backdrop::COLORS[7], 20.0, [800.0, 800.0]));
+        s.update_backdrop("notes", &edit(json!({"title": "Notes"}))).unwrap();
+        assert_eq!(s.undo.len(), depth + 1, "no change, no step");
+        s.update_backdrop(&id, &edit(json!({"around": [b]}))).unwrap();
+        assert_eq!(s.backdrops()[0]["nodes"], json!([b]));
+        assert!(s.undo());
+        assert_eq!(s.backdrops()[0]["nodes"], json!([a, b]));
+        s.delete_backdrop(&id).unwrap();
+        assert_eq!((s.graph.backdrops.len(), s.graph.nodes.len()), (1, 3));
+        assert!(s.delete_backdrop(&id).is_err());
     }
 }

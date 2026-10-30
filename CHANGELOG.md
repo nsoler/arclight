@@ -12,6 +12,18 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.24 — 2026-10-30
+
+- **Backdrops from scripts**: MCP tools `list_backdrops`,
+  `create_backdrop`, `update_backdrop` and `delete_backdrop`, and in
+  Python `arclt.backdrops()`, `arclt.backdrop(id)`,
+  `arclt.create_backdrop(...)` and `Backdrop` objects (title / color /
+  font_size / pos / size, `set()`, `fit()`, `nodes()`, `delete()`). A box
+  is made around nodes with a margin as Group does, or at a position and
+  size; colors are a palette name (slate, teal, green, olive, amber,
+  rust, plum, blue), an index 0–7, or [r, g, b]. Each edit is one undo
+  step, also in a GUI attached over the bridge.
+
 ## 0.10.23 — 2026-10-30
 
 - Shift+Tab over the viewer no longer also switches it between 2D and

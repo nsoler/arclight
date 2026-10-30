@@ -11,7 +11,7 @@ use crate::media;
 use crate::ops;
 use crate::plugin;
 use crate::render::Progress;
-use crate::session::{self, Session};
+use crate::session::{self, BackdropEdit, Session};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -114,6 +114,30 @@ static TOOLS: &[Tool] = &[
             "input": {"type": "string", "description": "An image for the card."},
             "name": {"type": "string"}
         }, "required": ["node", "points"]}),
+    tool!("list_backdrops", "'backdrops': the node editor's backdrops (group boxes behind nodes), back to front: id, title, pos and size (node editor units, top-left corner), color (sRGB 0-1, and color_name when it's a palette color), font_size (the title's) and nodes (those fully inside it, which move with it).",
+        {"type": "object", "properties": {}}),
+    tool!("create_backdrop", "Add a backdrop (a group box behind nodes in the node editor), in front of the others: fitted 'around' nodes with a margin as the editor's Group does, or at 'pos' with 'size'. 'color' is a palette name (slate, teal, green, olive, amber, rust, plum, blue), an index 0-7 into that order or [r, g, b] 0-1. Returns its id.",
+        {"type": "object", "properties": {
+            "title": {"type": "string", "description": "Default \"Group\"."},
+            "around": {"type": "array", "items": {"type": "string"}, "description": "Nodes to fit it around."},
+            "pos": {"type": "array", "items": {"type": "number"}, "description": "Top-left corner [x, y]."},
+            "size": {"type": "array", "items": {"type": "number"}, "description": "[width, height], at least 120 x 60."},
+            "color": {"type": ["string", "integer", "array"]},
+            "font_size": {"type": "number", "description": "The title's size, 8-72 (default 14)."},
+            "id": {"type": "string", "description": "Default backdrop1, backdrop2, ..."}
+        }}),
+    tool!("update_backdrop", "Change a backdrop (one undo step): any of title, color, font_size, pos, size, or 'around' to refit it to nodes. Moving it doesn't move the nodes in it.",
+        {"type": "object", "properties": {
+            "backdrop": {"type": "string"},
+            "title": {"type": "string"},
+            "around": {"type": "array", "items": {"type": "string"}},
+            "pos": {"type": "array", "items": {"type": "number"}},
+            "size": {"type": "array", "items": {"type": "number"}},
+            "color": {"type": ["string", "integer", "array"]},
+            "font_size": {"type": "number"}
+        }, "required": ["backdrop"]}),
+    tool!("delete_backdrop", "Remove a backdrop; the nodes in it stay.",
+        {"type": "object", "properties": {"backdrop": {"type": "string"}}, "required": ["backdrop"]}),
     tool!("connect", "Connect node 'from' to input 'port' (index or label like \"B\"/\"mask\", default 0) of node 'to'.",
         {"type": "object", "properties": {"from": {"type": "string"}, "to": {"type": "string"}, "port": {"type": ["integer", "string"]}}, "required": ["from", "to"]}),
     tool!("disconnect", "Disconnect input 'port' (index or label) of a node.",
@@ -261,6 +285,16 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
             let linked = args.get("linked").and_then(Value::as_bool).unwrap_or(true);
             let id = s.export_tracker(str_arg(args, "node")?, op, stabilize, linked, opt_str(args, "name"), opt_str(args, "input"))?;
             json!({"node": id})
+        }
+        "list_backdrops" => json!({"backdrops": s.backdrops()}),
+        "create_backdrop" => json!({"backdrop": s.create_backdrop(opt_str(args, "id"), &BackdropEdit::from_args(args)?)?}),
+        "update_backdrop" => {
+            s.update_backdrop(str_arg(args, "backdrop")?, &BackdropEdit::from_args(args)?)?;
+            ok()
+        }
+        "delete_backdrop" => {
+            s.delete_backdrop(str_arg(args, "backdrop")?)?;
+            ok()
         }
         "connect" => {
             let to = str_arg(args, "to")?;
@@ -707,6 +741,47 @@ mod tests {
         assert_eq!(graph["project"].get("folder"), None);
         assert_eq!(graph["nodes"][0]["params"]["path"], moved.join("plates/bg.####.png").to_string_lossy().as_ref());
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Backdrops through MCP: made around nodes, listed, changed and
+    /// deleted, each one undo step; bad arguments say what's wrong.
+    #[test]
+    fn backdrops_through_mcp() {
+        let mut s = Server::new(Session::default());
+        let ok = |r: Value| {
+            assert_eq!(r["isError"], false, "{r}");
+            r["structuredContent"].clone()
+        };
+        ok(call(&mut s, "create_node", json!({"op": "constant", "name": "plate"})));
+        ok(call(&mut s, "create_node", json!({"op": "blur", "name": "soft", "inputs": ["plate"]})));
+        let made = ok(call(&mut s, "create_backdrop", json!({"around": ["plate", "soft"], "title": "Plate", "color": "amber", "font_size": 24})));
+        assert_eq!(made["backdrop"], "backdrop1");
+        ok(call(&mut s, "create_backdrop", json!({"id": "notes", "pos": [500, 0], "size": [300, 200]})));
+        let list = ok(call(&mut s, "list_backdrops", json!({})))["backdrops"].clone();
+        assert_eq!(list.as_array().unwrap().len(), 2);
+        assert_eq!((&list[0]["nodes"], &list[0]["color_name"], &list[0]["font_size"]), (&json!(["plate", "soft"]), &json!("amber"), &json!(24.0)));
+        assert_eq!((&list[1]["title"], &list[1]["nodes"]), (&json!("Group"), &json!([])));
+        ok(call(&mut s, "update_backdrop", json!({"backdrop": "notes", "title": "Notes", "color": [0.2, 0.2, 0.2]})));
+        let graph = ok(call(&mut s, "get_graph", json!({})))["graph"].clone();
+        assert_eq!(graph["backdrops"][1]["title"], "Notes", "saved with the graph");
+        ok(call(&mut s, "delete_backdrop", json!({"backdrop": "backdrop1"})));
+        let list = ok(call(&mut s, "list_backdrops", json!({})))["backdrops"].clone();
+        assert_eq!(list.as_array().unwrap().len(), 1);
+        ok(call(&mut s, "undo", json!({})));
+        ok(call(&mut s, "undo", json!({})));
+        let list = ok(call(&mut s, "list_backdrops", json!({})))["backdrops"].clone();
+        assert_eq!((list[0]["id"].as_str(), list[1]["title"].as_str()), (Some("backdrop1"), Some("Group")));
+        for (tool, args, says) in [
+            ("create_backdrop", json!({"title": "x"}), "'around'"),
+            ("create_backdrop", json!({"around": ["nope"]}), "nope"),
+            ("create_backdrop", json!({"around": ["plate"], "color": "mauve"}), "mauve"),
+            ("update_backdrop", json!({"backdrop": "gone"}), "gone"),
+            ("update_backdrop", json!({"backdrop": "notes", "font_size": 4}), "font_size"),
+            ("delete_backdrop", json!({}), "backdrop"),
+        ] {
+            let r = call(&mut s, tool, args);
+            assert!(r["isError"] == true && r["content"][0]["text"].as_str().unwrap().contains(says), "{tool}: {r}");
+        }
     }
 
     #[test]

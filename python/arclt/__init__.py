@@ -30,7 +30,7 @@ __all__ = [
     "ArcltError", "Node", "create_node", "node", "nodes", "delete", "connect", "disconnect",
     "save", "load", "new", "render", "pixels", "to_numpy", "ops", "op_info", "project",
     "undo", "redo", "metadata", "graph", "plugins", "instances", "attach", "detach",
-    "select", "view", "view_state",
+    "select", "view", "view_state", "Backdrop", "backdrops", "backdrop", "create_backdrop",
 ]
 
 
@@ -248,6 +248,119 @@ def create_node(op: str, *inputs: "Node | str | None", name: str | None = None, 
     (``None`` skips a port); keyword arguments set params."""
     ins = ["" if i is None else _name(i) for i in inputs]
     return Node(_call("create_node", op=op, name=name, params=params, inputs=ins)["node"])
+
+
+class Backdrop:
+    """A handle to a backdrop (a group box behind nodes in the node editor)
+    by id. Colors are a palette name (slate, teal, green, olive, amber,
+    rust, plum, blue), an index 0-7 into it, or ``[r, g, b]`` 0-1."""
+
+    __slots__ = ("_id",)
+
+    def __init__(self, id: str):
+        self._id = id
+
+    @property
+    def id(self) -> str:
+        return self._id
+
+    def info(self) -> dict:
+        """id, title, pos, size, color (and color_name for a palette color),
+        font_size and nodes (those fully inside it)."""
+        for b in _call("list_backdrops")["backdrops"]:
+            if b["id"] == self._id:
+                return b
+        raise ArcltError(f"no backdrop named '{self._id}'")
+
+    @property
+    def title(self) -> str:
+        return self.info()["title"]
+
+    @title.setter
+    def title(self, value: str) -> None:
+        self.set(title=value)
+
+    @property
+    def color(self) -> list[float]:
+        return self.info()["color"]
+
+    @color.setter
+    def color(self, value: "str | int | list[float]") -> None:
+        self.set(color=value)
+
+    @property
+    def font_size(self) -> float:
+        return self.info()["font_size"]
+
+    @font_size.setter
+    def font_size(self, value: float) -> None:
+        self.set(font_size=value)
+
+    @property
+    def pos(self) -> list[float]:
+        return self.info()["pos"]
+
+    @pos.setter
+    def pos(self, value: list[float]) -> None:
+        self.set(pos=value)
+
+    @property
+    def size(self) -> list[float]:
+        return self.info()["size"]
+
+    @size.setter
+    def size(self, value: list[float]) -> None:
+        self.set(size=value)
+
+    def nodes(self) -> list[Node]:
+        """The nodes fully inside it (they move with it in the node editor)."""
+        return [Node(n) for n in self.info()["nodes"]]
+
+    def set(self, title: str | None = None, color: "str | int | list[float] | None" = None,
+            font_size: float | None = None, pos: list[float] | None = None,
+            size: list[float] | None = None) -> "Backdrop":
+        """Change several settings as one undo step."""
+        _call("update_backdrop", backdrop=self._id, title=title, color=color, font_size=font_size, pos=pos, size=size)
+        return self
+
+    def fit(self, *nodes: "Node | str") -> "Backdrop":
+        """Refit it around ``nodes``, with a margin, as Group does."""
+        _call("update_backdrop", backdrop=self._id, around=[_name(n) for n in nodes])
+        return self
+
+    def delete(self) -> None:
+        """Remove it; the nodes in it stay."""
+        _call("delete_backdrop", backdrop=self._id)
+
+    def __repr__(self) -> str:
+        return f"<arclt.Backdrop {self._id}>"
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Backdrop) and other._id == self._id
+
+    def __hash__(self) -> int:
+        return hash(self._id)
+
+
+def backdrops() -> list[Backdrop]:
+    """Every backdrop, back to front."""
+    return [Backdrop(b["id"]) for b in _call("list_backdrops")["backdrops"]]
+
+
+def backdrop(id: str) -> Backdrop | None:
+    """The backdrop ``id``, or None."""
+    return Backdrop(id) if any(b["id"] == id for b in _call("list_backdrops")["backdrops"]) else None
+
+
+def create_backdrop(*nodes: "Node | str", title: str | None = None, color: "str | int | list[float] | None" = None,
+                    font_size: float | None = None, pos: list[float] | None = None,
+                    size: list[float] | None = None, id: str | None = None) -> Backdrop:
+    """Add a backdrop in front of the others: fitted around ``nodes`` with a
+    margin (as Group does), or at ``pos`` with ``size``. The title defaults
+    to "Group", the id to backdrop1, backdrop2, ..."""
+    around = [_name(n) for n in nodes] or None
+    return Backdrop(_call("create_backdrop", around=around, title=title, color=color, font_size=font_size,
+                          pos=pos, size=size, id=id)["backdrop"])
 
 
 def node(name: str) -> Node | None:

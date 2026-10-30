@@ -97,9 +97,10 @@ Phase 10: 0.10.x on branch `wip-ns-splats` (started 0.10.0).
 
 ## Interface
 
-- [ ] Backdrop tools in MCP / Python
-- [ ] Shift+Tab over the viewer also toggles 2D / 3D (main.rs's plain
-      Tab match ignores Shift); harmless, could be tightened
+- [x] Backdrop tools in MCP / Python (0.10.24)
+- [ ] A `set_node_position` MCP / Python tool, so backdrops `around`
+      nodes are useful headless (nodes made by scripts have no position)
+- [x] Shift+Tab over the viewer no longer toggles 2D / 3D (0.10.23)
 
 ## Engine and platform (larger)
 

@@ -425,7 +425,7 @@ arclight mcp --attach [PID]               # drive the newest (or given) running 
 
 Register it with an MCP client, e.g. `claude mcp add arclight -- /path/to/arclight mcp`.
 Tools: `list_ops`, `describe_op`, `get_graph`, `describe_node`, `create_node`,
-`delete_node`, `rename_node`, `set_params`, `set_key`, `export_tracker` (a Tracker's motion as a keyed Transform or Corner Pin), `track_camera`, `camera_points`, `orient_camera`, `export_camera`, `place_on_points` (the Camera Tracker: solve, read the points, set origin/ground/scale, export (`export_camera` links the Camera to the solve live by default; `"linked": false` keys a copy), place cards and locators), `scene_objects` (what a 3D node's scene holds: cameras, cards, meshes, splat captures, and lights with their type, world position and direction, color, intensity and settings), `particles` (a particle node's particles at a frame: ids, positions, velocities, ages, lives, sizes, colors, in pages of up to 100000), `splats` (a scene's Gaussian splats in pages: positions in the scene, scales, rotations (w,x,y,z), opacities, colors (linear RGB), and which capture (`sets`: node, count, SH degree, world)), `connect`, `disconnect`,
+`list_backdrops` / `create_backdrop` / `update_backdrop` / `delete_backdrop` (the node editor's group boxes: create one around nodes, or at `pos` with `size`; set `title`, `color` (palette name, index or [r, g, b]), `font_size` (8–72), `pos`, `size`, or refit it `around` nodes; deleting a box keeps its nodes; `list_backdrops` also gives the nodes fully inside each box), `delete_node`, `rename_node`, `set_params`, `set_key`, `export_tracker` (a Tracker's motion as a keyed Transform or Corner Pin), `track_camera`, `camera_points`, `orient_camera`, `export_camera`, `place_on_points` (the Camera Tracker: solve, read the points, set origin/ground/scale, export (`export_camera` links the Camera to the solve live by default; `"linked": false` keys a copy), place cards and locators), `scene_objects` (what a 3D node's scene holds: cameras, cards, meshes, splat captures, and lights with their type, world position and direction, color, intensity and settings), `particles` (a particle node's particles at a frame: ids, positions, velocities, ages, lives, sizes, colors, in pages of up to 100000), `splats` (a scene's Gaussian splats in pages: positions in the scene, scales, rotations (w,x,y,z), opacities, colors (linear RGB), and which capture (`sets`: node, count, SH degree, world)), `connect`, `disconnect`,
 `set_project` (incl. `folder`: relative paths are in it), `render_frame` (stats, optional file and PNG preview the model can
 see), `render_output`, `probe_media`, `new_graph`, `load_graph`, `save_graph`,
 `undo`, `redo`, `list_plugins`, `list_instances`, `attach_instance`,
@@ -467,7 +467,10 @@ arclt.attach()        # from now on, edit the project open in the GUI
 
 Also: `node`, `nodes`, `delete`, `connect`, `disconnect`, `load`, `new`,
 `pixels`, `ops`, `op_info`, `project`, `undo`, `redo`, `metadata` (media file
-info), `graph`, `plugins`, `instances`, `detach`, and, when attached,
+info), `graph`, `plugins`, `instances`, `detach`, `backdrops()`, `backdrop(id)`,
+`create_backdrop(*nodes, title=, color=, font_size=, pos=, size=)` (a
+`Backdrop` with `title` / `color` / `font_size` / `pos` / `size`, `set`, `fit(*nodes)`,
+`nodes()`, `delete()`), and, when attached,
 `select`, `view(node, frame=None)`, `view_state`. `Node` has `info`,
 `params`, `set`, `input(s)`, `set_input`, `outputs`, `rename`, `render`,
 `select`, `view`, `to_transform` / `to_corner_pin` (for a Tracker),

@@ -33,6 +33,19 @@ pub struct NodeSpec {
     pub pos: Option<[f32; 2]>,
 }
 
+/// A node's size in the node editor.
+pub const NODE_W: f32 = 150.0;
+pub const NODE_H: f32 = 46.0;
+
+impl NodeSpec {
+    /// Its box in the node editor (min and max corners); one never placed
+    /// counts at 0,0.
+    pub fn bounds(&self) -> ([f32; 2], [f32; 2]) {
+        let p = self.pos.unwrap_or([0.0, 0.0]);
+        (p, [p[0] + NODE_W, p[1] + NODE_H])
+    }
+}
+
 /// Timeline settings for interactive playback.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Project {
@@ -179,7 +192,13 @@ impl Backdrop {
         [0.45, 0.30, 0.48],
         [0.26, 0.36, 0.58],
     ];
+    /// The palette's names, in order.
+    pub const COLOR_NAMES: [&str; 8] = ["slate", "teal", "green", "olive", "amber", "rust", "plum", "blue"];
     pub const FONT_SIZE: f32 = 14.0;
+    /// The title sizes offered.
+    pub const FONT_RANGE: std::ops::RangeInclusive<f32> = 8.0..=72.0;
+    /// The smallest size a box is resized to.
+    pub const MIN_SIZE: [f32; 2] = [120.0, 60.0];
     /// Room around the nodes it's made to fit, and above them for the title.
     pub const PAD: f32 = 20.0;
     pub const TITLE_PAD: f32 = 30.0;

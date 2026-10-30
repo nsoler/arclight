@@ -88,6 +88,36 @@ class ArcltTest(unittest.TestCase):
         self.assertTrue(arclt.undo())
         self.assertEqual(comp["operation"], "over")
 
+    def test_backdrops(self):
+        plate = arclt.create_node("constant", name="plate")
+        soft = arclt.create_node("blur", plate, name="soft")
+        box = arclt.create_backdrop(plate, soft, title="Plate", color="teal")
+        self.assertEqual((box.id, box.title, box.info()["color_name"]), ("backdrop1", "Plate", "teal"))
+        self.assertEqual(box.nodes(), [plate, soft])
+        notes = arclt.create_backdrop(pos=[600, 0], size=[300, 200], id="notes")
+        self.assertEqual(arclt.backdrops(), [box, notes])
+        self.assertEqual((notes.title, notes.nodes()), ("Group", []))
+        notes.set(title="Notes", color=7, font_size=24)
+        notes.size = [400, 250]
+        self.assertEqual((notes.title, notes.font_size, notes.size), ("Notes", 24, [400, 250]))
+        # (Unplaced headless nodes sit at 0,0: moved off them, it holds none.)
+        box.pos = [1000, 1000]
+        self.assertEqual(box.nodes(), [])
+        box.fit(soft)
+        self.assertEqual(box.nodes(), [plate, soft])
+        self.assertTrue(arclt.undo())
+        self.assertEqual((box.nodes(), box.pos), ([], [1000, 1000]))
+        with self.assertRaisesRegex(arclt.ArcltError, "mauve"):
+            box.color = "mauve"
+        with self.assertRaisesRegex(arclt.ArcltError, "'around'"):
+            arclt.create_backdrop(title="nowhere")
+        box.delete()
+        self.assertIsNone(arclt.backdrop("backdrop1"))
+        self.assertEqual(arclt.backdrop("notes"), notes)
+        self.assertEqual(len(arclt.nodes()), 2)
+        with self.assertRaisesRegex(arclt.ArcltError, "no backdrop"):
+            box.title
+
     def test_errors_raise_arclt_error(self):
         c = arclt.create_node("constant")
         with self.assertRaisesRegex(arclt.ArcltError, "no param"):
