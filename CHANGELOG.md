@@ -11,6 +11,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.55 — 2026-10-29
+
+- **Motion blur jitters each pixel's times** (Dev2): Scanline Render
+  shifts each pixel's times within the shutter in a fixed dither
+  pattern (so renders repeat exactly), so low Motion blur counts on very
+  fast moves give fine grain instead of a few sharp copies, at no extra
+  cost. Blur off is unchanged; blurred renders get the same average with
+  a different grain than 0.9.48–0.9.54.
+
 ## 0.9.54 — 2026-10-29
 
 - **View preferences are remembered between runs** (Dev1): View ▸ Show

@@ -340,7 +340,7 @@ color).
 - **Motion blur** (Scanline Render, 0 or 1: off, the default) renders
   that many times across the **Shutter** (in frames: 0.5 is a 180°
   shutter), **centered** on the frame, or starting or ending at it
-  (**Shutter offset**), and averages them. Cameras, cards, meshes (their
+  (**Shutter offset**), and averages them. Each pixel's times are shifted a little within the shutter, in a fixed dither pattern, so a very fast move at a low count shows fine grain rather than separate copies (and the same frame always renders the same). Cameras, cards, meshes (their
   vertices too, if they deform) and lights move between where they are at
   the frames round each time; particles move along their velocities, so
   fast ones streak. The picture, mattes and light passes blur; depth, P,

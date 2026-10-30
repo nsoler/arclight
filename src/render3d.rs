@@ -405,6 +405,28 @@ pub fn render_passes(scene: &Scene, cam: &Camera, format: Size, samples: usize, 
 /// the motion pass (without it, motion is the camera's and objects' move
 /// as if nothing moved: all 0).
 pub fn render_motion(scene: &Scene, cam: &Camera, format: Size, samples: usize, background: Option<&Image>, passes: Passes, next: Option<(&Scene, &Camera)>) -> Image {
+    render_cell(scene, cam, format, samples, background, passes, next, None)
+}
+
+/// One pixel of every `side` × `side` tile, the one at (`x`, `y`) in it:
+/// the pixels a render at one of [`render_blurred`]'s jittered times fills.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Cell {
+    side: usize,
+    x: usize,
+    y: usize,
+}
+
+impl Cell {
+    fn has(&self, x: usize, y: usize) -> bool {
+        x % self.side == self.x && y % self.side == self.y
+    }
+}
+
+/// [`render_motion`], only `cell`'s pixels drawn (the rest left empty), or
+/// all of them.
+#[allow(clippy::too_many_arguments)]
+fn render_cell(scene: &Scene, cam: &Camera, format: Size, samples: usize, background: Option<&Image>, passes: Passes, next: Option<(&Scene, &Camera)>, cell: Option<Cell>) -> Image {
     // Particles drawn as objects render as meshes; as points or sprites,
     // over the rest, hidden by its depth (made for them if not asked for).
     let objects = particles::with_objects(scene);
@@ -416,7 +438,7 @@ pub fn render_motion(scene: &Scene, cam: &Camera, format: Size, samples: usize, 
     // their velocities (the next frame's own may be others).
     let next_objects = next.filter(|_| objects.is_some() && passes.motion).and_then(|(n, _)| particles::with_objects(&Scene { particles: scene.particles.iter().map(|s| s.shifted(1.0)).collect(), ..n.clone() }));
     let next = next.map(|(n, c)| (next_objects.as_ref().unwrap_or(n), c));
-    let out = draw_passes(&surfaces(scene), &scene.lights, &scene.points, cam, format, samples, passes, next);
+    let out = draw_passes(&surfaces(scene), &scene.lights, &scene.points, cam, format, samples, passes, next, cell);
     let mut out = match background {
         Some(bg) => over_background(out, bg),
         None => out,
@@ -475,29 +497,93 @@ impl Blur<'_> {
 /// in between their whole frames: see [`Scene::at_time`]); depth, P, N, uv,
 /// motion and id from the render at the frame itself, as without blur.
 /// No blur (or one time): [`render_motion`].
+///
+/// Each pixel's times are jittered within their shares of the shutter, so
+/// a very fast move smears into fine grain instead of a few sharp copies:
+/// the pixels of each tile (see [`jitter_side`]) take turns at offsets
+/// spread across a share (in ordered-dither order, so neighbours differ),
+/// each turn rendering just its pixels. The same every time.
 #[allow(clippy::too_many_arguments)]
 pub fn render_blurred(scene: &Scene, cam: &Camera, format: Size, samples: usize, background: Option<&Image>, passes: Passes, next: Option<(&Scene, &Camera)>, blur: Option<&Blur>) -> Image {
-    let mut out = render_motion(scene, cam, format, samples, background, passes, next);
+    let out = render_motion(scene, cam, format, samples, background, passes, next);
     let Some(blur) = blur.filter(|b| b.times.len() > 1) else { return out };
     let mixed = Passes { depth: false, position: false, normal: false, uv: false, motion: false, id: false, ..passes };
     let frames: Vec<(i64, &Scene)> = blur.frames.iter().map(|f| (f.0, f.1)).collect();
+    match blur_sum(&blur.times, |t, cell| render_cell(&scene.at_time(&frames, t), &blur.camera(cam, t), format, samples, background, mixed, None, cell)) {
+        Some(sum) if sum.pixels.len() == out.pixels.len() => mean_into(out, sum, blur.times.len()),
+        _ => out,
+    }
+}
+
+/// The tile side [`render_blurred`] jitters `n` times over: 4 × 4 (16
+/// offsets) for few times, where copies would show most, fewer as there
+/// are more (each turn costs a scene setup), none from 32.
+fn jitter_side(n: usize) -> usize {
+    match n {
+        0..=7 => 4,
+        8..=31 => 2,
+        _ => 1,
+    }
+}
+
+/// Where (x, y) of a `side` × `side` tile comes in ordered-dither order
+/// (`side` a power of two): 0 .. side².
+fn dither_rank(side: usize, x: usize, y: usize) -> usize {
+    // The coarsest 2 × 2 the last digit, as in Bayer's matrices.
+    let (mut r, mut s, mut weight) = (0, side, 1);
+    let (mut x, mut y) = (x, y);
+    while s > 1 {
+        s /= 2;
+        r += weight * [[0, 2], [3, 1]][y / s][x / s];
+        weight *= 4;
+        x %= s;
+        y %= s;
+    }
+    r
+}
+
+/// The sum over `times` (a share of the shutter apart) of renders by
+/// `render` (time, cell), each tile pixel's times moved within their
+/// shares by its jitter. None if nothing rendered.
+fn blur_sum(times: &[f64], render: impl Fn(f64, Option<Cell>) -> Image) -> Option<Image> {
+    let side = jitter_side(times.len());
+    let share = if times.len() > 1 { times[1] - times[0] } else { 0.0 };
     let mut sum: Option<Image> = None;
-    for &t in &blur.times {
-        let img = render_motion(&scene.at_time(&frames, t), &blur.camera(cam, t), format, samples, background, mixed, None);
-        match &mut sum {
-            None => sum = Some(img),
-            Some(acc) => {
-                acc.pixels.iter_mut().zip(&img.pixels).for_each(|(a, b)| (0..4).for_each(|c| a[c] += b[c]));
+    for cy in 0..side {
+        for cx in 0..side {
+            let cell = (side > 1).then_some(Cell { side, x: cx, y: cy });
+            let shift = share * ((dither_rank(side, cx, cy) as f64 + 0.5) / (side * side) as f64 - 0.5);
+            for &t in times {
+                let img = render(t + shift, cell);
+                // (Starting from nothing: a turn's render has more than its
+                // pixels, sprites and the background drawn all over.)
+                let acc = sum.get_or_insert_with(|| {
+                    let mut zero = img.clone();
+                    zero.pixels.fill(color::TRANSPARENT);
+                    zero.planes.iter_mut().for_each(|p| p.data.fill(0.0));
+                    zero
+                });
+                if acc.pixels.len() != img.pixels.len() {
+                    continue;
+                }
+                // (By frame position: a background can reach past it.)
+                let (win, w) = (img.window(), img.width.max(1));
+                let mine = |i: usize| cell.is_none_or(|c| c.has((win.x0 + (i % w) as i32).rem_euclid(c.side as i32) as usize, (win.y0 + (i / w) as i32).rem_euclid(c.side as i32) as usize));
+                acc.pixels.iter_mut().zip(&img.pixels).enumerate().filter(|(i, _)| mine(*i)).for_each(|(_, (a, b))| (0..4).for_each(|c| a[c] += b[c]));
                 for p in &mut acc.planes {
                     if let Some(q) = img.plane(&p.name) {
-                        p.data.iter_mut().zip(&q.data).for_each(|(a, b)| *a += b);
+                        p.data.iter_mut().zip(&q.data).enumerate().filter(|(i, _)| mine(*i)).for_each(|(_, (a, b))| *a += b);
                     }
                 }
             }
         }
     }
-    let Some(sum) = sum.filter(|s| s.pixels.len() == out.pixels.len()) else { return out };
-    let k = 1.0 / blur.times.len() as f32;
+    sum
+}
+
+/// `out` with its picture and `sum`'s planes the mean of `sum` over `n`.
+fn mean_into(mut out: Image, sum: Image, n: usize) -> Image {
+    let k = 1.0 / n as f32;
     out.pixels = sum.pixels.iter().map(|p| p.map(|v| v * k)).collect();
     for p in sum.planes {
         if p.data.len() == out.pixels.len() {
@@ -515,7 +601,7 @@ pub fn render_preview(scene: &Scene, cam: &Camera, format: Size, preview: Previe
     match preview {
         Preview::Lit { shadows } if !scene.lights.is_empty() => {
             let lights: Vec<Light> = scene.lights.iter().map(|l| Light { shadows: l.shadows && shadows, ..l.clone() }).collect();
-            draw_passes(&surfs, &lights, &[], cam, format, 1, Passes::DEPTH, None)
+            draw_passes(&surfs, &lights, &[], cam, format, 1, Passes::DEPTH, None, None)
         }
         _ => {
             for s in surfs.iter_mut().skip(scene.cards.len()) {
@@ -583,7 +669,7 @@ fn slot(k: &mut usize, on: bool, n: usize) -> usize {
 /// Surfaces `surfs` and dots at `points` through `cam` into a frame of
 /// `format`, with depth (see [`render`]).
 fn draw(surfs: &[Surface], points: &[Vec3], cam: &Camera, format: Size, samples: usize) -> Image {
-    draw_passes(surfs, &[], points, cam, format, samples, Passes::DEPTH, None)
+    draw_passes(surfs, &[], points, cam, format, samples, Passes::DEPTH, None, None)
 }
 
 /// The object nodes of `surfs` in order (each once, unnamed ones left out):
@@ -600,7 +686,7 @@ fn object_nodes<'a>(surfs: &[Surface<'a>]) -> Vec<&'a str> {
 
 /// [`draw`] writing `passes` (see [`render_passes`]).
 #[allow(clippy::too_many_arguments)]
-fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes, next: Option<(&Scene, &Camera)>) -> Image {
+fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes, next: Option<(&Scene, &Camera)>, cell: Option<Cell>) -> Image {
     let n = samples.clamp(1, 16);
     // With the motion pass: each surface's vertices a frame later (the
     // surface at the same place in the next frame's list, if it's from the
@@ -658,7 +744,7 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
         .enumerate()
         .for_each(|(y, ((crow, drow), xrow))| {
             let row = &rows[y];
-            if row.is_empty() {
+            if row.is_empty() || cell.is_some_and(|c| y % c.side != c.y) {
                 return;
             }
             let y = y as i32;
@@ -679,7 +765,7 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                     next += 1;
                 }
                 here.retain(|&i| tris[i as usize].bounds.x1 > xi);
-                if here.is_empty() {
+                if here.is_empty() || cell.is_some_and(|c| x % c.side != c.x) {
                     continue;
                 }
                 let mut sum = [0.0f32; 4];
@@ -1822,6 +1908,39 @@ mod tests {
         let still = json!({ "translate": [0, 0, -5], "size": [3, 3] });
         let (s0, s1) = (at5(&still, json!({ "samples": 4 })), at5(&still, json!({ "samples": 4, "motion_blur": 8 })));
         assert!(s0.pixels.iter().zip(&s1.pixels).all(|(p, q)| (0..4).all(|c| (p[c] - q[c]).abs() < 1e-6)));
+    }
+
+    /// Two times across a frame of a card moving 40 px a frame: without
+    /// jitter, two sharp copies 20 px apart; with it, grain along the whole
+    /// streak, nearer the smear many times give. The same every time.
+    #[test]
+    fn jittered_times_turn_copies_into_grain() {
+        let white = Image::filled(4, 4, [1.0; 4]);
+        let at = |x: f64| Scene { cards: vec![card(white.clone(), [x, 0.0, -5.0], [0.0; 3], [1.25, 2.5])], ..Scene::default() };
+        let (a, b) = (at(-3.5), at(2.75));
+        let cam = camera();
+        let blur = |n: usize| Blur { times: Blur::times(0.0, 1.0, n), frames: vec![(0, &a, cam.clone()), (1, &b, cam.clone())] };
+        let render = |n: usize| render_blurred(&a, &cam, FMT, 2, None, Passes::NONE, None, Some(&blur(n)));
+        let row = |img: &Image| (0..64).map(|x| img.at(x, 16)[3]).collect::<Vec<f32>>();
+        let (smear_img, jittered_img) = (render(64), render(2));
+        let (smear, jittered) = (row(&smear_img), row(&jittered_img));
+        assert_eq!(jittered, row(&render(2)), "repeatable");
+        let frames = [(0, &a), (1, &b)];
+        let copies: Vec<Image> = Blur::times(0.0, 1.0, 2).iter().map(|&t| render_motion(&a.at_time(&frames, t), &cam, FMT, 2, None, Passes::NONE, None)).collect();
+        let copies: Vec<f32> = row(&copies[0]).iter().zip(row(&copies[1])).map(|(p, q)| (p + q) / 2.0).collect();
+        // Seen from a step back (over the 4 px tile), nearer the smear.
+        let soft = |r: &[f32]| (0..61).map(|x| r[x..x + 4].iter().sum::<f32>() / 4.0).collect::<Vec<f32>>();
+        let off = |r: &[f32]| soft(r).iter().zip(soft(&smear)).map(|(p, q)| (p - q).abs()).sum::<f32>();
+        assert!(off(&jittered) < 0.6 * off(&copies), "{} vs {} without jitter\n{jittered:?}\n{copies:?}", off(&jittered), off(&copies));
+        // The gap between the copies is no longer empty, and the picture's
+        // total stays.
+        assert!(copies[29] == 0.0 && jittered[27..33].iter().any(|v| *v > 0.0), "{jittered:?}");
+        let total = |img: &Image| img.pixels.iter().map(|p| p[3]).sum::<f32>();
+        assert!((total(&jittered_img) - total(&smear_img)).abs() < 0.02 * total(&smear_img), "{} vs {}", total(&jittered_img), total(&smear_img));
+        // A bigger tile for fewer times; none for many.
+        assert_eq!([jitter_side(2), jitter_side(8), jitter_side(32)], [4, 2, 1]);
+        let ranks: Vec<usize> = (0..16).map(|i| dither_rank(4, i % 4, i / 4)).collect();
+        assert_eq!(ranks, [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5]);
     }
 
     #[test]
