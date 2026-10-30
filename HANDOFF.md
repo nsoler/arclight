@@ -61,6 +61,10 @@ proposed 2026-10-30, not started; after the Particles round).
   or a Mac). Master workflow: a ship script snapshots the
   reported paths, tests them alone at HEAD with the bump, commits those
   blobs only; workers keep README / help / CHANGELOG / TODO to the master.
+  The ship script builds in `../.verify/target`, so it does NOT update
+  `target/release`, which the Omarchy launcher runs: run
+  `cargo build --release` in the repo after commits (it sat at 0.9.48
+  until 0.9.68).
 - **Session 12 (2026-10-29, master wD:p1; workers **Dev1** = herdr `dev1`
   (wD:p3, formerly mathwiz / MathWiz) and **Dev2** = herdr `dev2` (wD:p4,
   formerly worker3d / 3DWorker), renamed at the user's word):** from the user's hand test of the 0.9.48 camera setup:
