@@ -12,6 +12,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.5 — 2026-10-30
+
+- **Splats in scripting** (Dev1): `scene_objects` lists splat captures
+  (node, count, bounds, SH degree, position), and a new `splats` query
+  (MCP `splats`, Python `Node.splats()`) returns a scene's splats in
+  pages: positions in the scene, scales, rotations, opacities, colors and
+  which capture each came from.
+
 ## 0.10.4 — 2026-10-30
 
 - **Splats in the 3D view: framing, box selection, picking** (Dev2): F

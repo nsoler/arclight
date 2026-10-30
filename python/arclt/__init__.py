@@ -126,7 +126,8 @@ class Node:
         ``cards``, ``meshes`` and ``lights`` (each with its ``node`` and
         world ``position``; lights also ``type``, ``direction``, ``color``,
         ``intensity``, ``enabled``, ``shadows`` and their type's settings),
-        and the number of ``points``."""
+        ``splats`` (each capture's ``node``, ``count``, ``bounds``,
+        ``sh_degree`` and ``position``) and the number of ``points``."""
         return _call("scene_objects", node=self._name, frame=frame)
 
     def particles(self, frame: int | None = None, offset: int = 0, limit: int | None = None) -> dict:
@@ -141,6 +142,26 @@ class Node:
         out = _call("particles", node=self._name, frame=frame, offset=offset, limit=100_000)
         while out.get("next_offset") is not None:
             page = _call("particles", node=self._name, frame=frame, offset=out["next_offset"], limit=100_000)
+            for c in columns:
+                out[c].extend(page[c])
+            out["count"] += page["count"]
+            out["next_offset"] = page.get("next_offset")
+        return out
+
+    def splats(self, frame: int | None = None, offset: int = 0, limit: int | None = None) -> dict:
+        """The Gaussian splats this node's scene holds at ``frame`` (a Read
+        Splat's capture, or those a Scene gathers), as columns:
+        ``positions`` (in the scene), ``scales`` and ``rotations`` (w, x,
+        y, z; in the capture's own space), ``opacities``, ``colors``
+        (linear RGB, the view-independent part) and ``set`` (an index into
+        ``sets``: ``node``, ``count``, ``sh_degree``, ``world``), with
+        ``total``. All of them by default, or ``limit`` from ``offset``."""
+        columns = ("positions", "scales", "rotations", "opacities", "colors", "set")
+        if limit is not None:
+            return _call("splats", node=self._name, frame=frame, offset=offset, limit=limit)
+        out = _call("splats", node=self._name, frame=frame, offset=offset, limit=100_000)
+        while out.get("next_offset") is not None:
+            page = _call("splats", node=self._name, frame=frame, offset=out["next_offset"], limit=100_000)
             for c in columns:
                 out[c].extend(page[c])
             out["count"] += page["count"]

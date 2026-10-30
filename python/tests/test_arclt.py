@@ -36,6 +36,20 @@ class ArcltTest(unittest.TestCase):
         with self.assertRaises(arclt.ArcltError):
             arclt.create_node("constant").particles()
 
+    def test_splats(self):
+        sample = os.path.join(os.path.dirname(__file__), "..", "..", "examples", "geo", "splats.ply")
+        cap = arclt.create_node("read_splat", name="cap", file=os.path.abspath(sample), translate=[0, 0, -5])
+        objs = cap.scene_objects()
+        self.assertEqual([(g["node"], g["count"], g["sh_degree"]) for g in objs["splats"]], [("cap", 320, 1)])
+        s = cap.splats()
+        self.assertEqual((s["total"], s["count"], len(s["positions"]), s["sets"][0]["node"]), (320, 320, 320, "cap"))
+        self.assertTrue(all(-7.1 < p[2] < -2.9 for p in s["positions"]), "placed in the scene")
+        self.assertTrue(all(0.0 <= a <= 1.0 for a in s["opacities"]) and all(len(c) == 3 for c in s["colors"]))
+        page = cap.splats(offset=300, limit=50)
+        self.assertEqual((page["count"], page["next_offset"], page["positions"]), (20, None, s["positions"][300:]))
+        with self.assertRaises(arclt.ArcltError):
+            arclt.create_node("cube").splats()
+
     def test_lights_and_scene_objects(self):
         target = arclt.create_node("locator", name="target", translate=[3, 0, 0])
         key = arclt.create_node("light_spot", target, name="key", translate=[0, 4, 0], cone=30)

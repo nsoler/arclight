@@ -85,10 +85,12 @@ static TOOLS: &[Tool] = &[
             "mode": {"type": "string", "enum": ["auto", "free move", "free", "tripod"], "description": "'free move' (or 'free') for a camera that travels; 'tripod' for one that only turns about its center; 'auto' picks tripod when the camera only turns. Default: the node's Solve setting (auto). Kept on the node."},
             "distance": {"type": "number", "description": "How far from the camera a tripod solve puts its points (they have no depth). Default: the node's Tripod distance (10). Kept on the node."}
         }, "required": ["node"]}),
-    tool!("scene_objects", "What a 3D node's scene holds at 'frame' (default 1): cameras, cards and meshes (node, world position; cards their size, shading and shadow flags; meshes their bounds) and lights (node, type ambient/directional/point/spot/area, world position and direction, color, intensity, enabled, shadows, and the type's own settings: cone/penumbra/falloff, size/shape/two_sided/quality, radius), and the number of points. Lights are made with create_node (light_ambient, light_directional, light_point, light_spot, light_area; light_2d lights an image in 2D).",
+    tool!("scene_objects", "What a 3D node's scene holds at 'frame' (default 1): cameras, cards and meshes (node, world position; cards their size, shading and shadow flags; meshes their bounds), lights (node, type ambient/directional/point/spot/area, world position and direction, color, intensity, enabled, shadows, and the type's own settings: cone/penumbra/falloff, size/shape/two_sided/quality, radius), splat captures (node, count, bounds, sh_degree, world position; see the splats tool for the splats themselves), and the number of points. Lights are made with create_node (light_ambient, light_directional, light_point, light_spot, light_area; light_2d lights an image in 2D).",
         {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}}, "required": ["node"]}),
     tool!("particles", "The particles a particle node passes on at 'frame' (default 1), simulated as needed: an emitter's, a modifier's or a Particle Render's stream, or the streams a Scene or Scanline Render gathers. Columns: ids, positions, velocities (units per second), ages and lives (frames), sizes, colors (premultiplied linear RGBA) and stream (index into 'streams', the nodes they came from). Pages: 'limit' (default 1000, at most 100000) from 'offset' (default 0); 'total' counts all, 'next_offset' starts the next page. Particle nodes: particle_emitter, particle_gravity/wind/turbulence/attractor/vortex/bounce/kill/speed_limit, particle_render, particles_2d.",
         {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 0}}, "required": ["node"]}),
+    tool!("splats", "The Gaussian splats a 3D node's scene holds at 'frame' (default 1): a Read Splat's capture, or those a Scene or Scanline Render gathers. Columns: positions (in the scene), scales (1 sigma, linear) and rotations ([w, x, y, z]) in the capture's own space, opacities (0-1), colors (the view-independent color, linear RGB) and set (index into 'sets': node, count, sh_degree and world, the capture's placement as a row-major 4x4). Pages: 'limit' (default 1000, at most 100000) from 'offset' (default 0); 'total' counts all, 'next_offset' starts the next page.",
+        {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}, "offset": {"type": "integer"}, "limit": {"type": "integer"}}, "required": ["node"]}),
     tool!("camera_points", "A Camera Tracker's solved points: index, position in 3D, and where each lands in the frame at 'frame' (default: the first solved frame), to pick points for place_on_points or orient_camera; also the solve's mode ('free move' or 'tripod') and the frames placed by PnP.",
         {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}}, "required": ["node"]}),
     tool!("orient_camera", "Move a Camera Tracker's solve (arbitrary until then): 'ground' (3+ point indices) becomes level at height 0 with the camera above, 'origin' (a point index) goes to 0,0,0, and 'scale' ({points: [a, b], distance}) sets the distance between two points. Applied in that order; any may be left out.",
@@ -308,6 +310,10 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
         "particles" => {
             let n = |k: &str, d: u64| args.get(k).and_then(Value::as_u64).unwrap_or(d) as usize;
             s.particles(str_arg(args, "node")?, args.get("frame").and_then(Value::as_i64).unwrap_or(1), n("offset", 0), n("limit", 1000))?
+        }
+        "splats" => {
+            let n = |k: &str, d: u64| args.get(k).and_then(Value::as_u64).unwrap_or(d) as usize;
+            s.splats(str_arg(args, "node")?, args.get("frame").and_then(Value::as_i64).unwrap_or(1), n("offset", 0), n("limit", 1000))?
         }
         "camera_points" => {
             let sol = s.camera_solution(str_arg(args, "node")?)?;
@@ -978,6 +984,51 @@ mod tests {
         assert_eq!(at(&mut s, json!({"node": "fall", "frame": 25}))["positions"], all["positions"]);
         call(&mut s, "create_node", json!({"op": "constant", "name": "plate"}));
         assert_eq!(call(&mut s, "particles", json!({"node": "plate"}))["isError"], true);
+    }
+
+    /// The splats query and scene_objects: the sample capture placed, in
+    /// pages that add up, gathered with another by a Scene.
+    #[test]
+    fn splats_are_listed_in_pages() {
+        let file = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/geo/splats.ply");
+        let mut s = Server::new(Session::default());
+        let ok = |r: Value| {
+            assert_eq!(r["isError"], false, "{r}");
+            r["structuredContent"].clone()
+        };
+        ok(call(&mut s, "create_node", json!({"op": "read_splat", "name": "cap", "params": {"file": file, "translate": [10, 0, 0], "sh_degree": 0}})));
+        ok(call(&mut s, "create_node", json!({"op": "read_splat", "name": "cap2", "params": {"file": file}})));
+        ok(call(&mut s, "create_node", json!({"op": "scene", "name": "all", "inputs": ["cap", "cap2"]})));
+        let objs = ok(call(&mut s, "scene_objects", json!({"node": "all"})));
+        assert_eq!(objs["splats"].as_array().unwrap().len(), 2);
+        let one = &objs["splats"][0];
+        assert_eq!((one["node"].as_str(), one["count"].as_u64(), one["sh_degree"].as_u64(), one["position"].clone()), (Some("cap"), Some(320), Some(0), json!([10.0, 0.0, 0.0])));
+        let b = |k: usize, c: usize| one["bounds"][k][c].as_f64().unwrap();
+        assert!(b(0, 0) > 8.0 && b(1, 0) < 12.0 && b(1, 0) > 11.5 && (b(1, 1) - 2.0).abs() < 0.01 && b(0, 1).abs() < 1e-6, "placed: {one}");
+        let all = ok(call(&mut s, "splats", json!({"node": "all", "limit": 100000})));
+        assert_eq!((all["total"].as_u64(), all["count"].as_u64(), all["next_offset"].clone()), (Some(640), Some(640), Value::Null));
+        assert_eq!((all["sets"][0]["node"].as_str(), all["sets"][1]["sh_degree"].as_u64(), all["sets"][0]["world"][3].as_f64()), (Some("cap"), Some(1), Some(10.0)));
+        // Placed: the first set 10 to the right of the second, the same splat.
+        let x = |i: usize| all["positions"][i][0].as_f64().unwrap();
+        assert!((x(0) - x(320) - 10.0).abs() < 1e-5);
+        assert_eq!((all["set"][0].as_u64(), all["set"][320].as_u64()), (Some(0), Some(1)));
+        assert_eq!(all["scales"][0], all["scales"][320], "scales in the capture's own space");
+        assert!(all["opacities"][0].as_f64().unwrap() > 0.8 && all["colors"][0].as_array().unwrap().len() == 3 && all["rotations"][0].as_array().unwrap().len() == 4);
+        // Pages of 250 across the two sets add up to the whole.
+        let mut positions = Vec::new();
+        let mut offset = Some(0u64);
+        while let Some(o) = offset {
+            let page = ok(call(&mut s, "splats", json!({"node": "all", "offset": o, "limit": 250})));
+            positions.extend(page["positions"].as_array().unwrap().clone());
+            offset = page["next_offset"].as_u64();
+        }
+        assert_eq!(json!(positions), all["positions"]);
+        assert_eq!(ok(call(&mut s, "splats", json!({"node": "cap2", "offset": 1000})))["count"], 0);
+        // A scene without splats, or an image: an error.
+        ok(call(&mut s, "create_node", json!({"op": "cube", "name": "box"})));
+        assert_eq!(call(&mut s, "splats", json!({"node": "box"}))["isError"], true);
+        ok(call(&mut s, "create_node", json!({"op": "constant", "name": "plate"})));
+        assert_eq!(call(&mut s, "splats", json!({"node": "plate"}))["isError"], true);
     }
 
     #[test]

@@ -22,6 +22,8 @@ const UNDO_LIMIT: usize = 200;
 /// The most particles one [`Session::particles`] call returns (page
 /// through more with its offset).
 pub const MAX_PARTICLES: usize = 100_000;
+/// The most splats one [`Session::splats`] page holds.
+pub const MAX_SPLATS: usize = 100_000;
 /// About how long [`Session::particles`] simulates at a time.
 const PARTICLE_RUN: std::time::Duration = std::time::Duration::from_millis(30);
 
@@ -518,7 +520,8 @@ impl Session {
     /// What node `id`'s 3D scene holds at `frame`: its cameras, cards,
     /// meshes and lights (each with the node it came from and where it is in
     /// the scene; lights also their type, direction, color and settings),
-    /// and how many points. Err if the node outputs an image, not a scene.
+    /// splat captures (node, count, bounds, SH degree, where), and how many
+    /// points. Err if the node outputs an image, not a scene.
     pub fn scene_objects(&mut self, id: &str, frame: i64) -> Result<Value> {
         use crate::shade::LightKind;
         let img = self.render(id, frame)?;
@@ -572,7 +575,15 @@ impl Session {
                 v
             })
             .collect();
-        Ok(json!({"node": id, "frame": frame, "cameras": cameras, "cards": cards, "meshes": meshes, "lights": lights, "points": scene.points.len()}))
+        let splats: Vec<Value> = scene
+            .splats
+            .iter()
+            .map(|g| {
+                let bounds = g.bounds().map(|(lo, hi)| [<[f64; 3]>::from(lo), hi.into()]);
+                json!({"node": g.node, "count": g.len(), "bounds": bounds, "sh_degree": g.sh_degree, "position": origin(&g.world)})
+            })
+            .collect();
+        Ok(json!({"node": id, "frame": frame, "cameras": cameras, "cards": cards, "meshes": meshes, "lights": lights, "splats": splats, "points": scene.points.len()}))
     }
 
     /// The particles node `id` passes on at `frame` (an emitter's,
@@ -625,6 +636,55 @@ impl Session {
             "sizes": page.iter().map(|(_, p)| p.size).collect::<Vec<_>>(),
             "colors": page.iter().map(|(_, p)| p.color).collect::<Vec<_>>(),
             "stream": page.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+        }))
+    }
+
+    /// The Gaussian splats node `id`'s scene holds at `frame` (a Read
+    /// Splat's, or the captures a Scene or Scanline Render gathers): from
+    /// the `offset`th, at most `limit` (capped at [`MAX_SPLATS`]), as
+    /// columns: positions (in the scene, placed), scales (1σ, linear) and
+    /// rotations ([w, x, y, z]) in the capture's own space, opacities
+    /// (0–1), colors (the view-independent part, linear RGB) and which set
+    /// each came from (an index into `sets`: node, count, SH degree and
+    /// placement as a 4×4 row-major matrix). `total` counts them all;
+    /// `next_offset` is where the next page starts, if there is one. Err if
+    /// the scene holds none.
+    pub fn splats(&mut self, id: &str, frame: i64, offset: usize, limit: usize) -> Result<Value> {
+        let img = self.render(id, frame)?;
+        let sets = img.scene.as_ref().map(|s| s.splats.clone()).unwrap_or_default();
+        if sets.iter().all(|g| g.is_empty()) {
+            bail!("'{id}' holds no splats (read a capture with Read Splat)");
+        }
+        let total: usize = sets.iter().map(|g| g.len()).sum();
+        let start = offset.min(total);
+        let end = start.saturating_add(limit.min(MAX_SPLATS)).min(total);
+        // (set, index in it) for each splat of the page.
+        let mut page = Vec::with_capacity(end - start);
+        let mut first = 0;
+        for (k, g) in sets.iter().enumerate() {
+            let (lo, hi) = (start.max(first), end.min(first + g.len()));
+            page.extend((lo..hi.max(lo)).map(|i| (k, i - first)));
+            first += g.len();
+        }
+        let placed = |k: usize, i: usize| -> [f64; 3] {
+            let p = sets[k].positions[i];
+            crate::geom::transform_point(&sets[k].world, &crate::geom::Vec3::new(p[0] as f64, p[1] as f64, p[2] as f64)).into()
+        };
+        let matrix = |m: &crate::geom::Mat4| -> Vec<f64> { (0..4).flat_map(|r| (0..4).map(move |c| m[(r, c)])).collect() };
+        Ok(json!({
+            "node": id,
+            "frame": frame,
+            "total": total,
+            "offset": start,
+            "count": page.len(),
+            "next_offset": (end < total).then_some(end),
+            "sets": sets.iter().map(|g| json!({"node": g.node, "count": g.len(), "sh_degree": g.sh_degree, "world": matrix(&g.world)})).collect::<Vec<_>>(),
+            "positions": page.iter().map(|&(k, i)| placed(k, i)).collect::<Vec<_>>(),
+            "scales": page.iter().map(|&(k, i)| sets[k].scales[i]).collect::<Vec<_>>(),
+            "rotations": page.iter().map(|&(k, i)| sets[k].rotations[i]).collect::<Vec<_>>(),
+            "opacities": page.iter().map(|&(k, i)| sets[k].opacity[i]).collect::<Vec<_>>(),
+            "colors": page.iter().map(|&(k, i)| crate::splat::sh_color(sets[k].sh_of(i), 0, [0.0, 0.0, 1.0])).collect::<Vec<_>>(),
+            "set": page.iter().map(|&(k, _)| k).collect::<Vec<_>>(),
         }))
     }
 
