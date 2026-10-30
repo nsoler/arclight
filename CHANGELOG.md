@@ -11,6 +11,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.9.52 — 2026-10-29
+
+- **Fixed: the 3D view of a Scanline Render with scenes only on its
+  extra inputs** (Dev2): one with nothing on its scene and camera inputs
+  but, say, a light on an extra input said it had no 3D scene; it now
+  shows.
+
 ## 0.9.51 — 2026-10-29
 
 - **Fixed: a new 3D Camera Setup rendered black** with a default Card

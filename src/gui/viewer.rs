@@ -805,9 +805,10 @@ fn layer_image(img: &Image, planes: &[&Plane], region: IRect, exposure: f32, ste
 
 /// The node whose 3D scene viewing `node` shows: `node` itself when it
 /// outputs a scene (Camera, Card, Scene, …) or solves one (a Camera
-/// Tracker: its camera and points), else what feeds its first scene input
-/// (a Scanline Render's). A Viewer node stands for what it shows. None: no
-/// scene.
+/// Tracker: its camera and points), else what feeds its first connected
+/// scene input (a Scanline Render's scene, camera or extra inputs: any of
+/// them shows the render's whole scene). A Viewer node stands for what it
+/// shows. None: no scene.
 pub fn scene_of(doc: &Doc, node: &str) -> Option<String> {
     let mut n = doc.node(node)?;
     if n.op == "viewer" {
@@ -817,8 +818,8 @@ pub fn scene_of(doc: &Doc, node: &str) -> Option<String> {
     if ops::output_kind(&n.op) == ops::Kind::Scene || n.op == "camera_tracker" {
         return Some(node.to_string());
     }
-    let ports = ops::info(&n.op)?.inputs;
-    ports.iter().zip(&n.inputs).find(|(p, src)| p.kind == ops::Kind::Scene && !src.is_empty()).map(|(_, src)| src.clone())
+    let scene_in = |(i, src): &(usize, &String)| !src.is_empty() && ops::port(&n.op, *i).is_some_and(|p| p.kind == ops::Kind::Scene);
+    n.inputs.iter().enumerate().find(scene_in).map(|(_, src)| src.clone())
 }
 
 #[cfg(test)]
@@ -890,6 +891,13 @@ mod tests {
         assert_eq!(scene_of(&d, &blur), None);
         let tracker = d.add_node("camera_tracker", [0.0, 300.0]);
         assert_eq!(scene_of(&d, &tracker).as_deref(), Some(tracker.as_str()), "its solved camera and points");
+        // Only a light on a render's extra input: still a 3D scene.
+        let light = d.add_node("light_area", [0.0, 400.0]);
+        let lit = d.add_node("scanline_render", [200.0, 400.0]);
+        d.commit(false);
+        assert_eq!(scene_of(&d, &lit), None);
+        assert!(d.connect(&light, &lit, 3));
+        assert_eq!(scene_of(&d, &lit).as_deref(), Some(light.as_str()));
         // A Viewer shows what feeds it.
         let viewer = d.add_node("viewer", [600.0, 0.0]);
         assert_eq!(scene_of(&d, &viewer), None);
