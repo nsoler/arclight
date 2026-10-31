@@ -46,7 +46,7 @@ const SCENE_3D: Color32 = Color32::from_rgb(90, 175, 235);
 /// setup (seconds).
 const PULSE_SECONDS: f64 = 4.0;
 const HINT_SECONDS: f64 = 7.0;
-const HINT_3D: &str = "3D view: Tab switches 2D / 3D (pointer over the viewer)";
+const HINT_3D: &str = "3D view: Tab switches 2D / 3D";
 /// The frame size labels' text, and their gap from the frame's corners
 /// (points).
 const FRAME_SIZE_FONT: f32 = 11.0;
@@ -89,7 +89,7 @@ pub struct Viewer {
     /// frame, so it can be read at leisure (and follows playback).
     picked: Option<Picked>,
     /// Showing the viewed node's 3D scene instead of its image (the 2D / 3D
-    /// toggle, or Tab over the viewer).
+    /// toggle, or Tab).
     pub mode3d: bool,
     /// Geo Info: the viewed scene's spreadsheet, in a strip under the view
     /// (see `spreadsheet.rs`).
@@ -582,7 +582,7 @@ impl Viewer {
     /// (a dot, in the scene color) when the viewed node has a 3D scene and
     /// dimmed when it hasn't; after a first 3D setup it glows for a while.
     fn mode_switch(&mut self, ui: &mut egui::Ui) {
-        let tip = "Show the viewed node's image (2D) or its 3D scene (3D). Tab switches while the pointer is over the viewer.";
+        let tip = "Show the viewed node's image (2D) or its 3D scene (3D). Tab switches (anywhere but in a text field).";
         if ui.selectable_label(!self.mode3d, "2D").on_hover_text(tip).clicked() {
             self.mode3d = false;
         }
@@ -1183,7 +1183,7 @@ mod tests {
         assert_eq!(scene_of(&d, &viewer).as_deref(), Some(card.as_str()));
     }
 
-    /// Tab over the viewer (main.rs) must not also move keyboard focus:
+    /// Tab (main.rs) must not also move keyboard focus:
     /// egui reads Tab when the frame starts and focuses the first widget
     /// that wants focus, unless the move is called off before any widget.
     /// A long error over a view wraps within it, and only its text takes

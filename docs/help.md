@@ -108,7 +108,7 @@ choose in Properties:
   marked with an eye in the graph (the others read "Viewer (not shown)").
 - Drag (or middle-drag) to pan; scroll or pinch to zoom.
 - Double-click or **F** to fit.
-- **Tab** (with the pointer over the viewer) switches between **2D** (the
+- **Tab** (anywhere but in a text field) switches between **2D** (the
   image) and **3D** (the scene); so do the **2D / 3D** buttons (**3D ●**
   when the viewed node has a scene).
 - The selected node's handles draw over the image: drag them to edit (a
@@ -216,7 +216,7 @@ size (**Fit to project**), and follow it when it changes:
 
 ## 3D view
 
-Switch the viewer to **3D** (or press **Tab** over it) to see the viewed
+Switch the viewer to **3D** (or press **Tab**) to see the viewed
 node's scene: a Camera, Card, Cube, Sphere, Cylinder, Plane, Read Geo,
 light, Scene, Camera Tracker or Scanline Render. The controls follow Blender's
 defaults. ArclightVFX's world is Y up, so the top view looks down −Y and the

@@ -17,6 +17,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.14 — 2026-10-31
+
+- **Tab** switches the viewer between 2D and 3D wherever the pointer is
+  in the window (over the node graph or Properties too), not only over
+  the viewer; in a text field Tab still does its usual job, and Shift+Tab
+  still opens the node browser over the graph.
+
 ## 0.13.13 — 2026-10-31
 
 - New **Instance on Points** node: puts copies of meshes, cards or splat

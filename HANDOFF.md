@@ -37,6 +37,11 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.14, Tab anywhere** (Supervisor, user request): `App::shortcuts`
+  toggles 2D / 3D on a plain Tab wherever the pointer is (it runs before
+  the panels, so the node editor never sees it); text fields return
+  earlier. Test `tab_switches_2d_3d_anywhere_but_in_a_text_field`.
+  **Release rule (user): release once Dev1's geo-scatter example is in.**
 - **0.13.13, P4: Instance on Points + Realize** (Dev2): instances drawn
   by expanding them in `render3d::surfaces()` (a Surface per instance
   borrowing its prototype; `Surface.instance`; splats via `all_splats`),

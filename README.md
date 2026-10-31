@@ -128,8 +128,8 @@ selected shape) · **Esc** select none · **⌘G / ⇧⌘G** group / ungroup.
 
 ### 3D view (Blender-style)
 
-The viewer's **2D | 3D** toggle (or **Tab** with the pointer over the
-viewer) shows the 3D scene of the node being viewed (a Camera, Card,
+The viewer's **2D | 3D** toggle (or **Tab**, anywhere in the window but
+a text field) shows the 3D scene of the node being viewed (a Camera, Card,
 Scene, Locator, Point Cloud, Camera Tracker, or a Scanline Render's scene
 input); a node without one says so. The viewport camera is saved with the
 project.

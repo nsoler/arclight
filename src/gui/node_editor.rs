@@ -2146,8 +2146,8 @@ mod tests {
         };
         let op = |doc: &Doc, id: &Option<String>| doc.node(id.as_ref().unwrap()).unwrap().op.clone();
 
-        // Plain Tab: nothing (it switches 2D / 3D over the viewer), and
-        // keyboard focus stays put.
+        // Plain Tab: nothing here (main.rs takes it first, anywhere, to
+        // switch 2D / 3D), and keyboard focus stays put.
         let (a, b) = (h.rect(&doc, &plate), h.rect(&doc, &grade));
         let mid = NodeEditor::out_port(a).lerp(NodeEditor::in_port(b, 0, 2), 0.5);
         h.frame(&mut doc, vec![egui::Event::PointerMoved(mid), key(Key::Tab, Modifiers::NONE)]);

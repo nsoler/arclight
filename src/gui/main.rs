@@ -986,14 +986,20 @@ impl App {
         } else if ctx.input_mut(|i| i.consume_shortcut(&UNDO)) {
             self.undo();
         }
-        // Tab over the viewer switches it between 2D and 3D (elsewhere, and
-        // in text fields, which returned above, Tab keeps its usual job).
+        // Tab anywhere in the window switches the viewer between 2D and 3D
+        // (in text fields, which returned above, Tab keeps its usual job).
         // Plain Tab only: Shift+Tab is the node browser's, over the graph.
         let over_viewer = ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| self.viewer.rect.contains(p));
-        if over_viewer && ctx.input_mut(|i| consume_plain(i, Key::Tab)) {
+        if ctx.input_mut(|i| consume_plain(i, Key::Tab)) {
             self.viewer.toggle_3d();
-            // egui read the Tab already, to move keyboard focus this frame.
-            ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+            // egui read the Tab already, to move keyboard focus this frame:
+            // call that off, and let go of a button it focused before.
+            ctx.memory_mut(|m| {
+                m.move_focus(egui::FocusDirection::None);
+                if let Some(id) = m.focused() {
+                    m.surrender_focus(id);
+                }
+            });
         }
         // ⌘A: every node, over the node graph; else every vertex of the
         // selected shape.
@@ -1877,8 +1883,8 @@ mod tests {
         assert_eq!(keys(Key::End, Modifiers::NONE, true), [Key::End], "End still goes to the last frame");
     }
 
-    /// Tab over the viewer toggles 2D / 3D; Shift+Tab (or Alt / Ctrl+Tab)
-    /// is left alone and kept for whoever wants it.
+    /// Tab toggles 2D / 3D; Shift+Tab (or Alt / Ctrl+Tab) is left alone
+    /// and kept for whoever wants it.
     #[test]
     fn only_a_plain_tab_is_taken_as_plain() {
         let tab = |modifiers| egui::Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers };
@@ -1892,6 +1898,53 @@ mod tests {
             }).drop_without_applying_deltas();
             assert_eq!((took, left), (plain, !plain), "{modifiers:?}");
         }
+    }
+
+    /// Tests that make an App set XDG_RUNTIME_DIR (for its bridge) and
+    /// remove that folder after: one at a time.
+    static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A plain Tab switches the viewer between 2D and 3D wherever the
+    /// pointer is (over the node graph too, or outside the window), but not
+    /// while a text field has the keys.
+    #[test]
+    fn tab_switches_2d_3d_anywhere_but_in_a_text_field() {
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("arclight-gui-tab-test-{}", std::process::id()));
+        std::env::set_var("XDG_RUNTIME_DIR", &dir);
+        let ctx = egui::Context::default();
+        let mut app = App::new(ctx.clone(), Doc::new(Graph::default(), None));
+        app.viewer.rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 300.0));
+        let tab = |modifiers| egui::Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers };
+        let press = |app: &mut App, events: Vec<egui::Event>, field: bool| {
+            let raw = egui::RawInput { events, ..Default::default() };
+            ctx.run_ui(raw, |ui| {
+                if field {
+                    let mut text = String::new();
+                    ui.text_edit_singleline(&mut text).request_focus();
+                }
+                app.shortcuts(ui.ctx());
+            }).drop_without_applying_deltas();
+        };
+        let start = app.viewer.mode3d;
+        // Over the viewer, far from it (the node graph), and with no pointer.
+        for at in [Some(egui::pos2(200.0, 150.0)), Some(egui::pos2(200.0, 900.0)), None] {
+            let before = app.viewer.mode3d;
+            let mut events: Vec<egui::Event> = at.map(egui::Event::PointerMoved).into_iter().collect();
+            events.push(tab(Modifiers::NONE));
+            press(&mut app, events, false);
+            assert_eq!(app.viewer.mode3d, !before, "Tab at {at:?} switches");
+        }
+        assert_eq!(app.viewer.mode3d, !start);
+        let before = app.viewer.mode3d;
+        press(&mut app, vec![tab(Modifiers::SHIFT)], false);
+        assert_eq!(app.viewer.mode3d, before, "Shift+Tab doesn't");
+        // A focused text field keeps its Tab.
+        press(&mut app, vec![], true);
+        press(&mut app, vec![tab(Modifiers::NONE)], true);
+        assert_eq!(app.viewer.mode3d, before, "not while typing");
+        drop(app);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// New projects and the 3D view as the preferences say; their defaults
@@ -1958,6 +2011,7 @@ mod tests {
     /// one's edit), and an edit made in the window meanwhile isn't undone.
     #[test]
     fn bridged_calls_run_in_order_off_the_ui_thread() {
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("arclight-gui-bridge-test-{}", std::process::id()));
         std::env::set_var("XDG_RUNTIME_DIR", &dir);
         let graph: Graph = serde_json::from_value(json!({ "nodes": [{ "id": "emit", "op": "particle_emitter", "params": { "rate": 20 } }] })).unwrap();
