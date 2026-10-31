@@ -241,6 +241,7 @@ pub(crate) fn rows(gpu: &Gpu) -> Vec<CheckRow> {
         blur_row(Size { width: 960, height: 540 }),
         sprites_row(Size { width: 960, height: 540 }),
         splats_row(hd),
+        instances_row(gpu, hd),
         row(gpu, "3D view, solid", &scene, &cam, hd, 1, Passes::DEPTH, true),
     ]
 }
@@ -346,6 +347,47 @@ fn splats_row(size: Size) -> CheckRow {
 }
 
 /// A row from a CPU render and the GPU's (`out`), and their times.
+/// Instances over a floor (`n` cards and a twentieth as many spheres, lit,
+/// in a grid going away from the camera): `cards` and `spheres` copies.
+pub(super) fn instanced_field(n: usize) -> (Scene, Camera) {
+    use crate::geo::{Instances, Prototype};
+    use crate::geom::{trs, Mat4};
+    use crate::mesh::{Material, Shading};
+    let lambert = Material { shading: Shading::Lambert, ..Material::default() };
+    let floor = crate::scene::Model::new(Arc::new(crate::mesh::plane([40.0, 40.0], [1, 1])), trs([0.0, -1.0, -16.0], [-90.0, 0.0, 0.0], [1.0; 3]), lambert.clone());
+    let tex = Arc::new(crate::image::Image::filled(16, 16, [0.6, 0.7, 0.3, 1.0]));
+    let card = crate::scene::Card { material: Some(lambert.clone()), ..crate::scene::Card::new(tex, Mat4::identity(), [0.25, 0.4]) };
+    let ball = crate::scene::Model::new(Arc::new(crate::mesh::sphere(0.15, [16, 8])), Mat4::identity(), lambert);
+    let grid = |count: usize, salt: f64| -> Vec<Mat4> {
+        let side = (count as f64).sqrt().ceil() as usize;
+        (0..count).map(|i| trs([(i % side) as f64 / side as f64 * 12.0 - 6.0 + salt, -0.8, -1.5 - (i / side) as f64 / side as f64 * 28.0], [0.0, i as f64 * 37.0 % 360.0, 0.0], [1.0; 3])).collect()
+    };
+    let cards = Instances { prototypes: vec![Prototype::Card(card)], which: vec![0; n], worlds: grid(n, 0.0), node: "cards".into(), ..Instances::default() };
+    let balls = Instances { prototypes: vec![Prototype::Model(ball)], which: vec![0; n / 20], worlds: grid(n / 20, 0.05), node: "balls".into(), ..Instances::default() };
+    let sun = crate::shade::Light { node: "sun".into(), ..crate::shade::Light::new(crate::shade::LightKind::Directional, trs([0.0; 3], [-50.0, 30.0, 0.0], [1.0; 3])) };
+    let scene = Scene { meshes: vec![floor], instances: vec![cards, balls], lights: vec![sun], ..Scene::default() };
+    let cam = Camera { focal: 24.0, world: trs([0.0, 0.6, 2.5], [-8.0, 0.0, 0.0], [1.0; 3]), ..Camera::default() };
+    (scene, cam)
+}
+
+/// The instancing row: 10k cards and 500 spheres drawn instanced, against
+/// the CPU drawing each as a surface of its own.
+fn instances_row(gpu: &Gpu, size: Size) -> CheckRow {
+    let (scene, cam) = instanced_field(10_000);
+    let passes = Passes::from_names(["depth", "id"]);
+    let all = super::super::surfaces(&scene);
+    let plain = super::super::plain_surfaces(&scene);
+    let cpu_draw = || crate::gpu::cpu_only(|| super::super::draw_passes(&all, &scene.lights, &[], &cam, size, 2, passes, None, None, None));
+    let gpu_draw = || -> anyhow::Result<Option<Image>> {
+        let Some(plan) = super::instances::Plan::new(&plain, &scene.instances, false, &cam) else { return Ok(None) };
+        super::draw_with(gpu, &plan.surfs, Some(&plan), &scene.lights, &[], &cam, size, 2, passes, None, None, None)
+    };
+    let _ = gpu_draw();
+    let (cpu, cpu_ms) = timed(cpu_draw);
+    let (out, gpu_ms) = timed(gpu_draw);
+    judge("3D render, 10k instanced cards", format!("{}x{}", size.width, size.height), &cpu, out, cpu_ms, gpu_ms)
+}
+
 fn judge(case: &str, size: String, cpu: &Image, out: anyhow::Result<Option<Image>>, cpu_ms: f64, gpu_ms: f64) -> CheckRow {
     let mut r = CheckRow { case: case.into(), size, max_abs: 0.0, max_rel: 0.0, tol_abs: 1e-3, tol_rel: 0.005, pass: true, cpu_ms, gpu_kernel_ms: gpu_ms, gpu_total_ms: gpu_ms, note: String::new() };
     let out = match out {

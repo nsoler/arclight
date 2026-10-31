@@ -46,6 +46,7 @@ use std::sync::{Arc, Mutex, Weak};
 use wgpu::util::DeviceExt;
 
 pub(super) mod check;
+pub(super) mod instances;
 pub(super) mod sprites;
 pub(super) mod splat_view;
 #[cfg(test)]
@@ -78,6 +79,8 @@ const NONE: u32 = u32::MAX;
 const SPLAT: u32 = 0x4000_0000;
 /// A pixel's depth (as bits) when its samples met too many surfaces.
 const OVERFLOWED: u32 = u32::MAX;
+/// A kept hit on an instance's triangle (raster.wgsl's INSTANCE).
+const INSTANCE: u32 = 0x2000_0000;
 
 /// [`super::draw_passes`] on the GPU, or None where it can't (see the
 /// module's notes): then the CPU renders.
@@ -97,10 +100,38 @@ pub(super) fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], 
         return None;
     }
     let gpu = crate::gpu::get()?;
-    match draw(&gpu, surfs, lights, points, cam, format, samples, passes, next, cell, splats) {
+    match draw_with(&gpu, surfs, None, lights, points, cam, format, samples, passes, next, cell, splats) {
         Ok(img) => img,
         Err(e) => {
             crate::gpu::report_error(format!("Scanline Render: {e:#}"), false);
+            None
+        }
+    }
+}
+
+/// [`draw_passes`] with `sets`' instances drawn instanced (see
+/// instances.rs; `headlight`: theirs shaded as the 3D view's Solid). None
+/// where it can't (then the caller draws them as surfaces of their own):
+/// shadows, the motion pass and motion blur take that way for now.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_instanced(surfs: &[Surface], sets: &[crate::geo::Instances], headlight: bool, lights: &[Light], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes, next: Option<(&Scene, &Camera)>, cell: Option<Cell>, splats: Option<&splats::Prepared>) -> Option<Image> {
+    #[cfg(test)]
+    if !tests::GPU_ON.with(|on| on.get()) {
+        return None;
+    }
+    if format.width == 0 || format.height == 0 || passes.motion || next.is_some() || lights.iter().any(|l| l.shadows) || splats.is_some_and(|sp| sp.gpu().is_none()) {
+        return None;
+    }
+    let plan = instances::Plan::new(surfs, sets, headlight, cam)?;
+    let gpu = crate::gpu::get()?;
+    match draw_with(&gpu, &plan.surfs, Some(&plan), lights, points, cam, format, samples, passes, next, cell, splats) {
+        Ok(img) => {
+            #[cfg(test)]
+            tests::INSTANCED.with(|n| n.set(n.get() + usize::from(img.is_some())));
+            img
+        }
+        Err(e) => {
+            crate::gpu::report_error(format!("Scanline Render (instances): {e:#}"), false);
             None
         }
     }
@@ -120,8 +151,9 @@ pub(super) fn preview(scene: &Scene, cam: &Camera, format: Size, look: super::Pr
     }
     let gpu = crate::gpu::get()?;
     // As `preview_cell`: Lit by the scene's lights (their shadows if asked
-    // for), else Solid, the meshes lit from the camera.
-    let mut surfs = super::surfaces(scene);
+    // for), else Solid, the meshes (and instances) lit from the camera.
+    let mut surfs = super::plain_surfaces(scene);
+    let solid = !matches!(look, super::Preview::Lit { .. }) || scene.lights.is_empty();
     let lights: Vec<Light> = match look {
         super::Preview::Lit { shadows } if !scene.lights.is_empty() => scene.lights.iter().map(|l| Light { shadows: l.shadows && shadows, ..l.clone() }).collect(),
         _ => {
@@ -133,10 +165,29 @@ pub(super) fn preview(scene: &Scene, cam: &Camera, format: Size, look: super::Pr
     };
     let all = super::all_splats(scene);
     let splats = splats::prepare_upto(&all, cam, format, super::PREVIEW_SH);
-    if splats.as_ref().is_some_and(|sp| sp.gpu().is_none()) || (surfs.is_empty() && splats.is_none()) {
+    if splats.as_ref().is_some_and(|sp| sp.gpu().is_none()) {
         return None;
     }
-    match preview_on(&gpu, &surfs, &lights, cam, format, splats.as_ref()) {
+    // Instances drawn instanced (each its own surface where shadows are
+    // drawn: those take that way for now).
+    let sets = &scene.instances;
+    let plan = (sets.iter().any(|g| !g.is_empty()) && !lights.iter().any(|l| l.shadows)).then(|| instances::Plan::new(&surfs, sets, solid, cam)).flatten();
+    let expanded: Vec<Surface> = match plan {
+        Some(_) => Vec::new(),
+        None => surfs
+            .iter()
+            .map(Surface::view)
+            .chain(super::instance_surfaces(sets).into_iter().map(|mut s| {
+                s.headlight = solid;
+                s
+            }))
+            .collect(),
+    };
+    let drawn = plan.as_ref().map_or(&expanded[..], |p| &p.surfs[..]);
+    if drawn.is_empty() && splats.is_none() {
+        return None;
+    }
+    match preview_on(&gpu, drawn, plan.as_ref(), &lights, cam, format, splats.as_ref()) {
         Ok(r) => r,
         Err(e) => {
             crate::gpu::report_error(format!("3D view: {e:#}"), false);
@@ -145,13 +196,14 @@ pub(super) fn preview(scene: &Scene, cam: &Camera, format: Size, look: super::Pr
     }
 }
 
-fn preview_on(gpu: &Arc<Gpu>, surfs: &[Surface], lights: &[Light], cam: &Camera, format: Size, splats: Option<&splats::Prepared>) -> Result<Option<crate::gpu::Resident>> {
-    let Some(prep) = prepare(gpu, surfs, lights, cam, format, Passes::default(), None, splats) else { return Ok(None) };
+fn preview_on(gpu: &Arc<Gpu>, surfs: &[Surface], plan: Option<&instances::Plan>, lights: &[Light], cam: &Camera, format: Size, splats: Option<&splats::Prepared>) -> Result<Option<crate::gpu::Resident>> {
+    let Some(prep) = prepare(gpu, surfs, plan, lights, cam, format, Passes::default(), None, splats) else { return Ok(None) };
     let maps = gpu.scoped(|| Ok(draw_maps(gpu, &prep.tables, &prep.textures)))?;
+    let inst = instance_buffers(gpu, &prep, plan, cam, format)?;
     let image = gpu.scoped(|| {
         let frame = Frame::take(gpu, format.width, format.height, prep.layout.slots.stride);
         frame.clear(gpu);
-        dispatch(gpu, &prep, &maps, &frame, cam, format, 1, None, false, splats);
+        dispatch(gpu, &prep, &maps, &frame, cam, format, 1, None, false, splats, inst.as_ref().map(|(r, l, n, p)| (r, l, *n, *p)));
         // (Only the depths come back: an overflowed pixel sends the view
         // to the other path.)
         let depth = frame.read_depth(gpu);
@@ -188,7 +240,19 @@ impl Layout {
     /// (`splat_nodes`: the splat sets' nodes, objects after the surfaces',
     /// as the CPU renderer counts them.)
     fn new(surfs: &[Surface], lights: &[Light], passes: Passes, splat_nodes: &[String]) -> Layout {
-        let mut nodes: Vec<String> = super::object_nodes(surfs).into_iter().map(String::from).collect();
+        Layout::with_instances(surfs, lights, passes, splat_nodes, surfs.len(), &[])
+    }
+
+    /// [`Layout::new`], with the instances' `nodes` among the objects after
+    /// the first `plain` surfaces' (as the CPU renderer counts them, the
+    /// instances each a surface after those).
+    fn with_instances(surfs: &[Surface], lights: &[Light], passes: Passes, splat_nodes: &[String], plain: usize, instance_nodes: &[String]) -> Layout {
+        let mut nodes: Vec<String> = super::object_nodes(&surfs[..plain]).into_iter().map(String::from).collect();
+        for n in instance_nodes.iter().map(String::as_str).chain(super::object_nodes(&surfs[plain..])) {
+            if !n.is_empty() && !nodes.iter().any(|o| o == n) {
+                nodes.push(n.to_string());
+            }
+        }
         for n in splat_nodes {
             if !n.is_empty() && !nodes.contains(n) {
                 nodes.push(n.clone());
@@ -219,6 +283,8 @@ struct Readout {
 struct Prepared {
     /// Where the splat sets' table starts in `tables` (see raster.wgsl).
     splat_table: usize,
+    /// The instances' records (their objects filled in), if any.
+    records: Vec<u32>,
     layout: Layout,
     tris: Vec<Tri>,
     textures: Textures,
@@ -229,9 +295,18 @@ struct Prepared {
 /// Set up `surfs` lit by `lights` through `cam` for the GPU, or None where
 /// this renderer can't take it (see the module's notes).
 #[allow(clippy::too_many_arguments)]
-fn prepare(gpu: &Gpu, surfs: &[Surface], lights: &[Light], cam: &Camera, format: Size, passes: Passes, next: Option<(&Scene, &Camera)>, splats: Option<&splats::Prepared>) -> Option<Prepared> {
+fn prepare(gpu: &Gpu, surfs: &[Surface], plan: Option<&instances::Plan>, lights: &[Light], cam: &Camera, format: Size, passes: Passes, next: Option<(&Scene, &Camera)>, splats: Option<&splats::Prepared>) -> Option<Prepared> {
     let splat_nodes = splats.map_or(&[][..], |sp| sp.nodes());
-    let layout = Layout::new(surfs, lights, passes, splat_nodes);
+    let layout = match plan {
+        Some(p) => Layout::with_instances(surfs, lights, passes, splat_nodes, p.plain, &p.nodes),
+        None => Layout::new(surfs, lights, passes, splat_nodes),
+    };
+    // The instances' records, each with its object; with the prototypes,
+    // within a binding.
+    let records = plan.map_or_else(Vec::new, |p| p.records_with_objects(&layout.nodes));
+    if records.len() * 4 > gpu.limits.max_storage_buffer_binding_size as usize {
+        return None;
+    }
     if (passes.mattes && layout.nodes.len() > MAX_OBJECTS) || (passes.lights && layout.light_names.len() > MAX_LIGHT_NODES) {
         return None;
     }
@@ -263,21 +338,29 @@ fn prepare(gpu: &Gpu, surfs: &[Surface], lights: &[Light], cam: &Camera, format:
     if !tables.add_layers(room) {
         return None;
     }
-    Some(Prepared { layout, tris, textures, tables, lights: lights.len(), splat_table })
+    Some(Prepared { layout, tris, textures, tables, lights: lights.len(), splat_table, records })
 }
 
 #[allow(clippy::too_many_arguments)]
 fn draw(gpu: &Gpu, surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes, next: Option<(&Scene, &Camera)>, cell: Option<Cell>, splats: Option<&splats::Prepared>) -> Result<Option<Image>> {
+    draw_with(gpu, surfs, None, lights, points, cam, format, samples, passes, next, cell, splats)
+}
+
+/// [`draw`], with `plan`'s instances (its surfaces `surfs`) drawn
+/// instanced.
+#[allow(clippy::too_many_arguments)]
+fn draw_with(gpu: &Gpu, surfs: &[Surface], plan: Option<&instances::Plan>, lights: &[Light], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes, next: Option<(&Scene, &Camera)>, cell: Option<Cell>, splats: Option<&splats::Prepared>) -> Result<Option<Image>> {
     let n = samples.clamp(1, 16);
-    let Some(prep) = prepare(gpu, surfs, lights, cam, format, passes, next, splats) else { return Ok(None) };
+    let Some(prep) = prepare(gpu, surfs, plan, lights, cam, format, passes, next, splats) else { return Ok(None) };
     let next_cam = next.map_or(cam, |n| n.1);
     let wants_kept = passes.position || passes.normal || passes.uv || passes.motion || passes.id;
     let maps = gpu.scoped(|| Ok(draw_maps(gpu, &prep.tables, &prep.textures)))?;
+    let inst = instance_buffers(gpu, &prep, plan, cam, format)?;
     let render = |deep: bool| {
         gpu.scoped(|| {
             let frame = Frame::take(gpu, format.width, format.height, prep.layout.slots.stride);
             frame.clear(gpu);
-            dispatch(gpu, &prep, &maps, &frame, cam, format, n, cell, deep, splats);
+            dispatch(gpu, &prep, &maps, &frame, cam, format, n, cell, deep, splats, inst.as_ref().map(|(r, l, n, p)| (r, l, *n, *p)));
             let out = frame.read(gpu, wants_kept);
             frame.give_back();
             out
@@ -289,10 +372,15 @@ fn draw(gpu: &Gpu, surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &C
         out = render(true)?;
     }
     let overflowed: Vec<bool> = out.depth.par_iter().map(|d| d.to_bits() == OVERFLOWED).collect();
-    let mut img = finish(&prep.tris, points, cam, next_cam, format, n, passes, &prep.layout, out, splats);
+    let mut img = finish(&prep.tris, plan, points, cam, next_cam, format, n, passes, &prep.layout, out, splats);
     if overflowed.contains(&true) {
-        // Those pixels on the CPU, which keeps every surface.
-        let cpu = super::draw_cpu(surfs, lights, points, cam, format, samples, passes, next, cell, splats, Some(&overflowed));
+        // Those pixels on the CPU, which keeps every surface (the
+        // instances each its own).
+        let expanded: Vec<Surface> = match plan {
+            Some(p) => p.surfs[..p.plain].iter().map(Surface::view).chain(p.cpu_surfaces()).collect(),
+            None => surfs.iter().map(Surface::view).collect(),
+        };
+        let cpu = super::draw_cpu(&expanded, lights, points, cam, format, samples, passes, next, cell, splats, Some(&overflowed));
         let take = |to: &mut [f32], from: &[f32]| to.par_iter_mut().zip(from).zip(&overflowed).filter(|(_, o)| **o).for_each(|((t, f), _)| *t = *f);
         img.pixels.par_iter_mut().zip(&cpu.pixels).zip(&overflowed).filter(|(_, o)| **o).for_each(|((t, f), _)| *t = *f);
         for p in &mut img.planes {
@@ -302,6 +390,18 @@ fn draw(gpu: &Gpu, surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &C
         }
     }
     Ok(Some(img))
+}
+
+/// The records of `plan`'s instances drawn here and their tiles' lists
+/// (binned on the GPU), if there are any.
+#[allow(clippy::type_complexity)]
+fn instance_buffers<'p>(gpu: &Gpu, prep: &Prepared, plan: Option<&'p instances::Plan>, cam: &Camera, format: Size) -> Result<Option<(wgpu::Buffer, wgpu::Buffer, usize, &'p instances::Plan<'p>)>> {
+    let Some(p) = plan.filter(|p| !p.is_empty()) else { return Ok(None) };
+    gpu.scoped(|| {
+        let records = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("instance records"), contents: bytemuck::cast_slice(&prep.records), usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC });
+        let (lists, entries) = instances::bin(gpu, p, cam, format, &records)?;
+        Ok(Some((records, lists, entries, p)))
+    })
 }
 
 /// [`super::render_blurred`]'s blurred part on the GPU: `scene` at each of
@@ -377,7 +477,7 @@ fn blur_on(gpu: &Gpu, scene: &Scene, cam: &Camera, format: Size, samples: usize,
                 if surfs.is_empty() && streams.is_empty() && now_splats.is_none() {
                     continue;
                 }
-                let Some(prep) = prepare(gpu, &surfs, &now.lights, &c, format, passes, None, now_splats.as_ref()) else { return Ok(None) };
+                let Some(prep) = prepare(gpu, &surfs, None, &now.lights, &c, format, passes, None, now_splats.as_ref()) else { return Ok(None) };
                 // Every time's passes in the same channels.
                 let same = layout.as_ref().is_none_or(|l| l.nodes == prep.layout.nodes && l.light_names == prep.layout.light_names);
                 if !same {
@@ -391,7 +491,7 @@ fn blur_on(gpu: &Gpu, scene: &Scene, cam: &Camera, format: Size, samples: usize,
                 if streams.is_empty() {
                     gpu.scoped(|| {
                         let maps = draw_maps(gpu, &prep.tables, &prep.textures);
-                        dispatch(gpu, &prep, &maps, f, &c, format, n, cell, false, now_splats.as_ref());
+                        dispatch(gpu, &prep, &maps, f, &c, format, n, cell, false, now_splats.as_ref(), None);
                         Ok(())
                     })?;
                 } else {
@@ -404,7 +504,7 @@ fn blur_on(gpu: &Gpu, scene: &Scene, cam: &Camera, format: Size, samples: usize,
                         x.frame.clear(gpu);
                         if !surfs.is_empty() || now_splats.is_some() {
                             let maps = draw_maps(gpu, &prep.tables, &prep.textures);
-                            dispatch(gpu, &prep, &maps, &x.frame, &c, format, n, cell, false, now_splats.as_ref());
+                            dispatch(gpu, &prep, &maps, &x.frame, &c, format, n, cell, false, now_splats.as_ref(), None);
                         }
                         let mut encoder = gpu.device.create_command_encoder(&Default::default());
                         let params = [format.width as u32, format.height as u32, prep.layout.slots.stride as u32, (n * n) as u32, cell.map_or(0, |c| c.side as u32), cell.map_or(0, |c| c.x as u32), cell.map_or(0, |c| c.y as u32), 0];
@@ -650,9 +750,11 @@ impl Tables {
     /// The uniform words the shader starts with (see `Params` in
     /// raster.wgsl), for a frame `w` × `h` with `n` samples a side.
     #[allow(clippy::too_many_arguments)]
-    fn params(&self, w: usize, h: usize, n: usize, cell: [u32; 4], slots: [u32; 4], parts: [u32; 4], counts: [u32; 4], at: [usize; 3], cam: [f32; 3], eye: Vec3, back: Vec3, splat: [u32; 4]) -> [u32; 44] {
+    fn params(&self, w: usize, h: usize, n: usize, cell: [u32; 4], slots: [u32; 4], parts: [u32; 4], counts: [u32; 4], at: [usize; 3], cam: [f32; 3], eye: Vec3, back: Vec3, splat: [u32; 4]) -> [u32; 64] {
         let f = |v: f64| (v as f32).to_bits();
-        let mut p = [0u32; 44];
+        // (44 on: the instances' words and the camera's view and lens, set
+        // where there are instances.)
+        let mut p = [0u32; 64];
         p[..4].copy_from_slice(&[w as u32, h as u32, n as u32, w.div_ceil(TILE) as u32]);
         p[4..8].copy_from_slice(&cell);
         p[8..12].copy_from_slice(&slots);
@@ -700,6 +802,7 @@ fn draw_maps(gpu: &Gpu, tables: &Tables, textures: &Textures) -> wgpu::Buffer {
         return maps;
     }
     let pipeline = gpu.compute_pipeline("render3d/raster", RASTER, "shadow_map");
+    let no_records = storage(gpu, &[], "render3d shadow (no instances)");
     let blocks = gpu.compute_pipeline("render3d/raster", RASTER, "map_blocks");
     let texel_buf = textures.buffer(gpu);
     let out = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("render3d shadow out"), layout: &pipeline.get_bind_group_layout(1), entries: &[wgpu::BindGroupEntry { binding: 0, resource: maps.as_entire_binding() }] });
@@ -709,8 +812,10 @@ fn draw_maps(gpu: &Gpu, tables: &Tables, textures: &Textures) -> wgpu::Buffer {
         let params = tables.params(m.res, m.res, 1, [0, 0, 0, k as u32], [0; 4], [0; 4], [0; 4], at, [m.near as f32, m.far as f32, 0.0], Vec3::zeros(), Vec3::zeros(), [0; 4]);
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("render3d shadow params"), contents: bytemuck::cast_slice(&params), usage: wgpu::BufferUsages::UNIFORM });
         let word_buf = storage(gpu, &all, "render3d shadow words");
-        let buffers = [&uniform, &word_buf, &*texel_buf];
-        let entries: Vec<wgpu::BindGroupEntry> = buffers.iter().enumerate().map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() }).collect();
+        // (And the instances' records, which the shared triangle reads name:
+        // none here, the maps draw surfaces' triangles only.)
+        let buffers = [(0, &uniform), (1, &word_buf), (2, &*texel_buf), (7, &no_records)];
+        let entries: Vec<wgpu::BindGroupEntry> = buffers.iter().map(|(i, b)| wgpu::BindGroupEntry { binding: *i, resource: b.as_entire_binding() }).collect();
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("render3d shadow"), layout: &pipeline.get_bind_group_layout(0), entries: &entries });
         let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_pipeline(&pipeline);
@@ -752,18 +857,55 @@ fn storage(gpu: &Gpu, words: &[u32], label: &str) -> wgpu::Buffer {
 /// Render `prep` into `frame` (adding to what's there), a sample row a
 /// dispatch, with its shadow `maps`.
 #[allow(clippy::too_many_arguments)]
-fn dispatch(gpu: &Gpu, prep: &Prepared, maps: &wgpu::Buffer, frame: &Frame, cam: &Camera, format: Size, n: usize, cell: Option<Cell>, deep: bool, splats: Option<&splats::Prepared>) {
+fn dispatch(gpu: &Gpu, prep: &Prepared, maps: &wgpu::Buffer, frame: &Frame, cam: &Camera, format: Size, n: usize, cell: Option<Cell>, deep: bool, splats: Option<&splats::Prepared>, inst: Option<(&wgpu::Buffer, &wgpu::Buffer, usize, &instances::Plan)>) {
     let device = &gpu.device;
     let (w, h) = (format.width, format.height);
     let (tables, layout) = (&prep.tables, &prep.layout);
     let stride = layout.slots.stride;
-    let (all, at) = joined(&tables.bins, tables.levels_at, &tables.tables, &tables.tris);
+    let (mut all, at) = joined(&tables.bins, tables.levels_at, &tables.tables, &tables.tris);
+    // The prototypes after the triangles.
+    let protos_at = all.len();
+    if let Some((_, _, _, p)) = inst {
+        all.extend_from_slice(&p.protos);
+    }
     let word_buf = storage(gpu, &all, "render3d words");
-    // The view's splats (or stand-ins when there are none).
+    // The view's splats (or stand-ins when there are none); the
+    // instances' records after the splats' projections, their lists after
+    // the splats'.
     let none = storage(gpu, &[], "render3d no splats");
     let view = splats.and_then(|sp| sp.gpu());
-    let (proj, lists) = view.map_or((&none, &none), |v| (&v.proj, &v.lists));
+    let (mut proj, mut lists) = view.map_or((&none, &none), |v| (&v.proj, &v.lists));
     let splat = view.map_or([0; 4], |v| [1, (v.tiles + 1) as u32, (at[1] + prep.splat_table) as u32, 0]);
+    let joined_bufs: (wgpu::Buffer, wgpu::Buffer);
+    let mut inst_words = [0u32; 4];
+    if let Some((records, inst_lists, _, _)) = inst {
+        let both = |a: &wgpu::Buffer, b: &wgpu::Buffer, label: &str| {
+            let out = device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: a.size() + b.size(), usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            encoder.copy_buffer_to_buffer(a, 0, &out, 0, a.size());
+            encoder.copy_buffer_to_buffer(b, 0, &out, a.size(), b.size());
+            gpu.queue.submit([encoder.finish()]);
+            out
+        };
+        let tiles = w.div_ceil(instances::BIN) * h.div_ceil(instances::BIN);
+        match view {
+            Some(v) => {
+                joined_bufs = (both(&v.proj, records, "render3d splats and instances"), both(&v.lists, inst_lists, "render3d splat and instance lists"));
+                inst_words = [(tiles + 1) as u32, (v.proj.size() / 4) as u32, (v.lists.size() / 4) as u32, protos_at as u32];
+                proj = &joined_bufs.0;
+                lists = &joined_bufs.1;
+            }
+            None => {
+                inst_words = [(tiles + 1) as u32, 0, 0, protos_at as u32];
+                proj = records;
+                lists = inst_lists;
+            }
+        }
+    }
+    let mut lens = instances::lens_words(cam, format);
+    if let Some((_, _, entries, _)) = inst {
+        lens[15] = entries as u32;
+    }
     let texel_buf = prep.textures.buffer(gpu);
     let pipeline = if deep { gpu.compute_pipeline("render3d/raster-deep", deep_raster(), "main") } else { gpu.compute_pipeline("render3d/raster", RASTER, "main") };
     let bgl = pipeline.get_bind_group_layout(0);
@@ -789,6 +931,9 @@ fn dispatch(gpu: &Gpu, prep: &Prepared, maps: &wgpu::Buffer, frame: &Frame, cam:
             back,
             splat,
         );
+        let mut params = params;
+        params[44..48].copy_from_slice(&inst_words);
+        params[48..64].copy_from_slice(&lens);
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("render3d params"), contents: bytemuck::cast_slice(&params), usage: wgpu::BufferUsages::UNIFORM });
         let buffers = [&uniform, &word_buf, &*texel_buf, maps, &frame.color, &frame.extra, &frame.hits, proj, lists];
         let entries: Vec<wgpu::BindGroupEntry> = buffers.iter().enumerate().map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() }).collect();
@@ -1188,7 +1333,7 @@ impl Textures {
 /// the samples, the passes from the surface each pixel kept (as the CPU
 /// renderer works them out), the points, then the planes.
 #[allow(clippy::too_many_arguments)]
-fn finish(tris: &[Tri], points: &[Vec3], cam: &Camera, next_cam: &Camera, format: Size, n: usize, passes: Passes, layout: &Layout, out: Readout, splats: Option<&splats::Prepared>) -> Image {
+fn finish(tris: &[Tri], plan: Option<&instances::Plan>, points: &[Vec3], cam: &Camera, next_cam: &Camera, format: Size, n: usize, passes: Passes, layout: &Layout, out: Readout, splats: Option<&splats::Prepared>) -> Image {
     let Readout { mut color, mut depth, mut extra, kept } = out;
     let s = &layout.slots;
     let norm = 1.0 / (n * n) as f32;
@@ -1226,7 +1371,17 @@ fn finish(tris: &[Tri], points: &[Vec3], cam: &Camera, next_cam: &Camera, format
             }
             return;
         }
-        let t = &tris[hit[0] as usize - 1];
+        // An instance's triangle: set up again here, as the CPU would.
+        let kept = hit[0] - 1;
+        let rebuilt;
+        let (t, id) = if kept & INSTANCE != 0 {
+            let Some(r) = plan.and_then(|p| p.triangle(kept & !INSTANCE, cam, format, layout.nodes.len())) else { return };
+            rebuilt = r;
+            (&rebuilt.0, rebuilt.1)
+        } else {
+            let t = &tris[kept as usize];
+            (t, layout.ids[t.surf])
+        };
         let (b0, b1) = (f32::from_bits(hit[1]) as f64, f32::from_bits(hit[2]) as f64);
         let bary = [b0, b1, 1.0 - b0 - b1];
         let at = |f: fn(&Vert) -> Vec3| t.v.iter().zip(&bary).map(|(v, b)| f(v) * *b).sum::<Vec3>();
@@ -1252,7 +1407,7 @@ fn finish(tris: &[Tri], points: &[Vec3], cam: &Camera, next_cam: &Camera, format
             }
         }
         if passes.id {
-            px[s.id_at] = layout.ids[t.surf];
+            px[s.id_at] = id;
         }
     });
     super::draw_points(points, cam, format, &mut color, &mut depth);

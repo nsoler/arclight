@@ -141,31 +141,71 @@ fn model_surface(m: &crate::scene::Model) -> Surface<'_> {
 /// Everything in `scene` to draw, in order: cards, then meshes, then
 /// each instance of a mesh or card (sharing its prototype's data).
 pub(crate) fn surfaces(scene: &Scene) -> Vec<Surface<'_>> {
-    let mut out: Vec<Surface> = scene.cards.iter().map(card_surface).chain(scene.meshes.iter().map(model_surface)).collect();
+    let mut out = plain_surfaces(scene);
+    out.extend(instance_surfaces(&scene.instances));
+    out
+}
+
+/// `scene`'s cards, then its meshes (no instances).
+pub(crate) fn plain_surfaces(scene: &Scene) -> Vec<Surface<'_>> {
+    scene.cards.iter().map(card_surface).chain(scene.meshes.iter().map(model_surface)).collect()
+}
+
+/// Each instance of a mesh or card in `sets`, as a surface of its own
+/// (sharing its prototype's data), numbered across them all from 0.
+pub(crate) fn instance_surfaces(sets: &[crate::geo::Instances]) -> Vec<Surface<'_>> {
+    let mut out = Vec::new();
     let mut k = 0u32;
-    for g in &scene.instances {
+    for g in sets {
         for i in 0..g.len() {
-            let tint = crate::ops::geo_ops::tint(g, i);
-            let s = match &g.prototypes[g.which[i] as usize] {
-                crate::geo::Prototype::Model(m) => Some((model_surface(m), m.world, true)),
-                // (An unlit card's image isn't tinted: only faded.)
-                crate::geo::Prototype::Card(c) => Some((card_surface(c), c.world, c.material.is_some())),
-                crate::geo::Prototype::Splats(_) => None,
-            };
-            if let Some((mut s, own, lit)) = s {
-                s.world = g.worlds[i] * own;
-                s.node = &g.node;
-                s.instance = Some(k);
-                if let Some(t) = tint {
-                    let rgb = if lit { [t[0], t[1], t[2]] } else { [1.0; 3] };
-                    s.color = [s.color[0] * rgb[0] * t[3], s.color[1] * rgb[1] * t[3], s.color[2] * rgb[2] * t[3], s.color[3] * t[3]];
-                }
-                out.push(s);
-            }
+            out.extend(instance_surface(g, i, k));
             k += 1;
         }
     }
     out
+}
+
+/// What instance `i` of `g` multiplies its prototype's color by (its Cd:
+/// a mesh's or lit card's color and alpha; an unlit card's alpha only, its
+/// image isn't tinted), and whether it's a mesh or card (else a splat
+/// capture, drawn with the splats).
+pub(crate) fn instance_tint(g: &crate::geo::Instances, i: usize) -> Option<[f32; 4]> {
+    let lit = match &g.prototypes[g.which[i] as usize] {
+        crate::geo::Prototype::Model(_) => true,
+        crate::geo::Prototype::Card(c) => c.material.is_some(),
+        crate::geo::Prototype::Splats(_) => return None,
+    };
+    Some(crate::ops::geo_ops::tint(g, i).map_or([1.0; 4], |t| {
+        let rgb = if lit { [t[0], t[1], t[2]] } else { [1.0; 3] };
+        [rgb[0] * t[3], rgb[1] * t[3], rgb[2] * t[3], t[3]]
+    }))
+}
+
+/// The surface of instance `i` of `g` (number `k` across the scene's), of
+/// a mesh or card (None for a splat capture): its prototype's, placed by
+/// the instance before the prototype's own placement, its node `g`'s.
+pub(crate) fn instance_surface(g: &crate::geo::Instances, i: usize, k: u32) -> Option<Surface<'_>> {
+    let mult = instance_tint(g, i)?;
+    let (mut s, own) = match &g.prototypes[g.which[i] as usize] {
+        crate::geo::Prototype::Model(m) => (model_surface(m), m.world),
+        crate::geo::Prototype::Card(c) => (card_surface(c), c.world),
+        crate::geo::Prototype::Splats(_) => return None,
+    };
+    s.world = g.worlds[i] * own;
+    s.node = &g.node;
+    s.instance = Some(k);
+    if mult != [1.0; 4] {
+        s.color = std::array::from_fn(|c| s.color[c] * mult[c]);
+    }
+    Some(s)
+}
+
+impl Surface<'_> {
+    /// Itself again, borrowing its data.
+    #[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+    pub(crate) fn view(&self) -> Surface<'_> {
+        Surface { world: self.world, positions: Cow::Borrowed(&self.positions), normals: Cow::Borrowed(&self.normals), uvs: Cow::Borrowed(&self.uvs), triangles: Cow::Borrowed(&self.triangles), color: self.color, texture: self.texture, wrap: self.wrap, v_up: self.v_up, headlight: self.headlight, holdout: self.holdout, node: self.node, material: self.material, casts: self.casts, receives: self.receives, two_sided: self.two_sided, instance: self.instance }
+    }
 }
 
 /// The scene's splat captures to draw: its own, then each instance of
@@ -591,7 +631,7 @@ fn render_cell(scene: &Scene, cam: &Camera, format: Size, samples: usize, backgr
             sp.add_motion(&all, next_all.as_ref().map(|(n, c)| (&n[..], *c)), cam, format);
         }
     }
-    let out = draw_passes(&surfaces(scene), &scene.lights, &scene.points, cam, format, samples, passes, next, cell, splats.as_ref());
+    let out = draw_with_instances(plain_surfaces(scene), &scene.instances, false, &scene.lights, &scene.points, cam, format, samples, passes, next, cell, splats.as_ref());
     let mut out = match background {
         Some(bg) => over_background(out, bg),
         None => out,
@@ -820,19 +860,38 @@ pub fn render_preview_gpu(scene: &Scene, cam: &Camera, format: Size, preview: Pr
 /// [`render_preview`], only `cell`'s pixels drawn, or all of them, with
 /// `splats` (the scene's, prepared for `cam`).
 fn preview_cell(scene: &Scene, cam: &Camera, format: Size, preview: Preview, cell: Option<Cell>, splats: Option<&splats::Prepared>) -> Image {
-    let mut surfs = surfaces(scene);
+    let mut surfs = plain_surfaces(scene);
     match preview {
         Preview::Lit { shadows } if !scene.lights.is_empty() => {
             let lights: Vec<Light> = scene.lights.iter().map(|l| Light { shadows: l.shadows && shadows, ..l.clone() }).collect();
-            draw_passes(&surfs, &lights, &[], cam, format, 1, Passes::DEPTH, None, cell, splats)
+            draw_with_instances(surfs, &scene.instances, false, &lights, &[], cam, format, 1, Passes::DEPTH, None, cell, splats)
         }
         _ => {
             for s in surfs.iter_mut().skip(scene.cards.len()) {
                 s.headlight = true;
             }
-            draw_passes(&surfs, &[], &[], cam, format, 1, Passes::DEPTH, None, cell, splats)
+            draw_with_instances(surfs, &scene.instances, true, &[], &[], cam, format, 1, Passes::DEPTH, None, cell, splats)
         }
     }
+}
+
+/// [`draw_passes`] for `surfs` and the instances of `sets` (`headlight`:
+/// theirs shaded as the 3D view's Solid): drawn instanced on the GPU where
+/// it can take them, else each a surface of its own.
+#[allow(clippy::too_many_arguments)]
+fn draw_with_instances(surfs: Vec<Surface>, sets: &[crate::geo::Instances], headlight: bool, lights: &[Light], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes, next: Option<(&Scene, &Camera)>, cell: Option<Cell>, splats: Option<&splats::Prepared>) -> Image {
+    #[cfg(feature = "gpu")]
+    if sets.iter().any(|g| !g.is_empty()) {
+        if let Some(img) = gpu::draw_instanced(&surfs, sets, headlight, lights, points, cam, format, samples, passes, next, cell, splats) {
+            return img;
+        }
+    }
+    let mut all = surfs;
+    all.extend(instance_surfaces(sets).into_iter().map(|mut s| {
+        s.headlight = headlight;
+        s
+    }));
+    draw_passes(&all, lights, points, cam, format, samples, passes, next, cell, splats)
 }
 
 /// The light at a hit, in parts (premultiplied, as `color` is): `color`

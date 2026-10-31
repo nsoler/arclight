@@ -37,6 +37,18 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.17, P4b B1: GPU instancing** (Dev2): `render3d/gpu/instances.rs`
+  plans each instance (wholly in front: instanced record of 20 words;
+  crossing the near plane: an ordinary CPU-clipped surface; behind:
+  dropped); `instances.wgsl` count / offsets / scatter into 8×8 bins with
+  saved 10-word setups; raster.wgsl walks the bins per sample after the
+  CPU tile list (box + nearest-depth rejects), `Tri3` / `tri_at`; no new
+  bindings (records in `proj`, bins in `lists`; Params 44 → 64 words);
+  twin-triangle ties keep the earlier one, so no sort; `finish()`
+  rebuilds kept instance triangles in f64. B1 limits: shadows, motion
+  pass and blur still take the expansion path (B2, B3). Bench 1080p:
+  10k spheres 806 → 121 ms; 1M cards 536 ms (didn't fit). gpu --check
+  65 rows (10k instanced cards).
 - **0.13.16, P3: Attribute Noise** (Dev1): `src/geo_attr.rs` holds what
   the P3 nodes share (element walk over point sets / curves / mesh points
   / instances with Group, attr build/read by kind, region falloff pushed

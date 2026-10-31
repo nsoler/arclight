@@ -17,6 +17,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.17 — 2026-10-31
+
+- GPU: instances render much faster, and far more of them fit: each
+  prototype's geometry goes up once and the copies' triangles are set up
+  on the GPU, so 10,000 instanced meshes (2 million triangles) render in
+  about 120 ms instead of 800 ms at 1080p, and a million instanced cards
+  now render (about 0.5 s) where they didn't fit before. Shadows and
+  motion blur over instances follow next.
+
 ## 0.13.16 — 2026-10-31
 
 - Geometry: an **Attribute Noise** node writes smooth 3-D noise (the same

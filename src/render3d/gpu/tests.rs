@@ -10,6 +10,8 @@ thread_local! {
     /// The shadow maps' room where they have layers, in place of the
     /// device's (see `layer_room`).
     pub(super) static LAYER_ROOM: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    /// How many frames this thread drew with instances drawn instanced.
+    pub(super) static INSTANCED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// For a motion-blur test's failure message: whether `out` (a blurred
@@ -239,7 +241,7 @@ fn see_through_casters_shadow_as_on_the_cpu() {
     compare(&gpu, &scene, &cam, format, 2, Passes::from_names(["shadow", "diffuse", "depth"]), None);
     // (They have layers, and their shadows let light through part way.)
     let surfs = super::super::surfaces(&scene);
-    let prep = prepare(&gpu, &surfs, &scene.lights, &cam, format, Passes::default(), None, None).expect("on the GPU");
+    let prep = prepare(&gpu, &surfs, None, &scene.lights, &cam, format, Passes::default(), None, None).expect("on the GPU");
     assert!(prep.tables.maps.iter().any(|m| m.layered));
     let passes = Passes::from_names(["shadow"]);
     let out = draw(&gpu, &surfs, &scene.lights, &[], &cam, format, 1, passes, None, None, None).unwrap().unwrap();
@@ -278,7 +280,7 @@ fn layers_shrink_to_fit_or_leave_the_frame_to_the_cpu() {
     let (scene, cam) = scene_of(&layered(128, 12.0));
     let surfs = super::super::surfaces(&scene);
     let format = Size { width: 160, height: 90 };
-    let prep = prepare(&gpu, &surfs, &scene.lights, &cam, format, Passes::default(), None, None).expect("on the GPU");
+    let prep = prepare(&gpu, &surfs, None, &scene.lights, &cam, format, Passes::default(), None, None).expect("on the GPU");
     // (With each map's blocks: 2 words a 4 × 4 texels.)
     let depths: usize = prep.tables.maps.iter().map(|m| m.res * m.res + 2 * m.res.div_ceil(4).pow(2)).sum();
     let layered_texels: usize = prep.tables.maps.iter().filter(|m| m.layered).map(|m| m.res * m.res).sum();
@@ -288,7 +290,7 @@ fn layers_shrink_to_fit_or_leave_the_frame_to_the_cpu() {
     let cpu = crate::gpu::cpu_only(|| super::super::draw_passes(&surfs, &scene.lights, &[], &cam, format, 2, passes, None, None, None));
     // Room for one layer a texel.
     LAYER_ROOM.with(|r| r.set(Some((depths + 3 * layered_texels) * 4)));
-    let prep = prepare(&gpu, &surfs, &scene.lights, &cam, format, Passes::default(), None, None).expect("one layer each fits");
+    let prep = prepare(&gpu, &surfs, None, &scene.lights, &cam, format, Passes::default(), None, None).expect("one layer each fits");
     assert!(layers(&prep).iter().all(|&k| k == 1), "{:?}", layers(&prep));
     let out = draw(&gpu, &surfs, &scene.lights, &[], &cam, format, 2, passes, None, None, None).unwrap().expect("on the GPU");
     for (name, mean, off) in differences(&cpu, &out) {
@@ -297,7 +299,7 @@ fn layers_shrink_to_fit_or_leave_the_frame_to_the_cpu() {
     }
     // Not even that: the CPU's, the same picture.
     LAYER_ROOM.with(|r| r.set(Some((depths + 3 * layered_texels) * 4 - 4)));
-    assert!(prepare(&gpu, &surfs, &scene.lights, &cam, format, Passes::default(), None, None).is_none());
+    assert!(prepare(&gpu, &surfs, None, &scene.lights, &cam, format, Passes::default(), None, None).is_none());
     assert!(draw(&gpu, &surfs, &scene.lights, &[], &cam, format, 2, passes, None, None, None).unwrap().is_none());
     let out = with_gpu(|| super::super::draw_passes(&surfs, &scene.lights, &[], &cam, format, 2, passes, None, None, None));
     LAYER_ROOM.with(|r| r.set(None));
@@ -314,6 +316,92 @@ fn instances_match_the_cpu_render() {
     };
     let (copies, _) = super::super::tests::instanced();
     compare(&gpu, &copies, &super::super::tests::camera(), Size { width: 160, height: 80 }, 2, Passes::from_names(["depth", "id", "shadow", "mattes"]), None);
+}
+
+/// Instances drawn instanced on the GPU (prototypes once, triangles set
+/// up where they're tested) match the CPU's render of each as a surface of
+/// its own, every pass; and two renders are the same to the bit.
+#[test]
+fn instances_drawn_instanced_match_the_cpu() {
+    if crate::gpu::test_device().is_none() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let (mut copies, _) = super::super::tests::instanced();
+    copies.lights.iter_mut().for_each(|l| l.shadows = false);
+    let cam = super::super::tests::camera();
+    let format = Size { width: 160, height: 80 };
+    let passes = Passes::from_names(["depth", "id", "mattes", "P", "N", "uv", "diffuse"]);
+    let cpu = crate::gpu::cpu_only(|| super::super::render_passes(&copies, &cam, format, 2, None, passes));
+    let before = INSTANCED.with(|n| n.get());
+    let out = with_gpu(|| super::super::render_passes(&copies, &cam, format, 2, None, passes));
+    assert_eq!(INSTANCED.with(|n| n.get()), before + 1, "drawn instanced: {:?}", crate::gpu::last_error());
+    for (name, mean, off) in differences(&cpu, &out) {
+        let (most_mean, most_off) = super::check::allowed(&name);
+        assert!(mean <= most_mean && off <= most_off, "{name}: mean {mean:.2e}, {:.3} % of values off", off * 100.0);
+    }
+    let again = with_gpu(|| super::super::render_passes(&copies, &cam, format, 2, None, passes));
+    assert!(again.pixels == out.pixels, "the same every time");
+}
+
+/// The raster and the instances' binning set an instance's corners up
+/// with the same function (so a triangle is binned where it's drawn).
+#[test]
+fn instance_corners_are_set_up_alike_in_both_shaders() {
+    let body = |src: &str| {
+        let at = src.find("fn inst_corner(").expect("inst_corner");
+        let end = at + src[at..].find("\n}\n").expect("its end");
+        src[at..end].to_string()
+    };
+    assert_eq!(body(RASTER), body(include_str!("instances.wgsl")));
+}
+
+/// Instances near the camera: one crossing the near plane drawn as the
+/// CPU draws it (its triangles clipped), one behind the camera not at
+/// all; a stack of see-through copies deeper than a sample keeps, those
+/// pixels from the CPU; and the 3D view's preview drawn instanced too.
+#[test]
+fn instances_near_the_camera_deep_stacks_and_the_3d_view() {
+    use super::super::{render_preview, render_preview_gpu, Preview};
+    use crate::geo::{Instances, Prototype};
+    use crate::geom::Mat4;
+    if crate::gpu::test_device().is_none() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let cam = super::super::tests::camera();
+    let format = Size { width: 160, height: 80 };
+    let cube = crate::scene::Model::new(Arc::new(crate::mesh::cube([1.0; 3], [1; 3])), Mat4::identity(), crate::mesh::Material::default());
+    let at = |x: f64, z: f64| crate::geom::trs([x, 0.0, z], [0.0, 30.0, 0.0], [1.0; 3]);
+    let worlds = vec![at(0.3, -0.2), at(0.0, 5.0), at(-1.5, -6.0), at(1.5, -6.0)];
+    let set = Instances { prototypes: vec![Prototype::Model(cube.clone())], which: vec![0; 4], worlds, node: "near".into(), ..Instances::default() };
+    let scene = Scene { instances: vec![set], ..Scene::default() };
+    let plan = instances::Plan::new(&[], &scene.instances, false, &cam).unwrap();
+    assert_eq!(plan.drawn.len(), 2, "the two in front, instanced");
+    assert_eq!(plan.surfs.len() - plan.plain, 2, "a prototype and the one crossing the near plane");
+    let passes = Passes::from_names(["depth", "id"]);
+    let check = |scene: &Scene, what: &str| {
+        let cpu = crate::gpu::cpu_only(|| super::super::render_passes(scene, &cam, format, 2, None, passes));
+        let before = INSTANCED.with(|n| n.get());
+        let out = with_gpu(|| super::super::render_passes(scene, &cam, format, 2, None, passes));
+        assert_eq!(INSTANCED.with(|n| n.get()), before + 1, "{what}: drawn instanced: {:?}", crate::gpu::last_error());
+        for (name, mean, off) in differences(&cpu, &out) {
+            let (most_mean, most_off) = super::check::allowed(&name);
+            assert!(mean <= most_mean && off <= most_off, "{what}, {name}: mean {mean:.2e}, {:.3} % of values off", off * 100.0);
+        }
+    };
+    check(&scene, "near");
+    // 80 see-through cards one behind another: past 16, then 64.
+    let tex = Arc::new(crate::image::Image::filled(4, 4, [0.1, 0.05, 0.02, 0.1]));
+    let card = crate::scene::Card::new(tex, Mat4::identity(), [3.0, 2.0]);
+    let stack = Instances { prototypes: vec![Prototype::Card(card)], which: vec![0; 80], worlds: (0..80).map(|k| at(0.0, -4.0 - 0.05 * k as f64)).collect(), node: "stack".into(), ..Instances::default() };
+    check(&Scene { instances: vec![stack], ..Scene::default() }, "deep");
+    // The 3D view: Solid, the copies lit from the camera.
+    let (copies, _) = super::super::tests::instanced();
+    let cpu = crate::gpu::cpu_only(|| render_preview(&copies, &cam, format, Preview::Solid));
+    let resident = with_gpu(|| render_preview_gpu(&copies, &cam, format, Preview::Solid, None)).expect("on the GPU");
+    let (_, mean, off) = differences(&cpu, &resident.cpu().unwrap())[0].clone();
+    assert!(mean <= 1e-3 && off <= 0.005, "3D view: mean {mean:.2e}, {:.3} % off", off * 100.0);
 }
 
 /// Motion blur added up on the GPU (each pixel's times jittered by its

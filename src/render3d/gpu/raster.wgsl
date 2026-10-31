@@ -21,6 +21,22 @@ const NONE: u32 = 0xffffffffu;
 const OVERFLOW: u32 = 0x80000000u;
 // A kept surface that's a splat (with its number).
 const SPLAT: u32 = 0x40000000u;
+// A triangle or surface of an instance (see `tri_at`): the hit's `tri` is
+// this and its instance triangle's number, its `surf` this and its
+// instance's.
+const INSTANCE: u32 = 0x20000000u;
+// An instance's record (in `proj`, from P.inst.y): its placement (3 rows
+// of 4), prototype, object (+ 1, 0 none), the number of its first
+// triangle, (unused), and what its prototype's color is multiplied by.
+const INST_WORDS: u32 = 20u;
+// A prototype (in `words`, from P.inst.w): its surface, where its vertices
+// and triangles start (from P.inst.w too), how many triangles, whether
+// its vertices have normals.
+const PROTO_WORDS: u32 = 8u;
+// A prototype's vertex: position, normal, texture coordinates.
+const VERT_WORDS: u32 = 8u;
+// The bins instances' triangles are listed in, INST_BIN pixels across.
+const INST_BIN: u32 = 8u;
 const PROJ_WORDS: u32 = 12u;
 const SPLAT_SET_WORDS: u32 = 2u;
 // A pixel's splats stop once less than this shows through them; ones
@@ -105,6 +121,19 @@ struct Params {
     // (after the tile starts), where the sets' table starts in `words`
     // (SPLAT_SET_WORDS a set: object + 1, holdout), (unused)
     splat: vec4<u32>,
+    // instances (instances.wgsl): their bins + 1 (0: none), where their
+    // records start in `proj`, where their bins' lists start in `lists`
+    // (the bin starts, then the entries: triangle, instance, its pixels;
+    // then each triangle set up), where the prototypes start in `words`
+    inst: vec4<u32>,
+    // the camera's view (scene to camera space), three rows
+    view0: vec4<f32>,
+    view1: vec4<f32>,
+    view2: vec4<f32>,
+    // its lens: focal length in pixels (orthographic: pixels a unit), the
+    // frame's middle x and y; and how many bin entries the instances have
+    // (u32 bits: each triangle set up comes after them)
+    lens: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> P: Params;
@@ -170,53 +199,166 @@ fn edge_shared(a: vec2<f32>, b: vec2<f32>, q: vec2<f32>) -> f32 {
     return -edge(b, a, q);
 }
 
-// Triangle t's plain barycentric coordinates at frame position q (less
-// the triangle's origin), each edge's share of their sum.
-fn plain_bary(t: u32, q: vec2<f32>) -> vec3<f32> {
-    let p0 = tv2(t, 0u);
-    let p1 = tv2(t, 2u);
-    let p2 = tv2(t, 4u);
-    let e = vec3<f32>(edge_shared(p1, p2, q), edge_shared(p2, p0, q), edge_shared(p0, p1, q));
+// A triangle as coverage reads it: its corners in frame pixels, 1 / depth
+// at each, whether it's seen orthographically.
+struct Tri3 {
+    p0: vec2<f32>,
+    p1: vec2<f32>,
+    p2: vec2<f32>,
+    inv: vec3<f32>,
+    ortho: bool,
+};
+
+fn is_inst(s: u32) -> bool { return (s & INSTANCE) != 0u; }
+fn iu(i: u32, k: u32) -> u32 { return proj[P.inst.y + i * INST_WORDS + k]; }
+fn ifl(i: u32, k: u32) -> f32 { return bitcast<f32>(iu(i, k)); }
+fn irow(i: u32, r: u32) -> vec4<f32> { return vec4<f32>(ifl(i, 4u * r), ifl(i, 4u * r + 1u), ifl(i, 4u * r + 2u), ifl(i, 4u * r + 3u)); }
+fn pu(p: u32, k: u32) -> u32 { return words[P.inst.w + p * PROTO_WORDS + k]; }
+fn vf(at: u32, k: u32) -> f32 { return bitcast<f32>(words[at + k]); }
+fn vpos(at: u32) -> vec3<f32> { return vec3<f32>(vf(at, 0u), vf(at, 1u), vf(at, 2u)); }
+
+// Instance i's triangle number g: where its three vertices are in `words`.
+fn inst_corners(i: u32, g: u32) -> vec3<u32> {
+    let p = iu(i, 12u);
+    let at = P.inst.w + pu(p, 2u) + 3u * (g - iu(i, 14u));
+    let vb = P.inst.w + pu(p, 1u);
+    return vec3<u32>(vb + words[at] * VERT_WORDS, vb + words[at + 1u] * VERT_WORDS, vb + words[at + 2u] * VERT_WORDS);
+}
+
+// (The same in instances.wgsl, word for word.)
+// Vertex `v` (its prototype's space) of an instance placed by rows w0..w2,
+// seen by the camera (view rows c0..c2, lens as P.lens): its frame
+// position and 1 / depth.
+fn inst_corner(w0: vec4<f32>, w1: vec4<f32>, w2: vec4<f32>, v: vec3<f32>, c0: vec4<f32>, c1: vec4<f32>, c2: vec4<f32>, lens: vec4<f32>, ortho: bool) -> vec3<f32> {
+    let p = vec4<f32>(v, 1.0);
+    let world = vec4<f32>(dot(w0, p), dot(w1, p), dot(w2, p), 1.0);
+    let c = vec3<f32>(dot(c0, world), dot(c1, world), dot(c2, world));
+    let d = -c.z;
+    if (ortho) { return vec3<f32>(lens.y + lens.x * c.x, lens.z - lens.x * c.y, 1.0 / d); }
+    return vec3<f32>(lens.y + lens.x * c.x / d, lens.z - lens.x * c.y / d, 1.0 / d);
+}
+
+// Triangle t of surface s (a hit's: an instance's when s says so).
+fn tri_at(t: u32, s: u32) -> Tri3 {
+    if (is_inst(s)) {
+        let i = s & ~INSTANCE;
+        let v = inst_corners(i, t & ~INSTANCE);
+        let w0 = irow(i, 0u);
+        let w1 = irow(i, 1u);
+        let w2 = irow(i, 2u);
+        let ortho = P.cam.z != 0.0;
+        let a = inst_corner(w0, w1, w2, vpos(v.x), P.view0, P.view1, P.view2, P.lens, ortho);
+        let b = inst_corner(w0, w1, w2, vpos(v.y), P.view0, P.view1, P.view2, P.lens, ortho);
+        let c = inst_corner(w0, w1, w2, vpos(v.z), P.view0, P.view1, P.view2, P.lens, ortho);
+        return Tri3(a.xy, b.xy, c.xy, vec3<f32>(a.z, b.z, c.z), ortho);
+    }
+    return Tri3(tv2(t, 0u), tv2(t, 2u), tv2(t, 4u), tv3(t, 7u), tu(t, 11u) != 0u);
+}
+
+// Triangle c's plain barycentric coordinates at frame position q, each
+// edge's share of their sum.
+fn plain_bary(c: Tri3, q: vec2<f32>) -> vec3<f32> {
+    let e = vec3<f32>(edge_shared(c.p1, c.p2, q), edge_shared(c.p2, c.p0, q), edge_shared(c.p0, c.p1, q));
     return e / (e.x + e.y + e.z);
 }
 
 // Perspective-correct from plain (orthographic: the same).
-fn correct(t: u32, b: vec3<f32>) -> vec3<f32> {
-    if (tu(t, 11u) != 0u) { return b; }
-    let w = b * tv3(t, 7u);
+fn correct(c: Tri3, b: vec3<f32>) -> vec3<f32> {
+    if (c.ortho) { return b; }
+    let w = b * c.inv;
     return w / (w.x + w.y + w.z);
 }
 
-// Depth where t covers q, with the corrected barycentric coordinates in
+// Depth where c covers q, with the corrected barycentric coordinates in
 // .yzw; depth < 0: it doesn't (or it's outside near / far).
-fn cover(t: u32, q: vec2<f32>) -> vec4<f32> {
-    let b = plain_bary(t, q);
+fn cover(c: Tri3, q: vec2<f32>) -> vec4<f32> {
+    let b = plain_bary(c, q);
     if (!(b.x >= 0.0 && b.y >= 0.0 && b.z >= 0.0)) { return vec4<f32>(-1.0); }
-    let inv = tv3(t, 7u);
+    let inv = c.inv;
     var d: f32;
     var bc: vec3<f32>;
-    if (tu(t, 11u) != 0u) {
+    if (c.ortho) {
         d = b.x / inv.x + b.y / inv.y + b.z / inv.z;
         bc = b;
     } else {
-        let s = dot(b, inv);
-        d = 1.0 / s;
-        bc = b * inv / s;
+        let sum = dot(b, inv);
+        d = 1.0 / sum;
+        bc = b * inv / sum;
     }
     if (!(d >= P.cam.x && d <= P.cam.y)) { return vec4<f32>(-1.0); }
     return vec4<f32>(d, bc);
 }
 
-fn tri_uv(t: u32, b: vec3<f32>) -> vec2<f32> {
+fn tri_uv(t: u32, s: u32, b: vec3<f32>) -> vec2<f32> {
+    if (is_inst(s)) {
+        let v = inst_corners(s & ~INSTANCE, t & ~INSTANCE);
+        return vec2<f32>(vf(v.x, 6u), vf(v.x, 7u)) * b.x + vec2<f32>(vf(v.y, 6u), vf(v.y, 7u)) * b.y + vec2<f32>(vf(v.z, 6u), vf(v.z, 7u)) * b.z;
+    }
     return tv2(t, 36u) * b.x + tv2(t, 38u) * b.y + tv2(t, 40u) * b.z;
 }
 
-fn tri_world(t: u32, b: vec3<f32>) -> vec3<f32> {
+// Instance i's placement of point p (its prototype's space).
+fn inst_world(i: u32, p: vec3<f32>) -> vec3<f32> {
+    let p4 = vec4<f32>(p, 1.0);
+    return vec3<f32>(dot(irow(i, 0u), p4), dot(irow(i, 1u), p4), dot(irow(i, 2u), p4));
+}
+
+fn tri_world(t: u32, s: u32, b: vec3<f32>) -> vec3<f32> {
+    if (is_inst(s)) {
+        let i = s & ~INSTANCE;
+        let v = inst_corners(i, t & ~INSTANCE);
+        return inst_world(i, vpos(v.x)) * b.x + inst_world(i, vpos(v.y)) * b.y + inst_world(i, vpos(v.z)) * b.z;
+    }
     return tv3(t, 18u) * b.x + tv3(t, 21u) * b.y + tv3(t, 24u) * b.z;
 }
 
-fn tri_normal(t: u32, b: vec3<f32>) -> vec3<f32> {
+fn tri_normal(t: u32, s: u32, b: vec3<f32>) -> vec3<f32> {
+    if (is_inst(s)) {
+        let i = s & ~INSTANCE;
+        let v = inst_corners(i, t & ~INSTANCE);
+        if (pu(iu(i, 12u), 4u) == 0u) {
+            // No normals: the face's, as the CPU's.
+            let a = inst_world(i, vpos(v.x));
+            let bb = inst_world(i, vpos(v.y));
+            let c = inst_world(i, vpos(v.z));
+            return unit_or(cross(bb - a, c - a), vec3<f32>(0.0, 0.0, 1.0));
+        }
+        // By the placement's inverse transpose (its cofactors, the sign of
+        // its determinant), each made unit, as the CPU's.
+        let r0 = irow(i, 0u).xyz;
+        let r1 = irow(i, 1u).xyz;
+        let r2 = irow(i, 2u).xyz;
+        let k0 = cross(r1, r2);
+        let k1 = cross(r2, r0);
+        let k2 = cross(r0, r1);
+        let sign = select(1.0, -1.0, dot(r0, k0) < 0.0);
+        let n0 = vec3<f32>(vf(v.x, 3u), vf(v.x, 4u), vf(v.x, 5u));
+        let n1 = vec3<f32>(vf(v.y, 3u), vf(v.y, 4u), vf(v.y, 5u));
+        let n2 = vec3<f32>(vf(v.z, 3u), vf(v.z, 4u), vf(v.z, 5u));
+        let m0 = unit_or(vec3<f32>(dot(k0, n0), dot(k1, n0), dot(k2, n0)) * sign, n0);
+        let m1 = unit_or(vec3<f32>(dot(k0, n1), dot(k1, n1), dot(k2, n1)) * sign, n1);
+        let m2 = unit_or(vec3<f32>(dot(k0, n2), dot(k1, n2), dot(k2, n2)) * sign, n2);
+        return m0 * b.x + m1 * b.y + m2 * b.z;
+    }
     return tv3(t, 27u) * b.x + tv3(t, 30u) * b.y + tv3(t, 33u) * b.z;
+}
+
+// A hit's surface (an instance's prototype's) and what its color is
+// multiplied by (an instance's tint), and its object (+ 1, 0 none).
+fn hit_surface(s: u32) -> u32 {
+    if (is_inst(s)) { return pu(iu(s & ~INSTANCE, 12u), 0u); }
+    return s;
+}
+fn hit_tint(s: u32) -> vec4<f32> {
+    if (is_inst(s)) {
+        let i = s & ~INSTANCE;
+        return vec4<f32>(ifl(i, 16u), ifl(i, 17u), ifl(i, 18u), ifl(i, 19u));
+    }
+    return vec4<f32>(1.0);
+}
+fn hit_object(s: u32) -> u32 {
+    if (is_inst(s)) { return iu(s & ~INSTANCE, 13u); }
+    return su(s, 15u);
 }
 
 // ---- textures ---------------------------------------------------------
@@ -295,14 +437,15 @@ fn surface_color(s: u32, uv: vec2<f32>, covered: f32) -> vec4<f32> {
     return tint(s, a + (b - a) * w);
 }
 
-// How many texels of surface s's texture a sample at q (uv there) covers,
-// the next sample `step` pixels on.
-fn footprint(t: u32, s: u32, q: vec2<f32>, uv: vec2<f32>, step: f32) -> f32 {
+// How many texels of surface s's texture a sample of triangle t (hit
+// surface hs) at q (uv there) covers, the next sample `step` pixels on.
+fn footprint(t: u32, hs: u32, s: u32, q: vec2<f32>, uv: vec2<f32>, step: f32) -> f32 {
     let base = su(s, 13u);
     if (base == NONE) { return 0.0; }
     let size = vec2<f32>(f32(lw(base, 1u)), f32(lw(base, 2u)));
-    let ax = (tri_uv(t, correct(t, plain_bary(t, q + vec2<f32>(step, 0.0)))) - uv) * size;
-    let ay = (tri_uv(t, correct(t, plain_bary(t, q + vec2<f32>(0.0, step)))) - uv) * size;
+    let c = tri_at(t, hs);
+    let ax = (tri_uv(t, hs, correct(c, plain_bary(c, q + vec2<f32>(step, 0.0)))) - uv) * size;
+    let ay = (tri_uv(t, hs, correct(c, plain_bary(c, q + vec2<f32>(0.0, step)))) - uv) * size;
     return max(length(ax), length(ay));
 }
 
@@ -904,6 +1047,45 @@ struct Hit {
     surf: u32,
 };
 
+// Hit h into a sample's surfaces (`count` of them, nearest first; ties by
+// triangle); where two triangles of a surface meet (one there already as
+// near), only the first triangle of the two (as the CPU, going through
+// them in order, keeps it: so the order they come in doesn't matter); one
+// past MAX_HITS dropped (`dropped` set).
+fn add_hit(hits: ptr<function, array<Hit, MAX_HITS>>, count: ptr<function, u32>, dropped: ptr<function, bool>, h: Hit) {
+    var n = *count;
+    // Full, and behind the last by more than a twin's tolerance: dropped,
+    // without going through them (deep stacks of copies have many such).
+    if (n == MAX_HITS && h.depth > (*hits)[n - 1u].depth * (1.0 + 1e-5)) {
+        *dropped = true;
+        return;
+    }
+    for (var m = 0u; m < n; m++) {
+        if ((*hits)[m].surf == h.surf && abs((*hits)[m].depth - h.depth) <= 1e-5 * h.depth) {
+            if (h.tri >= (*hits)[m].tri) { return; }
+            // This one comes first: it takes the other's place.
+            for (var k = m; k + 1u < n; k++) { (*hits)[k] = (*hits)[k + 1u]; }
+            n -= 1u;
+            *count = n;
+            break;
+        }
+    }
+    var at = n;
+    while (at > 0u && (h.depth < (*hits)[at - 1u].depth || (h.depth == (*hits)[at - 1u].depth && h.tri < (*hits)[at - 1u].tri))) { at--; }
+    if (at >= MAX_HITS) {
+        *dropped = true;
+        return;
+    }
+    var k = n;
+    if (n == MAX_HITS) {
+        *dropped = true;
+        k = n - 1u;
+    }
+    for (var m = k; m > at; m--) { (*hits)[m] = (*hits)[m - 1u]; }
+    (*hits)[at] = h;
+    *count = k + 1u;
+}
+
 // What a pixel adds up over its samples.
 struct Sums {
     color: vec4<f32>,
@@ -966,7 +1148,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
     let first = words[P.tables.x + tile];
     let last = words[P.tables.x + tile + 1u];
     let splat_tile = stream_at(tile);
-    if (first == last && splat_tile.k == splat_tile.end) { return; }
+    // (Instances' triangles are binned finer: INST_BIN pixels across.)
+    let bin = (g.y / INST_BIN) * ((P.size.x + INST_BIN - 1u) / INST_BIN) + g.x / INST_BIN;
+    let no_instances = P.inst.x == 0u || lists[P.inst.z + bin] == lists[P.inst.z + bin + 1u];
+    if (first == last && splat_tile.k == splat_tile.end && no_instances) { return; }
 
     let n = P.size.z;
     let j = P.cell.w;
@@ -1005,27 +1190,45 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
         var hits: array<Hit, MAX_HITS>;
         var count = 0u;
         var dropped = false;
+        let sq = vec2<f32>(f32(x), f32(y)) + vec2<f32>((f32(i) + 0.5) / f32(n), (f32(j) + 0.5) / f32(n));
         for (var k = first; k < last; k++) {
             let t = words[k];
             if (x < ti(t, 14u) || x >= ti(t, 16u) || y < ti(t, 15u) || y >= ti(t, 17u)) { continue; }
             let q = vec2<f32>(f32(x - ti(t, 12u)), f32(y - ti(t, 13u))) + vec2<f32>((f32(i) + 0.5) / f32(n), (f32(j) + 0.5) / f32(n));
-            let c = cover(t, q);
-            if (c.x < 0.0) { continue; }
-            let d = c.x;
             let surf = tu(t, 10u);
-            // One hit where two triangles of a surface meet.
-            var twin = false;
-            for (var m = 0u; m < count; m++) {
-                if (hits[m].surf == surf && abs(hits[m].depth - d) <= 1e-5 * d) { twin = true; }
+            let c = cover(tri_at(t, surf), q);
+            if (c.x < 0.0) { continue; }
+            add_hit(&hits, &count, &dropped, Hit(c.x, t, c.yz, surf));
+        }
+        // The instances' triangles over this tile (by triangle number).
+        if (P.inst.x != 0u) {
+            let ia = lists[P.inst.z + bin];
+            let ib = lists[P.inst.z + bin + 1u];
+            let entries = P.inst.z + P.inst.x;
+            let setups = entries + 4u * bitcast<u32>(P.lens.w);
+            // (The near plane cuts nothing here: instances crossing it are
+            // drawn as surfaces of their own.)
+            let ortho = P.cam.z != 0.0;
+            for (var k = ia; k < ib; k++) {
+                let at = entries + 4u * k;
+                // Most of a bin's triangles miss this pixel: by their box;
+                // or, the sample's surfaces full, are behind the last.
+                let b0 = lists[at + 1u];
+                let b1 = lists[at + 2u];
+                if (x < i32(b0 & 0xffffu) || y < i32(b0 >> 16u) || x >= i32(b1 & 0xffffu) || y >= i32(b1 >> 16u)) { continue; }
+                if (count == MAX_HITS && bitcast<f32>(lists[at + 3u]) > hits[MAX_HITS - 1u].depth * (1.0 + 1e-5)) {
+                    dropped = true;
+                    continue;
+                }
+                let g = lists[at];
+                let t = INSTANCE | g;
+                // (Set up once, by instances.wgsl.)
+                let su_at = setups + 10u * g;
+                let surf = INSTANCE | lists[su_at + 9u];
+                let c = cover(Tri3(vec2<f32>(bitcast<f32>(lists[su_at]), bitcast<f32>(lists[su_at + 1u])), vec2<f32>(bitcast<f32>(lists[su_at + 2u]), bitcast<f32>(lists[su_at + 3u])), vec2<f32>(bitcast<f32>(lists[su_at + 4u]), bitcast<f32>(lists[su_at + 5u])), vec3<f32>(bitcast<f32>(lists[su_at + 6u]), bitcast<f32>(lists[su_at + 7u]), bitcast<f32>(lists[su_at + 8u])), ortho), sq);
+                if (c.x < 0.0) { continue; }
+                add_hit(&hits, &count, &dropped, Hit(c.x, t, c.yz, surf));
             }
-            if (twin) { continue; }
-            var at = count;
-            while (at > 0u && (d < hits[at - 1u].depth || (d == hits[at - 1u].depth && t < hits[at - 1u].tri))) { at--; }
-            if (at >= MAX_HITS) { dropped = true; continue; }
-            if (count == MAX_HITS) { dropped = true; count--; }
-            for (var m = count; m > at; m--) { hits[m] = hits[m - 1u]; }
-            hits[at] = Hit(d, t, c.yz, surf);
-            count++;
         }
         if (count == 0u) {
             // No surface: the splats alone (added in the last row).
@@ -1063,18 +1266,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
             let hit = hits[m];
             m += 1u;
             let t = hit.tri;
-            let s = hit.surf;
+            let hs = hit.surf;
+            let s = hit_surface(hs);
             let b = vec3<f32>(hit.b, 1.0 - hit.b.x - hit.b.y);
-            let q = vec2<f32>(f32(x - ti(t, 12u)), f32(y - ti(t, 13u))) + vec2<f32>((f32(i) + 0.5) * step, (f32(j) + 0.5) * step);
-            let uv = tri_uv(t, b);
-            var color = surface_color(s, uv, footprint(t, s, q, uv, step));
+            var q = vec2<f32>(f32(x), f32(y)) + vec2<f32>((f32(i) + 0.5) * step, (f32(j) + 0.5) * step);
+            if (!is_inst(hs)) { q = vec2<f32>(f32(x - ti(t, 12u)), f32(y - ti(t, 13u))) + vec2<f32>((f32(i) + 0.5) * step, (f32(j) + 0.5) * step); }
+            let uv = tri_uv(t, hs, b);
+            var color = surface_color(s, uv, footprint(t, hs, s, q, uv, step)) * hit_tint(hs);
             let sflags = su(s, 12u);
-            let p = tri_world(t, b);
+            let p = tri_world(t, hs, b);
             var view: vec3<f32>;
             if (P.cam.z != 0.0) { view = unit_or(P.back.xyz, vec3<f32>(0.0, 0.0, 1.0)); } else { view = unit_or(P.eye.xyz - p, vec3<f32>(0.0, 0.0, 1.0)); }
             if ((sflags & S_HEADLIGHT) != 0u) {
                 // Headlight: lit from the camera.
-                let nn = tri_normal(t, b);
+                let nn = tri_normal(t, hs, b);
                 var facing = 1.0;
                 if (length(nn) > 0.0) { facing = abs(dot(normalize(nn), view)); }
                 let kk = 0.25 + 0.75 * facing;
@@ -1096,7 +1301,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
                 mm.specular = sv3(s, 4u);
                 mm.exponent = sf(s, 7u);
                 mm.blinn = shading == 2u;
-                var nrm = unit_or(tri_normal(t, b), vec3<f32>(0.0, 0.0, 1.0));
+                var nrm = unit_or(tri_normal(t, hs, b), vec3<f32>(0.0, 0.0, 1.0));
                 if ((sflags & S_TWO_SIDED) != 0u && dot(nrm, view) < 0.0) { nrm = -nrm; }
                 mm.n = nrm;
                 mm.view = view;
@@ -1126,7 +1331,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
                 color = vec4<f32>(parts[0] + parts[1] + parts[2] + parts[3], a);
             }
             if (color.a > 0.0) { see(select(1u, 0u, color.a >= 0.5), hit); }
-            let object = su(s, 15u);
+            let object = hit_object(hs);
             if ((flags & MATTES) != 0u && object > 0u) {
                 sums.mattes[object - 1u] += color.a * k;
             }
@@ -1257,11 +1462,11 @@ fn shadow_map(@builtin(global_invocation_id) gid: vec3<u32>) {
         let s = tu(t, 10u);
         let f = su(s, 12u);
         if ((f & S_CASTS) == 0u || (f & S_HOLDOUT) != 0u) { continue; }
-        let c = cover(t, q);
+        let c = cover(tri_at(t, s), q);
         if (c.x < 0.0) { continue; }
-        let a = surface_color(s, tri_uv(t, c.yzw), 0.0).a;
+        let a = surface_color(s, tri_uv(t, s, c.yzw), 0.0).a;
         if (a <= 0.0) { continue; }
-        let key = map_key(m, tri_world(t, c.yzw));
+        let key = map_key(m, tri_world(t, s, c.yzw));
         if ((f & S_SEE_THROUGH) == 0u || a >= OPAQUE_ALPHA) {
             d = min(d, key);
             continue;
