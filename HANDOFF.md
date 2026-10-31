@@ -19,7 +19,9 @@ done), `docs/help.md` (the in-app help) and
   the next task. Dev2: profiling many-sample area-light shadows (20–34 s
   a 4K frame at 16 samples, even on the GPU), proposal before code. Macs:
   `arclight gpu --check` / `cargo test --release` on Metal not yet run
-  (TODO). v0.12.17's macOS DMG: the user builds it on the Mac.
+  (TODO). Released as the beta **v0.12.19** (Latest): Linux tarball,
+  macOS universal DMG (built and uploaded by the user), `arclt` wheel +
+  sdist; v0.12.17 stays Linux only (no DMG).
 - **0.12.19, transport labels wrap with their fields** (Dev1):
   `src/gui/transport.rs`'s `together(ui, name, add)` keeps Frame, In,
   Out, FPS and Format with their fields; a group nested in a wrapping row
