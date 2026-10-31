@@ -14,6 +14,19 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.11.2 — 2026-10-30
+
+- **Plugins run in helper processes** (Linux, macOS): a native plugin
+  that crashes, aborts or hangs no longer takes Arclight (or Python)
+  down. Its node shows "plugin X crashed: killed by SIGSEGV (report: …)"
+  or "timed out after 60 s", and the next render starts it again.
+- Plugins work unchanged (same ABI), with images passed in shared memory.
+  That costs about 30 ms on a 4K frame; `ARCLIGHT_PLUGINS_IN_PROCESS=1`
+  loads trusted plugins in-process instead. `ARCLIGHT_PLUGIN_TIMEOUT` sets
+  the time limit (seconds).
+- A plugin's ops are remembered, so a project still opens with them when
+  its plugin can't start.
+
 ## 0.11.1 — 2026-10-30
 
 - **Crash reports**: if Arclight crashes (a panic, or a native crash in a

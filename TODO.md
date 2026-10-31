@@ -118,7 +118,9 @@ Ends in a **beta** (About box, release titles, GitHub pre-releases) for
 a public release once tested.
 
 - [x] Crash reporting (0.11.1)
-- [ ] Plugin process isolation (a crashing native plugin kills the app)
+- [x] Plugin process isolation (0.11.2)
+- [ ] Long node errors (a plugin crash with its report path) are clipped
+      on one line in the viewer: wrap them
 
 ## Later: 0.12.0
 

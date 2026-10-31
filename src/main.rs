@@ -65,10 +65,21 @@ enum Command {
 }
 
 fn main() -> Result<()> {
+    // A plugin host (see arclight::plugin_host), started by Arclight itself:
+    // before anything else.
+    #[cfg(unix)]
+    if std::env::args_os().nth(1).is_some_and(|a| a == "plugin-host") {
+        arclight::crash::install_host("plugin-host");
+        let library = std::env::args_os().nth(2).map(PathBuf::from).unwrap_or_default();
+        std::process::exit(arclight::plugin::run_host(&library));
+    }
     // Crash reports (kept on this machine, see arclight::crash).
     arclight::crash::install("arclight");
     arclight::crash::crash_test_now();
     let cli = Cli::parse();
+    if let Ok(exe) = std::env::current_exe() {
+        arclight::plugin::set_host_command(vec![exe.into(), "plugin-host".into()]);
+    }
     arclight::plugin::init();
     arclight::crash::note(format!("command: {}", std::env::args().nth(1).unwrap_or_default()));
     match cli.command {

@@ -9,6 +9,13 @@
  * Images are 32-bit float RGBA, linear light, premultiplied alpha, stored
  * row-major from the top-left: pixel (x, y) channel c is at
  * pixels[(y * width + x) * 4 + c].
+ *
+ * On Linux and macOS each plugin library runs in helper processes of its own
+ * (the same ABI, in shared memory), so a plugin that crashes or hangs gives
+ * a node error rather than stopping Arclight. Don't rely on state shared
+ * with the application or between calls: several helpers may render at
+ * once. Anything a plugin prints goes to Arclight's stderr. Set
+ * ARCLIGHT_PLUGINS_IN_PROCESS=1 to load plugins in-process instead.
  */
 #ifndef ARCLIGHT_PLUGIN_H
 #define ARCLIGHT_PLUGIN_H

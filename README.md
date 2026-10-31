@@ -504,11 +504,23 @@ searches `$ARCLIGHT_PLUGIN_PATH`, the `plugin_paths` setting,
 `/usr/lib/arclight/plugins`. Run `arclight plugins` to see the search path and
 what loaded, and `arclight ops [OP]` to see the op catalog.
 
+On Linux and macOS each plugin library runs in helper processes of
+Arclight's own (the same program, or the Python interpreter for `arclt`):
+a plugin that crashes or hangs gives its node an error, with the crash
+report's path, and is restarted at its next render. Images travel in
+shared memory (about 30 ms for a 4K frame). `ARCLIGHT_PLUGINS_IN_PROCESS=1`
+loads plugins into Arclight itself (trusted plugins, a little faster);
+`ARCLIGHT_PLUGIN_TIMEOUT=<seconds>` (default 60) is how long a render may
+take. A plugin's ops are remembered, so a project still opens with them
+when its plugin can't start.
+
 ### Settings and files (XDG)
 
 | What | Where |
 |------|-------|
 | Settings | `$XDG_CONFIG_HOME/arclight/settings.json`, edited in **Edit ▸ Preferences** (Ctrl/⌘+,) or by hand (unknown keys are kept): `plugin_paths`, `frame_cache_mb` (GUI frame cache, default 1536), `mcp_http_addr`, `interface` (`ui_scale`, `theme` system / dark / light, `snap_to_grid`, `wire_style` curved / straight), `new_project` (`width`, `height`, `fps`, `first_frame`, `last_frame`: what File ▸ New starts with; Project Settings ▸ Save as defaults), `files` (`autosave_minutes` (0 off; writes `<project>.autosave` beside the project, never over it), `recent_count`, `undo_levels`, `project_dir`: the Projects folder, where File ▸ New makes projects' folders and Open starts), `view3d` (`emulate_three_button`, `trackpad` orbit / pan, `zoom_to_pointer`, `invert_zoom`, `default_shading` auto / solid / lit) |
+| Crash reports | `$XDG_STATE_HOME/arclight/crashes/` (macOS `~/Library/Logs/Arclight/`), kept on this machine (see Help ▸ Report a problem) |
+| Plugin ops cache | `$XDG_STATE_HOME/arclight/plugin-ops.json` |
 | Recent projects | `$XDG_STATE_HOME/arclight/recent.json` (File ▸ Open Recent) |
 | View preferences | `$XDG_STATE_HOME/arclight/view.json` (`~/.local/state/arclight/view.json`), written by the GUI: View ▸ Show frame size and the 3D view's Solid / Lit, wireframe and Lit shadows, remembered between runs (a project that saved its own 3D view keeps it); not part of projects or settings.json |
 | User plugins | `$XDG_DATA_HOME/arclight/plugins/` |

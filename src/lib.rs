@@ -33,6 +33,8 @@ pub mod particle_nodes;
 pub mod particles;
 pub mod particles_render;
 pub mod plugin;
+#[cfg(unix)]
+pub mod plugin_host;
 pub mod render;
 pub mod render3d;
 pub mod scene;

@@ -5,29 +5,38 @@
 //! GUI's node menus with generated property panels, can be keyframed, are
 //! cached by the evaluator and are scriptable from Python and MCP. Libraries
 //! are never unloaded, so the registry can hand out `&'static` op infos.
+//!
+//! Where a front end says how to start a helper ([`set_host_command`]: the
+//! CLI's `plugin-host`, the GUI's `--plugin-host`, arclt's interpreter),
+//! each library runs in helper processes of its own (see
+//! [`crate::plugin_host`]): a plugin that crashes, hangs or scribbles over
+//! memory gives a node error instead of taking Arclight down.
+//! `ARCLIGHT_PLUGINS_IN_PROCESS=1` loads them in-process instead (trusted
+//! plugins, a little faster), as does every embedding that sets no command.
 
 use crate::image::Image;
 use crate::ops::{self, Category, DefaultValue, EvalContext, OpInfo, Overlay, ParamKind, ParamSpec, Port};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
-use std::ffi::{c_char, c_void, CStr, CString};
+use std::ffi::{c_char, c_void, CStr, CString, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::{Once, RwLock};
+use std::time::Duration;
 
 pub const ABI_VERSION: u32 = 1;
 
 #[repr(C)]
-struct ArclightImage {
-    width: u32,
-    height: u32,
-    pixels: *const f32,
+pub(crate) struct ArclightImage {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: *const f32,
 }
 
-type Alloc = unsafe extern "C" fn(host: *mut c_void, width: u32, height: u32) -> *mut f32;
+pub(crate) type Alloc = unsafe extern "C" fn(host: *mut c_void, width: u32, height: u32) -> *mut f32;
 
 #[repr(C)]
-struct ArclightPlugin {
+pub(crate) struct ArclightPlugin {
     abi_version: u32,
     ops_json: *const c_char,
     render: unsafe extern "C" fn(
@@ -47,9 +56,17 @@ struct ArclightPlugin {
 // `render` to be callable from several threads at once.
 unsafe impl Sync for ArclightPlugin {}
 
+/// Where an op's library runs.
+#[derive(Clone, Copy)]
+enum Backend {
+    InProcess(&'static ArclightPlugin),
+    #[cfg(unix)]
+    Hosted(&'static crate::plugin_host::Pool),
+}
+
 struct PluginOp {
     info: &'static OpInfo,
-    entry: &'static ArclightPlugin,
+    backend: Backend,
     time_varying: bool,
     library: &'static Path,
 }
@@ -57,6 +74,47 @@ struct PluginOp {
 static REGISTRY: RwLock<Vec<PluginOp>> = RwLock::new(Vec::new());
 static REPORT: RwLock<Vec<LoadReport>> = RwLock::new(Vec::new());
 static INIT: Once = Once::new();
+static HOST_COMMAND: RwLock<Option<Vec<OsString>>> = RwLock::new(None);
+static TIMEOUT: RwLock<Option<Duration>> = RwLock::new(None);
+
+/// How to start a plugin host: a program and its arguments, to which the
+/// library's path is added; it must call [`run_host`] with it. Set before
+/// [`init`] (or [`load`]) for plugins to run out of process.
+pub fn set_host_command(command: Vec<OsString>) {
+    *HOST_COMMAND.write().unwrap() = Some(command);
+}
+
+/// The host command, unless plugins load in-process (none was set, or
+/// `ARCLIGHT_PLUGINS_IN_PROCESS` is, or there's no host on this system).
+pub(crate) fn host_command() -> Option<Vec<OsString>> {
+    if !cfg!(unix) || std::env::var_os("ARCLIGHT_PLUGINS_IN_PROCESS").is_some_and(|v| !v.is_empty() && v != "0") {
+        return None;
+    }
+    HOST_COMMAND.read().unwrap().clone()
+}
+
+/// How long a plugin host may take over one render (or starting) before
+/// it's stopped: [`set_timeout`], else `ARCLIGHT_PLUGIN_TIMEOUT` seconds,
+/// else 60 s.
+pub fn timeout() -> Duration {
+    if let Some(t) = *TIMEOUT.read().unwrap() {
+        return t;
+    }
+    let secs = std::env::var("ARCLIGHT_PLUGIN_TIMEOUT").ok().and_then(|s| s.parse::<f64>().ok()).filter(|s| *s > 0.0);
+    Duration::from_secs_f64(secs.unwrap_or(60.0))
+}
+
+pub fn set_timeout(t: Duration) {
+    *TIMEOUT.write().unwrap() = Some(t);
+}
+
+/// A plugin host's whole life: load `library` and render for the process
+/// that started it, over stdin and stdout, until it closes them. Returns the
+/// exit code.
+#[cfg(unix)]
+pub fn run_host(library: &Path) -> i32 {
+    crate::plugin_host::serve(library)
+}
 
 /// What happened to one library during discovery.
 #[derive(Clone, Debug)]
@@ -70,6 +128,11 @@ pub struct LoadReport {
 /// library can't keep the application from starting.
 pub fn init() {
     INIT.call_once(|| {
+        // A plugin host serves one library and loads no others.
+        #[cfg(unix)]
+        if std::env::var_os(crate::plugin_host::HOST_ENV).is_some() {
+            return;
+        }
         let mut reports = Vec::new();
         for dir in crate::config::plugin_dirs() {
             let Ok(entries) = std::fs::read_dir(&dir) else { continue };
@@ -104,7 +167,29 @@ pub fn reports() -> Vec<LoadReport> {
 }
 
 /// Load one plugin library and register its ops. Returns the op names.
+/// Out of process (see [`set_host_command`]), its ops come from a host
+/// started to describe them, or, for a library unchanged since, from the
+/// last time; a library whose host can't start then still has its ops,
+/// which give node errors saying why.
 pub fn load(path: &Path) -> Result<Vec<String>> {
+    #[cfg(unix)]
+    if let Some(command) = host_command() {
+        let library: &'static Path = Box::leak(path.to_path_buf().into_boxed_path());
+        let pool: &'static crate::plugin_host::Pool = Box::leak(Box::new(crate::plugin_host::Pool::new(library, command)));
+        let (json, failed) = pool.describe()?;
+        let names = register(library, &json, Backend::Hosted(pool))?;
+        return match failed {
+            Some(e) => Err(anyhow!("{e} (its ops are kept from the last time it loaded)")),
+            None => Ok(names),
+        };
+    }
+    let (entry, json) = open_library(path)?;
+    let library: &'static Path = Box::leak(path.to_path_buf().into_boxed_path());
+    register(library, json, Backend::InProcess(entry))
+}
+
+/// Load `path` into this process: its entry table and ops JSON.
+pub(crate) fn open_library(path: &Path) -> Result<(&'static ArclightPlugin, &'static str)> {
     // SAFETY: loading a library runs its initializers; plugins are trusted
     // code the user installed, as with any native plugin host.
     let lib = unsafe { libloading::Library::new(path) }.with_context(|| format!("loading {}", path.display()))?;
@@ -122,9 +207,12 @@ pub fn load(path: &Path) -> Result<Vec<String>> {
         bail!("ops_json is NULL");
     }
     let json = unsafe { CStr::from_ptr(entry.ops_json) }.to_str().context("ops_json is not UTF-8")?;
-    let descs: Vec<OpDesc> = serde_json::from_str(json).context("parsing ops_json")?;
-    let library: &'static Path = Box::leak(path.to_path_buf().into_boxed_path());
+    Ok((entry, json))
+}
 
+/// Register the ops `json` describes, run by `backend`.
+fn register(library: &'static Path, json: &str, backend: Backend) -> Result<Vec<String>> {
+    let descs: Vec<OpDesc> = serde_json::from_str(json).context("parsing ops_json")?;
     let mut names = Vec::new();
     for desc in descs {
         let name = desc.name.clone();
@@ -133,7 +221,7 @@ pub fn load(path: &Path) -> Result<Vec<String>> {
         }
         let time_varying = desc.time_varying;
         let info = Box::leak(Box::new(desc.into_info()?));
-        REGISTRY.write().unwrap().push(PluginOp { info, entry, time_varying, library });
+        REGISTRY.write().unwrap().push(PluginOp { info, backend, time_varying, library });
         names.push(name);
     }
     Ok(names)
@@ -158,8 +246,13 @@ pub fn is_time_varying(op: &str) -> bool {
 
 /// Render plugin op `op`, or `None` if no plugin defines it.
 pub fn eval(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContext) -> Option<Result<Image>> {
-    let entry = REGISTRY.read().unwrap().iter().find(|p| p.info.name == op).map(|p| p.entry)?;
-    Some(render(entry, op, params, inputs, ctx))
+    let backend = REGISTRY.read().unwrap().iter().find(|p| p.info.name == op).map(|p| p.backend)?;
+    let params = ops::params_with_defaults(op, params).to_string();
+    Some(match backend {
+        Backend::InProcess(entry) => render(entry, op, &params, inputs, ctx.frame),
+        #[cfg(unix)]
+        Backend::Hosted(pool) => pool.render(op, &params, inputs, ctx.frame),
+    })
 }
 
 struct HostOut {
@@ -172,10 +265,8 @@ unsafe extern "C" fn alloc(host: *mut c_void, width: u32, height: u32) -> *mut f
     img.pixels.as_mut_ptr() as *mut f32
 }
 
-fn render(entry: &ArclightPlugin, op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContext) -> Result<Image> {
-    let params = ops::params_with_defaults(op, params);
-    let c_op = CString::new(op)?;
-    let c_params = CString::new(params.to_string())?;
+/// Render in this process.
+fn render(entry: &ArclightPlugin, op: &str, params: &str, inputs: &[Option<&Image>], frame: i64) -> Result<Image> {
     // ABI v1 has no data windows: plugins see whole frames.
     let frames: Vec<Option<std::borrow::Cow<Image>>> = inputs.iter().map(|i| i.map(Image::flat)).collect();
     let images: Vec<ArclightImage> = frames
@@ -186,27 +277,29 @@ fn render(entry: &ArclightPlugin, op: &str, params: &Value, inputs: &[Option<&Im
         })
         .collect();
     let mut out = HostOut { image: None };
+    // SAFETY: every pointer stays valid for the call.
+    unsafe { call(entry, op, params, &images, frame, &mut out as *mut HostOut as *mut c_void, alloc)? };
+    out.image.ok_or_else(|| anyhow!("plugin returned no image"))
+}
+
+/// Call `entry`'s render with `images`, its output made by `alloc(host, ..)`.
+/// The plugin's error message (or status) on failure.
+///
+/// # Safety
+/// The images' pixels and `host` must be valid for the call; the ABI
+/// forbids the plugin from keeping them.
+pub(crate) unsafe fn call(entry: &ArclightPlugin, op: &str, params: &str, images: &[ArclightImage], frame: i64, host: *mut c_void, alloc: Alloc) -> Result<()> {
+    let c_op = CString::new(op)?;
+    let c_params = CString::new(params)?;
     let mut error = vec![0u8; 1024];
-    // SAFETY: every pointer stays valid for the call; the ABI forbids the
-    // plugin from keeping them.
     let status = unsafe {
-        (entry.render)(
-            c_op.as_ptr(),
-            c_params.as_ptr(),
-            images.as_ptr(),
-            images.len() as u32,
-            ctx.frame,
-            &mut out as *mut HostOut as *mut c_void,
-            alloc,
-            error.as_mut_ptr() as *mut c_char,
-            error.len(),
-        )
+        (entry.render)(c_op.as_ptr(), c_params.as_ptr(), images.as_ptr(), images.len() as u32, frame, host, alloc, error.as_mut_ptr() as *mut c_char, error.len())
     };
     if status != 0 {
         let msg = CStr::from_bytes_until_nul(&error).map(|c| c.to_string_lossy().into_owned()).unwrap_or_default();
         bail!("{}", if msg.is_empty() { format!("plugin failed with status {status}") } else { msg });
     }
-    out.image.ok_or_else(|| anyhow!("plugin returned no image"))
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

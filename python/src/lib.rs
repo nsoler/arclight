@@ -45,9 +45,38 @@ fn pixels(py: Python<'_>, node: &str, frame: i64) -> PyResult<(usize, usize, Py<
     Ok((img.width, img.height, PyBytes::new(py, &bytes).unbind()))
 }
 
+/// Run a plugin host for `library` (see arclight::plugin_host): what the
+/// interpreter started by this module to host a plugin runs. Returns the
+/// exit code.
+#[pyfunction]
+fn _plugin_host(library: std::path::PathBuf) -> i32 {
+    #[cfg(unix)]
+    {
+        arclight::crash::install_host("plugin-host");
+        arclight::plugin::run_host(&library)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = library;
+        2
+    }
+}
+
 #[pymodule]
 fn _arclt(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Plugins run in hosts of their own: this interpreter, running this
+    // module's _plugin_host (the wheel has no other program to start).
+    // It finds arclt where this one did: its sys.path first.
+    let sys = m.py().import("sys")?;
+    let exe: Option<String> = sys.getattr("executable")?.extract().ok().filter(|e: &String| !e.is_empty());
+    let path: Vec<String> = sys.getattr("path")?.extract().unwrap_or_default();
+    if let Some(exe) = exe {
+        let path = serde_json::to_string(&path).unwrap_or_else(|_| "[]".into());
+        let code = format!("import sys; sys.path[:0] = {path}; from arclt import _arclt; sys.exit(_arclt._plugin_host(sys.argv[1]))");
+        arclight::plugin::set_host_command(vec![exe.into(), "-c".into(), code.into()]);
+    }
     arclight::plugin::init();
+    m.add_function(wrap_pyfunction!(_plugin_host, m)?)?;
     m.add_function(wrap_pyfunction!(call, m)?)?;
     m.add_function(wrap_pyfunction!(pixels, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

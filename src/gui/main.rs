@@ -83,10 +83,21 @@ fn consume_plain(i: &mut egui::InputState, key: Key) -> bool {
 }
 
 fn main() -> eframe::Result {
+    // A plugin host (see arclight::plugin_host), started by Arclight itself:
+    // before anything else, so it never opens a window.
+    #[cfg(unix)]
+    if std::env::args_os().nth(1).is_some_and(|a| a == "--plugin-host") {
+        arclight::crash::install_host("plugin-host");
+        let library = std::env::args_os().nth(2).map(PathBuf::from).unwrap_or_default();
+        std::process::exit(arclight::plugin::run_host(&library));
+    }
     // Crash reports (kept on this machine, see arclight::crash), and the
     // open project saved to its autosave on a crash.
     arclight::crash::install("arclight-gui");
     arclight::crash::set_rescue(rescue);
+    if let Ok(exe) = std::env::current_exe() {
+        arclight::plugin::set_host_command(vec![exe.into(), "--plugin-host".into()]);
+    }
     arclight::plugin::init();
     let doc = match std::env::args_os().nth(1).map(PathBuf::from) {
         Some(path) => match Graph::from_file(&path) {
