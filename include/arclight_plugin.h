@@ -1,7 +1,7 @@
 /*
- * Arclight native plugin ABI, version 1.
+ * ArclightVFX native plugin ABI, version 1.
  *
- * A plugin is a shared library placed in one of Arclight's plugin
+ * A plugin is a shared library placed in one of ArclightVFX's plugin
  * directories (see `arclight plugins`) and named libarclight_plugin_*.so or
  * *.arclight.so; other files are ignored. It exports one function,
  * `arclight_plugin_entry`, returning a static ArclightPlugin.
@@ -12,9 +12,9 @@
  *
  * On Linux and macOS each plugin library runs in helper processes of its own
  * (the same ABI, in shared memory), so a plugin that crashes or hangs gives
- * a node error rather than stopping Arclight. Don't rely on state shared
+ * a node error rather than stopping ArclightVFX. Don't rely on state shared
  * with the application or between calls: several helpers may render at
- * once. Anything a plugin prints goes to Arclight's stderr. Set
+ * once. Anything a plugin prints goes to ArclightVFX's stderr. Set
  * ARCLIGHT_PLUGINS_IN_PROCESS=1 to load plugins in-process instead.
  */
 #ifndef ARCLIGHT_PLUGIN_H

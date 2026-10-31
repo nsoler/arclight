@@ -1,8 +1,8 @@
 [package]
 name = "arclt"
-version = "0.11.2"
+version = "0.11.3"
 edition = "2021"
-description = "Python bindings (the `arclt` module) for the Arclight compositor"
+description = "Python bindings (the `arclt` module) for ArclightVFX Compositor"
 license = "MIT OR Apache-2.0"
 
 [lib]

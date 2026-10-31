@@ -1,7 +1,7 @@
-//! "Arclight closed unexpectedly": at the start after a crash (and from
+//! "ArclightVFX closed unexpectedly": at the start after a crash (and from
 //! Help ▸ Report a problem), the crash report (see `arclight::crash`) to
 //! view, copy, or open as a prefilled GitHub issue the user reviews and
-//! submits. Nothing is sent by Arclight; file paths read `<path>` unless
+//! submits. Nothing is sent by ArclightVFX; file paths read `<path>` unless
 //! the user includes them.
 
 use arclight::crash;
@@ -72,18 +72,18 @@ impl CrashDialog {
         let shown = self.shown();
         let panic = shown.lines().find_map(|l| l.strip_prefix("Panic: ").or_else(|| l.strip_prefix("Signal: "))).unwrap_or("");
         let title = if self.report.is_none() {
-            "Problem: ".to_string()
+            format!("{} problem: ", arclight::SHORT_NAME)
         } else if panic.is_empty() {
-            "Crash".to_string()
+            format!("{} crash", arclight::SHORT_NAME)
         } else {
-            format!("Crash: {}", panic.chars().take(80).collect::<String>())
+            format!("{} crash: {}", arclight::SHORT_NAME, panic.chars().take(80).collect::<String>())
         };
         let mut report: String = shown.chars().take(ISSUE_REPORT_CHARS).collect();
         if shown.chars().count() > ISSUE_REPORT_CHARS {
-            report += "\n… (cut: the whole report is in Arclight's crash reports folder)";
+            report += "\n… (cut: the whole report is in ArclightVFX's crash reports folder)";
         }
         let body = if self.report.is_none() {
-            format!("**What happened?**\n\n\n**What did you expect?**\n\n\n**Steps to reproduce**\n\n\nArclight {}", env!("CARGO_PKG_VERSION"))
+            format!("**What happened?**\n\n\n**What did you expect?**\n\n\n**Steps to reproduce**\n\n\n{} {} ({})", arclight::PRODUCT, env!("CARGO_PKG_VERSION"), arclight::STAGE)
         } else {
             format!("**What were you doing when it happened?**\n\n\n<details><summary>Crash report</summary>\n\n```\n{report}\n```\n</details>\n\n<!-- Check the report for anything private before submitting. -->")
         };
@@ -96,10 +96,10 @@ impl CrashDialog {
         }
         let mut choice = None;
         let mut open = true;
-        let title = if self.crashed { "Arclight closed unexpectedly" } else { "Report a problem" };
+        let title = if self.crashed { "ArclightVFX closed unexpectedly" } else { "Report a problem" };
         egui::Window::new(title).id(egui::Id::unique("crash dialog")).collapsible(false).resizable(true).default_width(560.0).open(&mut open).show(ctx, |ui| {
             if self.crashed {
-                ui.label("Arclight closed unexpectedly the last time it ran. A report of what happened was saved on this computer; nothing was sent.");
+                ui.label("ArclightVFX closed unexpectedly the last time it ran. A report of what happened was saved on this computer; nothing was sent.");
                 if let Some(line) = self.text.lines().find(|l| l.starts_with("Project: ")) {
                     ui.label(line.trim_start_matches("Project: ").replace("saved to its autosave", "Your project was saved to its autosave"));
                 }
@@ -193,16 +193,16 @@ mod tests {
 
     #[test]
     fn the_issue_link_is_prefilled_encoded_and_short_enough() {
-        let mut long = String::from("Arclight closed unexpectedly\nPanic: index out of bounds & more\n");
+        let mut long = String::from("ArclightVFX closed unexpectedly\nPanic: index out of bounds & more\n");
         long += &"   9: arclight::frame\n".repeat(2000);
         let d = with(&long);
         let url = d.issue_url();
-        assert!(url.starts_with(&format!("{}?title=Crash%3A%20index%20out%20of%20bounds%20%26%20more&body=", crash::ISSUES_URL)), "{}", &url[..120]);
+        assert!(url.starts_with(&format!("{}?title=ArclightVFX%20crash%3A%20index%20out%20of%20bounds%20%26%20more&body=", crash::ISSUES_URL)), "{}", &url[..120]);
         assert!(url.len() < 20_000, "{}", url.len());
         assert!(url.contains(&encode("(cut: the whole report")), "cut, and says so");
         assert!(!url.contains(' ') && !url.contains('\n'));
         let help = CrashDialog { open: true, ..CrashDialog::default() };
-        assert!(help.issue_url().contains("title=Problem%3A%20") && help.issue_url().contains(&encode("Steps to reproduce")));
+        assert!(help.issue_url().contains("title=ArclightVFX%20problem%3A%20") && help.issue_url().contains(&encode("Steps to reproduce")));
         assert_eq!(encode("a b/é"), "a%20b%2F%C3%A9");
     }
 
@@ -214,7 +214,7 @@ mod tests {
         // in this process.)
         std::env::set_var("ARCLIGHT_CRASH_DIR", &dir);
         assert!(!CrashDialog::at_start(true).open, "no crash: no question");
-        let report = crash::write_report(crash::Kind::Crash, "Arclight closed unexpectedly\nPanic: boom\nProject: saved to its autosave, ~/a.autosave").unwrap();
+        let report = crash::write_report(crash::Kind::Crash, "ArclightVFX closed unexpectedly\nPanic: boom\nProject: saved to its autosave, ~/a.autosave").unwrap();
         std::fs::write(dir.join("pending"), report.file_name().unwrap().to_string_lossy().as_bytes()).unwrap();
         assert!(!CrashDialog::at_start(false).open, "asking turned off");
         let mut d = CrashDialog::at_start(true);

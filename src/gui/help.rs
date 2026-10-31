@@ -1,4 +1,4 @@
-//! Help ▸ Arclight Help (F1): `docs/help.md`, built into the app, shown as
+//! Help ▸ ArclightVFX Help (F1): `docs/help.md`, built into the app, shown as
 //! formatted markdown (headings, lists, tables, bold, code) in a scrollable,
 //! resizable window. Esc or its close button closes it.
 
@@ -31,7 +31,7 @@ impl Help {
             return;
         }
         let mut open = true;
-        egui::Window::new("Arclight Help")
+        egui::Window::new(format!("{} Help", arclight::SHORT_NAME))
             .id(egui::Id::unique("arclight_help"))
             .open(&mut open)
             .collapsible(false)
@@ -77,7 +77,7 @@ mod tests {
     #[test]
     fn the_help_parses_into_its_sections() {
         let (headings, items, rows) = outline();
-        assert_eq!(headings.first().map(|h| h.1.as_str()), Some("Arclight Help"));
+        assert_eq!(headings.first().map(|h| h.1.as_str()), Some("ArclightVFX Help"));
         assert!(headings.iter().all(|(_, t)| !t.trim().is_empty()), "no empty headings");
         let names: Vec<&str> = headings.iter().map(|h| h.1.as_str()).collect();
         for want in ["Node graph", "Viewer", "Player", "Keyframes", "Curve editor", "3D view", "Navigating", "Views", "Selecting in 3D", "Moving, rotating, scaling", "Undo"] {

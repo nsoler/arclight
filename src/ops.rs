@@ -1038,7 +1038,7 @@ pub static OPS: &[OpInfo] = &[
                gsplat and the INRIA code export it, a .splat file (the antimatter15 web format: one color per splat) or a \
                .spz file (Niantic's compressed format, versions 2 and 3; read Y down like the others). Up axis says which way is up in the \
                capture: -y (Y down, Z forward, the default: captures from COLMAP / OpenCV, as most .ply and .splat files and every .spz \
-               are), y (already Y up, as Arclight), or z (Z-up tools). Translate, Rotate and Scale then place it. Opacity fades every splat. Color detail \
+               are), y (already Y up, as ArclightVFX), or z (Z-up tools). Translate, Rotate and Scale then place it. Opacity fades every splat. Color detail \
                keeps the color's change with the viewing angle up to that spherical-harmonics degree (0: one color per \
                splat, the quickest; 3: all of it). Holdout draws nothing but hides what's behind the splats, as a holdout mesh \
                does. Outputs a scene holding the capture.",

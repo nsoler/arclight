@@ -1,6 +1,7 @@
 # Changelog
 
-Arclight is alpha software: versions are `0.<phase>.<increment>`. The
+ArclightVFX Compositor (Arclight until 0.11.2) is **beta** software since
+0.11.3 (alpha before): versions are `0.<phase>.<increment>`. The
 middle number is the development phase the project is in (11 now:
 engine and platform (crash reporting, plugin process isolation), on
 branch `wip-ns-engine`, ending in a beta for a public release; phase 10,
@@ -13,6 +14,19 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 `plugins/example/Cargo.toml`, kept in step) and shows in the GUI's Help
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
+
+## 0.11.3 — 2026-10-30
+
+- **Beta: Arclight is now ArclightVFX Compositor** (ArclightVFX for
+  short). Renamed: the window, About box (with a Beta badge), Help, crash
+  dialog and reports, MCP server title, the Linux launcher and tarball
+  (`arclightvfx-<ver>-linux-x86_64.tar.gz`), and the Mac app and DMG
+  (`ArclightVFX.app`, `ArclightVFX-<ver>-universal.dmg`). Unchanged: the
+  commands (`arclight`, `arclight-gui`), the `arclt` Python module,
+  settings and project files, and environment variables.
+- Upgrading: Mac users delete the old `Arclight.app` from Applications
+  once. Linux users re-run `install.sh` (it replaces the old launcher
+  entry).
 
 ## 0.11.2 — 2026-10-30
 

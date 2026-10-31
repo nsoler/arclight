@@ -40,7 +40,7 @@ pub fn dir() -> PathBuf {
 /// What a report is about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    /// The main thread panicked: Arclight closed.
+    /// The main thread panicked: ArclightVFX closed.
     Crash,
     /// Another thread panicked, and it was caught (it became an error).
     Recovered,
@@ -78,8 +78,8 @@ pub struct Report {
 /// The report as text: the header (version, system), then what happened.
 pub fn render(header: &str, kind: Kind, r: &Report) -> String {
     let title = match kind {
-        Kind::Crash => "Arclight closed unexpectedly",
-        Kind::Recovered => "An internal error was caught (Arclight kept running)",
+        Kind::Crash => "ArclightVFX closed unexpectedly",
+        Kind::Recovered => "An internal error was caught (ArclightVFX kept running)",
         Kind::Host => "A plugin host closed unexpectedly",
     };
     let mut out = format!("{title}\n\n{header}\n");
@@ -277,7 +277,7 @@ fn system() -> &'static str {
 pub fn header() -> String {
     let app = APP.get().copied().unwrap_or("arclight");
     let gpu = GPU.lock().map(|g| g.clone()).unwrap_or_default();
-    format!("Version: {app} {}\n{}\nGPU: {}", env!("CARGO_PKG_VERSION"), system(), if gpu.is_empty() { "not known" } else { gpu.as_str() })
+    format!("Version: {} {} ({}), {app}\n{}\nGPU: {}", crate::PRODUCT, env!("CARGO_PKG_VERSION"), crate::STAGE, system(), if gpu.is_empty() { "not known" } else { gpu.as_str() })
 }
 
 // -- files -----------------------------------------------------------------
@@ -578,7 +578,7 @@ mod native {
                 let fd = libc::open(path.as_ptr() as *const libc::c_char, libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC, 0o644);
                 if fd >= 0 {
                     let mut buf = [0u8; 4096];
-                    put(fd, b"Arclight closed unexpectedly (a native crash)\n\n");
+                    put(fd, b"ArclightVFX closed unexpectedly (a native crash)\n\n");
                     let n = HEADER_SIG.read(&mut buf);
                     put(fd, &buf[..n]);
                     put(fd, b"\nSignal: ");
@@ -657,7 +657,7 @@ mod tests {
             rescue: Some("saved to its autosave".into()),
         };
         let text = render(&header, Kind::Crash, &r);
-        for want in ["Arclight closed unexpectedly", "Thread: main", "Panic: index out of bounds", "At: src/ops.rs:12", "Evaluating: blur1 (blur)", "Project: saved", "  open\n  render\n", "arclight::ops::blur"] {
+        for want in ["ArclightVFX closed unexpectedly", "Thread: main", "Panic: index out of bounds", "At: src/ops.rs:12", "Evaluating: blur1 (blur)", "Project: saved", "  open\n  render\n", "arclight::ops::blur"] {
             assert!(text.contains(want), "{want}: {text}");
         }
         assert!(render(&header, Kind::Recovered, &r).starts_with("An internal error was caught"));
@@ -751,7 +751,7 @@ mod tests {
             assert_eq!(all.len(), 1, "{how}: {all:?}\n{}", String::from_utf8_lossy(&out.stderr));
             let text = std::fs::read_to_string(&all[0]).unwrap();
             let name = all[0].file_name().unwrap().to_string_lossy().into_owned();
-            assert!(text.contains("Version: crash-test") && text.contains("about to crash") && text.contains("blur1 (blur)"), "{how}: {text}");
+            assert!(text.contains("Version: ArclightVFX Compositor ") && text.contains("(beta), crash-test") && text.contains("about to crash") && text.contains("blur1 (blur)"), "{how}: {text}");
             match how {
                 "panic" => {
                     assert!(text.contains("Panic: on purpose") && text.contains("Project: not saved: nothing open") && text.contains("Backtrace:"), "{text}");

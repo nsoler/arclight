@@ -72,7 +72,7 @@ impl Preferences {
                 egui::Panel::bottom("preferences_buttons").show(ui, |ui| {
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Reset to defaults").on_hover_text("Every section back to how Arclight works without settings (Apply or OK to keep it)").clicked() {
+                        if ui.button("Reset to defaults").on_hover_text("Every section back to how ArclightVFX works without settings (Apply or OK to keep it)").clicked() {
                             self.draft = Settings { other: std::mem::take(&mut self.draft.other), ..Settings::default() };
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -150,7 +150,7 @@ fn heading(ui: &mut egui::Ui, text: &str) {
 /// Plugin folders, the frame cache and the MCP address.
 fn general(ui: &mut egui::Ui, s: &mut Settings, wanted: &mut Option<Folder>) {
     heading(ui, "General");
-    ui.label("Plugin folders").on_hover_text("Searched for native plugins (after $ARCLIGHT_PLUGIN_PATH, before the standard places). Takes effect next time Arclight starts.");
+    ui.label("Plugin folders").on_hover_text("Searched for native plugins (after $ARCLIGHT_PLUGIN_PATH, before the standard places). Takes effect next time ArclightVFX starts.");
     let mut gone = None;
     for (i, dir) in s.plugin_paths.iter_mut().enumerate() {
         ui.horizontal(|ui| {
@@ -173,7 +173,7 @@ fn general(ui: &mut egui::Ui, s: &mut Settings, wanted: &mut Option<Folder>) {
     egui::Grid::new("general_grid").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
         ui.label("Frame cache");
         ui.add(egui::DragValue::new(&mut s.frame_cache_mb).range(64..=1_048_576).speed(16).suffix(" MB"))
-            .on_hover_text("Memory for played frames, so playing and scrubbing back is instant. Takes effect next time Arclight starts.");
+            .on_hover_text("Memory for played frames, so playing and scrubbing back is instant. Takes effect next time ArclightVFX starts.");
         ui.end_row();
         ui.label("MCP address");
         ui.add(egui::TextEdit::singleline(&mut s.mcp_http_addr).desired_width(200.0))
@@ -272,7 +272,7 @@ fn files(ui: &mut egui::Ui, p: &mut FilePrefs, wanted: &mut Option<Folder>) {
         ui.label("Autosave every");
         ui.horizontal(|ui| {
             ui.add(egui::DragValue::new(&mut p.autosave_minutes).range(0..=120).suffix(" min"))
-                .on_hover_text("Save a copy of unsaved changes this often: beside the project as <name>.autosave (the project itself is never overwritten), or in Arclight's state folder for a project not saved yet");
+                .on_hover_text("Save a copy of unsaved changes this often: beside the project as <name>.autosave (the project itself is never overwritten), or in ArclightVFX's state folder for a project not saved yet");
             ui.weak(if p.autosave_minutes == 0 { "(off)" } else { "" });
         });
         ui.end_row();

@@ -124,8 +124,7 @@ Phase 10: 0.10.x on branch `wip-ns-splats` (started 0.10.0).
 Ends in a **beta** (About box, release titles, GitHub pre-releases) for
 a public release once tested.
 
-- [ ] **The beta step** (when the user says phase 11 is tested), one
-      version: rename to **ArclightVFX Compositor** (user, 2026-10-30;
+- [x] **The beta step** (0.11.3): rename to **ArclightVFX Compositor** (user, 2026-10-30;
       short name **ArclightVFX**) and switch to beta.
       - Renamed: window title, About box (with "Beta"), Help window title,
         the crash dialog's text, the Linux launcher entry (`Name=`, both
@@ -146,6 +145,8 @@ a public release once tested.
 
 - [x] Crash reporting (0.11.1)
 - [x] Plugin process isolation (0.11.2)
+- [ ] A new logo: `assets/arclight.png` and the full logo still draw the
+      word ARCLIGHT (the About box, icons 128 px and up)
 - [ ] Long node errors (a plugin crash with its report path) are clipped
       on one line in the viewer: wrap them
 

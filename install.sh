@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Add Arclight to the app launcher (Omarchy's, or any freedesktop desktop's)
+# Add ArclightVFX to the app launcher (Omarchy's, or any freedesktop desktop's)
 # for this user: a desktop entry and icons under ~/.local/share. The entry
 # runs the release build in this checkout, so later `cargo build --release`
 # runs are picked up without reinstalling. Undo with ./uninstall.sh.
@@ -15,7 +15,7 @@ apps="$data/applications"
 icons="$data/icons/hicolor"
 
 if [[ "${1:-}" == "--build" || ! -x "$bin" ]]; then
-  echo "Building Arclight (release)…"
+  echo "Building ArclightVFX (release)…"
   cargo build --release --manifest-path "$repo/Cargo.toml" --bin arclight-gui
 fi
 
@@ -38,15 +38,16 @@ for size in 16 24 32 48 64 128 256; do
   fi
 done
 
-# The desktop entry. Its name matches the window's app id ("arclight").
+# The desktop entry. Its file name matches the window's app id ("arclight"),
+# so it replaces an older install's entry rather than adding a second.
 mkdir -p "$apps"
 cat > "$apps/arclight.desktop" <<DESKTOP
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=Arclight
+Name=ArclightVFX
 GenericName=Node-based Compositor
-Comment=Node-graph image and video compositor (in development)
+Comment=ArclightVFX Compositor: node-graph image and video compositing (beta)
 Exec="$bin" %f
 TryExec=$bin
 Path=$repo
@@ -64,4 +65,4 @@ command -v update-desktop-database >/dev/null && update-desktop-database -q "$ap
 command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q -f -t "$icons" || true
 
 echo "Installed: $apps/arclight.desktop"
-echo "Arclight is now in the app launcher. Remove it with ./uninstall.sh"
+echo "ArclightVFX is now in the app launcher. Remove it with ./uninstall.sh"

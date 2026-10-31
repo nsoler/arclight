@@ -30,20 +30,20 @@ jobs:
       - name: Check both architectures
         run: |
           for bin in arclight-gui arclight; do
-            archs="$(lipo -archs dist/Arclight.app/Contents/MacOS/$bin)"
+            archs="$(lipo -archs dist/ArclightVFX.app/Contents/MacOS/$bin)"
             echo "$bin: $archs"
             [[ "$archs" == *arm64* && "$archs" == *x86_64* ]]
           done
-          arch -arm64 dist/Arclight.app/Contents/MacOS/arclight --version
+          arch -arm64 dist/ArclightVFX.app/Contents/MacOS/arclight --version
           # The Intel half runs here only if the runner has Rosetta 2.
           if arch -x86_64 /usr/bin/true 2>/dev/null; then
-            arch -x86_64 dist/Arclight.app/Contents/MacOS/arclight --version
+            arch -x86_64 dist/ArclightVFX.app/Contents/MacOS/arclight --version
           else
             echo "No Rosetta on this runner: the Intel half was built and linked, not run."
           fi
       - uses: actions/upload-artifact@v4
         with:
-          name: Arclight-macOS-universal
+          name: ArclightVFX-macOS-universal
           path: dist/*.dmg
           if-no-files-found: error
       - name: Attach to the release
@@ -55,7 +55,7 @@ jobs:
           # wheels.yml may be creating the same release at the same moment:
           # a failed create is fine as long as the release then exists.
           gh release view "$tag" >/dev/null 2>&1 \
-            || gh release create "$tag" --title "Arclight ${tag#v} (alpha)" --latest --notes "See CHANGELOG.md." \
+            || gh release create "$tag" --title "ArclightVFX ${tag#v} (beta)" --latest --notes "See CHANGELOG.md." \
             || true
           gh release view "$tag" >/dev/null 2>&1 || { sleep 10; gh release view "$tag" >/dev/null; }
           gh release upload "$tag" dist/*.dmg --clobber

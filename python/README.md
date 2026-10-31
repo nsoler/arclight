@@ -1,8 +1,8 @@
 # arclt
 
-Python scripting for the [Arclight](https://github.com/nsoler/arclight)
-compositor: build, edit and render node graphs headless, or drive a running
-Arclight window (`arclt.attach()`).
+Python scripting for [ArclightVFX Compositor](https://github.com/nsoler/arclight)
+(beta): build, edit and render node graphs headless, or drive a running
+ArclightVFX window (`arclt.attach()`).
 
 ```python
 import arclt

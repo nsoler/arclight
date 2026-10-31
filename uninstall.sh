@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Remove Arclight from the app launcher: the desktop entry and icons that
+# Remove ArclightVFX from the app launcher: the desktop entry and icons that
 # install.sh added under ~/.local/share. The checkout and its build are left
 # alone.
 set -euo pipefail
@@ -21,7 +21,7 @@ command -v update-desktop-database >/dev/null && update-desktop-database -q "$ap
 command -v gtk-update-icon-cache >/dev/null && [[ -d "$icons" ]] && gtk-update-icon-cache -q -f -t "$icons" || true
 
 if (( removed )); then
-  echo "Removed Arclight from the app launcher ($removed files)."
+  echo "Removed ArclightVFX from the app launcher ($removed files)."
 else
-  echo "Arclight wasn't installed in the app launcher; nothing to remove."
+  echo "ArclightVFX wasn't installed in the app launcher; nothing to remove."
 fi

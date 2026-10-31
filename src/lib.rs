@@ -1,7 +1,14 @@
-//! Arclight — an original node-graph image compositor.
+//! ArclightVFX Compositor — an original node-graph image compositor.
 //!
 //! A float-linear, premultiplied-alpha compositing engine driven by a JSON node
 //! graph. This is original work, not derived from any existing product.
+
+/// The product's name, and its short form (windows, menus). Commands,
+/// crates, folders and environment variables keep "arclight".
+pub const PRODUCT: &str = "ArclightVFX Compositor";
+pub const SHORT_NAME: &str = "ArclightVFX";
+/// How far along it is, shown beside the version.
+pub const STAGE: &str = "beta";
 
 pub mod alembic;
 pub mod anim;

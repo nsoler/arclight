@@ -1,6 +1,6 @@
-# Arclight Help
+# ArclightVFX Help
 
-Arclight is a node-graph compositor: build a graph of nodes in the
+ArclightVFX Compositor (beta) is a node-graph compositor: build a graph of nodes in the
 **Node Graph** at the bottom, see the result in the **Viewer**, and edit the
 selected node in **Properties** on the right. On macOS, ⌘ stands for Ctrl.
 
@@ -219,7 +219,7 @@ size (**Fit to project**), and follow it when it changes:
 Switch the viewer to **3D** (or press **Tab** over it) to see the viewed
 node's scene: a Camera, Card, Cube, Sphere, Cylinder, Plane, Read Geo,
 light, Scene, Camera Tracker or Scanline Render. The controls follow Blender's
-defaults. Arclight's world is Y up, so the top view looks down −Y and the
+defaults. ArclightVFX's world is Y up, so the top view looks down −Y and the
 front view down −Z.
 
 ### Navigating
@@ -340,7 +340,7 @@ selected object.
   rest of the scene: in front of, behind or through cards and meshes by
   depth; holdouts cut them out, and **Holdout** on a Read Splat makes it
   cut out what's behind it. They light themselves (no shadows from
-  Arclight's lights). In the passes: depth and P where a capture becomes
+  ArclightVFX's lights). In the passes: depth and P where a capture becomes
   half opaque, N from the strongest splat (its flat side), motion, an id
   and a matte per Read Splat, and emission; no uv. An animated Read Splat
   motion-blurs. In the 3D
@@ -652,9 +652,9 @@ defaults**.
   ⌃ + middle-drag); **Shading** for projects without their own 3D view:
   Automatic (as last chosen, else Lit with lights), Solid or Lit.
 
-## If Arclight crashes
+## If ArclightVFX crashes
 
-Arclight saves a crash report on your computer
+ArclightVFX saves a crash report on your computer
 (`~/.local/state/arclight/crashes`; on macOS `~/Library/Logs/Arclight`)
 and saves your unsaved changes to the project's autosave. **Nothing is
 sent anywhere.** At the next start it asks: **View report**, **Copy** it,
@@ -662,7 +662,7 @@ or **Report on GitHub** to open a new issue filled in with it, for you to
 read and submit. File names in the report read `<path>` unless you tick
 **Include file names**. **Help ▸ Report a problem** opens the latest
 report any time. An internal error while rendering a frame, in the 3D
-view, sound or a script's call no longer stops that part of Arclight: it
+view, sound or a script's call no longer stops that part of ArclightVFX: it
 shows as that frame's error, and a report is saved.
 
 ## Undo

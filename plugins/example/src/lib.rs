@@ -1,4 +1,4 @@
-//! Example Arclight plugin implementing the C ABI in
+//! Example ArclightVFX plugin implementing the C ABI in
 //! `include/arclight_plugin.h`: a Vignette and an animated Film Grain op.
 //!
 //! Build with `cargo build --release -p arclight-plugin-example` and copy

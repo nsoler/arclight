@@ -57,22 +57,22 @@ pub fn list_instances() -> Vec<Instance> {
 pub fn find_instance(pid: Option<u32>) -> Result<Instance> {
     let all = list_instances();
     match pid {
-        Some(pid) => all.into_iter().find(|i| i.pid == pid).ok_or_else(|| anyhow!("no running Arclight GUI with pid {pid}")),
-        None => all.into_iter().last().ok_or_else(|| anyhow!("no running Arclight GUI found")),
+        Some(pid) => all.into_iter().find(|i| i.pid == pid).ok_or_else(|| anyhow!("no running ArclightVFX window with pid {pid}")),
+        None => all.into_iter().last().ok_or_else(|| anyhow!("no running ArclightVFX window found")),
     }
 }
 
 /// Call `tool` on a running instance.
 pub fn call(inst: &Instance, tool: &str, arguments: &Value) -> Result<Value> {
     let mut stream = UnixStream::connect(&inst.socket)
-        .with_context(|| format!("connecting to Arclight GUI (pid {})", inst.pid))?;
+        .with_context(|| format!("connecting to the ArclightVFX window (pid {})", inst.pid))?;
     let mut line = serde_json::to_string(&json!({"tool": tool, "arguments": arguments}))?;
     line.push('\n');
     stream.write_all(line.as_bytes())?;
     let mut reply = String::new();
     BufReader::new(stream).read_line(&mut reply)?;
     if reply.is_empty() {
-        bail!("Arclight GUI (pid {}) closed the connection", inst.pid);
+        bail!("the ArclightVFX window (pid {}) closed the connection", inst.pid);
     }
     let reply: Value = serde_json::from_str(&reply).context("bad reply from GUI")?;
     match reply.get("error").and_then(Value::as_str) {

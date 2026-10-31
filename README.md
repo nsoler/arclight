@@ -1,9 +1,11 @@
-# Arclight
+# ArclightVFX Compositor
 
-An original **node-graph image compositor** written in Rust. Arclight reads a
+**Beta.** An original **node-graph image compositor** written in Rust.
+ArclightVFX (formerly Arclight) reads a
 JSON description of an image-processing DAG, evaluates it, and writes the
 result. It ships as a command-line renderer (`arclight`) and an interactive desktop
-app (`arclight-gui`) with a node editor, viewer, player and properties panels.
+app (`arclight-gui`; the commands, the `arclt` Python module and the
+settings folders keep the name `arclight`) with a node editor, viewer, player and properties panels.
 
 This is original work — its design and code are not derived from any existing
 compositing product.
@@ -27,7 +29,7 @@ Python wheels). All releases: [Releases](https://github.com/nsoler/arclight/rele
 
 ## Build
 
-Version **0.9.48** (alpha); see `CHANGELOG.md`.
+Version **0.11.3** (beta); see `CHANGELOG.md`.
 
 ```sh
 cargo build --release      # -> target/release/arclight, target/release/arclight-gui
@@ -46,7 +48,7 @@ Image sequences and stills need nothing extra.
 ### App launcher (Linux)
 
 ```sh
-./install.sh            # add Arclight to the app launcher (builds first if needed)
+./install.sh            # add ArclightVFX to the app launcher (builds first if needed)
 ./install.sh --build    # rebuild the release binary, then install
 ./uninstall.sh          # take it out again
 ```
@@ -63,12 +65,12 @@ No root needed; nothing outside `~/.local/share` is touched.
 ### Linux release tarball
 
 ```sh
-packaging/linux/build-tarball.sh   # -> dist/arclight-<version>-linux-x86_64.tar.gz
+packaging/linux/build-tarball.sh   # -> dist/arclightvfx-<version>-linux-x86_64.tar.gz
 ```
 
 The tarball holds `bin/arclight-gui`, `bin/arclight`, the example clip and
 icons. Unpack it and run `./install.sh` to put the binaries in
-`~/.local/bin` and Arclight in the app launcher (`PREFIX=… ./install.sh`
+`~/.local/bin` and ArclightVFX in the app launcher (`PREFIX=… ./install.sh`
 for elsewhere; `./uninstall.sh` removes it), or run `bin/arclight-gui` in
 place. The binaries link only glibc (and, for the GUI, `libasound.so.2`), so they run on the distribution they
 were built on (Arch / Omarchy for the published releases) and newer ones.
@@ -79,7 +81,7 @@ Apple Silicon and Intel) and the Python wheels beside the tarball.
 
 ```sh
 brew install librsvg ffmpeg       # icon drawing for the build; video I/O at run time
-packaging/macos/build-dmg.sh      # -> dist/Arclight.app, dist/Arclight-<version>-universal.dmg
+packaging/macos/build-dmg.sh      # -> dist/ArclightVFX.app, dist/ArclightVFX-<version>-universal.dmg
 ARCHS=arm64 packaging/macos/build-dmg.sh   # one architecture only (-arm64.dmg; or x86_64)
 ```
 
@@ -95,11 +97,12 @@ Actions tab or by pushing a `v*` tag; the DMG is attached to the run and,
 for a tag, to that tag's GitHub release. The
 app is signed ad hoc, not with a Developer ID, so a downloaded copy opens
 the first time with right-click → **Open** (or `xattr -dr
-com.apple.quarantine /Applications/Arclight.app`). ffmpeg isn't bundled:
-Arclight finds Homebrew's (`/opt/homebrew/bin`) or MacPorts' even when
+com.apple.quarantine /Applications/ArclightVFX.app`). ffmpeg isn't bundled:
+ArclightVFX finds Homebrew's (`/opt/homebrew/bin`) or MacPorts' even when
 opened from the Finder (on Intel Macs Homebrew lives in `/usr/local/bin`,
 which is searched too). The CLI is inside the bundle at
-`Arclight.app/Contents/MacOS/arclight`. Plugins on macOS are
+`ArclightVFX.app/Contents/MacOS/arclight`. Upgrading from a release named
+Arclight, delete the old `Arclight.app` from Applications once. Plugins on macOS are
 `libarclight_plugin_*.dylib`.
 
 ## GUI
@@ -181,9 +184,9 @@ light shows handles on its cone's edge (drag to change the cone angle) and
 an area light on its edges' middles (drag to resize it about its middle);
 these key and undo the same way.
 
-**Help → Arclight Help…** (or **F1**) opens a scrollable help window with
+**Help → ArclightVFX Help…** (or **F1**) opens a scrollable help window with
 these controls and more (the text is `docs/help.md`, built into the app;
-edit it to change the help); **Help → About Arclight Compositor…** shows
+edit it to change the help); **Help → About ArclightVFX Compositor…** shows
 the version and when the binary was built (UTC; `build.rs` stamps it, or
 uses `SOURCE_DATE_EPOCH` when set).
 
@@ -445,7 +448,7 @@ JSON-RPC codes.
 Install: `pip install arclt-<version>-cp310-abi3-<platform>.whl` from a
 release (or `pip install ./python` to build it; needs Rust and maturin).
 The wheel is self-contained; video needs ffmpeg on `PATH`. For working on
-Arclight itself, `python/build.sh` builds the module in place:
+ArclightVFX itself, `python/build.sh` builds the module in place:
 
 ```sh
 python/build.sh
@@ -498,18 +501,18 @@ float RGBA buffers to process. Plugin ops show up in the node menus with
 generated property panels, can be keyframed, are cached, and can be scripted.
 `plugins/example` (Rust) adds **Vignette** and **Film Grain**.
 
-Files must be named `libarclight_plugin_*.so` or `*.arclight.so`. Arclight
+Files must be named `libarclight_plugin_*.so` or `*.arclight.so`. ArclightVFX
 searches `$ARCLIGHT_PLUGIN_PATH`, the `plugin_paths` setting,
 `~/.local/share/arclight/plugins`, `/usr/local/lib/arclight/plugins` and
 `/usr/lib/arclight/plugins`. Run `arclight plugins` to see the search path and
 what loaded, and `arclight ops [OP]` to see the op catalog.
 
 On Linux and macOS each plugin library runs in helper processes of
-Arclight's own (the same program, or the Python interpreter for `arclt`):
+ArclightVFX's own (the same program, or the Python interpreter for `arclt`):
 a plugin that crashes or hangs gives its node an error, with the crash
 report's path, and is restarted at its next render. Images travel in
 shared memory (about 30 ms for a 4K frame). `ARCLIGHT_PLUGINS_IN_PROCESS=1`
-loads plugins into Arclight itself (trusted plugins, a little faster);
+loads plugins into ArclightVFX itself (trusted plugins, a little faster);
 `ARCLIGHT_PLUGIN_TIMEOUT=<seconds>` (default 60) is how long a render may
 take. A plugin's ops are remembered, so a project still opens with them
 when its plugin can't start.

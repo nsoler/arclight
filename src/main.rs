@@ -1,4 +1,4 @@
-//! Arclight — an original node-graph image compositor.
+//! ArclightVFX Compositor — an original node-graph image compositor.
 //!
 //! A float-linear, premultiplied-alpha compositing engine driven by a JSON node
 //! graph. This is original work, not derived from any existing product.
@@ -15,7 +15,7 @@ use std::str::FromStr;
 #[command(
     name = "arclight",
     version,
-    about = "Node-graph image compositor (linear float, premultiplied alpha)"
+    about = "ArclightVFX Compositor (beta): a node-graph image compositor (linear float, premultiplied alpha)"
 )]
 struct Cli {
     #[command(subcommand)]

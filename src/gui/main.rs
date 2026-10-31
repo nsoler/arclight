@@ -1,5 +1,5 @@
-//! Arclight GUI — interactive node editor, viewer, player and properties for
-//! the Arclight compositing engine.
+//! ArclightVFX GUI — interactive node editor, viewer, player and properties for
+//! the ArclightVFX compositing engine.
 //!
 //! Layout: viewer + transport in the center, node graph along the bottom,
 //! properties on the right.
@@ -118,7 +118,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1600.0, 1000.0])
             .with_min_inner_size([900.0, 600.0])
-            .with_title("Arclight")
+            .with_title(arclight::SHORT_NAME)
             // Matches arclight.desktop (install.sh), so launchers and the
             // compositor pair the window with its icon.
             .with_app_id("arclight")
@@ -126,7 +126,7 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native(
-        "Arclight",
+        arclight::SHORT_NAME,
         options,
         Box::new(|cc| {
             if let Some(rs) = &cc.wgpu_render_state {
@@ -273,14 +273,14 @@ struct App {
     close_after_save: bool,
     /// Help > About is open.
     about: bool,
-    /// "Arclight closed unexpectedly" (at start after a crash) or Help ▸
+    /// "ArclightVFX closed unexpectedly" (at start after a crash) or Help ▸
     /// Report a problem.
     crash: crash_dialog::CrashDialog,
     /// The project as last registered for a crash's rescue (its revision).
     rescue_revision: Option<u64>,
     /// ARCLIGHT_CRASH_TEST's crash has had its chance (after a first frame).
     crash_tested: bool,
-    /// Help > Arclight Help (F1).
+    /// Help > ArclightVFX Help (F1).
     help: help::Help,
     /// File ▸ Project Settings…
     project_settings: project_settings::ProjectSettings,
@@ -551,7 +551,7 @@ impl App {
                 return Some(Ok(json!({ if tool == "undo" { "undone" } else { "redone" }: able })));
             }
             "load_graph" | "new_graph" if self.doc.dirty => {
-                return Some(Err(anyhow::anyhow!("the Arclight window has unsaved changes; save them first (save_graph)")));
+                return Some(Err(anyhow::anyhow!("the ArclightVFX window has unsaved changes; save them first (save_graph)")));
             }
             _ => {}
         }
@@ -567,14 +567,14 @@ impl App {
         let out = done.result.map_err(|e| anyhow::anyhow!(e))?;
         let edited = self.doc.revision != revision;
         match tool {
-            "load_graph" | "new_graph" if edited => anyhow::bail!("the graph was edited in the Arclight window while {tool} ran; call it again"),
+            "load_graph" | "new_graph" if edited => anyhow::bail!("the graph was edited in the ArclightVFX window while {tool} ran; call it again"),
             "load_graph" | "new_graph" => self.load(Doc::new(done.graph, done.path)),
             "save_graph" => {
                 self.doc.path = done.path;
                 // (What was saved is the graph as the call found it.)
                 self.doc.dirty = edited;
             }
-            _ if done.changed && edited => anyhow::bail!("the graph was edited in the Arclight window while {tool} ran; nothing changed, call it again"),
+            _ if done.changed && edited => anyhow::bail!("the graph was edited in the ArclightVFX window while {tool} ran; nothing changed, call it again"),
             _ if done.changed => {
                 self.doc.commit(false);
                 self.doc.graph = done.graph;
@@ -759,11 +759,11 @@ impl App {
             return;
         }
         self.file = match what {
-            FileFor::Open => dialogs::pick_project(what, dialogs::filter(dialogs::new(), "Arclight graph", &["json"])),
+            FileFor::Open => dialogs::pick_project(what, dialogs::filter(dialogs::new(), "ArclightVFX project", &["json"])),
             FileFor::SaveAs => {
                 // Named after its folder, if it has one.
                 let name = self.doc.graph.project.folder.as_deref().and_then(|f| f.file_name()).map_or("comp".into(), |n| n.to_string_lossy().into_owned());
-                dialogs::save_project(what, dialogs::filter(dialogs::new(), "Arclight graph", &["json"]).set_file_name(format!("{name}.json")))
+                dialogs::save_project(what, dialogs::filter(dialogs::new(), "ArclightVFX project", &["json"]).set_file_name(format!("{name}.json")))
             }
             FileFor::Import => dialogs::pick(what, dialogs::new()),
             FileFor::NewFolder => None,
@@ -1202,7 +1202,10 @@ impl App {
                 let uv = square_uv(uv, logo.size_vec2());
                 ui.add(egui::Image::new(&logo).uv(uv).maintain_aspect_ratio(false).fit_to_exact_size(egui::vec2(side, side)));
                 ui.add_space(8.0);
-                ui.heading("Arclight Compositor");
+                ui.heading(arclight::PRODUCT);
+                ui.add_space(4.0);
+                // Beta: a badge under the name.
+                ui.label(egui::RichText::new(" BETA ").strong().small().color(egui::Color32::WHITE).background_color(egui::Color32::from_rgb(200, 120, 40)));
                 ui.add_space(6.0);
                 let row = |ui: &mut egui::Ui, name: &str, value: &str| {
                     let style = ui.style().clone();
@@ -1212,7 +1215,7 @@ impl App {
                     ui.label(job);
                 };
                 row(ui, "Created by:", "Nelson Soler");
-                row(ui, "Version:", concat!(env!("CARGO_PKG_VERSION"), " (alpha)"));
+                row(ui, "Version:", &format!("{} ({})", env!("CARGO_PKG_VERSION"), arclight::STAGE));
                 row(ui, "Built:", env!("ARCLIGHT_BUILD_TIME"));
                 ui.add_space(12.0);
                 if ui.add(egui::Button::new("OK").min_size(egui::vec2(80.0, 0.0))).clicked() {
@@ -1232,7 +1235,7 @@ impl App {
             .as_ref()
             .and_then(|p| p.file_name())
             .map_or("Untitled".to_string(), |n| n.to_string_lossy().into_owned());
-        let title = format!("{}{name} — Arclight", if self.doc.dirty { "• " } else { "" });
+        let title = format!("{}{name} — {}", if self.doc.dirty { "• " } else { "" }, arclight::SHORT_NAME);
         if title != self.title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.title = title;
@@ -1381,20 +1384,20 @@ impl App {
                 ui.add_enabled(lit, egui::Checkbox::new(&mut vp.view.shadows, "Lit shadows")).on_hover_text("With Lit shading, show the lights' shadows (once the view stops moving)");
             });
             ui.menu_button("Help", |ui| {
-                if ui.add(egui::Button::new("Arclight Help…").shortcut_text("F1")).clicked() {
+                if ui.add(egui::Button::new(format!("{} Help…", arclight::SHORT_NAME)).shortcut_text("F1")).clicked() {
                     self.help.open = true;
                     ui.close();
                 }
-                if ui.button("Report a problem…").on_hover_text("The latest crash report, to copy or put in a GitHub issue (nothing is sent by Arclight)").clicked() {
+                if ui.button("Report a problem…").on_hover_text("The latest crash report, to copy or put in a GitHub issue (nothing is sent by ArclightVFX)").clicked() {
                     self.crash = crash_dialog::CrashDialog::for_help();
                     ui.close();
                 }
-                if ui.button("About Arclight Compositor…").clicked() {
+                if ui.button(format!("About {}…", arclight::PRODUCT)).clicked() {
                     self.about = true;
                     ui.close();
                 }
                 ui.separator();
-                ui.weak(concat!("Arclight ", env!("CARGO_PKG_VERSION"), " (alpha)"));
+                ui.weak(format!("{} {} ({})", arclight::SHORT_NAME, env!("CARGO_PKG_VERSION"), arclight::STAGE));
             });
             if let Some(s) = &self.status {
                 ui.separator();
@@ -1443,7 +1446,7 @@ static RESCUE: std::sync::Mutex<Option<(Option<PathBuf>, Arc<Graph>)>> = std::sy
 /// project's unsaved changes to its autosave, where the next start's
 /// autosave recovery finds them. Never waits for the project's lock.
 fn rescue() -> Result<PathBuf, String> {
-    let slot = RESCUE.try_lock().map_err(|_| "it was being changed when Arclight closed".to_string())?;
+    let slot = RESCUE.try_lock().map_err(|_| "it was being changed when ArclightVFX closed".to_string())?;
     let (path, graph) = slot.as_ref().ok_or("there were no unsaved changes")?;
     write_autosave(path.as_deref(), &graph.to_json_at(path.as_deref())).map_err(|e| e.to_string())
 }
@@ -1903,7 +1906,7 @@ mod tests {
         let mut other = app.doc.graph.clone();
         other.nodes.clear();
         let done = bridge_calls::Done { result: Ok(json!({})), graph: other, changed: true, path: None };
-        assert!(app.finish_call("delete_node", done, stale).unwrap_err().to_string().contains("edited in the Arclight window"));
+        assert!(app.finish_call("delete_node", done, stale).unwrap_err().to_string().contains("edited in the ArclightVFX window"));
         assert!(app.doc.node("emit").is_some());
         drop(app);
         std::fs::remove_dir_all(&dir).ok();

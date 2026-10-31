@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build Arclight for Linux (x86_64) and package it as a tarball:
-#   dist/arclight-<ver>-linux-x86_64.tar.gz
+# Build ArclightVFX for Linux (x86_64) and package it as a tarball:
+#   dist/arclightvfx-<ver>-linux-x86_64.tar.gz
 # containing
 #   bin/arclight-gui, bin/arclight            the GUI and the CLI / MCP server
 #   share/arclight/examples/media/testsrc.mp4 the starter project's clip
@@ -18,11 +18,11 @@ set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/Cargo.toml" | head -1)"
 arch="$(uname -m)"
-name="arclight-$version-linux-$arch"
+name="arclightvfx-$version-linux-$arch"
 dist="$repo/dist"
 stage="$dist/$name"
 
-echo "Building Arclight $version for Linux $arch..."
+echo "Building ArclightVFX $version for Linux $arch..."
 cargo build --release --manifest-path "$repo/Cargo.toml" --bin arclight-gui --bin arclight
 
 rm -rf "$stage" && mkdir -p "$stage/bin" "$stage/share/arclight/examples/media" "$stage/share/arclight/icons"

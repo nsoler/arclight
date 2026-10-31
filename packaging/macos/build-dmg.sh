@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build Arclight for macOS and package it as a DMG:
-#   dist/Arclight.app                 the app (GUI, plus the `arclight` CLI inside)
-#   dist/Arclight-<ver>-universal.dmg drag-to-Applications installer
+# Build ArclightVFX for macOS and package it as a DMG:
+#   dist/ArclightVFX.app                 the app (GUI, plus the `arclight` CLI inside)
+#   dist/ArclightVFX-<ver>-universal.dmg drag-to-Applications installer
 # The binaries are universal: built for Apple Silicon (arm64) and Intel
 # (x86_64) and joined with lipo, so one app runs natively on any Mac from
 # macOS 11. ARCHS="arm64" (or "x86_64") builds one architecture only, and
@@ -11,18 +11,18 @@
 #   packaging/macos/build-dmg.sh
 # Needs: Rust (rustup), Xcode command line tools, and rsvg-convert
 # (`brew install librsvg`) to draw the icon. ffmpeg isn't bundled: users
-# install it with `brew install ffmpeg`, and Arclight finds it there.
+# install it with `brew install ffmpeg`, and ArclightVFX finds it there.
 #
 # The app is signed ad hoc (Apple Silicon refuses to run unsigned code), not
 # with a Developer ID, so a downloaded copy opens with right-click → Open
-# the first time (or after `xattr -dr com.apple.quarantine Arclight.app`).
+# the first time (or after `xattr -dr com.apple.quarantine ArclightVFX.app`).
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 archs="${ARCHS:-arm64 x86_64}"
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/Cargo.toml" | head -1)"
 dist="$repo/dist"
-app="$dist/Arclight.app"
+app="$dist/ArclightVFX.app"
 
 [[ "$(uname -s)" == Darwin ]] || { echo "build-dmg.sh runs on macOS (it needs Apple's SDK, iconutil and hdiutil)." >&2; exit 1; }
 command -v rsvg-convert >/dev/null || { echo "rsvg-convert not found: brew install librsvg" >&2; exit 1; }
@@ -32,12 +32,12 @@ command -v rsvg-convert >/dev/null || { echo "rsvg-convert not found: brew insta
 export MACOSX_DEPLOYMENT_TARGET=11.0
 for arch in $archs; do
   if [[ "$arch" == arm64 ]]; then target=aarch64-apple-darwin; else target=x86_64-apple-darwin; fi
-  echo "Building Arclight ${version} for ${target}..."
+  echo "Building ArclightVFX ${version} for ${target}..."
   rustup target add "$target" >/dev/null 2>&1 || true
   cargo build --release --manifest-path "$repo/Cargo.toml" --target "$target" --bin arclight-gui --bin arclight
 done
 
-echo "Assembling Arclight.app..."
+echo "Assembling ArclightVFX.app..."
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/examples/media"
 # One binary per program, holding every architecture built.
@@ -74,8 +74,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>Arclight</string>
-  <key>CFBundleDisplayName</key><string>Arclight</string>
+  <key>CFBundleName</key><string>ArclightVFX</string>
+  <key>CFBundleDisplayName</key><string>ArclightVFX</string>
   <key>CFBundleIdentifier</key><string>com.github.nsoler.arclight</string>
   <key>CFBundleExecutable</key><string>arclight-gui</string>
   <key>CFBundleIconFile</key><string>arclight</string>
@@ -99,12 +99,12 @@ codesign --verify --strict "$app"
 
 echo "Making the DMG..."
 if [[ "$archs" == *" "* ]]; then flavor=universal; else flavor="$archs"; fi
-dmg="$dist/Arclight-$version-$flavor.dmg"
+dmg="$dist/ArclightVFX-$version-$flavor.dmg"
 stage="$dist/dmg"
 rm -rf "$stage" "$dmg" && mkdir -p "$stage"
 cp -R "$app" "$stage/"
 ln -s /Applications "$stage/Applications"
-hdiutil create -quiet -volname "Arclight $version" -srcfolder "$stage" -ov -format UDZO "$dmg"
+hdiutil create -quiet -volname "ArclightVFX $version" -srcfolder "$stage" -ov -format UDZO "$dmg"
 rm -rf "$stage"
 
 echo "Done:"

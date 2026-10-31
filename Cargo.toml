@@ -1,8 +1,8 @@
 [package]
 name = "arclight"
-version = "0.11.2"
+version = "0.11.3"
 edition = "2021"
-description = "Arclight — an original node-graph image compositor"
+description = "ArclightVFX Compositor — an original node-graph image compositor"
 license = "MIT OR Apache-2.0"
 # Packages (the arclt sdist bundles this crate) leave out the sample media
 # and captures in examples/: nothing compiled reads them.

@@ -677,6 +677,15 @@ done), `docs/help.md` (the in-app help) and
   24 px inner margin on every side; the logo is drawn trimmed to its
   opaque pixels (UV rect computed once; `App.logo` is `(TextureHandle,
   Rect)`), since the PNG's transparent border made the top gap larger.
+- **The product is ArclightVFX Compositor since 0.11.3 (beta)** (user,
+  2026-10-30: another product is called Arclight Compositor). Display
+  names, the Mac app (`ArclightVFX.app`), the DMG
+  (`ArclightVFX-<ver>-universal.dmg`) and the tarball
+  (`arclightvfx-<ver>-linux-x86_64.tar.gz`) use it; release titles are
+  "ArclightVFX <ver> (beta)", still marked Latest. Commands, crates,
+  `arclt`, settings folders, env vars, the MCP id, the bundle id and the
+  repo keep `arclight`. The logo art still draws the word ARCLIGHT (a new
+  logo is a design job).
 - **While Actions is billing-blocked (since v0.9.57; still so at
   v0.10.26):** the Supervisor tags `v<ver>` from `main`, builds the Linux
   tarball in a clean worktree (`env -u CARGO_TARGET_DIR

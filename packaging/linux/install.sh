@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install Arclight from this release for the current user: the binaries in
+# Install ArclightVFX from this release for the current user: the binaries in
 # ~/.local/bin, the example clip in ~/.local/share/arclight, and a desktop
 # entry and icons so it shows in the app launcher (Omarchy's, or any
 # freedesktop desktop's). No root needed. Undo with ./uninstall.sh.
@@ -35,14 +35,16 @@ for size in 16 24 32 48 64 128 256; do
   fi
 done
 
+# Named for the window's app id ("arclight"): it replaces an older
+# install's entry (named Arclight then) rather than adding a second.
 mkdir -p "$apps"
 cat > "$apps/arclight.desktop" <<DESKTOP
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=Arclight
+Name=ArclightVFX
 GenericName=Node-based Compositor
-Comment=Node-graph image and video compositor (in development)
+Comment=ArclightVFX Compositor: node-graph image and video compositing (beta)
 Exec="$prefix/bin/arclight-gui" %f
 TryExec=$prefix/bin/arclight-gui
 Icon=arclight
@@ -56,5 +58,5 @@ DESKTOP
 command -v update-desktop-database >/dev/null && update-desktop-database -q "$apps" || true
 command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q -f -t "$icons" || true
 
-echo "Installed Arclight in $prefix/bin and the app launcher."
+echo "Installed ArclightVFX in $prefix/bin and the app launcher."
 command -v ffmpeg >/dev/null || echo "Note: video needs ffmpeg (e.g. sudo pacman -S ffmpeg)."

@@ -1,4 +1,4 @@
-"""Scripting API for the Arclight compositor.
+"""Scripting API for ArclightVFX Compositor (beta).
 
 Build, edit and render node graphs from Python::
 
@@ -13,7 +13,7 @@ Build, edit and render node graphs from Python::
     arclt.save("/tmp/comp.json")
 
 By default calls act on a headless graph owned by this module. ``attach()``
-sends them to a running Arclight GUI instead, where the edits appear live
+sends them to a running ArclightVFX window instead, where the edits appear live
 and can be undone there.
 """
 
@@ -512,7 +512,7 @@ def plugins() -> list[dict]:
 
 
 def instances() -> list[dict]:
-    """Running Arclight GUIs that ``attach`` can connect to."""
+    """Running ArclightVFX windows that ``attach`` can connect to."""
     return _call("list_instances")
 
 

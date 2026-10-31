@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "arclight"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -343,14 +343,14 @@ dependencies = [
 
 [[package]]
 name = "arclight-plugin-example"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "arclt"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "arclight",
  "pyo3",

@@ -14,4 +14,4 @@ rm -rf "$prefix/share/arclight"
 
 command -v update-desktop-database >/dev/null && update-desktop-database -q "$data/applications" || true
 command -v gtk-update-icon-cache >/dev/null && [[ -d "$icons" ]] && gtk-update-icon-cache -q -f -t "$icons" || true
-echo "Removed Arclight."
+echo "Removed ArclightVFX."

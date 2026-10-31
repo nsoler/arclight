@@ -27,7 +27,7 @@ const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 
-const INSTRUCTIONS: &str = "Arclight is a node-graph compositor (linear float RGBA, premultiplied alpha). \
+const INSTRUCTIONS: &str = "ArclightVFX Compositor (beta) is a node-graph compositor (linear float RGBA, premultiplied alpha). \
 Build a graph with create_node/connect/set_params, inspect ops with list_ops/describe_op, and check \
 results with render_frame (preview=true returns a PNG). Merge composites input A over B. Params that \
 are numeric can be keyframed with set_key. Colors are straight linear RGBA.";
@@ -187,7 +187,7 @@ static TOOLS: &[Tool] = &[
         {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}}, "required": ["node"]}),
     tool!("get_view", "In an attached GUI: what the user is looking at: selected node, viewed node, current frame, playing.",
         {"type": "object", "properties": {}}),
-    tool!("list_instances", "Running Arclight GUI windows that tools can be sent to.", {"type": "object", "properties": {}}),
+    tool!("list_instances", "Running ArclightVFX windows that tools can be sent to.", {"type": "object", "properties": {}}),
     tool!("attach_instance", "Send all further tools to a running GUI (by pid, default the newest).",
         {"type": "object", "properties": {"pid": {"type": "integer"}}}),
     tool!("detach_instance", "Go back to the local headless graph.", {"type": "object", "properties": {}}),
@@ -477,7 +477,7 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
             })
             .collect::<Vec<_>>()),
         gui if is_gui_tool(gui) => {
-            return Err(anyhow!("'{gui}' needs a running Arclight window: call attach_instance first"))
+            return Err(anyhow!("'{gui}' needs a running ArclightVFX window: call attach_instance first"))
         }
         other => return Err(anyhow!("unknown tool '{other}'")),
     })
@@ -603,7 +603,7 @@ impl Server {
                 result(id, json!({
                     "protocolVersion": version,
                     "capabilities": {"tools": {"listChanged": false}},
-                    "serverInfo": {"name": "arclight", "title": "Arclight Compositor", "version": env!("CARGO_PKG_VERSION")},
+                    "serverInfo": {"name": "arclight", "title": "ArclightVFX Compositor", "version": env!("CARGO_PKG_VERSION")},
                     "instructions": INSTRUCTIONS,
                 }))
             }

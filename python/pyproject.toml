@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "arclt"
-description = "Scripting API for the Arclight compositor"
+description = "Scripting API for ArclightVFX Compositor"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 requires-python = ">=3.10"
