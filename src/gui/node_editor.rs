@@ -1397,7 +1397,7 @@ mod tests {
             };
             self.time += 1.0 / 60.0;
             let ed = &mut self.ed;
-            let _ = self.ctx.run_ui(raw, |ui| ed.ui(ui, doc, None));
+            self.ctx.run_ui(raw, |ui| ed.ui(ui, doc, None)).drop_without_applying_deltas();
         }
 
         fn button(pos: Pos2, pressed: bool) -> egui::Event {
@@ -1987,11 +1987,11 @@ mod tests {
                 ..Default::default()
             };
             let mut viewer_got_r = false;
-            let _ = ctx.run_ui(raw, |ui| {
+            ctx.run_ui(raw, |ui| {
                 let (top, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 300.0), Sense::hover());
                 ed.ui(ui, doc, None);
                 viewer_got_r = ui.rect_contains_pointer(top) && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::R));
-            });
+            }).drop_without_applying_deltas();
             viewer_got_r
         };
         let over_viewer = Pos2::new(600.0, 150.0);

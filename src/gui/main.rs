@@ -1786,7 +1786,7 @@ mod tests {
             let ctx = egui::Context::default();
             let mut taken = vec![];
             let event = egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
-            let _ = ctx.run_ui(egui::RawInput { events: vec![event], ..Default::default() }, |ui| taken = ui.input(|i| player_keys(i, over_3d)));
+            ctx.run_ui(egui::RawInput { events: vec![event], ..Default::default() }, |ui| taken = ui.input(|i| player_keys(i, over_3d))).drop_without_applying_deltas();
             taken
         };
         for k in [Key::Space, Key::L, Key::Delete, Key::Home, Key::F, Key::ArrowLeft] {
@@ -1808,10 +1808,10 @@ mod tests {
             let ctx = egui::Context::default();
             let (mut took, mut left) = (false, false);
             let raw = egui::RawInput { events: vec![tab(modifiers)], ..Default::default() };
-            let _ = ctx.run_ui(raw, |ui| {
+            ctx.run_ui(raw, |ui| {
                 took = ui.input_mut(|i| consume_plain(i, Key::Tab));
                 left = ui.input(|i| i.key_pressed(Key::Tab));
-            });
+            }).drop_without_applying_deltas();
             assert_eq!((took, left), (plain, !plain), "{modifiers:?}");
         }
     }

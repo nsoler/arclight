@@ -3128,11 +3128,11 @@ mod tests {
         let mut handled = Vec::new();
         for events in [pointer(start, None), pointer(start, Some(true)), pointer((start + end.to_vec2()) / 2.0, None), pointer(end, None), pointer(end, Some(false)), vec![]] {
             let raw = egui::RawInput { screen_rect: Some(rect()), events, ..Default::default() };
-            let _ = ctx.run_ui(raw, |ui| {
+            ctx.run_ui(raw, |ui| {
                 let resp = ui.interact(rect(), ui.scope_id().with("vp"), Sense::click_and_drag());
                 handled.push(v.light_handle_input(ui, &resp, &mut doc, 1, &p));
                 doc.commit(ui.input(|i| i.pointer.any_down()));
-            });
+            }).drop_without_applying_deltas();
         }
         // (egui knows the hover from the second frame.)
         assert_eq!(&handled[1..5], [true; 4], "hovered, pressed, dragged, released: {handled:?}");
@@ -3144,10 +3144,10 @@ mod tests {
         assert_eq!(doc.param("spot", "cone").as_f64(), Some(40.0), "one undo step back to where it was");
         // Not on a handle: nothing taken.
         let raw = egui::RawInput { screen_rect: Some(rect()), events: pointer(rect().left_top() + Vec2::splat(5.0), None), ..Default::default() };
-        let _ = ctx.run_ui(raw, |ui| {
+        ctx.run_ui(raw, |ui| {
             let resp = ui.interact(rect(), ui.scope_id().with("vp"), Sense::click_and_drag());
             assert!(!v.light_handle_input(ui, &resp, &mut doc, 1, &p));
-        });
+        }).drop_without_applying_deltas();
     }
 
     #[test]

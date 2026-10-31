@@ -1010,12 +1010,12 @@ mod tests {
             let mut focused = false;
             for events in [vec![], vec![tab.clone()], vec![]] {
                 let raw = egui::RawInput { events, ..Default::default() };
-                let _ = ctx.run_ui(raw, |ui| {
+                ctx.run_ui(raw, |ui| {
                     if call_off && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) {
                         ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
                     }
                     focused = ui.text_edit_singleline(&mut text).has_focus();
-                });
+                }).drop_without_applying_deltas();
             }
             assert_eq!(focused, !call_off, "call_off {call_off}");
         }

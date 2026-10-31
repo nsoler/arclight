@@ -15,6 +15,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.11.5 — 2026-10-30
+
+- Tests: the GUI tests no longer panic under egui 0.37 with "Dropped
+  TexturesDelta with 1 unapplied deltas"; each test run clears its
+  texture deltas (`FullOutput::drop_without_applying_deltas`). The app
+  itself was never affected.
+
 ## 0.11.4 — 2026-10-30
 
 - **3D view: gizmos and smoother rotation.** A selected object now

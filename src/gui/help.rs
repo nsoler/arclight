@@ -101,11 +101,11 @@ mod tests {
                 events: events.take().unwrap_or_default(),
                 ..Default::default()
             };
-            let _ = ctx.run_ui(raw, |ui| {
+            ctx.run_ui(raw, |ui| {
                 let ctx = ui.ctx().clone();
                 help.shortcuts(&ctx);
                 help.ui(&ctx);
-            });
+            }).drop_without_applying_deltas();
         }
         help.open
     }

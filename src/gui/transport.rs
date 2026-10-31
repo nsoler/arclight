@@ -430,10 +430,10 @@ mod tests {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 300.0))),
                 ..Default::default()
             };
-            let _ = ctx.run_ui(raw, |ui| {
+            ctx.run_ui(raw, |ui| {
                 panel = ui.max_rect();
                 t.ui(ui, project, &[], &[], &[]);
-            });
+            }).drop_without_applying_deltas();
         }
         (t.row, panel)
     }

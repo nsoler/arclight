@@ -1854,10 +1854,10 @@ mod tests {
         let tab = |modifiers| egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers };
         let mut frame = |buf: &mut String, events: Vec<egui::Event>| {
             let mut before = false;
-            let _ = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+            ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
                 before = ui.button("before").has_focus();
                 props.formula_field(ui, &doc, field, buf);
-            });
+            }).drop_without_applying_deltas();
             (before, ctx.memory(|m| m.has_focus(field)))
         };
         let focus = |ctx: &egui::Context| {

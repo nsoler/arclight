@@ -476,7 +476,7 @@ mod tests {
         sol.frame_rms = vec![0.1, 0.2, 0.4];
         sol.pnp_frames = vec![5];
         assert_eq!(frame_rows(&sol), vec![(1, Some(0.1), false), (2, Some(0.2), false), (3, None, false), (4, None, false), (5, Some(0.4), true)]);
-        let _ = egui::Context::default().run_ui(egui::RawInput::default(), |ui| frame_list(ui, "ct", &sol));
+        egui::Context::default().run_ui(egui::RawInput::default(), |ui| frame_list(ui, "ct", &sol)).drop_without_applying_deltas();
         // Solutions saved before PnP frames were kept still load.
         let mut v = sol.to_value();
         v.as_object_mut().unwrap().remove("pnp_frames");
