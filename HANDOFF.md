@@ -37,6 +37,15 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.30, P8 A: Project 3D (CPU)** (Dev2): `src/project3d.rs`
+  (Projection, the node, `held_inputs`), `src/render3d/project.rs`
+  (applied per hit after the texture, before lighting); `Scene.projections`
+  (targets by node; `tag` fills "" so Instance on Points hands prototypes'
+  projections to copies) and `Scene.rest` (frame-time positions for
+  blur); graph.rs frame hold renders held inputs in the Elsewhen
+  evaluator; shadow.rs `Projector` (occlusion map, every non-holdout
+  surface). Scenes with projections render on the CPU until part B.
+  ops.rs split from Dev1's Normals block by the Supervisor.
 - **0.13.29, P6 part 2: Curve to Mesh + Points on Curve** (Dev2):
   geo_curves.rs `even_points` / `evenly` shared with Resample; rings in
   each point's frame (across = up × N), pscale taper, seam column, caps

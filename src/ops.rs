@@ -16,6 +16,8 @@ pub mod geo_ops;
 pub mod geo_curves;
 #[path = "geo_particles.rs"]
 pub mod geo_particles;
+#[path = "project3d.rs"]
+pub mod project3d;
 use crate::geom;
 use crate::render3d;
 use crate::scene::{self, Scene};
@@ -98,7 +100,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "points_from_geo" | "grid_points" | "line_points" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "curve_to_mesh" | "points_on_curve" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "points_from_geo" | "grid_points" | "line_points" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "curve_to_mesh" | "points_on_curve" | "project_3d" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1411,6 +1413,33 @@ pub static OPS: &[OpInfo] = &[
                attributes: Instance on Points then sets copies along the curve, upright (fences, lampposts, rails).",
     },
     OpInfo {
+        name: "project_3d",
+        label: "Project 3D",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN, req("image"), Port { label: "projector", optional: false, kind: Kind::Scene }],
+        params: &[
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("mode", "Mode", ParamKind::Choice(&["replace", "over", "multiply"]), "replace"),
+            p!("mix", "Mix", ParamKind::Float { min: 0.0, max: 1.0 }, 1.0),
+            fixed!("crop", "Crop", ParamKind::Bool, true),
+            p!("edge", "Edge", ParamKind::Float { min: 0.0, max: 1000.0 }, 0.0),
+            fixed!("occlusion", "Occlusion", ParamKind::Bool, true),
+            fixed!("backfaces", "Backfaces", ParamKind::Bool, false),
+            fixed!("hold", "Frame hold", ParamKind::Bool, false),
+            fixed!("hold_frame", "Hold frame", ParamKind::Int { min: -1_000_000, max: 1_000_000 }, 1),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Projects its image from the projector's camera onto the scene's meshes, cards and instances (of Group's \
+               node, a name or a pattern with *, or all), as a slide projector would: per rendered pixel, so a sharp plate \
+               lands on a simple card (set extensions, cleanup patches over a plate). Replace puts the image's color in \
+               place of the surface's (lights then shade it as usual), Over lays it over by its alpha, Multiply tints. Crop \
+               keeps it inside the camera's frame, faded in over Edge pixels; Occlusion puts it only on what the projector \
+               sees first, nothing smearing through onto what's hidden; Backfaces puts it on surfaces facing away too. \
+               Frame hold takes the projector and the image at Hold frame (a patch painted on one frame stays put as the \
+               shot's camera moves). Several projections stack in order.",
+    },
+    OpInfo {
         name: "particles_to_points",
         label: "Particles to Points",
         category: Category::Scene,
@@ -2436,6 +2465,11 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
             Ok(scene_output(DEFAULT_FORMAT, geo_curves::curve_to_mesh(params, input_scene(inputs), profile)?))
         }
         "points_on_curve" => Ok(scene_output(DEFAULT_FORMAT, geo_curves::points_on_curve(params, input_scene(inputs))?)),
+        "project_3d" => {
+            let image = inputs.get(1).copied().flatten().filter(|i| i.scene.is_none());
+            let projector = inputs.get(2).copied().flatten().and_then(|i| i.scene.as_deref());
+            Ok(scene_output(DEFAULT_FORMAT, project3d::project_3d(params, input_scene(inputs), image, projector)?))
+        }
         "particles_to_points" => Ok(scene_output(DEFAULT_FORMAT, geo_particles::particles_to_points(params, input_scene(inputs))?)),
         "resample" => Ok(scene_output(DEFAULT_FORMAT, geo_curves::resample(params, input_scene(inputs))?)),
         "instance_on_points" => {

@@ -17,6 +17,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.30 — 2026-10-31
+
+- New **Project 3D** node: projects an image from a camera onto meshes,
+  cards and instances per rendered pixel (set extensions, patches over a
+  plate): replace, over or multiply, cropped to the camera's frame with a
+  soft edge, only onto what the projector sees first, not onto
+  backfaces, a frame hold for the projector and image, several stacking
+  in order; the projection rides on moving surfaces under motion blur.
+  It renders on the CPU for now (the GPU follows).
+
 ## 0.13.29 — 2026-10-31
 
 - New **Curve to Mesh** node: sweeps a circle, a ribbon or a profile curve

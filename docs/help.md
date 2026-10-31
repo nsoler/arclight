@@ -599,6 +599,18 @@ S** or the gizmos to place them (Attractor, Vortex and Bounce only
 move). In **2D**, while viewing a Particles 2D, select its Emitter to
 drag its position, size and angle in the viewer.
 
+- **Project 3D** projects an image from a camera onto your geometry, like
+  a slide projector: connect the plate (or a painted patch) and a camera,
+  and every mesh, card or instance it lands on shows it at full
+  sharpness, even a simple card standing in for a building. Rendered
+  through the same camera the plate comes back exactly; move the shot
+  camera and the parallax is real. Occlusion keeps it off what's hidden
+  from the projector, Crop and Edge keep it inside its frame with a soft
+  edge, and Frame hold pins the projector (and image) to one frame, so a
+  cleanup patch painted on frame 1040 stays put while the camera moves.
+  Stack several: a patch over the plate. Over and Multiply lay it over or
+  tint the surface instead of replacing its color; lights shade it as
+  usual.
 - **Scanline Render** takes any number of scenes or particle streams:
   connect to its last (empty) input and a new one appears. With a Scanline
   Render selected, a Particle Emitter added from the node browser goes

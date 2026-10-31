@@ -906,6 +906,14 @@ pub fn instance_on_points(params: &Value, mut scene: Scene, protos: Option<&Scen
     if !params["keep_points"].as_bool().unwrap_or(false) {
         scene.point_sets.retain(|g| !take(&g.node));
     }
+    // The prototypes' projections go on their copies (this node's, once
+    // tagged: the target "").
+    if !made.is_empty() {
+        let nodes: Vec<&str> = protos.meshes.iter().map(|m| m.node.as_str()).chain(protos.cards.iter().map(|c| c.node.as_str())).collect();
+        for p in protos.projections.iter().filter(|p| nodes.iter().any(|n| p.targets(n))) {
+            scene.projections.push(crate::ops::project3d::Projection { targets: vec![String::new()], ..p.clone() });
+        }
+    }
     scene.instances.extend(made);
     Ok(scene)
 }

@@ -45,6 +45,13 @@ pub struct Scene {
     pub point_sets: Vec<PointSet>,
     pub instances: Vec<Instances>,
     pub curves: Vec<Curves>,
+    /// Images projected onto surfaces (Project 3D's), in the order they
+    /// go on.
+    pub projections: Vec<crate::ops::project3d::Projection>,
+    /// The scene at the frame itself, where this one is it at another
+    /// time ([`Scene::at_time`]) and has projections: they ride on the
+    /// surfaces, projected where those are then.
+    pub rest: Option<Arc<Scene>>,
 }
 
 /// A box or ball a node acts in: `world` takes the unit cube [-1, 1]³
@@ -154,6 +161,7 @@ impl Scene {
         self.point_sets.extend(other.point_sets.iter().cloned());
         self.instances.extend(other.instances.iter().cloned());
         self.curves.extend(other.curves.iter().cloned());
+        self.projections.extend(other.projections.iter().cloned());
         let mut other = other.clone();
         other.fill_nodes();
         self.camera_nodes.extend(other.camera_nodes);
@@ -181,6 +189,11 @@ impl Scene {
             if n.is_empty() {
                 *n = id.to_string();
             }
+        }
+        // (Instance on Points passes its prototypes' projections on to
+        // its own instances.)
+        for t in self.projections.iter_mut().flat_map(|p| p.targets.iter_mut()).filter(|t| t.is_empty()) {
+            *t = id.to_string();
         }
         // (A copy of the struct only: the splats themselves stay shared.)
         for s in self.splats.iter_mut().filter(|s| s.node.is_empty()) {
@@ -409,11 +422,15 @@ impl Scene {
     /// otherwise it stays as here. Particles move on along their
     /// velocities. Point sets and instances move each element to its
     /// match (see [`crate::geo::matched`]: by id, else by index); curves
-    /// move their points where both frames have as many. Everything else
+    /// move their points where both frames have as many. Projections stay
+    /// as here, this scene kept as [`rest`](Scene::rest). Everything else
     /// is as here.
     pub fn at_time(&self, frames: &[(i64, &Scene)], t: f64) -> Scene {
         let mut out = self.clone();
         out.particles = self.particles.iter().map(|s| s.shifted(t)).collect();
+        if !self.projections.is_empty() && self.rest.is_none() {
+            out.rest = Some(Arc::new(self.clone()));
+        }
         let k = t.floor();
         let w = t - k;
         let find = |k: i64| frames.iter().find(|f| f.0 == k).map(|f| f.1);

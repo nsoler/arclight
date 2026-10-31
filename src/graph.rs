@@ -683,6 +683,12 @@ impl Evaluator {
                     k = mix(k, &then);
                 }
             }
+            if let Some((ports, at)) = ops::project3d::held_inputs(&node.op, &params) {
+                let then = EvalContext { frame: at, write_outputs: false };
+                for d in held_deps(node, ports) {
+                    k = mix(k, &[Evaluator::key(graph, &d.1, &then)?]);
+                }
+            }
             keys.insert(id.as_str(), k);
         }
         Ok(keys[target])
@@ -755,6 +761,21 @@ impl Evaluator {
             if let Some((_, (_, _, more))) = &elsewhen {
                 key = mix(key, more);
             }
+            // Inputs held at another frame (Project 3D's Frame hold):
+            // rendered then, in an evaluator of their own, keyed on their
+            // keys then.
+            let mut held_at: Vec<(usize, Arc<Image>)> = Vec::new();
+            if let Some((ports, at)) = ops::project3d::held_inputs(&node.op, &params) {
+                let deps = held_deps(node, ports);
+                let then = &mut self.elsewhen.entry(id.clone()).or_default().eval;
+                let ctx_then = EvalContext { frame: at, write_outputs: false };
+                then.run(index, &Graph::order(index, deps.iter().map(|d| d.1.clone()))?, &ctx_then, project).map_err(|e| node_err(id, format!("at its hold frame {at}: {e}")))?;
+                for (port, dep) in deps {
+                    let (k, res) = then.cache[&dep].clone();
+                    key = mix(key, &[k]);
+                    held_at.push((port, read(&res, &dep, &mut self.gpu_failed)?));
+                }
+            }
             keys.insert(id.as_str(), key);
             if self.cache.get(id).is_some_and(|(k, _)| *k == key) {
                 continue;
@@ -770,7 +791,7 @@ impl Evaluator {
                 }
             }
             // On the GPU when it has this op and it pays (see `gpu::ops`).
-            if particle_nodes::info(&node.op).is_none() && others.is_empty() && elsewhen.is_none() {
+            if particle_nodes::info(&node.op).is_none() && others.is_empty() && elsewhen.is_none() && held_at.is_empty() {
                 if let Some(out) = self.try_gpu(node, &params, &empty) {
                     self.cache.insert(id.clone(), (key, out));
                     self.touch(id);
@@ -831,6 +852,9 @@ impl Evaluator {
                     }
                     inputs.push(Some(img));
                 }
+            }
+            for (port, img) in &held_at {
+                inputs[*port] = Some(img);
             }
             let out = match &others {
                 _ if particle.is_some() => {
@@ -1030,6 +1054,11 @@ fn linked_params(index: &HashMap<&str, &NodeSpec>, node: &NodeSpec, frame: i64, 
 /// all but its background (None there and where unconnected).
 fn other_inputs(node: &NodeSpec) -> Vec<Option<String>> {
     node.inputs.iter().enumerate().map(|(i, d)| (i != 2 && !d.is_empty()).then(|| d.clone())).collect()
+}
+
+/// The inputs connected at `ports` of `node`: (port, node id).
+fn held_deps(node: &NodeSpec, ports: &[usize]) -> Vec<(usize, String)> {
+    ports.iter().filter_map(|&p| node.inputs.get(p).filter(|d| !d.is_empty()).map(|d| (p, d.clone()))).collect()
 }
 
 /// `key` combined with `more` keys.

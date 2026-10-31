@@ -236,6 +236,49 @@ impl Map {
     }
 }
 
+/// A depth map from a projector (Project 3D's occlusion): what it sees
+/// first, every surface but holdouts drawing into it (it isn't a light:
+/// whether they cast shadows doesn't count); those less than opaque let
+/// it through in part, as they do light.
+pub(super) struct Projector(Map);
+
+/// The most texels across a projector's map.
+const PROJECTOR_RES: usize = 2048;
+
+impl Projector {
+    /// The map of `cam` projecting an image of `format`: square, as many
+    /// texels across as the image's longer side (at most
+    /// [`PROJECTOR_RES`]), spanning that side (a tall image's frame
+    /// widened to it).
+    pub fn draw(surfs: &[Surface], cam: &Camera, format: Size) -> Projector {
+        let (w, long) = (format.width.max(1) as f64, format.width.max(format.height).max(1));
+        let res = long.min(PROJECTOR_RES);
+        let wider = long as f64 / w;
+        let cam = Camera { film_back: [cam.film_back[0] * wider, cam.film_back[1]], ortho: cam.ortho * wider, ..cam.clone() };
+        let size = Size { width: res, height: res };
+        let along = cam.is_ortho().then(|| -cam.world.fixed_view::<3, 1>(0, 2).into_owned().try_normalize(1e-300).unwrap_or_else(Vec3::z));
+        let texel = if cam.is_ortho() { cam.ortho / res as f64 } else { 1.0 / cam.focal_pixels(size) };
+        let all: Vec<Surface> = surfs.iter().map(|s| Surface { casts: true, ..s.view() }).collect();
+        Projector(Map::draw(&all, &View::new(cam, res, along, texel)))
+    }
+
+    /// How much of the projection reaches point `p` of a surface with
+    /// normal `n` (either way): 0 where something is nearer the projector,
+    /// looked up a little off the surface toward it.
+    pub fn seen(&self, p: &Vec3, n: &Vec3) -> f32 {
+        let m = &self.0;
+        let l = m.cam.to_eye(p);
+        let n = if n.dot(&l) < 0.0 { -n } else { *n };
+        let texel = m.texel_at(p);
+        let slant = (1.0 - n.dot(&l).clamp(0.0, 1.0).powi(2)).sqrt() / n.dot(&l).max(0.2);
+        let off = p + n * texel * 1.5 + l * texel * (1.0 + slant);
+        match m.place(&off) {
+            Some(q) => m.lit_at(q, m.key(&off) as f32),
+            None => 1.0,
+        }
+    }
+}
+
 /// The shadow maps of one point the light shines from.
 enum Source {
     One(Box<Map>),
