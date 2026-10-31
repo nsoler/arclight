@@ -435,7 +435,15 @@ selected object.
   knows its direction (tangent, and N), how far along it is (u) and an up
   direction that doesn't twist, so copies set along it with Instance on
   Points stand upright and face along the curve. **Resample** spaces a
-  curve's points evenly, by count or by length. With a Curve selected,
+  curve's points evenly, by count or by length. **Curve to Mesh** turns
+  curves into geometry: a tube (a circle profile: cables, pipes), a flat
+  ribbon (roads, strips), or any closed curve you wire in as the profile,
+  swept along each curve and kept upright by the curve's frame. A pscale
+  attribute along the curve tapers it; open tubes get caps; textures run
+  along and around it. **Points on Curve** sets points along curves (a
+  count, a spacing, or the curve's own points), each knowing the curve's
+  direction and up, so Instance on Points stands fence posts or lampposts
+  along a road, facing along it. With a Curve selected,
   its points show as squares in the 3D view. Click one to pick it
   (Shift-click for more), drag it, or press G, R or S to move, turn or
   scale the picked points about their middle (with nothing picked, G, R

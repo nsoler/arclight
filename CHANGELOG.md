@@ -17,6 +17,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.29 — 2026-10-31
+
+- New **Curve to Mesh** node: sweeps a circle, a ribbon or a profile curve
+  along curves into a mesh (tubes, cables, roads), square to the curve
+  and upright by its frame, tapered by pscale, with caps and texture
+  coordinates along and around.
+- New **Points on Curve** node: points along curves by count, spacing or
+  at their own points, each with the curve's direction, up and position
+  along it, so copies set on them face along the curve.
+
 ## 0.13.28 — 2026-10-31
 
 - Geometry: **Points from Geo** turns meshes into points (at their

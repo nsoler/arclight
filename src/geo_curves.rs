@@ -1,6 +1,7 @@
 //! Curve nodes (docs/geo-plan.md, P5): the Curve node, which makes a
 //! curve from its own control points (drawn and edited in the 3D view) or
-//! from a node's path over frames, and Resample. `ops.rs` registers them.
+//! from a node's path over frames; Resample, Points on Curve and Curve to
+//! Mesh. `ops.rs` registers them.
 //!
 //! A curve comes out as polylines ([`Curves`]) sampled from its control
 //! points, each point with its `tangent` (unit), its `u` (0 at the start, 1
@@ -245,76 +246,304 @@ pub fn path_frames(params: &Value) -> Vec<f64> {
     out
 }
 
+/// How many points a curve gets again: Count of them, or one every
+/// Length (see [`even_points`]).
+#[derive(Clone, Copy)]
+pub enum Spacing {
+    Count(usize),
+    Length(f64),
+}
+
+impl Spacing {
+    /// From a node's `by`, `count` and `length` params (`what`: the node,
+    /// for the error).
+    fn of(params: &Value, what: &str) -> Result<Spacing> {
+        if params["by"].as_str() == Some("length") {
+            let length = params["length"].as_f64().unwrap_or(0.1);
+            if length.is_nan() || length <= 0.0 {
+                bail!("{what}: Length must be more than 0");
+            }
+            Ok(Spacing::Length(length))
+        } else {
+            Ok(Spacing::Count(params["count"].as_u64().unwrap_or(20).max(2) as usize))
+        }
+    }
+}
+
+/// Curve `k` of `c` with points evenly along its length as `spacing` says
+/// (ends kept; a closed curve's last not repeating its first): the points
+/// and, for each, the two old points it's between and how far along.
+fn even_points(c: &Curves, k: usize, spacing: Spacing) -> (Vec<Vec3>, Vec<(usize, usize, f64)>) {
+    let closed = c.closed[k];
+    let first = c.starts[k] as usize;
+    let mut pts: Vec<Vec3> = c.curve(k).to_vec();
+    let mut index: Vec<usize> = (first..first + pts.len()).collect();
+    if closed && pts.len() > 2 {
+        pts.push(pts[0]);
+        index.push(first);
+    }
+    // Distance along it at each point.
+    let mut along = vec![0.0];
+    for w in pts.windows(2) {
+        along.push(along.last().unwrap() + (w[1] - w[0]).norm());
+    }
+    let total = *along.last().unwrap_or(&0.0);
+    let n = match spacing {
+        Spacing::Length(length) => ((total / length).round() as usize).max(1) + 1,
+        Spacing::Count(count) => count,
+    };
+    // (A closed curve's last point would be its first again.)
+    let n_out = if closed && pts.len() > 3 { n.max(4) - 1 } else { n };
+    let mut new_pts = Vec::with_capacity(n_out);
+    let mut at: Vec<(usize, usize, f64)> = Vec::with_capacity(n_out);
+    for j in 0..n_out {
+        let d = if n > 1 { total * j as f64 / (n - 1) as f64 } else { 0.0 };
+        let s = along.partition_point(|&a| a <= d).clamp(1, along.len().max(2) - 1) - 1;
+        let span = (along.get(s + 1).copied().unwrap_or(along[s]) - along[s]).max(1e-300);
+        let w = ((d - along[s]) / span).clamp(0.0, 1.0);
+        let s2 = (s + 1).min(pts.len() - 1);
+        new_pts.push(pts[s] + (pts[s2] - pts[s]) * w);
+        at.push((index[s], index[s2], w));
+    }
+    (new_pts, at)
+}
+
+/// The directions at each of `pts` (a curve, closed or not) from its
+/// neighbours, for [`frame_attrs`].
+fn chords(pts: &[Vec3], closed: bool) -> Vec<Vec3> {
+    let m = pts.len();
+    (0..m)
+        .map(|i| {
+            let prev = if i > 0 { pts[i - 1] } else if closed && m > 2 { pts[m - 1] } else { pts[i] };
+            let next = if i + 1 < m { pts[i + 1] } else if closed && m > 2 { pts[0] } else { pts[i] };
+            next - prev
+        })
+        .collect()
+}
+
+/// Curve `k` of `c` evenly again (see [`even_points`]): its points, and
+/// their attributes (`c`'s blended, then tangent, u, N and up worked out
+/// for them).
+fn evenly(c: &Curves, k: usize, spacing: Spacing) -> (Vec<Vec3>, Attrs) {
+    let (pts, at) = even_points(c, k, spacing);
+    let mut attrs = blended(&c.attrs, &at);
+    let fresh = frame_attrs(&pts, &chords(&pts, c.closed[k]), None);
+    for (name, v) in fresh.iter() {
+        let _ = attrs.set(name, v.clone(), pts.len());
+    }
+    (pts, attrs)
+}
+
 /// A Resample: each curve (of Group's) again with points evenly by length:
 /// Count of them, or one every Length; ends kept, attributes blended
 /// (whole numbers from the nearer), the frame worked out again.
 pub fn resample(params: &Value, mut scene: Scene) -> Result<Scene> {
     let group = params["group"].as_str().unwrap_or("").trim();
     let take = |node: &str| group.is_empty() || geo::glob(group, node);
-    let by_length = params["by"].as_str() == Some("length");
-    let count = params["count"].as_u64().unwrap_or(20).max(2) as usize;
-    let length = params["length"].as_f64().unwrap_or(0.1);
-    if by_length && (length.is_nan() || length <= 0.0) {
-        bail!("Resample: Length must be more than 0");
-    }
+    let spacing = Spacing::of(params, "Resample")?;
     for c in scene.curves.iter_mut().filter(|c| take(&c.node)) {
         let mut out = Curves { world: c.world, node: c.node.clone(), ..Curves::default() };
         let mut parts: Vec<(Attrs, usize)> = Vec::new();
-        let mut frames: Vec<(Vec<Vec3>, Vec<Vec3>)> = Vec::new();
         for k in 0..c.len() {
-            let closed = c.closed[k];
+            let (pts, attrs) = evenly(c, k, spacing);
+            parts.push((attrs, pts.len()));
+            out.push(&pts, c.closed[k]);
+        }
+        out.attrs = Attrs::concat(&parts.iter().map(|(a, n)| (a, *n)).collect::<Vec<_>>());
+        *c = out;
+    }
+    Ok(scene)
+}
+
+/// A Points on Curve: a point set for each set of curves (of Group's), its
+/// points along them (by count, spacing, or at the curves' own points),
+/// each with its curve's frame (tangent, N, up), u, which curve, and the
+/// curves' other attributes; the curves kept unless Keep curves is off.
+pub fn points_on_curve(params: &Value, mut scene: Scene) -> Result<Scene> {
+    let group = params["group"].as_str().unwrap_or("").trim();
+    let take = |node: &str| group.is_empty() || geo::glob(group, node);
+    let own = params["by"].as_str() == Some("points");
+    let spacing = if own { Spacing::Count(2) } else { Spacing::of(params, "Points on Curve")? };
+    let mut made = Vec::new();
+    for c in scene.curves.iter().filter(|c| take(&c.node)) {
+        let mut positions = Vec::new();
+        let mut parts: Vec<(Attrs, usize)> = Vec::new();
+        for k in 0..c.len() {
+            let (pts, mut attrs) = if own {
+                // Its own points, its own attributes (its frame, where it
+                // hasn't one, worked out).
+                let first = c.starts[k] as usize;
+                let pts = c.curve(k).to_vec();
+                let mut attrs = c.attrs.gathered(&(first as u32..(first + pts.len()) as u32).collect::<Vec<_>>());
+                if attrs.get("tangent").is_none() {
+                    for (name, v) in frame_attrs(&pts, &chords(&pts, c.closed[k]), None).iter() {
+                        let _ = attrs.set(name, v.clone(), pts.len());
+                    }
+                }
+                (pts, attrs)
+            } else {
+                evenly(c, k, spacing)
+            };
+            let _ = attrs.set("curve", Attr::Int(vec![k as i32; pts.len()]), pts.len());
+            parts.push((attrs, pts.len()));
+            positions.extend(pts);
+        }
+        let attrs = Attrs::concat(&parts.iter().map(|(a, n)| (a, *n)).collect::<Vec<_>>());
+        made.push(geo::PointSet { positions, attrs, world: c.world, node: String::new() });
+    }
+    if !params["keep_curves"].as_bool().unwrap_or(true) {
+        scene.curves.retain(|c| !take(&c.node));
+    }
+    scene.point_sets.extend(made);
+    Ok(scene)
+}
+
+/// A profile swept along curves: its points across and up (in the curve's
+/// frame), whether it's closed, and its 2D normals.
+struct Profile {
+    points: Vec<[f64; 2]>,
+    closed: bool,
+}
+
+impl Profile {
+    /// Its normals (in the profile's plane, out of a counter-clockwise
+    /// one), from its neighbours.
+    fn normals(&self) -> Vec<[f64; 2]> {
+        let m = self.points.len();
+        (0..m)
+            .map(|j| {
+                let prev = if j > 0 { self.points[j - 1] } else if self.closed { self.points[m - 1] } else { self.points[j] };
+                let next = if j + 1 < m { self.points[j + 1] } else if self.closed { self.points[0] } else { self.points[j] };
+                let t = [next[0] - prev[0], next[1] - prev[1]];
+                let l = t[0].hypot(t[1]);
+                if l > 1e-300 { [t[1] / l, -t[0] / l] } else { [0.0, 1.0] }
+            })
+            .collect()
+    }
+}
+
+/// A Curve to Mesh: each set of curves (of Group's) as a mesh: a profile
+/// (a circle, a ribbon, or the profile input's first curve) swept along
+/// each curve in its frame (see the node's help in ops.rs).
+pub fn curve_to_mesh(params: &Value, mut scene: Scene, profile_scene: Option<&Scene>) -> Result<Scene> {
+    use std::f64::consts::TAU;
+    let group = params["group"].as_str().unwrap_or("").trim();
+    let take = |node: &str| group.is_empty() || geo::glob(group, node);
+    let scale = params["scale"].as_f64().unwrap_or(1.0);
+    let profile = match params["profile"].as_str() {
+        Some("ribbon") => {
+            let w = params["width"].as_f64().unwrap_or(0.2) / 2.0;
+            Profile { points: vec![[-w, 0.0], [w, 0.0]], closed: false }
+        }
+        Some("curve") => {
+            let c = profile_scene.and_then(|s| s.curves.iter().find(|c| !c.is_empty())).ok_or_else(|| anyhow::anyhow!("Curve to Mesh: its profile is 'curve': connect a scene with a curve to its profile input"))?;
+            Profile { points: c.curve(0).iter().map(|p| [p.x, p.y]).collect(), closed: c.closed[0] }
+        }
+        _ => {
+            let r = params["radius"].as_f64().unwrap_or(0.1);
+            let sides = params["sides"].as_u64().unwrap_or(12).clamp(3, 1024) as usize;
+            Profile { points: (0..sides).map(|j| { let a = TAU * j as f64 / sides as f64; [r * a.cos(), r * a.sin()] }).collect(), closed: true }
+        }
+    };
+    if profile.points.len() < 2 {
+        bail!("Curve to Mesh: its profile needs two points at least");
+    }
+    let caps = params["caps"].as_bool().unwrap_or(true);
+    let pn = profile.normals();
+    // Around the profile: a closed one's first point again at the end (a
+    // seam, so the texture wraps).
+    let around: Vec<usize> = if profile.closed { (0..profile.points.len()).chain([0]).collect() } else { (0..profile.points.len()).collect() };
+    let ring = around.len();
+    let reach = profile.points.iter().map(|p| p[0].hypot(p[1])).fold(1e-12, f64::max);
+    let mut models = Vec::new();
+    for c in scene.curves.iter().filter(|c| take(&c.node)) {
+        let mut mesh = crate::mesh::Mesh::default();
+        // Each vertex's curve point (for the attributes).
+        let mut from: Vec<u32> = Vec::new();
+        let pscale = c.attrs.float(geo::PSCALE);
+        let us = c.attrs.float("u");
+        for k in 0..c.len() {
             let first = c.starts[k] as usize;
-            let mut pts: Vec<Vec3> = c.curve(k).to_vec();
-            let mut index: Vec<usize> = (first..first + pts.len()).collect();
-            if closed && pts.len() > 2 {
-                pts.push(pts[0]);
-                index.push(first);
+            let pts = c.curve(k).to_vec();
+            let m = pts.len();
+            if m < 2 {
+                continue;
             }
-            // Distance along it at each point.
+            let closed = c.closed[k] && m > 2;
+            // The frame: the curve's own (N, up), or worked out.
+            let v3 = |a: [f32; 3]| Vec3::new(a[0] as f64, a[1] as f64, a[2] as f64);
+            let (ns, ups): (Vec<Vec3>, Vec<Vec3>) = match (c.attrs.vec3(geo::N), c.attrs.vec3(geo::UP)) {
+                (Some(n), Some(u)) => ((first..first + m).map(|i| v3(n[i])).collect(), (first..first + m).map(|i| v3(u[i])).collect()),
+                _ => {
+                    let f = frame_attrs(&pts, &chords(&pts, closed), None);
+                    (f.vec3(geo::N).unwrap().iter().map(|a| v3(*a)).collect(), f.vec3(geo::UP).unwrap().iter().map(|a| v3(*a)).collect())
+                }
+            };
             let mut along = vec![0.0];
             for w in pts.windows(2) {
                 along.push(along.last().unwrap() + (w[1] - w[0]).norm());
             }
-            let total = *along.last().unwrap_or(&0.0);
-            let n = if by_length { ((total / length).round() as usize).max(1) + 1 } else { count };
-            // (A closed curve's last point would be its first again.)
-            let n_out = if closed && pts.len() > 3 { n.max(4) - 1 } else { n };
-            let mut new_pts = Vec::with_capacity(n_out);
-            // Each new point: the segment it's on and how far along.
-            let mut at: Vec<(usize, usize, f64)> = Vec::with_capacity(n_out);
-            for j in 0..n_out {
-                let d = if n > 1 { total * j as f64 / (n - 1) as f64 } else { 0.0 };
-                let s = along.partition_point(|&a| a <= d).clamp(1, along.len().max(2) - 1) - 1;
-                let span = (along.get(s + 1).copied().unwrap_or(along[s]) - along[s]).max(1e-300);
-                let w = ((d - along[s]) / span).clamp(0.0, 1.0);
-                let s2 = (s + 1).min(pts.len() - 1);
-                new_pts.push(pts[s] + (pts[s2] - pts[s]) * w);
-                at.push((index[s], index[s2], w));
+            let total = along.last().copied().unwrap_or(0.0).max(1e-300);
+            let rows = if closed { m + 1 } else { m };
+            let base = mesh.positions.len() as u32;
+            for row in 0..rows {
+                let i = row % m;
+                let (n, up) = (ns[i], ups[i]);
+                let across = up.cross(&n);
+                let s = scale * pscale.map_or(1.0, |p| p[first + i] as f64);
+                let u = if closed && row == m { 1.0 } else { us.map_or(along[i] / total, |u| u[first + i] as f64) };
+                for (j, &q) in around.iter().enumerate() {
+                    let [x, y] = profile.points[q];
+                    mesh.positions.push(pts[i] + (across * x + up * y) * s);
+                    mesh.normals.push((across * pn[q][0] + up * pn[q][1]).try_normalize(1e-12).unwrap_or(up));
+                    mesh.uvs.push([u, j as f64 / (ring - 1) as f64]);
+                    from.push((first + i) as u32);
+                }
             }
-            parts.push((blended(&c.attrs, &at), new_pts.len()));
-            let dirs: Vec<Vec3> = (0..new_pts.len())
-                .map(|i| {
-                    let m = new_pts.len();
-                    let prev = if i > 0 { new_pts[i - 1] } else if closed && m > 2 { new_pts[m - 1] } else { new_pts[i] };
-                    let next = if i + 1 < m { new_pts[i + 1] } else if closed && m > 2 { new_pts[0] } else { new_pts[i] };
-                    next - prev
-                })
-                .collect();
-            frames.push((new_pts.clone(), dirs));
-            out.push(&new_pts, closed);
-        }
-        let mut attrs = Attrs::concat(&parts.iter().map(|(a, n)| (a, *n)).collect::<Vec<_>>());
-        // The frame (and u) worked out again for the new points.
-        let fresh: Vec<(Attrs, usize)> = frames.iter().map(|(p, d)| (frame_attrs(p, d, None), p.len())).collect();
-        let fresh = Attrs::concat(&fresh.iter().map(|(a, n)| (a, *n)).collect::<Vec<_>>());
-        for name in ["tangent", geo::N, geo::UP, "u"] {
-            if let Some(v) = fresh.get(name) {
-                attrs.set(name, v.clone(), out.positions.len())?;
+            for row in 0..rows - 1 {
+                for j in 0..ring - 1 {
+                    let a = base + (row * ring + j) as u32;
+                    let (b, cc, d) = (a + 1, a + ring as u32, a + ring as u32 + 1);
+                    mesh.triangles.push([a, b, cc]);
+                    mesh.triangles.push([b, d, cc]);
+                }
+            }
+            // Caps on an open tube: a fan from the middle, its own vertices.
+            if caps && profile.closed && !closed {
+                for (row, out) in [(0usize, -1.0), (m - 1, 1.0)] {
+                    let (n, up) = (ns[row], ups[row]);
+                    let across = up.cross(&n);
+                    let s = scale * pscale.map_or(1.0, |p| p[first + row] as f64);
+                    let center = mesh.positions.len() as u32;
+                    mesh.positions.push(pts[row]);
+                    mesh.normals.push(n * out);
+                    mesh.uvs.push([0.5, 0.5]);
+                    from.push((first + row) as u32);
+                    let sides = profile.points.len();
+                    for &[x, y] in &profile.points {
+                        mesh.positions.push(pts[row] + (across * x + up * y) * s);
+                        mesh.normals.push(n * out);
+                        mesh.uvs.push([0.5 + x / (2.0 * reach), 0.5 + y / (2.0 * reach)]);
+                        from.push((first + row) as u32);
+                    }
+                    for j in 0..sides as u32 {
+                        let (r0, r1) = (center + 1 + j, center + 1 + (j + 1) % sides as u32);
+                        mesh.triangles.push(if out < 0.0 { [center, r1, r0] } else { [center, r0, r1] });
+                    }
+                }
             }
         }
-        out.attrs = attrs;
-        *c = out;
+        if mesh.triangles.is_empty() {
+            continue;
+        }
+        mesh.point_attrs = c.attrs.gathered(&from);
+        let model = crate::scene::Model { node: String::new(), ..crate::scene::Model::new(std::sync::Arc::new(mesh), c.world, crate::scene::material(params)) }.flags(params);
+        models.push(model);
     }
+    if !params["keep_curves"].as_bool().unwrap_or(false) {
+        scene.curves.retain(|c| !take(&c.node));
+    }
+    scene.meshes.extend(models);
     Ok(scene)
 }
 
@@ -430,5 +659,86 @@ mod tests {
         let r = &out.curves[0];
         assert_eq!((r.positions.len(), r.closed.clone()), (8, vec![true]));
         assert!((r.positions[2] - Vec3::x()).norm() < 1e-12 && (r.positions[1] - Vec3::new(0.5, 0.0, 0.0)).norm() < 1e-12);
+    }
+
+    /// A straight curve along +X, its frame's up +Y (as a Curve gives it).
+    fn line(closed: bool) -> Scene {
+        let pts = if closed {
+            json!([0, 0, 0, 0, 0, 0, 0, 0, 0,  4, 0, 0, 0, 0, 0, 0, 0, 0,  4, 0, 4, 0, 0, 0, 0, 0, 0,  0, 0, 4, 0, 0, 0, 0, 0, 0])
+        } else {
+            json!([0, 0, 0, 0, 0, 0, 0, 0, 0,  2, 0, 0, 0, 0, 0, 0, 0, 0,  4, 0, 0, 0, 0, 0, 0, 0, 0])
+        };
+        let mut s = curve(&json!({ "points": pts, "kind": "polyline", "closed": closed })).unwrap();
+        s.curves[0].node = "c".into();
+        s
+    }
+
+    #[test]
+    fn curves_become_tubes_and_ribbons() {
+        let mesh = |p: Value, s: Scene| curve_to_mesh(&p, s, None).unwrap().meshes.remove(0).mesh;
+        // An open tube, 8 sides: 3 rings of 9 (a seam), caps of 1 + 8 each.
+        let m = mesh(json!({ "radius": 0.5, "sides": 8 }), line(false));
+        assert_eq!(m.positions.len(), 3 * 9 + 2 * 9);
+        assert_eq!(m.triangles.len(), 2 * 8 * 2 + 2 * 8);
+        // The rings stand square to +X, 0.5 out; the profile's +x is
+        // across (up x N: +Y x +X = -Z), its +y up.
+        assert!(m.positions[..27].iter().all(|p| ((p.y * p.y + p.z * p.z).sqrt() - 0.5).abs() < 1e-9));
+        assert!((m.positions[0] - Vec3::new(0.0, 0.0, -0.5)).norm() < 1e-9 && (m.positions[2] - Vec3::new(0.0, 0.5, 0.0)).norm() < 1e-9);
+        // Faces out: each triangle's normal away from the axis.
+        for t in &m.triangles[..32] {
+            let [a, b, c] = t.map(|i| m.positions[i as usize]);
+            let n = (b - a).cross(&(c - a));
+            let mid = (a + b + c) / 3.0;
+            assert!(n.dot(&Vec3::new(0.0, mid.y, mid.z)) > 0.0, "outward");
+        }
+        // uv: u along 0..1, v around 0..1 with the seam.
+        assert_eq!((m.uvs[0], m.uvs[8], m.uvs[26]), ([0.0, 0.0], [0.0, 1.0], [1.0, 1.0]));
+        // The caps face out of the ends.
+        let ends: Vec<Vec3> = m.normals[27..].to_vec();
+        assert!(ends[..9].iter().all(|n| (n.x + 1.0).abs() < 1e-9) && ends[9..].iter().all(|n| (n.x - 1.0).abs() < 1e-9));
+        assert!(m.point_attrs.check(m.positions.len()).is_ok() && m.point_attrs.float("u").is_some(), "the curve's attributes on the rings");
+        // Closed: no caps, the last ring joined to the first (5 rings).
+        let m = mesh(json!({ "radius": 0.5, "sides": 8 }), line(true));
+        assert_eq!((m.positions.len(), m.triangles.len()), (5 * 9, 4 * 8 * 2));
+        // pscale tapers it; a ribbon is two wide, flat, facing up.
+        let mut tapered = line(false);
+        tapered.curves[0].attrs.set(geo::PSCALE, Attr::Float(vec![1.0, 0.5, 0.0]), 3).unwrap();
+        let m = mesh(json!({ "radius": 1.0, "sides": 4, "caps": false }), tapered);
+        assert!(m.positions[5..10].iter().all(|p| ((p.y * p.y + p.z * p.z).sqrt() - 0.5).abs() < 1e-9));
+        let m = mesh(json!({ "profile": "ribbon", "width": 2.0 }), line(false));
+        assert_eq!((m.positions.len(), m.triangles.len()), (6, 4));
+        assert!(m.positions.iter().all(|p| p.y.abs() < 1e-9 && (p.z.abs() - 1.0).abs() < 1e-9) && m.normals.iter().all(|n| (n.y.abs() - 1.0).abs() < 1e-9));
+        // A profile curve: a triangle's three corners each ring.
+        let mut tri = Curves::default();
+        tri.push(&[Vec3::new(0.0, 1.0, 0.0), Vec3::new(-1.0, -1.0, 0.0), Vec3::new(1.0, -1.0, 0.0)], true);
+        let profile = Scene { curves: vec![tri], ..Scene::default() };
+        let m = curve_to_mesh(&json!({ "profile": "curve", "caps": false }), line(false), Some(&profile)).unwrap().meshes.remove(0).mesh;
+        assert_eq!(m.positions.len(), 3 * 4);
+        assert!(curve_to_mesh(&json!({ "profile": "curve" }), line(false), None).is_err());
+        assert!(curve_to_mesh(&json!({ "keep_curves": true }), line(false), None).unwrap().curves.len() == 1);
+    }
+
+    #[test]
+    fn points_go_along_curves_with_their_frame() {
+        let run = |p: Value| points_on_curve(&p, line(false)).unwrap();
+        let out = run(json!({ "count": 5 }));
+        assert_eq!(out.curves.len(), 1, "kept");
+        let ps = &out.point_sets[0];
+        assert!(ps.validate().is_ok());
+        assert_eq!(ps.positions.iter().map(|p| p.x).collect::<Vec<_>>(), vec![0.0, 1.0, 2.0, 3.0, 4.0]);
+        assert!(ps.attrs.vec3(geo::N).unwrap().iter().all(|n| (n[0] - 1.0).abs() < 1e-6));
+        assert!(ps.attrs.vec3(geo::UP).unwrap().iter().all(|u| (u[1] - 1.0).abs() < 1e-6));
+        assert_eq!(ps.attrs.int("curve"), Some(&[0; 5][..]));
+        assert_eq!(ps.attrs.float("u").unwrap()[4], 1.0);
+        assert_eq!(run(json!({ "by": "length", "length": 0.5 })).point_sets[0].len(), 9);
+        let own = run(json!({ "by": "points", "keep_curves": false }));
+        assert!(own.curves.is_empty() && own.point_sets[0].len() == 3 && own.point_sets[0].attrs.vec3("tangent").is_some());
+        // Instance on Points then aims copies along the curve, upright.
+        let card = crate::scene::Card::new(std::sync::Arc::new(crate::image::Image::new(2, 2)), crate::geom::Mat4::identity(), [1.0, 1.0]);
+        let protos = Scene { cards: vec![card], ..Scene::default() };
+        let copies = crate::ops::geo_ops::instance_on_points(&json!({}), out, Some(&protos), None).unwrap();
+        let w = copies.instances[0].worlds[2];
+        let dir = |v: Vec3| (w.fixed_view::<3, 3>(0, 0) * v).normalize();
+        assert!((dir(Vec3::z()) - Vec3::x()).norm() < 1e-6 && (dir(Vec3::y()) - Vec3::y()).norm() < 1e-6);
     }
 }

@@ -37,6 +37,11 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.29, P6 part 2: Curve to Mesh + Points on Curve** (Dev2):
+  geo_curves.rs `even_points` / `evenly` shared with Resample; rings in
+  each point's frame (across = up × N), pscale taper, seam column, caps
+  with flat normals, curve attrs onto rings; one Model per curve set.
+  Next (Dev2): P8 Project 3D (design approved; A CPU + node, B GPU).
 - **0.13.28, P2 rest: Points from Geo, Grid / Line Points** (Dev1):
   `src/geo_mesh.rs` (`weld()` by position, for the mesh ops too). ops.rs
   split from Dev2's Curve to Mesh block by the Supervisor. Next (Dev1):

@@ -98,7 +98,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "points_from_geo" | "grid_points" | "line_points" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "points_from_geo" | "grid_points" | "line_points" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "curve_to_mesh" | "points_on_curve" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1359,6 +1359,58 @@ pub static OPS: &[OpInfo] = &[
                (what Instance on Points turns copies by).",
     },
     OpInfo {
+        name: "curve_to_mesh",
+        label: "Curve to Mesh",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN, scene_in("profile")],
+        params: &[
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("profile", "Profile", ParamKind::Choice(&["circle", "ribbon", "curve"]), "circle"),
+            p!("radius", "Radius", ParamKind::Float { min: 0.0, max: 1000.0 }, 0.1),
+            fixed!("sides", "Sides", ParamKind::Int { min: 3, max: 1024 }, 12),
+            p!("width", "Width", ParamKind::Float { min: 0.0, max: 1000.0 }, 0.2),
+            p!("scale", "Scale", ParamKind::Float { min: 0.0, max: 1000.0 }, 1.0),
+            fixed!("caps", "Caps", ParamKind::Bool, true),
+            fixed!("keep_curves", "Keep curves", ParamKind::Bool, false),
+            SURFACE_COLOR,
+            SHADING,
+            SPECULAR,
+            ROUGHNESS,
+            EMISSION,
+            HOLDOUT,
+            CASTS_SHADOWS,
+            RECEIVES_SHADOWS,
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Makes each set of curves (of Group's node, a name or a pattern with *, or all) a mesh: a profile swept along \
+               them. Profile: a circle (Radius, Sides: tubes, pipes, cables), a ribbon (Width: roads, strips) or the first curve \
+               of the profile input (drawn counter-clockwise in its XY plane: x across, y up). At each point the profile \
+               stands square to the curve, its up the curve's up (the frame a Curve gives its points), sized by the \
+               point's pscale (where it has one) and Scale. Closed curves close up; open tubes get Caps. Texture \
+               coordinates run along the curve (u) and around the profile (v); the curves' point attributes go to the \
+               mesh's points. Color, Shading and the rest as for a primitive.",
+    },
+    OpInfo {
+        name: "points_on_curve",
+        label: "Points on Curve",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN],
+        params: &[
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("by", "By", ParamKind::Choice(&["count", "length", "points"]), "count"),
+            fixed!("count", "Count", ParamKind::Int { min: 2, max: 1_000_000 }, 10),
+            p!("length", "Length", ParamKind::Float { min: 0.0001, max: 10000.0 }, 1.0),
+            fixed!("keep_curves", "Keep curves", ParamKind::Bool, true),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Makes a point set along each set of curves (of Group's node, a name or a pattern with *, or all): Count \
+               points a curve evenly by length, one every Length, or at the curves' own points. Each point gets the \
+               curve's frame there (tangent, N along it, up), u (0 to 1 along it), curve (which one) and the curves' other \
+               attributes: Instance on Points then sets copies along the curve, upright (fences, lampposts, rails).",
+    },
+    OpInfo {
         name: "particles_to_points",
         label: "Particles to Points",
         category: Category::Scene,
@@ -2379,6 +2431,11 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "splat_crop" => splat_crop(params, inputs),
         "delete_geo" => Ok(scene_output(DEFAULT_FORMAT, geo_ops::delete(params, input_scene(inputs), ctx.frame as f64)?)),
         "curve" => Ok(scene_output(DEFAULT_FORMAT, geo_curves::curve(params)?)),
+        "curve_to_mesh" => {
+            let profile = inputs.get(1).copied().flatten().and_then(|i| i.scene.as_deref());
+            Ok(scene_output(DEFAULT_FORMAT, geo_curves::curve_to_mesh(params, input_scene(inputs), profile)?))
+        }
+        "points_on_curve" => Ok(scene_output(DEFAULT_FORMAT, geo_curves::points_on_curve(params, input_scene(inputs))?)),
         "particles_to_points" => Ok(scene_output(DEFAULT_FORMAT, geo_particles::particles_to_points(params, input_scene(inputs))?)),
         "resample" => Ok(scene_output(DEFAULT_FORMAT, geo_curves::resample(params, input_scene(inputs))?)),
         "instance_on_points" => {
