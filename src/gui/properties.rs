@@ -373,6 +373,7 @@ impl Properties {
                 "media_out" => self.media_out_extras(ui, doc, id),
                 "tracker" => self.tracker_extras(ui, doc, id),
                 "camera_tracker" => crate::camera_tracker::panel(ui, doc, id, &mut self.camera_jobs),
+                "fit_plane" => crate::camera_tracker::fit_plane_extras(ui, doc, id),
                 "corner_pin" => self.corner_pin_extras(ui, doc, id),
                 "camera" | "light_spot" | "light_area" => self.look_through_button(ui, id),
                 _ => {}

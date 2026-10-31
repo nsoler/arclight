@@ -123,11 +123,11 @@ static TOOLS: &[Tool] = &[
             "node": {"type": "string"},
             "linked": {"type": "boolean", "description": "Follow the solve live (default true), or key a copy (false)."}
         }, "required": ["node"]}),
-    tool!("place_on_points", "Place a node on a Camera Tracker's solved points (indices from camera_points): 'card' (default) lies on the plane through 3+ points (else faces the camera), at their middle, sized to them, showing 'input' if given; 'locator' is a point at their middle to wire into a Scene or link params to. Returns the new node's name.",
+    tool!("place_on_points", "Place a node on a Camera Tracker's solved points (indices from camera_points): 'card' (default) lies on the plane through 3+ points (else faces the camera), at their middle, sized to them, showing 'input' if given; 'locator' is a point at their middle to wire into a Scene or link params to; 'plane' (3+ points) is a Fit Plane through them, fed by the tracker's point cloud (Export's, else a new Point Cloud), to wire into a Scene (a ground plane or shadow catcher). Returns the new node's name.",
         {"type": "object", "properties": {
             "node": {"type": "string"},
             "points": {"type": "array", "items": {"type": "integer"}},
-            "what": {"type": "string", "enum": ["card", "locator"]},
+            "what": {"type": "string", "enum": ["card", "locator", "plane"]},
             "frame": {"type": "integer", "description": "The frame whose camera a card faces (default: the first solved)."},
             "input": {"type": "string", "description": "An image for the card."},
             "name": {"type": "string"}
@@ -1049,6 +1049,17 @@ mod tests {
         assert_eq!(cam["params"]["translate"]["keys"].as_array().unwrap().len(), 2);
         let r = call(&mut s, "render_frame", json!({"node": names["render"], "frame": 1}));
         assert_eq!(r["isError"], false, "{r}");
+        // A plane on four ground points: a Fit Plane on Export's point cloud,
+        // lying on the ground; two points aren't enough.
+        let plane = call(&mut s, "place_on_points", json!({"node": "ct", "points": [5, 6, 9, 10], "what": "plane"}))["structuredContent"]["node"].clone();
+        let p = call(&mut s, "describe_node", json!({"node": plane}))["structuredContent"].clone();
+        assert_eq!((p["op"].as_str(), p["inputs"][0]["source"].clone(), p["params"]["points"].as_str()), (Some("fit_plane"), names["points"].clone(), Some("5 6 9 10")));
+        let g = call(&mut s, "geometry", json!({"node": plane, "domain": "mesh_points"}))["structuredContent"].clone();
+        assert!(g["columns"]["P"].as_array().is_some_and(|v| v.len() == 4), "{g}");
+        let r = call(&mut s, "scene_objects", json!({"node": plane}))["structuredContent"].clone();
+        assert!(r["meshes"][0]["position"][1].as_f64().unwrap().abs() < 1e-9, "on the ground: {r}");
+        let r = call(&mut s, "place_on_points", json!({"node": "ct", "points": [5, 6], "what": "plane"}));
+        assert!(r["isError"] == true && r.to_string().contains("3 or more"), "{r}");
         // Tracking needs a moving camera: a still plate can't be solved.
         let r = call(&mut s, "track_camera", json!({"node": "ct"}));
         assert_eq!(r["isError"], true, "{r}");

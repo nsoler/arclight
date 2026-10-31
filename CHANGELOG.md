@@ -17,6 +17,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.12 — 2026-10-31
+
+- Geometry: a **Fit Plane** node: a plane fitted to a camera tracker's
+  points (least squares), facing the camera, sized to them (or fixed),
+  aligned to the world or to the points; a ground plane, wall, shadow
+  catcher or holdout with all of Plane's surface settings. The point
+  picker's **Fit plane** makes one from the selected points (on the
+  tracker's point cloud), **Use picked points** refits it, and scripts get
+  `place_on_points(what="plane")`.
+
 ## 0.13.11 — 2026-10-31
 
 - New **Attribute Set** node: sets up to four attributes on points, mesh

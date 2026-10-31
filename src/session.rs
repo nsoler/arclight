@@ -362,7 +362,25 @@ impl Session {
                 params.insert("translate".into(), json!([c.x, c.y, c.z]));
                 self.create_node("locator", name, &params, &[])
             }
-            other => bail!("unknown placement '{other}' (card or locator)"),
+            "plane" => {
+                if ids.len() < 3 {
+                    bail!("a plane needs 3 or more points ({} given)", ids.len());
+                }
+                // Fitted to the tracker's point cloud: Export's, else a new one.
+                let flat: Vec<f64> = sol.points.iter().flatten().copied().collect();
+                let cloud = match self.graph.nodes.iter().find(|n| n.op == "point_cloud" && n.params["points"] == json!(flat)) {
+                    Some(n) => n.id.clone(),
+                    None => {
+                        let mut p = Map::new();
+                        p.insert("points".into(), json!(flat));
+                        self.create_node("point_cloud", None, &p, &[])?
+                    }
+                };
+                let mut params = Map::new();
+                params.insert("points".into(), json!(crate::geo_fit::indices_text(ids)));
+                self.create_node("fit_plane", name, &params, &[cloud])
+            }
+            other => bail!("unknown placement '{other}' (card, locator or plane)"),
         }
     }
 

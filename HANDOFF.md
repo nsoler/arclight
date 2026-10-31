@@ -37,6 +37,14 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.12, P5: Fit Plane** (Dev1): `src/geo_fit.rs` (`fit` via
+  `camtrack::fit_plane`; align world / spread; size fit = extent +
+  margin, centered on the extent; faces the camera else up); node gathers
+  tracker points (Points "0 3 5"), else point sets, else mesh vertices,
+  builds Plane via `scene::primitive_model`. GUI: the point picker's Fit
+  plane, Properties' Use picked points (the picker publishes its
+  selection in a static in camera_tracker.rs). `place_on_points
+  what="plane"`. ops.rs lines split from Dev2's by the Supervisor.
 - **0.13.11, P3: Attribute Set** (Dev2): `attribute_set`, 4 rows (name,
   kind, expression) run in order, per element in parallel; @P writes
   positions through the placement's inverse (instances: world

@@ -94,7 +94,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "attribute_set" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_set" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1088,6 +1088,43 @@ pub static OPS: &[OpInfo] = &[
                everything. Cameras and lights stay where they are unless Cameras and lights is on, so moving the set \
                doesn't move the shot.",
     },
+    // Fit Plane (geo_fit.rs; Dev1).
+    OpInfo {
+        name: "fit_plane",
+        label: "Fit Plane",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN, opt("texture")],
+        params: &[
+            fixed!("points", "Points", ParamKind::Text, ""),
+            fixed!("align", "Align", ParamKind::Choice(&["world", "spread"]), "world"),
+            fixed!("size_mode", "Size", ParamKind::Choice(&["fit", "fixed"]), "fit"),
+            p!("margin", "Margin", ParamKind::Float { min: 0.0, max: 10.0 }, 0.2),
+            p!("size", "Fixed size", ParamKind::Vec2, [1.0, 1.0]),
+            p!("offset", "Offset", ParamKind::Float { min: -1000.0, max: 1000.0 }, 0.0),
+            fixed!("segments", "Segments", ParamKind::Vec2, [1.0, 1.0]),
+            fixed!("keep_input", "Keep input", ParamKind::Bool, false),
+            SURFACE_COLOR,
+            SHADING,
+            SPECULAR,
+            ROUGHNESS,
+            EMISSION,
+            HOLDOUT,
+            CASTS_SHADOWS,
+            RECEIVES_SHADOWS,
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "A plane fitted to points (least squares): a ground plane or a wall through a camera tracker's solved points, \
+               to catch shadows (Receives shadows), hold out (Holdout) or put things on. It fits the scene input's tracker \
+               points (a Point Cloud from the Camera Tracker's Export, say), the ones numbered in Points (\"0 3 5\", the \
+               solve's numbers; the point picker's Fit plane fills it in), or all of them; with no tracker points, its point \
+               sets' points, else its meshes' vertices. It faces the scene's camera if it has one, else up. Align world \
+               keeps its sides along the world's axes as near as the plane allows; spread lines it up with the points for \
+               the tightest fit. Size fit covers the points and Margin more (a share of their extent); fixed uses Fixed \
+               size. Offset moves it along its normal. The rest is the Plane's (texture input, color, shading, shadows). \
+               Outputs the plane alone (wire it into the Scene); Keep input passes the input scene on with it. Needs 3 or \
+               more points not in a line.",
+    },
     OpInfo {
         name: "scatter",
         label: "Scatter",
@@ -2044,6 +2081,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "read_splat" => read_splat(params),
         "splat_crop" => splat_crop(params, inputs),
         "delete_geo" => Ok(scene_output(DEFAULT_FORMAT, geo_ops::delete(params, input_scene(inputs), ctx.frame as f64)?)),
+        "fit_plane" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_fit::fit_plane(params, input_scene(inputs), inputs.get(1).copied().flatten())?)),
         "attribute_set" => Ok(scene_output(DEFAULT_FORMAT, geo_ops::attribute_set(params, input_scene(inputs), ctx.frame as f64)?)),
         "scatter" => {
             let image = inputs.get(1).copied().flatten().filter(|i| i.scene.is_none());

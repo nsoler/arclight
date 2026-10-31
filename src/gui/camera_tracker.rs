@@ -3,8 +3,8 @@
 //! Export) and the viewer's
 //! point picker (the solved points drawn through the frame's camera, over
 //! the plate or a Scanline Render of the solved scene; click, ⇧-click or
-//! drag a box to select, then place a Card or a Locator on them, or set
-//! the origin, ground and scale).
+//! drag a box to select, then place a Card or a Locator on them, fit a
+//! plane to them, or set the origin, ground and scale).
 
 use crate::doc::{Doc, NODE_H, NODE_W};
 use crate::overlay::Xf;
@@ -234,6 +234,53 @@ pub(crate) fn place_card(doc: &mut Doc, id: &str, sol: &Solution, ids: &[usize],
     Ok(card)
 }
 
+/// Add a Fit Plane through points `ids` of `sol` (Camera Tracker `id`'s),
+/// fed by the tracker's point cloud: the one Export made from this solve,
+/// else a new Point Cloud of it. Its name.
+pub(crate) fn place_plane(doc: &mut Doc, id: &str, sol: &Solution, ids: &[usize]) -> anyhow::Result<String> {
+    if ids.len() < 3 {
+        anyhow::bail!("a plane needs 3 or more points ({} picked)", ids.len());
+    }
+    let flat = json!(sol.points.iter().flatten().collect::<Vec<_>>());
+    let cloud = match doc.graph.nodes.iter().find(|n| n.op == "point_cloud" && n.params.get("points") == Some(&flat)) {
+        Some(n) => n.id.clone(),
+        None => {
+            let cloud = doc.add_node("point_cloud", spot_below(doc, id));
+            doc.set_param(&cloud, "points", flat);
+            cloud
+        }
+    };
+    let plane = doc.add_node("fit_plane", spot_below(doc, &cloud));
+    doc.set_param(&plane, "points", json!(arclight::geo_fit::indices_text(ids)));
+    doc.connect(&cloud, &plane, 0);
+    doc.selected = Some(plane.clone());
+    Ok(plane)
+}
+
+/// The points last picked in the viewer (the tracker and their numbers),
+/// for a Fit Plane's "Use picked points" (the picker belongs to the viewer,
+/// Properties to its panel).
+static PICKED: std::sync::Mutex<Option<(String, Vec<usize>)>> = std::sync::Mutex::new(None);
+
+pub(crate) fn picked_points() -> Option<(String, Vec<usize>)> {
+    PICKED.lock().ok()?.clone()
+}
+
+/// A Fit Plane's extra in Properties: refit to the points picked in the
+/// viewer.
+pub(crate) fn fit_plane_extras(ui: &mut egui::Ui, doc: &mut Doc, id: &str) {
+    let picked = picked_points().filter(|(_, p)| p.len() >= 3);
+    let tip = match &picked {
+        Some((tracker, p)) => format!("Fit to the {} points picked on {tracker} in the viewer", p.len()),
+        None => "Pick 3 or more of a Camera Tracker's points in the viewer first (select the tracker, then click or drag over its points)".to_string(),
+    };
+    if ui.add_enabled(picked.is_some(), egui::Button::new("Use picked points")).on_hover_text(tip).clicked() {
+        if let Some((_, p)) = picked {
+            doc.set_param(id, "points", json!(arclight::geo_fit::indices_text(&p)));
+        }
+    }
+}
+
 /// Add a Locator at the middle of points `ids`. Its name.
 pub(crate) fn place_locator(doc: &mut Doc, id: &str, sol: &Solution, ids: &[usize]) -> Option<String> {
     let c = sol.centroid(ids)?;
@@ -347,6 +394,9 @@ impl PointPicker {
             self.marquee = None;
         }
         self.actions(ui, resp.rect, doc, &id, &sol, frame);
+        if let Ok(mut p) = PICKED.lock() {
+            *p = (!self.selected.is_empty()).then(|| (id.clone(), self.selected.clone()));
+        }
         true
     }
 
@@ -397,6 +447,9 @@ impl PointPicker {
                     }
                     if ui.add_enabled(n > 0, egui::Button::new("Place locator")).on_hover_text("A point at their middle, to wire into a Scene or link params to").clicked() {
                         result = place_locator(doc, id, sol, &self.selected).map(|loc| Ok(format!("Added {loc}.")));
+                    }
+                    if ui.add_enabled(n >= 3, egui::Button::new("Fit plane")).on_hover_text("A plane fitted to the points (a Fit Plane on the tracker's point cloud): a ground plane or wall to catch shadows or hold out; wire it into the Scene").clicked() {
+                        result = Some(place_plane(doc, id, sol, &self.selected).map(|p| format!("Added {p}: wire it into the Scene (Receives shadows for a shadow catcher).")));
                     }
                 });
                 ui.horizontal(|ui| {
@@ -522,6 +575,29 @@ mod tests {
         assert!((normal - Vec3::y()).norm() < 1e-9, "{normal}");
         let loc = place_locator(&mut d, "ct", &sol, &[4]).unwrap();
         assert_eq!(d.node(&loc).unwrap().params["translate"], json!([0.0, -2.0, -9.0]));
+    }
+
+    /// Fit plane on picked ground points: a Fit Plane on a new point cloud
+    /// of the solve (the same cloud the next time), lying on the ground;
+    /// two points aren't enough.
+    #[test]
+    fn fit_plane_lays_a_plane_on_the_picked_points() {
+        let mut d = solved();
+        let sol = Solution::from_params(&d.node("ct").unwrap().params).unwrap();
+        let plane = place_plane(&mut d, "ct", &sol, &[0, 2, 6, 8]).unwrap();
+        let n = d.node(&plane).unwrap().clone();
+        assert_eq!((n.op.as_str(), n.params["points"].as_str(), d.selected.as_deref()), ("fit_plane", Some("0 2 6 8"), Some(plane.as_str())));
+        let cloud = n.inputs[0].clone();
+        assert_eq!(d.node(&cloud).unwrap().op, "point_cloud");
+        let mut eval = arclight::graph::Evaluator::new();
+        let out = eval.evaluate(&d.graph, &plane, &arclight::ops::EvalContext { frame: 1, write_outputs: false }).unwrap();
+        let m = &out.scene.as_ref().unwrap().meshes[0];
+        let up = arclight::geom::transform_point(&m.world, &Vec3::z()) - arclight::geom::transform_point(&m.world, &Vec3::zeros());
+        assert!((m.world[(1, 3)] + 2.0).abs() < 1e-9 && (up - Vec3::y()).norm() < 1e-9, "on the ground, facing up: {}", m.world);
+        let again = place_plane(&mut d, "ct", &sol, &[0, 1, 3]).unwrap();
+        assert_eq!(d.node(&again).unwrap().inputs[0], cloud, "the same cloud");
+        assert_eq!(d.graph.nodes.iter().filter(|n| n.op == "point_cloud").count(), 1);
+        assert!(place_plane(&mut d, "ct", &sol, &[0, 1]).unwrap_err().to_string().contains("3 or more"));
     }
 
     #[test]

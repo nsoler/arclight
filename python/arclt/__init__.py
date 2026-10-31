@@ -239,8 +239,9 @@ class Node:
     def place_on_points(self, points: list[int], what: str = "card", frame: int | None = None,
                         input: "Node | str | None" = None, name: str | None = None) -> "Node":
         """Place a ``"card"`` (on the points' plane, sized to them, showing
-        ``input``) or a ``"locator"`` (at their middle) on a solved Camera
-        Tracker's points."""
+        ``input``), a ``"locator"`` (at their middle) or a ``"plane"`` (a Fit
+        Plane through 3+ of them, on the tracker's point cloud) on a solved
+        Camera Tracker's points."""
         src = None if input is None else _name(input)
         return Node(_call("place_on_points", node=self._name, points=points, what=what, frame=frame, input=src, name=name)["node"])
 

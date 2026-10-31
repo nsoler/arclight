@@ -288,6 +288,11 @@ or rotate it with G / R or the gizmo to aim it.
   why.
 - Right-click a Camera Tracker's selected points: **Place Card here** or
   **Place locator**.
+- **Fit plane:** pick 3 or more ground (or wall) points over the plate,
+  then **Fit plane** in the panel: a Fit Plane through them, fed by the
+  tracker's point cloud. Wire it into the Scene; Receives shadows makes
+  it a shadow catcher, Holdout cuts the CG it hides. **Use picked
+  points** in its Properties refits it to a new selection.
 
 ### Moving, rotating, scaling
 
