@@ -56,7 +56,7 @@ pub(super) fn busy(camera: &str) -> String {
 
 /// [`busy`] with every light casting shadows (soft ones from the point
 /// light's radius) but the see-through card casting none (its layered
-/// shadow is the CPU's).
+/// shadow is [`layered`]'s to try).
 pub(super) fn busy_shadowed(camera: &str) -> String {
     busy(camera)
         .replace(r#""op": "light_directional", "params": {"#, r#""op": "light_directional", "params": {"shadows": true, "#)
@@ -64,6 +64,65 @@ pub(super) fn busy_shadowed(camera: &str) -> String {
         .replace(r#""op": "light_spot", "params": {"#, r#""op": "light_spot", "params": {"shadows": true, "shadow_softness": 2.0, "#)
         .replace(r#""op": "light_area", "params": {"#, r#""op": "light_area", "params": {"shadows": true, "#)
         .replace(r#""opacity": 0.4"#, r#""opacity": 0.4, "casts_shadows": false"#)
+}
+
+/// Shadows through casters that let light through, over a floor: a card
+/// at opacity 0.4, a cutout (a feathered ellipse: clear, opaque and part
+/// way between), three cards at 0.5 stacked, eight at 0.8 (deeper than a
+/// map's texel keeps: those pixels are the CPU's), an opaque cube among
+/// them; lit by a sun, a soft spot, a point with a radius (penumbra) and
+/// an area light, all casting. The texture `size` texels across, the
+/// floor `floor` units wide (the benchmark makes both bigger).
+pub(super) fn layered(size: usize, floor: f64) -> String {
+    let c = size / 2;
+    let card = |id: &str, tex: &str, at: [f64; 3], scale: f64, opacity: f64| {
+        format!(r#"{{"id": "{id}", "op": "card", "inputs": ["{tex}"], "params": {{"translate": [{}, {}, {}], "rotate": [-90, 0, 0], "scale": [{scale}, {scale}, 1], "opacity": {opacity}, "shading": "lambert"}}}},"#, at[0], at[1], at[2])
+    };
+    let mut nodes = format!(
+        r#"{{"id": "tex", "op": "checkerboard", "params": {{"width": {size}, "height": {size}, "size": {}}}}},
+        {{"id": "blob", "op": "ellipse", "params": {{"width": {size}, "height": {size}, "center": [{c}, {c}], "size": [{}, {}], "feather": {}}}}},
+        {{"id": "floor", "op": "card", "inputs": ["tex"], "params": {{"translate": [0, -1, -3], "rotate": [-90, 0, 0], "scale": [{floor}, {floor}, 1], "shading": "lambert"}}}},
+        {{"id": "cube", "op": "cube", "params": {{"translate": [-0.6, -0.6, -4.2], "scale": [0.5, 0.5, 0.5], "shading": "lambert"}}}},"#,
+        (size / 16).max(1),
+        size * 3 / 4,
+        size * 3 / 4,
+        size / 6
+    );
+    let mut ids = vec!["floor".to_string(), "cube".to_string()];
+    let mut add = |id: String, text: String| {
+        nodes.push_str(&text);
+        ids.push(id);
+    };
+    add("glass".into(), card("glass", "tex", [-2.0, 0.0, -2.5], 1.4, 0.4));
+    add("cutout".into(), card("cutout", "blob", [0.0, 0.2, -2.5], 1.6, 1.0));
+    for k in 0..3 {
+        add(format!("st{k}"), card(&format!("st{k}"), "tex", [2.0, -0.6 + 0.35 * k as f64, -2.5], 1.2, 0.5));
+    }
+    for k in 0..8 {
+        add(format!("deep{k}"), card(&format!("deep{k}"), "tex", [0.4, -0.75 + 0.12 * k as f64, -4.8], 1.6, 0.8));
+    }
+    let lights = [
+        r#"{"id": "amb", "op": "light_ambient", "params": {"intensity": 0.15}},"#,
+        r#"{"id": "sun", "op": "light_directional", "params": {"shadows": true, "rotate": [-65, 25, 0], "intensity": 0.6}},"#,
+        r#"{"id": "spot", "op": "light_spot", "params": {"shadows": true, "shadow_softness": 2.0, "translate": [-1, 4, 0], "rotate": [-70, -10, 0], "penumbra": 8.0, "falloff": 1.0}},"#,
+        r#"{"id": "pt", "op": "light_point", "params": {"shadows": true, "translate": [2.5, 3, -2], "radius": 0.3, "decay": 1.0}},"#,
+        r#"{"id": "area", "op": "light_area", "params": {"shadows": true, "translate": [0, 3.5, -3], "rotate": [-90, 0, 0], "shape": "ellipse", "intensity": 0.8}},"#,
+    ];
+    for l in lights {
+        let id = l.split('"').nth(3).unwrap().to_string();
+        add(id, l.to_string());
+    }
+    // Looking down at the floor.
+    const CAMERA: &str = r#"{"id": "cam", "op": "camera", "params": {"translate": [0, 3.2, 2.5], "rotate": [-38, 0, 0]}}"#;
+    let inputs: Vec<String> = ids.iter().map(|i| format!("\"{i}\"")).collect();
+    format!(
+        r#"{{"project": {{"format": {{"width": 320, "height": 180}}, "fps": 24.0, "first_frame": 1, "last_frame": 10}}, "nodes": [
+        {nodes}
+        {{"id": "scene", "op": "scene", "inputs": [{}]}},
+        {CAMERA}
+        ]}}"#,
+        inputs.join(", ")
+    )
 }
 
 /// `graph` (a [`busy`] scene) with its sphere moving across, frames 1 to
@@ -164,18 +223,21 @@ pub(super) fn allowed(name: &str) -> (f64, f64) {
 }
 
 /// The rows: the busy scene at 1080p (the picture and depth; every pass),
-/// orthographic, and as the 3D view shades it.
+/// orthographic, and as the 3D view shades it; shadows, through see-through
+/// casters too.
 pub(crate) fn rows(gpu: &Gpu) -> Vec<CheckRow> {
     let hd = Size { width: 1920, height: 1080 };
     let (scene, cam) = scene_of(&busy(PERSPECTIVE));
     let (flat, ortho) = scene_of(&busy(ORTHO));
     let (shaded, _) = scene_of(&busy_shadowed(PERSPECTIVE));
+    let (see, see_cam) = scene_of(&layered(256, 12.0));
     let all = Passes::from_names(Passes::NAMES);
     vec![
         row(gpu, "3D render, lit, AA 3×3", &scene, &cam, hd, 3, Passes::DEPTH, false),
         row(gpu, "3D render, every pass", &scene, &cam, hd, 3, all, false),
         row(gpu, "3D render, orthographic", &flat, &ortho, hd, 2, Passes::DEPTH, false),
         row(gpu, "3D render, shadows (4 lights)", &shaded, &cam, hd, 2, Passes::from_names(["depth", "shadow", "lights"]), false),
+        row(gpu, "3D render, see-through shadows", &see, &see_cam, hd, 2, Passes::from_names(["depth", "shadow"]), false),
         blur_row(Size { width: 960, height: 540 }),
         sprites_row(Size { width: 960, height: 540 }),
         splats_row(hd),

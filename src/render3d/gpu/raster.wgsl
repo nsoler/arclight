@@ -41,6 +41,12 @@ const SRC_WORDS: u32 = 8u;
 const MAP_WORDS: u32 = 28u;
 // Nothing in a shadow map's texel.
 const FAR_AWAY: f32 = 3.0e38;
+// The see-through casters a shadow map's texel gathers while it's drawn,
+// nearest first (it keeps the map's own number of them, fewer).
+const LAYERS_GATHERED: u32 = 8u;
+// A see-through caster's alpha from which it casts as an opaque one: f32
+// filtering of opaque texels can come out a rounding short of 1.
+const OPAQUE_ALPHA: f32 = 1.0 - 1.0 / 1048576.0;
 
 // Flags.
 const DIFFUSE: u32 = 1u;
@@ -60,6 +66,9 @@ const S_TWO_SIDED: u32 = 32u;
 const S_WRAP: u32 = 64u;
 const S_CASTS: u32 = 128u;
 const S_RECEIVES: u32 = 256u;
+// A caster that lets light through somewhere (see mod.rs's `sees_through`):
+// its fainter texels go into the map's layers.
+const S_SEE_THROUGH: u32 = 512u;
 
 // Light kinds.
 const K_AMBIENT: u32 = 0u;
@@ -369,11 +378,45 @@ fn map_place(m: u32, p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(half + f * c.x / depth, half - f * c.y / depth, 1.0);
 }
 
-// The nearest caster at texel (x, y) of map m.
+// A shadow lookup met a texel whose see-through casters it needed more of
+// than the map kept: the pixel goes to the CPU (as one that overflowed).
+var<private> layers_short: bool;
+
+// Map m's layers (see `shadow_map`): K a texel, each its distance and how
+// much light it lets through, nearest first, after a word saying how far
+// they're complete (FAR_AWAY: all there).
+fn map_layers(m: u32) -> u32 { return mu(m, 26u); }
+fn map_layer_at(m: u32, i: u32) -> u32 { return mu(m, 25u) + i * (2u * map_layers(m) + 1u); }
+
+// The nearest caster at texel (x, y) of map m, opaque or not.
 fn map_depth(m: u32, x: i32, y: i32) -> f32 {
     let res = i32(mu(m, 14u));
     if (x < 0 || y < 0 || x >= res || y >= res) { return FAR_AWAY; }
-    return maps[mu(m, 24u) + u32(y * res + x)];
+    let i = u32(y * res + x);
+    let d = maps[mu(m, 24u) + i];
+    if (map_layers(m) == 0u) { return d; }
+    return min(d, maps[map_layer_at(m, i) + 1u]);
+}
+
+// How lit a point `key` away is at texel (x, y) of map m: 0 behind an
+// opaque caster, else what the see-through ones nearer let through (as
+// shadow.rs's `through`).
+fn map_lit_texel(m: u32, x: i32, y: i32, key: f32) -> f32 {
+    let res = i32(mu(m, 14u));
+    if (x < 0 || y < 0 || x >= res || y >= res) { return 1.0; }
+    let i = u32(y * res + x);
+    if (maps[mu(m, 24u) + i] < key) { return 0.0; }
+    let k = map_layers(m);
+    if (k == 0u) { return 1.0; }
+    let at = map_layer_at(m, i);
+    if (maps[at] < key) { layers_short = true; }
+    var through = 1.0;
+    for (var j = 0u; j < k; j++) {
+        let l = at + 1u + 2u * j;
+        if (!(maps[l] < key)) { break; }
+        through *= maps[l + 1u];
+    }
+    return through;
 }
 
 // How lit (0 to 1) a point `key` away is at texel position q: the four
@@ -384,10 +427,10 @@ fn map_lit_at(m: u32, q: vec2<f32>, key: f32) -> f32 {
     let f = x - x0;
     let ix = i32(x0.x);
     let iy = i32(x0.y);
-    let l00 = select(1.0, 0.0, map_depth(m, ix, iy) < key);
-    let l10 = select(1.0, 0.0, map_depth(m, ix + 1, iy) < key);
-    let l01 = select(1.0, 0.0, map_depth(m, ix, iy + 1) < key);
-    let l11 = select(1.0, 0.0, map_depth(m, ix + 1, iy + 1) < key);
+    let l00 = map_lit_texel(m, ix, iy, key);
+    let l10 = map_lit_texel(m, ix + 1, iy, key);
+    let l01 = map_lit_texel(m, ix, iy + 1, key);
+    let l11 = map_lit_texel(m, ix + 1, iy + 1, key);
     return (l00 * (1.0 - f.x) + l10 * f.x) * (1.0 - f.y) + (l01 * (1.0 - f.x) + l11 * f.x) * f.y;
 }
 
@@ -1070,6 +1113,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
             out_extra[at] = out_extra[at] + sums.mattes[o];
         }
     }
+    if (layers_short) { overflowed = true; }
     var nearest = seen[0];
     if (overflowed) { nearest.x = nearest.x | OVERFLOW; }
     out_hits[px] = nearest;
@@ -1102,9 +1146,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
 // P.tables.x where its tiles start in `bins`).
 @group(1) @binding(0) var<storage, read_write> map_out: array<f32>;
 
-// Map P.cell.w's texel: the nearest caster's distance from the light, as
-// shadow.rs's `Map::draw` finds it (casters only, holdouts not; a texel's
-// middle; any texture alpha above 0 casts).
+// Map P.cell.w's texel: the nearest opaque caster's distance from the
+// light, and the see-through ones nearer (its layers, if the map has
+// them), as shadow.rs's `Map::draw` finds them (casters only, holdouts
+// not; a texel's middle; any texture alpha above 0 casts). Layers past
+// the map's K, or past those gathered, are left out, and the texel says
+// from how far: a lookup further than that sends its pixel to the CPU.
 @compute @workgroup_size(16, 16)
 fn shadow_map(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = P.size.x;
@@ -1117,6 +1164,14 @@ fn shadow_map(@builtin(global_invocation_id) gid: vec3<u32>) {
     let y = i32(gid.y);
     let q = vec2<f32>(f32(gid.x) + 0.5, f32(gid.y) + 0.5);
     var d = FAR_AWAY;
+    // The see-through casters nearer than d, nearest first (as many as
+    // gathered; a tie after the one before, as the CPU's sort keeps them):
+    // distance and alpha, and surface. Where some were left out, the
+    // nearest of those.
+    var lay: array<vec2<f32>, LAYERS_GATHERED>;
+    var lay_surf: array<u32, LAYERS_GATHERED>;
+    var count = 0u;
+    var cut = FAR_AWAY;
     for (var k = first; k < last; k++) {
         let t = words[k];
         if (x < ti(t, 14u) || x >= ti(t, 16u) || y < ti(t, 15u) || y >= ti(t, 17u)) { continue; }
@@ -1125,8 +1180,59 @@ fn shadow_map(@builtin(global_invocation_id) gid: vec3<u32>) {
         if ((f & S_CASTS) == 0u || (f & S_HOLDOUT) != 0u) { continue; }
         let c = cover(t, q);
         if (c.x < 0.0) { continue; }
-        if (surface_color(s, tri_uv(t, c.yzw), 0.0).a <= 0.0) { continue; }
-        d = min(d, map_key(m, tri_world(t, c.yzw)));
+        let a = surface_color(s, tri_uv(t, c.yzw), 0.0).a;
+        if (a <= 0.0) { continue; }
+        let key = map_key(m, tri_world(t, c.yzw));
+        if ((f & S_SEE_THROUGH) == 0u || a >= OPAQUE_ALPHA) {
+            d = min(d, key);
+            continue;
+        }
+        if (key >= d || key >= cut) { continue; }
+        var at = count;
+        while (at > 0u && lay[at - 1u].x > key) { at--; }
+        if (count == LAYERS_GATHERED) {
+            if (at == LAYERS_GATHERED) {
+                cut = key;
+                continue;
+            }
+            cut = min(cut, lay[LAYERS_GATHERED - 1u].x);
+            count--;
+        }
+        for (var i = count; i > at; i--) {
+            lay[i] = lay[i - 1u];
+            lay_surf[i] = lay_surf[i - 1u];
+        }
+        lay[at] = vec2<f32>(key, a);
+        lay_surf[at] = s;
+        count++;
     }
-    map_out[mu(m, 24u) + gid.y * res + gid.x] = d;
+    let i = gid.y * res + gid.x;
+    map_out[mu(m, 24u) + i] = d;
+    let kmax = map_layers(m);
+    if (kmax == 0u) { return; }
+    // Those nearer than d, one where two triangles of a surface meet (as
+    // the CPU's dedup: the same surface as the one kept before, as far
+    // within 1e-6), the map's K of them.
+    let base = map_layer_at(m, i);
+    var kept = 0u;
+    var prev = 0u;
+    var limit = cut;
+    for (var j = 0u; j < count; j++) {
+        let key = lay[j].x;
+        if (key >= d) { break; }
+        if (kept > 0u && lay_surf[j] == lay_surf[prev] && abs(lay[prev].x - key) <= 1e-6 * abs(lay[prev].x)) { continue; }
+        if (kept == kmax) {
+            limit = min(limit, key);
+            break;
+        }
+        map_out[base + 1u + 2u * kept] = key;
+        map_out[base + 2u + 2u * kept] = 1.0 - lay[j].y;
+        kept++;
+        prev = j;
+    }
+    for (var j = kept; j < kmax; j++) {
+        map_out[base + 1u + 2u * j] = FAR_AWAY;
+        map_out[base + 2u + 2u * j] = 1.0;
+    }
+    map_out[base] = limit;
 }

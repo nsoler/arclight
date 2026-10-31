@@ -15,6 +15,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.16 — 2026-10-31
+
+- GPU: **shadows cast by see-through casters** (cards below full opacity,
+  cutout textures with soft edges) now render on the GPU instead of
+  sending the whole frame to the CPU: each shadow map keeps up to 4
+  see-through layers a texel, and pixels needing more are rendered on the
+  CPU. On smaller GPUs the layers shrink to fit a memory budget (384 MB
+  discrete, 160 MB integrated), and a frame that still won't fit renders
+  on the CPU. A 4K scene with sun, spot and a 16-sample area light: 34 s
+  instead of 343 s.
+
 ## 0.12.15 — 2026-10-31
 
 - Long node errors (a plugin crash with its report path, a missing file's

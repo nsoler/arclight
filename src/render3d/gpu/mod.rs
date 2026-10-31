@@ -21,6 +21,12 @@
 //! 64; pixels that overflow even those are rendered on the CPU, which keeps
 //! them all, and put into the GPU's frame.
 //!
+//! Shadow casters that let light through (less than opaque, cutout
+//! textures) go into their maps' layers: up to [`MAX_LAYERS`] a texel,
+//! fewer where the maps would take more than [`layer_room`] (the CPU
+//! renders the frame where even one won't fit). A pixel whose shadow
+//! lookup needs more than a texel kept overflows the same way.
+//!
 //! [`draw_passes`] returns None, and the CPU renders, where this can't yet:
 //! shadows (G5), splats (G6), and more light nodes or objects than the
 //! shader keeps for the lights and mattes passes. A GPU error is recorded
@@ -234,22 +240,23 @@ fn prepare(gpu: &Gpu, surfs: &[Surface], lights: &[Light], cam: &Camera, format:
     if px * 64 > limit || px * layout.slots.stride * 4 > limit || textures.texels * 16 > limit {
         return None;
     }
-    // Shadow maps, as shadow.rs plans them; casters that let some light
-    // through (layered shadows) are the CPU's for now.
+    // Shadow maps, as shadow.rs plans them, with layers for casters that
+    // let some light through.
     let shadows = shadow::plan(surfs, lights);
-    if shadows.iter().any(Option::is_some) && casts_see_through(surfs) {
-        return None;
-    }
+    let see: Vec<bool> = if shadows.iter().any(Option::is_some) { surfs.iter().map(sees_through).collect() } else { vec![false; surfs.len()] };
     let (bins, levels_at) = binned(&tris, format.width, format.height, &textures.levels);
-    let mut tables = Tables { tris: tri_table(&tris), bins, levels_at, tables: surf_table(surfs, &textures.base, &layout), at: [0; 4], maps: Vec::new(), map_texels: 0 };
-    tables.add_lights(surfs, lights, &layout, &shadows, &textures.levels);
+    let mut tables = Tables { tris: tri_table(&tris), bins, levels_at, tables: surf_table(surfs, &textures.base, &layout, &see), at: [0; 4], maps: Vec::new(), map_words: 0 };
+    tables.add_lights(surfs, lights, &layout, &shadows, &textures.levels, &see);
     // Each splat set's object (+ 1) and whether it's a holdout.
     let splat_table = tables.tables.len();
     for (k, n) in splat_nodes.iter().enumerate() {
         let object = layout.nodes.iter().position(|o| o == n).filter(|_| !n.is_empty()).map_or(0, |o| o as u32 + 1);
         tables.tables.extend_from_slice(&[object, splats.is_some_and(|sp| sp.holdout(k)) as u32]);
     }
-    if tables.map_texels * 4 > limit {
+    // The maps within a binding; with layers, within a budget too (else
+    // the CPU renders the frame, as it does all of a light's layers).
+    let room = if tables.maps.iter().any(|m| m.layered) { layer_room(gpu).min(limit) } else { limit };
+    if !tables.add_layers(room) {
         return None;
     }
     Some(Prepared { layout, tris, textures, tables, lights: lights.len(), splat_table })
@@ -470,13 +477,14 @@ struct Tables {
     at: [usize; 4],
     /// Each shadow map to draw.
     maps: Vec<MapJob>,
-    /// The texels of all of them.
-    map_texels: usize,
+    /// The words of all of them (depths, then layers).
+    map_words: usize,
 }
 
 /// A shadow map to draw: its triangles (set up through its camera) and
 /// tiles as the shadow kernel reads them, how many texels across, and its
-/// camera's near and far.
+/// camera's near and far; its light, and whether it sees a see-through
+/// caster (then it has layers).
 struct MapJob {
     tris: Vec<u32>,
     bins: Vec<u32>,
@@ -484,6 +492,25 @@ struct MapJob {
     res: usize,
     near: f64,
     far: f64,
+    light: usize,
+    layered: bool,
+}
+
+/// The most see-through casters a shadow map's texel keeps (as many as
+/// fit the maps' room: see [`Tables::add_layers`]); a lookup needing more
+/// sends its pixel to the CPU.
+const MAX_LAYERS: usize = 4;
+
+/// The most memory the shadow maps may take where they have layers: some
+/// of a discrete GPU's, less of an integrated one's (which shares the
+/// system's), within the device's buffers.
+fn layer_room(gpu: &Gpu) -> usize {
+    #[cfg(test)]
+    if let Some(room) = tests::LAYER_ROOM.with(|r| r.get()) {
+        return room;
+    }
+    let mb: usize = if gpu.info.device_type == wgpu::DeviceType::DiscreteGpu { 384 } else { 160 };
+    (mb << 20).min(gpu.limits.max_buffer_size.min(usize::MAX as u64) as usize)
 }
 
 /// `tris` binned into a `width` × `height` frame's tiles, then the texture
@@ -499,13 +526,20 @@ impl Tables {
     /// The lights, their shadows, their shadow sources and maps after the
     /// surfaces, and the maps to draw (each set up on the CPU as shadow.rs
     /// sets up its own).
-    fn add_lights(&mut self, surfs: &[Surface], lights: &[Light], layout: &Layout, plan: &[Option<shadow::LightView>], levels: &[u32]) {
+    fn add_lights(&mut self, surfs: &[Surface], lights: &[Light], layout: &Layout, plan: &[Option<shadow::LightView>], levels: &[u32], see: &[bool]) {
         self.at[0] = self.tables.len();
         self.tables.extend(light_table(lights, layout));
-        let views: Vec<(usize, &shadow::View)> = plan.iter().flatten().flat_map(|l| &l.sources).flat_map(|src| match src {
-            shadow::SourceView::One(v) => vec![v],
-            shadow::SourceView::Cube { faces, .. } => faces.iter().collect(),
-        }).enumerate().collect();
+        // Each map, with its light.
+        let views: Vec<(usize, &shadow::View)> = plan
+            .iter()
+            .enumerate()
+            .filter_map(|(li, l)| l.as_ref().map(|l| (li, l)))
+            .flat_map(|(li, l)| l.sources.iter().map(move |src| (li, src)))
+            .flat_map(|(li, src)| match src {
+                shadow::SourceView::One(v) => vec![(li, v)],
+                shadow::SourceView::Cube { faces, .. } => faces.iter().map(|v| (li, v)).collect(),
+            })
+            .collect();
         let (mut shl, mut srcs, mut maps) = (Vec::new(), Vec::new(), Vec::new());
         let (mut first_src, mut first_map) = (0u32, 0u32);
         let f = |v: f64| (v as f32).to_bits();
@@ -550,6 +584,7 @@ impl Tables {
             (0..3).for_each(|k| w[20 + k] = f(v.origin[k]));
             w[23] = f(v.texel);
             w[24] = texels as u32;
+            // (25, 26: its layers, from `add_layers`.)
             maps.extend_from_slice(&w);
             texels += v.res * v.res;
         }
@@ -559,15 +594,47 @@ impl Tables {
         self.tables.extend(srcs);
         self.at[3] = self.tables.len();
         self.tables.extend(maps);
-        self.map_texels = texels;
+        self.map_words = texels;
         self.maps = views
             .par_iter()
-            .map(|(_, v)| {
+            .map(|&(light, v)| {
                 let tris = super::triangles(surfs, &v.cam, Size { width: v.res, height: v.res }, None);
+                let layered = tris.iter().any(|t| see[t.surf]);
                 let (bins, levels_at) = binned(&tris, v.res, v.res, levels);
-                MapJob { tris: tri_table(&tris), bins, levels_at, res: v.res, near: v.cam.near, far: v.cam.far }
+                MapJob { tris: tri_table(&tris), bins, levels_at, res: v.res, near: v.cam.near, far: v.cam.far, light, layered }
             })
             .collect();
+    }
+
+    /// Layers for the maps that see a see-through caster, after all the
+    /// depths: [`MAX_LAYERS`] a texel, fewer (2, then 1) for the light
+    /// whose layers take the most while the maps take more than `room`
+    /// bytes. False where they don't fit even so.
+    fn add_layers(&mut self, room: usize) -> bool {
+        let depths: usize = self.maps.iter().map(|m| m.res * m.res).sum();
+        let lights = self.maps.iter().map(|m| m.light + 1).max().unwrap_or(0);
+        let mut texels = vec![0usize; lights];
+        for m in self.maps.iter().filter(|m| m.layered) {
+            texels[m.light] += m.res * m.res;
+        }
+        let mut k: Vec<usize> = texels.iter().map(|&t| if t > 0 { MAX_LAYERS } else { 0 }).collect();
+        let words = |k: &[usize]| depths + texels.iter().zip(k).map(|(t, k)| if *k > 0 { t * (2 * k + 1) } else { 0 }).sum::<usize>();
+        while words(&k) * 4 > room {
+            let Some(l) = (0..lights).filter(|&l| k[l] > 1).max_by_key(|&l| texels[l] * (2 * k[l] + 1)) else { return false };
+            k[l] /= 2;
+        }
+        let mut at = depths;
+        for (i, m) in self.maps.iter().enumerate() {
+            let k = if m.layered { k[m.light] } else { 0 };
+            let w = self.at[3] + i * MAP_WORDS;
+            self.tables[w + 25] = at as u32;
+            self.tables[w + 26] = k as u32;
+            if k > 0 {
+                at += m.res * m.res * (2 * k + 1);
+            }
+        }
+        self.map_words = at;
+        true
     }
 
     /// The uniform words the shader starts with (see `Params` in
@@ -591,11 +658,11 @@ impl Tables {
     }
 }
 
-/// Whether any shadow caster among `surfs` lets light through somewhere:
-/// less than opaque, or a texture with a texel neither clear nor opaque or
-/// a data window short of its frame (its edges blend part way).
-fn casts_see_through(surfs: &[Surface]) -> bool {
-    surfs.iter().filter(|s| s.casts && !s.holdout).any(|s| (s.color[3] > 0.0 && s.color[3] < 1.0) || s.texture.is_some_and(|t| !opaque(t)))
+/// Whether shadow caster `s` lets light through somewhere: less than
+/// opaque, or a texture with a texel neither clear nor opaque or a data
+/// window short of its frame (its edges blend part way).
+fn sees_through(s: &Surface) -> bool {
+    s.casts && !s.holdout && ((s.color[3] > 0.0 && s.color[3] < 1.0) || s.texture.is_some_and(|t| !opaque(t)))
 }
 
 /// Whether texture `img` is opaque everywhere in its frame (asked once
@@ -618,7 +685,7 @@ fn opaque(img: &Arc<Image>) -> bool {
 /// Draw every shadow map of `tables` (a dispatch each) into one buffer.
 fn draw_maps(gpu: &Gpu, tables: &Tables, textures: &Textures) -> wgpu::Buffer {
     let device = &gpu.device;
-    let maps = device.create_buffer(&wgpu::BufferDescriptor { label: Some("render3d shadow maps"), size: (tables.map_texels.max(1) * 4) as u64, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false });
+    let maps = device.create_buffer(&wgpu::BufferDescriptor { label: Some("render3d shadow maps"), size: (tables.map_words.max(1) * 4) as u64, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false });
     if tables.maps.is_empty() {
         return maps;
     }
@@ -924,7 +991,7 @@ fn bin_tiles(tris: &[Tri], tiles_x: usize, tiles_y: usize) -> Vec<u32> {
 }
 
 /// The surfaces as the shader reads them.
-fn surf_table(surfs: &[Surface], tex_base: &[Option<(u32, u32)>], layout: &Layout) -> Vec<u32> {
+fn surf_table(surfs: &[Surface], tex_base: &[Option<(u32, u32)>], layout: &Layout, see: &[bool]) -> Vec<u32> {
     let mut words = vec![0u32; surfs.len() * SURF_WORDS];
     for (si, (o, s)) in words.chunks_mut(SURF_WORDS).zip(surfs).enumerate() {
         for (w, c) in o[..4].iter_mut().zip(s.color) {
@@ -944,7 +1011,7 @@ fn surf_table(surfs: &[Surface], tex_base: &[Option<(u32, u32)>], layout: &Layou
             }
             o[7] = (crate::shade::shininess(m.roughness) as f32).to_bits();
         }
-        flags |= (s.holdout as u32) << 3 | (s.headlight as u32) << 4 | (s.two_sided as u32) << 5 | (s.wrap as u32) << 6 | (s.casts as u32) << 7 | (s.receives as u32) << 8;
+        flags |= (s.holdout as u32) << 3 | (s.headlight as u32) << 4 | (s.two_sided as u32) << 5 | (s.wrap as u32) << 6 | (s.casts as u32) << 7 | (s.receives as u32) << 8 | (see[si] as u32) << 9;
         o[12] = flags;
         let (base, levels) = tex_base[si].unwrap_or((NONE, 0));
         o[13] = base;

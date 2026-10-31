@@ -30,6 +30,11 @@ done), `docs/help.md` (the in-app help) and
   "Dropped TexturesDelta with 1 unapplied deltas" (egui 0.37) now end
   `ctx.run_ui(..)` with `.drop_without_applying_deltas()` instead of
   `let _ =`; all GUI tests pass. **Tip:** do the same in new egui tests.
+- **0.12.16, layered shadows** (Dev2): see-through shadow casters render
+  on the GPU (up to 4 layers a texel, more → CPU pixels; layer count
+  shrinks 4→2→1 under a 384 / 160 MB budget, then the frame goes to the
+  CPU). README's note on see-through casters still says CPU (Dev1 to
+  update). Many-sample area lights stay slow (20–34 s at 4K): follow-up.
 - **0.12.15, error wrapping** (Dev1): long node errors wrap and are
   selectable in the viewer and the 3D view; the status line truncates
   to fit with the full text on hover. Known: the viewer toolbar's Fit

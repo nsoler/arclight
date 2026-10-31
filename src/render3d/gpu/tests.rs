@@ -1,12 +1,15 @@
 //! The GPU renderer against the CPU one on the same scenes (D8 of
 //! docs/gpu-plan.md): skipped without a GPU.
 
-use super::check::{busy, busy_shadowed, differences, moving, nearest_pass, scattered, scene_at, scene_of, ORTHO, PERSPECTIVE};
+use super::check::{busy, busy_shadowed, differences, layered, moving, nearest_pass, scattered, scene_at, scene_of, ORTHO, PERSPECTIVE};
 use super::*;
 
 thread_local! {
     /// Whether `draw_passes` may take the GPU on this thread (see there).
     pub(super) static GPU_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The shadow maps' room where they have layers, in place of the
+    /// device's (see `layer_room`).
+    pub(super) static LAYER_ROOM: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
 /// For a motion-blur test's failure message: whether `out` (a blurred
@@ -222,18 +225,66 @@ fn shadows_match_the_cpu_render() {
     compare(&gpu, &scene, &cam, format, 1, Passes::from_names(["depth", "shadow"]), None);
 }
 
-/// A caster that lets some light through casts a layered shadow: the
-/// CPU's still.
+/// Casters that let some light through cast layered shadows on the GPU
+/// as on the CPU: a card at 0.4, a feathered cutout, stacks of them (one
+/// deeper than a texel keeps), under sharp, soft and penumbra lights.
 #[test]
-fn see_through_casters_render_on_the_cpu() {
+fn see_through_casters_shadow_as_on_the_cpu() {
     let Some(gpu) = crate::gpu::test_device() else {
         eprintln!("skipped: no GPU adapter");
         return;
     };
-    let (scene, cam) = scene_of(&busy_shadowed(PERSPECTIVE).replace(r#", "casts_shadows": false"#, ""));
+    let (scene, cam) = scene_of(&layered(128, 12.0));
+    let format = Size { width: 320, height: 180 };
+    compare(&gpu, &scene, &cam, format, 2, Passes::from_names(["shadow", "diffuse", "depth"]), None);
+    // (They have layers, and their shadows let light through part way.)
     let surfs = super::super::surfaces(&scene);
-    let format = Size { width: 64, height: 36 };
-    assert!(draw(&gpu, &surfs, &scene.lights, &[], &cam, format, 1, Passes::DEPTH, None, None, None).unwrap().is_none());
+    let prep = prepare(&gpu, &surfs, &scene.lights, &cam, format, Passes::default(), None, None).expect("on the GPU");
+    assert!(prep.tables.maps.iter().any(|m| m.layered));
+    let passes = Passes::from_names(["shadow"]);
+    let out = draw(&gpu, &surfs, &scene.lights, &[], &cam, format, 1, passes, None, None, None).unwrap().unwrap();
+    let part = out.plane("shadow.R").unwrap().data.iter().filter(|v| **v > 0.02 && **v < 0.3).count();
+    assert!(part > 320 * 180 / 50, "{part} pixels in part shadow");
+    // The busy scene's glass card casting too, orthographic.
+    let (scene, cam) = scene_of(&busy_shadowed(ORTHO).replace(r#", "casts_shadows": false"#, ""));
+    compare(&gpu, &scene, &cam, format, 1, Passes::from_names(["depth", "shadow"]), None);
+}
+
+/// Where the layers won't all fit the maps' room, the lights keep fewer
+/// a texel (more pixels go to the CPU, the same picture); where even one
+/// won't, the frame is the CPU's.
+#[test]
+fn layers_shrink_to_fit_or_leave_the_frame_to_the_cpu() {
+    let Some(gpu) = crate::gpu::test_device() else {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    };
+    let (scene, cam) = scene_of(&layered(128, 12.0));
+    let surfs = super::super::surfaces(&scene);
+    let format = Size { width: 160, height: 90 };
+    let prep = prepare(&gpu, &surfs, &scene.lights, &cam, format, Passes::default(), None, None).expect("on the GPU");
+    let depths: usize = prep.tables.maps.iter().map(|m| m.res * m.res).sum();
+    let layered_texels: usize = prep.tables.maps.iter().filter(|m| m.layered).map(|m| m.res * m.res).sum();
+    let layers = |prep: &Prepared| (0..prep.tables.maps.len()).filter(|&i| prep.tables.maps[i].layered).map(|i| prep.tables.tables[prep.tables.at[3] + i * MAP_WORDS + 26]).collect::<Vec<u32>>();
+    assert!(layers(&prep).iter().all(|&k| k == MAX_LAYERS as u32));
+    let passes = Passes::from_names(["shadow", "depth"]);
+    let cpu = crate::gpu::cpu_only(|| super::super::draw_passes(&surfs, &scene.lights, &[], &cam, format, 2, passes, None, None, None));
+    // Room for one layer a texel.
+    LAYER_ROOM.with(|r| r.set(Some((depths + 3 * layered_texels) * 4)));
+    let prep = prepare(&gpu, &surfs, &scene.lights, &cam, format, Passes::default(), None, None).expect("one layer each fits");
+    assert!(layers(&prep).iter().all(|&k| k == 1), "{:?}", layers(&prep));
+    let out = draw(&gpu, &surfs, &scene.lights, &[], &cam, format, 2, passes, None, None, None).unwrap().expect("on the GPU");
+    for (name, mean, off) in differences(&cpu, &out) {
+        let (most_mean, most_off) = super::check::allowed(&name);
+        assert!(mean <= most_mean && off <= most_off, "one layer, {name}: mean {mean:.2e}, {:.3} % of values off", off * 100.0);
+    }
+    // Not even that: the CPU's, the same picture.
+    LAYER_ROOM.with(|r| r.set(Some((depths + 3 * layered_texels) * 4 - 4)));
+    assert!(prepare(&gpu, &surfs, &scene.lights, &cam, format, Passes::default(), None, None).is_none());
+    assert!(draw(&gpu, &surfs, &scene.lights, &[], &cam, format, 2, passes, None, None, None).unwrap().is_none());
+    let out = with_gpu(|| super::super::draw_passes(&surfs, &scene.lights, &[], &cam, format, 2, passes, None, None, None));
+    LAYER_ROOM.with(|r| r.set(None));
+    assert!(differences(&cpu, &out).iter().all(|(_, mean, _)| *mean == 0.0));
 }
 
 /// Motion blur added up on the GPU (each pixel's times jittered by its

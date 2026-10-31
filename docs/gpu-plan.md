@@ -535,9 +535,29 @@ switch, the status and the tests' skip work end to end.
   spot, point cubes, area-light cubes), and the light loop looks them up
   as `Shadows::visible` does (offset off the surface, cube face, bilinear
   compare, PCF, the blocker search for a light's radius), with the shadow
-  and per-light passes. Casters that let light through (opacity below 1,
-  a texture with partial alpha or a window short of its frame) keep the
-  frame on the CPU for now: their layered shadows are a follow-up.
+  and per-light passes.
+- **Done (layered shadows):** casters that let light through (opacity
+  below 1, a texture with partial alpha or a window short of its frame)
+  cast on the GPU too. `shadow_map` gathers a texel's see-through casters
+  nearer than the opaque one (8 while drawing, sorted, one where two
+  triangles of a surface meet, as `Map::draw` dedups) and keeps K of
+  them after the map's depths, each its distance and 1 − alpha, with how
+  far they're complete; the lookups multiply those nearer than the point
+  (as `through`), and the blocker search takes the nearest of any kind.
+  A lookup needing a layer the texel left out marks the pixel overflowed,
+  and the CPU renders it, as for deep transparency. Only maps that see a
+  see-through caster get layers. Memory: K = 4 a texel (36 bytes), and
+  while the maps would take more than their room (384 MB on a discrete
+  GPU, 160 MB otherwise, within the device's buffer limit) the light
+  whose layers take most drops to 2, then 1; if even 1 each won't fit,
+  the frame is the CPU's. Never approximated: fewer layers only send
+  more pixels to the CPU. Measured (RTX 5070, busy machine): 4K AA 3, a
+  0.4 card and a feathered cutout over a floor, sun + spot + a 16-sample
+  area light, 33.8 s against the CPU's 343 s (the same scene opaque:
+  20.6 s against 304 s), mean difference 2e-7. With a stack deeper than
+  K in view (`gpu --check`'s row, 1080p) those pixels' CPU pass and the
+  64-hit second try (which a shadow overflow sets off too) bring it to
+  2.1 s against 5.0 s.
 - Motion blur and the jittered shutter added up on the GPU
   (`gpu::blurred`): every (cell, time) render into one frame's buffers,
   each cell's pixels packed onto threads, one read-back; the triangles
