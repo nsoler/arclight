@@ -405,7 +405,10 @@ selected object.
   noise3(@P * 2) * 0.3, 0]` lifts a scatter into dunes). Formulas read the
   element with @ names and other nodes' params by name, so a locator can
   push points away from it (`dist(@P, locator1.translate)`). Up to four
-  rows, in order. **Instance on Points** puts a copy of a prototype (the
+  rows, in order. **Attribute Noise** puts smooth 3-D noise into an
+  attribute: sizes (pscale), colors (Cd, vec4), or any name for formulas;
+  Offset animated makes it drift; a Falloff region limits it.
+  **Instance on Points** puts a copy of a prototype (the
   meshes, cards or splats wired to its second input) at every scattered
   point: rocks on a ground, a crowd of cards, trees. Each point picks one
   at random (the same every frame), by its variant attribute, or in turn,

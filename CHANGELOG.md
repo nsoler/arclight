@@ -17,6 +17,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.16 — 2026-10-31
+
+- Geometry: an **Attribute Noise** node writes smooth 3-D noise (the same
+  as `noise3()` in formulas, with octaves of detail) into an attribute of
+  points, mesh points or instances: set, added or multiplied in, per
+  component for colors and vectors, and optionally only inside a sphere or
+  box region with a soft edge, shown in the 3D view.
+
 ## 0.13.15 — 2026-10-31
 
 - Examples: **geo-scatter.json** shows the geometry nodes end to end:

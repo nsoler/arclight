@@ -734,7 +734,7 @@ fn noise(x: f64, seed: f64) -> f64 {
 
 /// Smooth 3-D gradient noise in -1..1 (Perlin's, with a hashed gradient
 /// at each whole-number corner).
-fn noise3(p: [f64; 3], seed: f64) -> f64 {
+pub(crate) fn noise3(p: [f64; 3], seed: f64) -> f64 {
     let cell = p.map(f64::floor);
     let f = [p[0] - cell[0], p[1] - cell[1], p[2] - cell[2]];
     let ease = |t: f64| t * t * t * (t * (t * 6.0 - 15.0) + 10.0);

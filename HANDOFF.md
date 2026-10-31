@@ -37,6 +37,12 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.16, P3: Attribute Noise** (Dev1): `src/geo_attr.rs` holds what
+  the P3 nodes share (element walk over point sets / curves / mesh points
+  / instances with Group, attr build/read by kind, region falloff pushed
+  as a scene Region); `attribute_noise` = Center + Amplitude × fBm of
+  `expr::noise3` (now `pub(crate)`), set / add / multiply. Next from
+  Dev1: Falloff, Attribute from Image, Attribute Transfer.
 - **0.13.15, geo-scatter example** (Dev1): `examples/geo-scatter.json`
   (procedural: Plane ground, Ellipse mask, Scatter → Attribute Set →
   Instance on Points for rocks and face-camera bush cards, sun shadows;

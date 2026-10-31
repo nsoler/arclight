@@ -94,7 +94,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_set" | "instance_on_points" | "realize_instances" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "attribute_set" | "instance_on_points" | "realize_instances" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1087,6 +1087,40 @@ pub static OPS: &[OpInfo] = &[
                what came from one node (its name), or from those whose names match a pattern with * (`tree*`); empty: \
                everything. Cameras and lights stay where they are unless Cameras and lights is on, so moving the set \
                doesn't move the shot.",
+    },
+    // Attribute nodes (geo_attr.rs; Dev1).
+    OpInfo {
+        name: "attribute_noise",
+        label: "Attribute Noise",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN],
+        params: &[
+            fixed!("elements", "Elements", ParamKind::Choice(&["points", "mesh points", "instances"]), "points"),
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("name", "Attribute", ParamKind::Text, "pscale"),
+            fixed!("kind", "Kind", ParamKind::Choice(&["float", "vec3", "vec4"]), "float"),
+            fixed!("mode", "Mode", ParamKind::Choice(&["set", "add", "multiply"]), "set"),
+            p!("center", "Center", ParamKind::Float { min: -1000.0, max: 1000.0 }, 1.0),
+            p!("amplitude", "Amplitude", ParamKind::Float { min: 0.0, max: 1000.0 }, 0.5),
+            p!("frequency", "Frequency", ParamKind::Float { min: 0.0, max: 1000.0 }, 1.0),
+            p!("offset", "Offset", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+            fixed!("octaves", "Octaves", ParamKind::Int { min: 1, max: 8 }, 1),
+            fixed!("seed", "Seed", ParamKind::Int { min: 0, max: 1_000_000 }, 0),
+            fixed!("falloff", "Falloff", ParamKind::Choice(&["none", "sphere", "box"]), "none"),
+            p!("region_center", "Region center", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+            p!("region_size", "Region size", ParamKind::Vec3, [2.0, 2.0, 2.0]),
+            p!("region_rotate", "Region rotate", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+            p!("softness", "Softness", ParamKind::Float { min: 0.0, max: 1.0 }, 0.5),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Writes 3-D noise into an attribute of the points (of point sets and curves), the meshes' points or the \
+               instances (of Group's node, a name or a pattern with *, or all): Center + Amplitude × noise, the noise \
+               (-1 to 1) read at each element's place × Frequency + Offset (animate Offset to make it drift), with \
+               Octaves of finer detail; the same noise as noise3() in formulas. Mode sets the attribute, or adds to or \
+               multiplies what's there. Vectors (vec3, vec4: a color as Cd) get independent noise per component. Falloff \
+               sphere or box limits it to a region (Region center, size, rotate; shown in the 3D view), fading in over \
+               Softness of it from the edge. Pscale for sizes, Cd for colors, any name for formulas (@name).",
     },
     // Fit Plane (geo_fit.rs; Dev1).
     OpInfo {
@@ -2124,6 +2158,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         }
         "realize_instances" => Ok(scene_output(DEFAULT_FORMAT, geo_ops::realize_instances(params, input_scene(inputs))?)),
         "attribute_set" => Ok(scene_output(DEFAULT_FORMAT, geo_ops::attribute_set(params, input_scene(inputs), ctx.frame as f64)?)),
+        "attribute_noise" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_attr::attribute_noise(params, input_scene(inputs))?)),
         "fit_plane" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_fit::fit_plane(params, input_scene(inputs), inputs.get(1).copied().flatten())?)),
         "scatter" => {
             let image = inputs.get(1).copied().flatten().filter(|i| i.scene.is_none());
