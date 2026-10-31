@@ -95,6 +95,9 @@ pub struct Viewer {
     dragged: Option<Handle>,
     /// A message for the 3D view (why G / R / S can't), and when it was shown.
     notice: Option<(String, f64)>,
+    /// Why the selection last had no (or a ghost's) gizmo, said once as a
+    /// notice when it changes (see [`Viewer::gizmo_why`]).
+    gizmo_said: Option<String>,
     /// The viewed node has a 3D scene (the 3D button shows it).
     has_scene: bool,
     /// The 3D button glows until this time (seconds), and a hint about
@@ -137,6 +140,7 @@ impl Default for Viewer {
             space: Space::default(),
             dragged: None,
             notice: None,
+            gizmo_said: None,
             has_scene: false,
             pulse_until: 0.0,
             hint_since: None,
@@ -276,6 +280,31 @@ impl Viewer {
             if why.iter().any(Option::is_none) { None } else { why.into_iter().last().flatten() }
         });
         Some((layout, node, refused))
+    }
+
+    /// Why the selected card, light, camera… has no gizmo in the view, or
+    /// only a ghost's: it couldn't be made (its error), it isn't in the
+    /// viewed scene (shown dashed so it can still be moved), it's behind
+    /// the view, or it's what the view looks through. None when it has one,
+    /// with the Select tool (no gizmos), or with nothing 3D selected.
+    fn gizmo_why(&self, doc: &Doc) -> Option<String> {
+        if self.tool == Tool::Select || self.viewport3d.projector().is_none() {
+            return None;
+        }
+        let selection = doc.selection();
+        let (ghosts, errors) = self.viewport3d.ghosts();
+        if let Some((n, e)) = errors.iter().find(|(n, _)| selection.contains(n)) {
+            return Some(format!("{n} can't be shown in 3D: {e}"));
+        }
+        let placed: Vec<&String> = selection.iter().filter(|n| self.viewport3d.object_world(n).is_some()).collect();
+        let primary = placed.last()?;
+        if self.gizmo(doc).is_none() {
+            return Some(match self.viewport3d.looking_through() {
+                Some(t) if &&t == primary => format!("You're looking through {primary}: press 0 to come out and move it"),
+                _ => format!("{primary} is behind the view: press F to frame it"),
+            });
+        }
+        placed.iter().find(|n| ghosts.contains(n)).map(|n| format!("{n} isn't in the viewed scene: it's shown dashed so you can move it"))
     }
 
     /// Hovering a gizmo handle, and pressing it to start a drag (releasing
@@ -491,6 +520,13 @@ impl Viewer {
             }
             Some(_) => {
                 self.transform_keys(ui, resp, doc, frame);
+                let why = self.gizmo_why(doc);
+                if why != self.gizmo_said {
+                    if let Some(w) = &why {
+                        self.notice = Some((w.clone(), ui.input(|i| i.time)));
+                    }
+                    self.gizmo_said = why;
+                }
                 let hot = self.gizmo_input(ui, resp, doc, frame);
                 let blocked = self.is_transforming() || hot.is_some();
                 self.viewport3d.ui(ui, rect, resp, doc, frame, blocked);
@@ -803,17 +839,15 @@ fn layer_image(img: &Image, planes: &[&Plane], region: IRect, exposure: f32, ste
     ColorImage::from_rgba_unmultiplied([tw, th], &bytes)
 }
 
-/// The node whose 3D scene viewing `node` shows: `node` itself when it
-/// outputs a scene (Camera, Card, Scene, …) or solves one (a Camera
-/// Tracker: its camera and points), else what feeds its first connected
-/// scene input (a Scanline Render's scene, camera or extra inputs: any of
-/// them shows the render's whole scene). A Viewer node stands for what it
-/// shows. None: no scene.
+/// The node whose 3D scene viewing `node` shows: the nearest scene-making
+/// node up its inputs (see [`crate::worker::scene_source`]: a Grade or
+/// Merge after a render shows the render's), itself when it outputs a
+/// scene (Camera, Card, Scene, …) or solves one (a Camera Tracker: its
+/// camera and points); for a Scanline Render, what feeds its first
+/// connected scene input (its scene, camera or extra inputs: any of them
+/// shows the render's whole scene). None: no scene.
 pub fn scene_of(doc: &Doc, node: &str) -> Option<String> {
-    let mut n = doc.node(node)?;
-    if n.op == "viewer" {
-        n = doc.node(n.inputs.first().filter(|s| !s.is_empty())?)?;
-    }
+    let n = doc.node(&crate::worker::scene_source(&doc.graph, node)?)?;
     let node = n.id.as_str();
     if ops::output_kind(&n.op) == ops::Kind::Scene || n.op == "camera_tracker" {
         return Some(node.to_string());
@@ -873,6 +907,62 @@ mod tests {
         assert_eq!(v.shown_planes(&img).len(), 1);
         v.channel = Channel::Rgb;
         assert!(v.shown_planes(&img).is_empty());
+    }
+
+    /// A card, light or camera picked in the node graph gets the gizmo in
+    /// the 3D view wherever it is: in the viewed scene, viewed through a 2D
+    /// node after the render, or outside the scene (a ghost, said once);
+    /// and when it can't, the viewer says why.
+    #[test]
+    fn a_node_picked_in_the_graph_gets_the_gizmo_or_a_reason() {
+        use crate::viewport3d::{Projector, ViewCam};
+        let graph: Graph = serde_json::from_value(serde_json::json!({ "nodes": [
+            { "id": "card", "op": "card" },
+            { "id": "scene", "op": "scene", "inputs": ["card"] },
+            { "id": "cam", "op": "camera", "params": { "translate": [0, 0, 6] } },
+            { "id": "sun", "op": "light_directional" },
+            { "id": "render", "op": "scanline_render", "inputs": ["scene", "cam", "", "sun"] },
+            { "id": "graded", "op": "grade", "inputs": ["render"] },
+            { "id": "loose", "op": "card", "params": { "translate": [1, 0, 0] } },
+            { "id": "spot", "op": "light_spot", "params": { "translate": [0, 2, 0] } },
+            { "id": "cam2", "op": "camera", "params": { "translate": [3, 0, 4] } },
+            { "id": "behind", "op": "card", "params": { "translate": [0, 0, 1000] } },
+            { "id": "broken", "op": "read_geo", "params": { "file": "/no/such/model.obj" } },
+        ] }))
+        .unwrap();
+        let mut doc = Doc::new(graph.clone(), None);
+        assert_eq!(scene_of(&doc, "graded").as_deref(), Some("scene"), "a 2D node after the render shows its scene");
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let view = ViewCam::default().projector(rect);
+        let mut eval = arclight::graph::Evaluator::new();
+        let scene = crate::worker::scene_of(&mut eval, &graph, "render", 1).unwrap();
+        let mut v = Viewer::default();
+        let mut pick = |v: &mut Viewer, doc: &mut Doc, node: &str, through: Option<Projector>| {
+            doc.select_only(node);
+            let (ghosts, errors) = crate::worker::ghosts_of(&mut eval, &graph, scene.as_deref(), &doc.selection(), 1);
+            v.viewport3d.show_for_test(scene.clone(), ghosts, through.unwrap_or(view));
+            v.viewport3d.set_ghost_errors_for_test(errors);
+            (v.gizmo(doc).map(|g| g.1), v.gizmo_why(doc))
+        };
+        for n in ["card", "cam", "sun"] {
+            assert_eq!(pick(&mut v, &mut doc, n, None), (Some(n.to_string()), None), "{n}: in the scene");
+        }
+        for n in ["loose", "spot", "cam2"] {
+            let (gizmo, why) = pick(&mut v, &mut doc, n, None);
+            assert_eq!(gizmo.as_deref(), Some(n), "{n}: not in the scene, still a gizmo");
+            assert_eq!(why, Some(format!("{n} isn't in the viewed scene: it's shown dashed so you can move it")));
+        }
+        assert_eq!(pick(&mut v, &mut doc, "behind", None), (None, Some("behind is behind the view: press F to frame it".into())));
+        let cam2 = crate::worker::ghosts_of(&mut arclight::graph::Evaluator::new(), &graph, scene.as_deref(), &["cam2".to_string()], 1).0.unwrap().cameras[0].clone();
+        v.viewport3d.look_through_node("cam2");
+        let through = Projector::through(&cam2, Size { width: 1920, height: 1080 }, rect);
+        assert_eq!(pick(&mut v, &mut doc, "cam2", Some(through)), (None, Some("You're looking through cam2: press 0 to come out and move it".into())));
+        v.viewport3d.stop_looking_through();
+        let (gizmo, why) = pick(&mut v, &mut doc, "broken", None);
+        assert!(gizmo.is_none() && why.as_deref().is_some_and(|w| w.starts_with("broken can't be shown in 3D: ")), "{why:?}");
+        // The Select tool shows no gizmo, by choice: nothing to say.
+        v.tool = Tool::Select;
+        assert_eq!(pick(&mut v, &mut doc, "loose", None), (None, None));
     }
 
     #[test]

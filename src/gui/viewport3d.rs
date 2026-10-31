@@ -339,6 +339,64 @@ fn frustum(cam: &geom::Camera, size: f64, aspect: f64) -> ([Vec3; 4], [Vec3; 4])
     (corners(0.0, if cam.is_ortho() { 1.0 } else { 0.0 }), corners(-depth, 1.0))
 }
 
+/// A camera's icon as line segments: its frustum `size` across (a box for
+/// an orthographic one) and a notch on the frame's top edge for up.
+fn camera_lines(cam: &geom::Camera, size: f64, aspect: f64) -> Vec<(Vec3, Vec3)> {
+    let (back, k) = frustum(cam, size, aspect);
+    let mut lines = Vec::new();
+    for j in 0..4 {
+        lines.push((back[j], k[j]));
+        lines.push((k[j], k[(j + 1) % 4]));
+        if cam.is_ortho() {
+            lines.push((back[j], back[(j + 1) % 4]));
+        }
+    }
+    let up = (k[0] + k[1]) / 2.0 + (k[0] - k[3]) * 0.2;
+    lines.push((k[0], up));
+    lines.push((up, k[1]));
+    lines
+}
+
+/// Each named card, camera, light and particle gadget in `scene` with the
+/// lines it's drawn as (`size`: the icons' size; `aspect`: the cameras'
+/// frames'), which a click near picks it by.
+fn object_lines(scene: &Scene, size: f64, aspect: f64) -> Vec<(String, Vec<(Vec3, Vec3)>)> {
+    let mut out = Vec::new();
+    for c in scene.cards.iter().filter(|c| !c.node.is_empty()) {
+        let k = c.corners();
+        out.push((c.node.clone(), (0..4).map(|i| (k[i], k[(i + 1) % 4])).collect()));
+    }
+    for (i, cam) in scene.cameras.iter().enumerate() {
+        let node = scene.camera_node(i);
+        if !node.is_empty() {
+            out.push((node.to_string(), camera_lines(cam, size, aspect)));
+        }
+    }
+    for l in scene.lights.iter().filter(|l| !l.node.is_empty()) {
+        out.push((l.node.clone(), light_lines(l, size)));
+    }
+    for g in gadgets(scene) {
+        let lines = gadget_lines(&g, size);
+        out.push((g.node, lines));
+    }
+    out
+}
+
+/// The edges of the box round a model, in the scene.
+fn box_lines(m: &arclight::scene::Model) -> Vec<(Vec3, Vec3)> {
+    let Some((lo, hi)) = m.mesh.bounds() else { return Vec::new() };
+    let c = |i: usize| geom::transform_point(&m.world, &Vec3::new([lo.x, hi.x][i & 1], [lo.y, hi.y][(i >> 1) & 1], [lo.z, hi.z][(i >> 2) & 1]));
+    BOX_EDGES.iter().map(|&(a, b)| (c(a), c(b))).collect()
+}
+
+/// How far screen point `s` is from segment `a`–`b`, and how far along it
+/// (0 to 1) the nearest point is.
+fn segment_distance(s: Pos2, a: Pos2, b: Pos2) -> (f32, f32) {
+    let ab = b - a;
+    let t = if ab.length_sq() < 1e-6 { 0.0 } else { ((s - a).dot(ab) / ab.length_sq()).clamp(0.0, 1.0) };
+    (s.distance(a + ab * t), t)
+}
+
 /// A light's icon as line segments in the scene, `size` across (none for
 /// ambient light, drawn as a ring instead):
 /// - point: a star of eight rays round it (and a ring its radius across
@@ -582,18 +640,40 @@ pub enum Hit {
 
 /// How near (screen points) a click must be to a point, locator or camera.
 const PICK_RADIUS: f32 = 7.0;
+/// How near a click must be to a thin thing's lines: a card's edge (seen
+/// edge-on it's only a line), a camera's frustum, a light's icon.
+const LINE_PICK: f32 = 8.0;
+/// How near a click must be to a selected light's handle (a 7-point
+/// square) to drag it.
+const HANDLE_PICK: f32 = 10.0;
+/// How near the last click a click must be to pick the next thing under
+/// it.
+const CYCLE_REACH: f32 = 4.0;
 
-/// What's under screen point `s` in `scene` seen through `p`: the nearest
-/// point, locator, camera, light or splat center within reach, else the
-/// nearest card or mesh the ray through `s` hits. `is_locator` tells a locator's point from a
-/// cloud's.
-pub fn pick(scene: &Scene, p: &Projector, s: Pos2, is_locator: &dyn Fn(&str) -> bool) -> Option<Hit> {
-    let mut best: Option<(f32, f64, Hit)> = None;
+/// The project's frame aspect (the cameras' frames are drawn so).
+fn project_aspect(doc: &Doc) -> f64 {
+    doc.graph.project.format.width as f64 / doc.graph.project.format.height.max(1) as f64
+}
+
+/// What's under screen point `s` in `scene` seen through `p` (`aspect`:
+/// the cameras' frames', as drawn), the first of [`pick_all`].
+pub fn pick(scene: &Scene, p: &Projector, aspect: f64, s: Pos2, is_locator: &dyn Fn(&str) -> bool) -> Option<Hit> {
+    pick_all(scene, p, aspect, s, is_locator).into_iter().next()
+}
+
+/// Everything under screen point `s` in `scene` seen through `p`, what a
+/// click picks first: the points, locators, cameras, lights and splat
+/// centers within reach, nearest first; then, nearest the eye first, the
+/// cards and meshes the ray through `s` hits and the cards, cameras,
+/// lights and gadgets whose drawn lines pass within reach. Repeated clicks
+/// go down the list. `is_locator` tells a locator's point from a cloud's.
+pub fn pick_all(scene: &Scene, p: &Projector, aspect: f64, s: Pos2, is_locator: &dyn Fn(&str) -> bool) -> Vec<Hit> {
+    let mut near: Vec<(f32, f64, Hit)> = Vec::new();
     let mut consider = |at: Vec3, hit: Hit| {
         if let Some((q, depth)) = p.project(at) {
             let d = q.distance(s);
-            if d <= PICK_RADIUS && best.as_ref().is_none_or(|b| (d, depth) < (b.0, b.1)) {
-                best = Some((d, depth, hit));
+            if d <= PICK_RADIUS {
+                near.push((d, depth, hit));
             }
         }
     };
@@ -613,16 +693,33 @@ pub fn pick(scene: &Scene, p: &Projector, s: Pos2, is_locator: &dyn Fn(&str) -> 
     // Splats: the nearest center (only the set's node is picked).
     for sp in scene.splats.iter().filter(|sp| !sp.node.is_empty()) {
         if let Some((d, depth)) = nearest_splat(sp, p, s) {
-            if d <= PICK_RADIUS && best.as_ref().is_none_or(|b| (d, depth) < (b.0, b.1)) {
-                best = Some((d, depth, Hit::Object(sp.node.clone())));
+            if d <= PICK_RADIUS {
+                near.push((d, depth, Hit::Object(sp.node.clone())));
             }
         }
     }
-    if let Some((_, _, hit)) = best {
-        return Some(hit);
-    }
-    // Cards (the nearest the ray hits inside its rectangle) and meshes.
+    near.sort_by(|a, b| (a.0, a.1).partial_cmp(&(b.0, b.1)).unwrap_or(std::cmp::Ordering::Equal));
+    // Thin things by their lines, as far along the ray as where they pass
+    // nearest it (as cards and meshes are below).
     let (o, d) = p.ray(s);
+    let mut under: Vec<(f64, Hit)> = Vec::new();
+    for (node, lines) in object_lines(scene, icon_size(scene), aspect) {
+        let nearest = lines
+            .iter()
+            .filter_map(|&(a, b)| {
+                let (sa, sb) = p.segment(a, b)?;
+                let (off, t) = segment_distance(s, sa, sb);
+                // (Clipped to the view, the screen segment may be only part
+                // of the line, and t on screen isn't t in the scene: near
+                // enough for which is in front.)
+                (off <= LINE_PICK).then(|| (a + (b - a) * t as f64 - o).dot(&d))
+            })
+            .min_by(f64::total_cmp);
+        if let Some(depth) = nearest {
+            under.push((depth, Hit::Object(node)));
+        }
+    }
+    // Cards (where the ray hits inside its rectangle) and meshes.
     let meshes = scene.meshes.iter().filter_map(|m| Some((ray_mesh(m, &o, &d)?, m.node.clone())));
     scene
         .cards
@@ -641,8 +738,15 @@ pub fn pick(scene: &Scene, p: &Projector, s: Pos2, is_locator: &dyn Fn(&str) -> 
             (t > 0.0 && inside && world_t > 0.0).then_some((world_t, c.node.clone()))
         })
         .chain(meshes)
-        .min_by(|a, b| a.0.total_cmp(&b.0))
-        .map(|(_, n)| Hit::Object(n))
+        .for_each(|(t, n)| under.push((t, Hit::Object(n))));
+    under.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut all: Vec<Hit> = Vec::new();
+    for hit in near.into_iter().map(|n| n.2).chain(under.into_iter().map(|u| u.1)) {
+        if !all.contains(&hit) {
+            all.push(hit);
+        }
+    }
+    all
 }
 
 /// The nearest of splat set `s`'s centers to screen point `at` seen
@@ -798,6 +902,8 @@ struct Ask {
     through: Option<geom::Camera>,
     pixels: [usize; 2],
     preview: Preview,
+    /// The selection (shown as ghosts where it isn't in the scene).
+    ghosts: Vec<String>,
 }
 
 /// What the view looks through instead of the free camera.
@@ -1063,6 +1169,16 @@ pub struct Viewport3d {
     pie: Option<Pos2>,
     /// Each shown mesh's edges (by the mesh's address), for wireframes.
     edges: std::collections::HashMap<usize, Arc<Vec<[u32; 2]>>>,
+    /// Selected cards, lights, cameras… that aren't in the viewed scene,
+    /// each as its own output: drawn dashed, and given the gizmo.
+    ghosts: Option<Arc<Scene>>,
+    /// Selected nodes whose ghost couldn't be made, and why.
+    ghost_errors: Vec<(String, String)>,
+    /// The last click: where, everything under it (nearest first) and
+    /// which of them it picked; a click there again picks the next.
+    cycle: Option<(Pos2, Vec<Hit>, usize)>,
+    /// The pointer and what a click there would pick (drawn highlighted).
+    hover: Option<(Pos2, Option<Hit>)>,
 }
 
 impl Default for Viewport3d {
@@ -1098,6 +1214,10 @@ impl Default for Viewport3d {
             frame_first_scene: false,
             pie: None,
             edges: Default::default(),
+            ghosts: None,
+            ghost_errors: Vec::new(),
+            cycle: None,
+            hover: None,
         }
     }
 }
@@ -1120,6 +1240,8 @@ const BOX_EDGES: [(usize, usize); 12] = [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2),
 /// The most splats drawn as dots per set (past it, every so many).
 const MAX_SPLAT_DOTS: usize = 300_000;
 const SELECTED: Color32 = Color32::from_rgb(255, 160, 40);
+/// What a click would pick (see `hover`).
+const HOVER: Color32 = Color32::from_rgba_premultiplied(230, 240, 255, 230);
 const LIGHT: Color32 = Color32::from_rgb(250, 225, 120);
 /// Particle emitters and forces.
 const GADGET: Color32 = Color32::from_rgb(150, 220, 130);
@@ -1181,7 +1303,50 @@ impl Viewport3d {
     /// card, mesh, camera, light or locator; no parenting yet, so it's the node's own
     /// translate / rotate / scale).
     pub fn object_world(&self, node: &str) -> Option<Mat4> {
-        let s = self.scene.as_ref()?;
+        self.scene.as_deref().and_then(|s| Self::world_in(s, node)).or_else(|| Self::world_in(self.ghosts.as_deref()?, node))
+    }
+
+    /// Selected nodes shown as ghosts (not in the viewed scene), and those
+    /// whose ghost couldn't be made, with why.
+    pub fn ghosts(&self) -> (Vec<String>, &[(String, String)]) {
+        let held: Vec<String> = self.ghosts.as_deref().map_or_else(Vec::new, |g| {
+            let mut v: Vec<String> = g.cards.iter().map(|c| c.node.clone()).chain(g.meshes.iter().map(|m| m.node.clone())).chain(g.lights.iter().map(|l| l.node.clone())).collect();
+            v.extend((0..g.cameras.len()).map(|i| g.camera_node(i).to_string()).chain((0..g.points.len()).map(|i| g.point_node(i).to_string())));
+            v.sort();
+            v.dedup();
+            v
+        });
+        (held, &self.ghost_errors)
+    }
+
+    /// Show `scene` and `ghosts` as drawn last through `p` (for tests
+    /// elsewhere, without a worker).
+    #[cfg(test)]
+    pub fn show_for_test(&mut self, scene: Option<Arc<Scene>>, ghosts: Option<Arc<Scene>>, p: Projector) {
+        (self.scene, self.ghosts, self.last) = (scene, ghosts, Some(p));
+    }
+
+    #[cfg(test)]
+    pub fn set_ghost_errors_for_test(&mut self, errors: Vec<(String, String)>) {
+        self.ghost_errors = errors;
+    }
+
+    /// The scene and the ghosts together (for picking).
+    fn pickable(&self) -> Option<Arc<Scene>> {
+        let scene = self.scene.clone()?;
+        Some(match self.ghosts.as_deref() {
+            Some(g) => {
+                let mut all = (*scene).clone();
+                all.extend(g);
+                Arc::new(all)
+            }
+            None => scene,
+        })
+    }
+
+    /// The world matrix of node `node`'s object in scene `s`: a card,
+    /// mesh, camera, light, particle gadget or locator.
+    fn world_in(s: &Scene, node: &str) -> Option<Mat4> {
         if let Some(c) = s.cards.iter().find(|c| c.node == node) {
             return Some(c.world);
         }
@@ -1235,6 +1400,8 @@ impl Viewport3d {
                 Err(e) => self.error = Some(e),
             }
             self.render_ms = r.millis;
+            self.ghosts = r.ghosts;
+            self.ghost_errors = r.ghost_errors;
             self.splats_shown = r.splats;
             self.blur_times = r.blur_times;
             if let Some(img) = r.render {
@@ -1250,6 +1417,8 @@ impl Viewport3d {
         let node = doc.viewed();
         if node != self.node {
             self.scene = None;
+            self.ghosts = None;
+            self.ghost_errors.clear();
             self.look_through = None;
             self.texture_rect = None;
             self.blur_times.clear();
@@ -1276,7 +1445,8 @@ impl Viewport3d {
         let pixels = [(target.width() * ppp).round() as usize, (target.height() * ppp).round() as usize];
         // Asked again when the scene's lights change what Lit is.
         let preview = self.preview(scale == 1.0);
-        let ask = Ask { node: node.clone(), frame, revision: doc.revision, view: self.view, look_through: self.look_through.clone(), through: through.clone(), pixels, preview };
+        let ghosts = doc.selection();
+        let ask = Ask { node: node.clone(), frame, revision: doc.revision, view: self.view, look_through: self.look_through.clone(), through: through.clone(), pixels, preview, ghosts: ghosts.clone() };
         if self.asked.as_ref() == Some(&ask) {
             return;
         }
@@ -1290,7 +1460,7 @@ impl Viewport3d {
         if let Some(w) = &self.worker {
             // A render's motion blur and the splats only once the view has
             // settled.
-            w.request(SceneRequest { graph, node, frame, render, solid: !self.view.wireframe, preview, blur: scale == 1.0, splats: scale == 1.0, through: looking, rect: Some(target) });
+            w.request(SceneRequest { graph, node, frame, render, solid: !self.view.wireframe, preview, blur: scale == 1.0, splats: scale == 1.0, through: looking, rect: Some(target), ghosts });
         }
         self.asked = Some(ask);
     }
@@ -1329,6 +1499,7 @@ impl Viewport3d {
             self.select(ui, resp, doc, &p);
         } else {
             self.marquee = None;
+            self.hover = None;
         }
         self.context_menu(resp, doc, frame);
         self.draw(ui, &painter, &p, doc, frame);
@@ -1482,20 +1653,33 @@ impl Viewport3d {
     /// Left-click picks (⇧ adds or removes), a left-drag from empty space
     /// box-selects (⇧ adds); clicking empty space deselects.
     fn select(&mut self, ui: &egui::Ui, resp: &Response, doc: &mut Doc, p: &Projector) {
-        let Some(scene) = self.scene.clone() else { return };
+        let Some(scene) = self.pickable() else { return };
+        let aspect = project_aspect(doc);
         let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
         if self.nav.emulate_three_button && alt {
             return;
         }
         if resp.clicked_by(PointerButton::Primary) {
             if let Some(s) = resp.interact_pointer_pos() {
-                let hit = pick(&scene, p, s, &Self::locator(doc));
+                let hit = self.click(&scene, p, aspect, s, shift, doc);
                 self.apply_hit(doc, hit, shift);
             }
         }
+        // What a click would pick, while the pointer moves with no button
+        // down.
+        let idle = !ui.input(|i| i.pointer.any_down()) && self.marquee.is_none();
+        match resp.hover_pos().filter(|_| idle) {
+            Some(at) if self.hover.as_ref().is_none_or(|(was, _)| *was != at) => {
+                let hits = pick_all(&scene, p, aspect, at, &Self::locator(doc));
+                let next = self.cycle_next(at, &hits);
+                self.hover = Some((at, hits.get(next).cloned()));
+            }
+            Some(_) => {}
+            None => self.hover = None,
+        }
         if resp.drag_started_by(PointerButton::Primary) {
             let start = ui.input(|i| i.pointer.press_origin());
-            if let Some(o) = start.filter(|o| pick(&scene, p, *o, &Self::locator(doc)).is_none()) {
+            if let Some(o) = start.filter(|o| pick(&scene, p, aspect, *o, &Self::locator(doc)).is_none()) {
                 self.marquee = Some((o, o, shift));
             }
         }
@@ -1511,6 +1695,27 @@ impl Viewport3d {
                 self.points.extend(points.into_iter().filter(|pt| !self.points.contains(pt)).collect::<Vec<_>>());
                 doc.select_nodes(&objects, add);
             }
+        }
+    }
+
+    /// What a click at `at` picks: the first of what's under it, or, clicked
+    /// again where it was last (and the same things under it), the next
+    /// one (⇧ always takes the first).
+    fn click(&mut self, scene: &Scene, p: &Projector, aspect: f64, at: Pos2, shift: bool, doc: &Doc) -> Option<Hit> {
+        let hits = pick_all(scene, p, aspect, at, &Self::locator(doc));
+        let k = if shift { 0 } else { self.cycle_next(at, &hits) };
+        let hit = hits.get(k).cloned();
+        self.cycle = Some((at, hits, k));
+        self.hover = None;
+        hit
+    }
+
+    /// Which of `hits` (under `at`) a click there picks: the one after the
+    /// last click's, if it was here on the same things, else the first.
+    fn cycle_next(&self, at: Pos2, hits: &[Hit]) -> usize {
+        match &self.cycle {
+            Some((was, before, k)) if was.distance(at) <= CYCLE_REACH && before.as_slice() == hits && !hits.is_empty() => (k + 1) % hits.len(),
+            _ => 0,
         }
     }
 
@@ -1640,7 +1845,7 @@ impl Viewport3d {
         let hot = light_handles(l, size)
             .into_iter()
             .filter_map(|(h, w)| p.project(w).map(|(s, _)| (h, s.distance(at))))
-            .filter(|(_, d)| *d <= PICK_RADIUS)
+            .filter(|(_, d)| *d <= HANDLE_PICK)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(h, _)| h);
         let Some(h) = hot else { return false };
@@ -1913,18 +2118,9 @@ impl Viewport3d {
             let node = scene.camera_node(i);
             let color = if selected(node) { SELECTED } else { CAMERA };
             let stroke = Stroke::new(if selected(node) { 2.0 } else { 1.2 }, color);
-            let (back, k) = frustum(cam, size, aspect);
-            for j in 0..4 {
-                line(back[j], k[j], stroke);
-                line(k[j], k[(j + 1) % 4], stroke);
-                if cam.is_ortho() {
-                    line(back[j], back[(j + 1) % 4], stroke);
-                }
+            for (a, b) in camera_lines(cam, size, aspect) {
+                line(a, b, stroke);
             }
-            // A notch on the frame's top edge shows which way is up.
-            let up = (k[0] + k[1]) / 2.0 + (k[0] - k[3]) * 0.2;
-            line(k[0], up, stroke);
-            line(up, k[1], stroke);
             self.draw_path(painter, p, doc, node, frame);
         }
         let primary = doc.selection().last().cloned();
@@ -2043,6 +2239,57 @@ impl Viewport3d {
             let corner = |i: usize| Vec3::new([lo.x, hi.x][i & 1], [lo.y, hi.y][(i >> 1) & 1], [lo.z, hi.z][(i >> 2) & 1]);
             for (a, b) in BOX_EDGES {
                 line(corner(a), corner(b), Stroke::new(1.5, SELECTED));
+            }
+        }
+        // Selected objects not in the viewed scene, dashed (see `ghosts`).
+        if let Some(g) = self.ghosts.clone() {
+            let dashed = |a: Vec3, b: Vec3| {
+                if let Some((sa, sb)) = p.segment(a, b) {
+                    painter.extend(egui::Shape::dashed_line(&[sa, sb], Stroke::new(1.5, SELECTED), 6.0, 4.0));
+                }
+            };
+            for (_, lines) in object_lines(&g, size, aspect) {
+                lines.into_iter().for_each(|(a, b)| dashed(a, b));
+            }
+            for m in &g.meshes {
+                box_lines(m).into_iter().for_each(|(a, b)| dashed(a, b));
+            }
+            for pt in &g.points {
+                let arm = size * 0.5;
+                for axis in [Vec3::x(), Vec3::y(), Vec3::z()] {
+                    dashed(*pt - axis * arm, *pt + axis * arm);
+                }
+            }
+        }
+        // What a click would pick, brighter.
+        if let Some((_, Some(hit))) = &self.hover {
+            let hover = Stroke::new(2.5, HOVER);
+            let all = self.pickable().unwrap_or(scene.clone());
+            match hit {
+                Hit::Object(n) => {
+                    for (_, lines) in object_lines(&all, size, aspect).into_iter().filter(|(o, _)| o == n) {
+                        lines.into_iter().for_each(|(a, b)| line(a, b, hover));
+                    }
+                    for m in all.meshes.iter().filter(|m| &m.node == n) {
+                        box_lines(m).into_iter().for_each(|(a, b)| line(a, b, hover));
+                    }
+                    let dots = (0..all.points.len()).filter(|&i| all.point_node(i) == n).map(|i| all.points[i]);
+                    let lights = all.lights.iter().filter(|l| &l.node == n).map(|l| l.position());
+                    for at in dots.chain(lights) {
+                        if let Some((q, _)) = p.project(at) {
+                            painter.circle_stroke(q, 6.0, hover);
+                        }
+                    }
+                    for (lo, hi) in all.splats.iter().filter(|g| &g.node == n).filter_map(|g| g.bounds()) {
+                        let corner = |i: usize| Vec3::new([lo.x, hi.x][i & 1], [lo.y, hi.y][(i >> 1) & 1], [lo.z, hi.z][(i >> 2) & 1]);
+                        BOX_EDGES.iter().for_each(|&(a, b)| line(corner(a), corner(b), hover));
+                    }
+                }
+                Hit::Point(_, i) => {
+                    if let Some((q, _)) = all.points.get(*i).and_then(|pt| p.project(*pt)) {
+                        painter.circle_stroke(q, 5.0, hover);
+                    }
+                }
             }
         }
         // Through a camera: its frame, the outside darkened.
@@ -2254,6 +2501,9 @@ fn icon(painter: &egui::Painter, at: Pos2, what: &str) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The cameras' frame aspect the tests pick with (the default project's).
+    const ASPECT: f64 = 16.0 / 9.0;
 
     fn rect() -> Rect {
         Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(800.0, 450.0))
@@ -2507,6 +2757,84 @@ mod tests {
 
     /// A camera at the origin looking down −Z, two overlapping cards, a
     /// cloud of three points, a locator and a scene camera.
+    /// A card seen edge-on, a camera and a point light, side by side, and
+    /// two cards one behind the other in the middle; the view from the
+    /// origin down −Z.
+    fn thin_scene() -> (Scene, Projector, Doc) {
+        let tex = Arc::new(Image::new(4, 4));
+        let card = |node: &str, at: [f64; 3], turn: f64| arclight::scene::Card { node: node.into(), ..arclight::scene::Card::new(tex.clone(), geom::trs(at, [0.0, turn, 0.0], [1.0; 3]), [2.0, 2.0]) };
+        let s = Scene {
+            cards: vec![card("edge", [3.0, 0.0, -8.0], 90.0), card("front", [0.0, 0.0, -6.0], 0.0), card("back", [0.0, 0.0, -10.0], 0.0)],
+            cameras: vec![geom::Camera { world: geom::trs([-3.5, 1.5, -8.0], [0.0; 3], [1.0; 3]), ..geom::Camera::default() }],
+            camera_nodes: vec!["cam".into()],
+            lights: vec![Light { node: "bulb".into(), ..Light::new(LightKind::Point, geom::trs([0.0, -2.5, -8.0], [0.0; 3], [1.0; 3])) }],
+            ..Scene::default()
+        };
+        let graph: arclight::graph::Graph = serde_json::from_value(serde_json::json!({ "nodes": [
+            { "id": "edge", "op": "card" }, { "id": "front", "op": "card" }, { "id": "back", "op": "card" },
+            { "id": "cam", "op": "camera" }, { "id": "bulb", "op": "light_point" },
+        ] }))
+        .unwrap();
+        let p = ViewCam { center: [0.0, 0.0, -8.0], yaw: 0.0, pitch: 0.0, distance: 8.0, ortho: false, auto_ortho: false, wireframe: false, shading: None, shadows: false }.projector(rect());
+        (s, p, Doc::new(graph, None))
+    }
+
+    /// Thin things are picked by the lines they're drawn as, within a few
+    /// points and not past them: a card edge-on, a camera's frustum, a
+    /// light's rays.
+    #[test]
+    fn thin_things_are_picked_by_their_lines() {
+        let (s, p, doc) = thin_scene();
+        let loc = Viewport3d::locator(&doc);
+        let size = icon_size(&s);
+        let near = |lines: Vec<(Vec3, Vec3)>, k: usize, t: f32, off: Vec2| {
+            let (a, b) = p.segment(lines[k].0, lines[k].1).unwrap();
+            a + (b - a) * t + off
+        };
+        // The edge-on card: its near upright edge, a few points to its right.
+        let k = s.cards[0].corners();
+        let edge = object_lines(&s, size, ASPECT).into_iter().find(|(n, _)| n == "edge").unwrap().1;
+        let upright = (0..4).find(|&i| (edge[i].0.z - edge[i].1.z).abs() < 1e-9 && edge[i].0.z > -8.0).unwrap();
+        assert!(k.iter().all(|c| (c.x - 3.0).abs() < 1e-9), "edge-on: {k:?}");
+        let by = near(edge.clone(), upright, 0.5, Vec2::new(6.0, 0.0));
+        assert_eq!(pick(&s, &p, ASPECT, by, &loc), Some(Hit::Object("edge".into())));
+        assert_eq!(pick(&s, &p, ASPECT, by + Vec2::new(8.0, 0.0), &loc), None, "past reach");
+        // A frustum's far top edge, and a light's ray tip, a few points off.
+        let cam = camera_lines(&s.cameras[0], size, ASPECT);
+        assert_eq!(pick(&s, &p, ASPECT, near(cam, 1, 0.5, Vec2::new(0.0, -6.0)), &loc), Some(Hit::Object("cam".into())));
+        let rays = light_lines(&s.lights[0], size);
+        assert_eq!(pick(&s, &p, ASPECT, near(rays, 0, 1.0, Vec2::new(4.0, 4.0)), &loc), Some(Hit::Object("bulb".into())));
+    }
+
+    /// Clicking again where the last click was picks the next thing under
+    /// it, round and round; elsewhere, the first again. What the pointer
+    /// hovers is highlighted as what the click there would pick.
+    #[test]
+    fn clicks_in_one_spot_cycle_through_what_s_under_it() {
+        let (s, p, mut doc) = thin_scene();
+        let mut v = Viewport3d::default();
+        let mid = rect().center() + Vec2::new(0.0, 10.0);
+        let under = pick_all(&s, &p, ASPECT, mid, &Viewport3d::locator(&doc));
+        assert_eq!(under, [Hit::Object("front".into()), Hit::Object("back".into())], "nearest first");
+        let mut picked = Vec::new();
+        for at in [mid, mid + Vec2::new(2.0, 1.0), mid, mid + Vec2::new(30.0, 0.0), mid + Vec2::new(30.0, 0.0)] {
+            // What hovering there shows is what the click picks.
+            let shown = pick_all(&s, &p, ASPECT, at, &Viewport3d::locator(&doc)).get(v.cycle_next(at, &pick_all(&s, &p, ASPECT, at, &Viewport3d::locator(&doc)))).cloned();
+            let hit = v.click(&s, &p, ASPECT, at, false, &doc);
+            assert_eq!(shown, hit, "hover at {at:?}");
+            v.apply_hit(&mut doc, hit.clone(), false);
+            picked.push(hit.map(|h| match h {
+                Hit::Object(n) => n,
+                Hit::Point(n, _) => n,
+            }));
+        }
+        let names: Vec<&str> = picked.iter().map(|n| n.as_deref().unwrap_or("-")).collect();
+        assert_eq!(names, ["front", "back", "front", "front", "back"]);
+        assert_eq!(doc.selection(), ["back"]);
+        // ⇧ takes the first, adding it.
+        assert_eq!(v.click(&s, &p, ASPECT, mid + Vec2::new(30.0, 0.0), true, &doc), Some(Hit::Object("front".into())));
+    }
+
     fn picking_scene() -> (Scene, Projector, Doc) {
         use arclight::graph::{Graph, NodeSpec};
         let tex = Arc::new(Image::new(4, 4));
@@ -2551,9 +2879,9 @@ mod tests {
             holdout: false,
             node: "capture".into(),
         }));
-        assert_eq!(pick(&s, &p, at(Vec3::new(-1.0, 2.0, -9.0)) + Vec2::new(3.0, 2.0), &loc), Some(Hit::Object("capture".into())), "near a center");
-        assert_eq!(pick(&s, &p, at(Vec3::new(-0.5, 2.0, -9.0)), &loc), Some(Hit::Object("far".into())), "between centers, out of reach: the card behind");
-        assert_eq!(pick(&s, &p, rect().center(), &loc), Some(Hit::Object("near".into())), "the cards as before");
+        assert_eq!(pick(&s, &p, ASPECT, at(Vec3::new(-1.0, 2.0, -9.0)) + Vec2::new(3.0, 2.0), &loc), Some(Hit::Object("capture".into())), "near a center");
+        assert_eq!(pick(&s, &p, ASPECT, at(Vec3::new(-0.5, 2.0, -9.0)), &loc), Some(Hit::Object("far".into())), "between centers, out of reach: the card behind");
+        assert_eq!(pick(&s, &p, ASPECT, rect().center(), &loc), Some(Hit::Object("near".into())), "the cards as before");
         // Framed by its centers' box; boxed by its middle.
         let only = |n: &str| n == "capture";
         let (c, _) = bounds(&s, Some(&only)).unwrap();
@@ -2570,14 +2898,14 @@ mod tests {
         let at = |x: Vec3| p.project(x).unwrap().0;
         // A click at (or near) a projected point picks it; a locator's
         // point picks the locator; a camera's apex picks the camera.
-        assert_eq!(pick(&s, &p, at(s.points[1]) + Vec2::new(3.0, -2.0), &loc), Some(Hit::Point("cloud".into(), 1)));
-        assert_eq!(pick(&s, &p, at(s.points[3]), &loc), Some(Hit::Object("loc".into())));
-        assert_eq!(pick(&s, &p, at(Vec3::new(-2.5, -1.0, -7.0)), &loc), Some(Hit::Object("cam".into())));
+        assert_eq!(pick(&s, &p, ASPECT, at(s.points[1]) + Vec2::new(3.0, -2.0), &loc), Some(Hit::Point("cloud".into(), 1)));
+        assert_eq!(pick(&s, &p, ASPECT, at(s.points[3]), &loc), Some(Hit::Object("loc".into())));
+        assert_eq!(pick(&s, &p, ASPECT, at(Vec3::new(-2.5, -1.0, -7.0)), &loc), Some(Hit::Object("cam".into())));
         // The middle of the view is on both cards: the nearer wins.
-        assert_eq!(pick(&s, &p, rect().center(), &loc), Some(Hit::Object("near".into())));
+        assert_eq!(pick(&s, &p, ASPECT, rect().center(), &loc), Some(Hit::Object("near".into())));
         // Past the near card's edge, on the bigger far one: the far one.
-        assert_eq!(pick(&s, &p, at(Vec3::new(2.6, -2.6, -10.0)), &loc), Some(Hit::Object("far".into())));
-        assert_eq!(pick(&s, &p, Pos2::new(5.0, 5.0), &loc), None);
+        assert_eq!(pick(&s, &p, ASPECT, at(Vec3::new(2.6, -2.6, -10.0)), &loc), Some(Hit::Object("far".into())));
+        assert_eq!(pick(&s, &p, ASPECT, Pos2::new(5.0, 5.0), &loc), None);
         // A box around the left half: the left point, the camera.
         let (objects, points) = box_pick(&s, &p, Pos2::new(0.0, 0.0), Pos2::new(rect().center().x - 50.0, rect().max.y), &loc);
         assert_eq!((objects, points), (vec!["cam".to_string()], vec![("cloud".to_string(), 1)]));
@@ -2596,9 +2924,9 @@ mod tests {
         s.meshes = vec![ball, crate_];
         // Through the ball's middle: the ball, nearer than both cards; just
         // past its edge, the near card; on the crate's middle, the crate.
-        assert_eq!(pick(&s, &p, rect().center(), &loc), Some(Hit::Object("ball".into())));
-        assert_eq!(pick(&s, &p, at(Vec3::new(0.6, 0.0, -4.0)), &loc), Some(Hit::Object("near".into())));
-        assert_eq!(pick(&s, &p, at(Vec3::new(3.5, 2.5, -9.0)), &loc), Some(Hit::Object("crate".into())));
+        assert_eq!(pick(&s, &p, ASPECT, rect().center(), &loc), Some(Hit::Object("ball".into())));
+        assert_eq!(pick(&s, &p, ASPECT, at(Vec3::new(0.6, 0.0, -4.0)), &loc), Some(Hit::Object("near".into())));
+        assert_eq!(pick(&s, &p, ASPECT, at(Vec3::new(3.5, 2.5, -9.0)), &loc), Some(Hit::Object("crate".into())));
         // A box around the right half takes the crate (by its center).
         let (objects, _) = box_pick(&s, &p, Pos2::new(rect().center().x + 40.0, 0.0), rect().max, &loc);
         assert!(objects.contains(&"crate".to_string()) && !objects.contains(&"ball".to_string()), "{objects:?}");
@@ -2629,7 +2957,7 @@ mod tests {
         ];
         // A click on (or near) each light picks it, over the cards behind.
         for l in &s.lights {
-            assert_eq!(pick(&s, &p, at(l.position()) + Vec2::new(2.0, 2.0), &loc), Some(Hit::Object(l.node.clone())), "{}", l.node);
+            assert_eq!(pick(&s, &p, ASPECT, at(l.position()) + Vec2::new(2.0, 2.0), &loc), Some(Hit::Object(l.node.clone())), "{}", l.node);
         }
         // A box round the left half takes the spot and the panel.
         let (objects, _) = box_pick(&s, &p, Pos2::new(0.0, 0.0), Pos2::new(rect().center().x - 30.0, rect().max.y), &loc);
@@ -2973,7 +3301,7 @@ mod tests {
         let (_, p, _) = picking_scene();
         let loc = |_: &str| false;
         let mid = p.project(Vec3::new(3.0, 0.0, -8.0)).unwrap().0;
-        assert_eq!(pick(&s, &p, mid + Vec2::new(2.0, 1.0), &loc), Some(Hit::Object("crop".into())));
+        assert_eq!(pick(&s, &p, ASPECT, mid + Vec2::new(2.0, 1.0), &loc), Some(Hit::Object("crop".into())));
         assert!(bounds(&s, Some(&|n: &str| n == "crop")).is_some_and(|(c, _)| (c - Vec3::new(3.0, 0.0, -8.0)).norm() < 1e-9));
         let v = Viewport3d { scene: Some(Arc::new(s.clone())), ..Viewport3d::default() };
         assert_eq!(v.object_world("crop"), Some(g.world));
@@ -3024,7 +3352,7 @@ mod tests {
         let (_, p, _) = picking_scene();
         let loc = |_: &str| false;
         for g in &gs {
-            assert_eq!(pick(&s, &p, p.project(at(g)).unwrap().0 + Vec2::new(2.0, 1.0), &loc), Some(Hit::Object(g.node.clone())), "{}", g.node);
+            assert_eq!(pick(&s, &p, ASPECT, p.project(at(g)).unwrap().0 + Vec2::new(2.0, 1.0), &loc), Some(Hit::Object(g.node.clone())), "{}", g.node);
         }
         let (objects, _) = box_pick(&s, &p, Pos2::new(0.0, 0.0), Pos2::new(rect().center().x - 30.0, rect().max.y), &loc);
         assert_eq!(objects, ["swirl"]);

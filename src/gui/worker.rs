@@ -186,6 +186,9 @@ pub struct SceneRequest {
     pub through: Option<(crate::viewport3d::Through, arclight::image::Size)>,
     /// Where the render goes on screen (echoed back).
     pub rect: Option<eframe::egui::Rect>,
+    /// Selected nodes to show even if they aren't in the scene (see
+    /// [`ghosts_of`]).
+    pub ghosts: Vec<String>,
 }
 
 pub struct SceneResponse {
@@ -201,6 +204,9 @@ pub struct SceneResponse {
     /// render with motion blur shows: the cards blurred over them, and the
     /// particles streaked. Empty otherwise.
     pub blur_times: Vec<f64>,
+    /// The asked-for ghosts not in the scene, and why any couldn't be made.
+    pub ghosts: Option<Arc<arclight::scene::Scene>>,
+    pub ghost_errors: Vec<(String, String)>,
 }
 
 /// The 3D viewport's own background thread (so orbiting doesn't queue
@@ -223,8 +229,10 @@ impl SceneWorker {
                         req = newer;
                     }
                     let t0 = Instant::now();
-                    let scene = scene_of(&mut eval, &req.graph, &req.node, req.frame);
-                    let blur_times = if req.blur { view_blur_times(&req.graph, &req.node, req.frame) } else { Vec::new() };
+                    // (A 2D node after a render shows the render's scene.)
+                    let viewed = scene_source(&req.graph, &req.node).unwrap_or_else(|| req.node.clone());
+                    let scene = scene_of(&mut eval, &req.graph, &viewed, req.frame);
+                    let blur_times = if req.blur { view_blur_times(&req.graph, &viewed, req.frame) } else { Vec::new() };
                     // Only cards, solid meshes and (settled) splats are
                     // rendered; the viewport draws the rest.
                     let splats = req.splats && matches!(&scene, Ok(Some(s)) if !s.splats.is_empty());
@@ -238,17 +246,19 @@ impl SceneWorker {
                                 arclight::scene::Scene { cards: s.cards.clone(), meshes, lights, splats, ..Default::default() }
                             };
                             let now = shown(s);
-                            let (times, then) = if blur_times.is_empty() { Default::default() } else { blurred(&mut eval, &req.graph, &req.node, req.frame) };
+                            let (times, then) = if blur_times.is_empty() { Default::default() } else { blurred(&mut eval, &req.graph, &viewed, req.frame) };
                             let then: Vec<(i64, arclight::scene::Scene, arclight::geom::Camera)> = then.iter().map(|(k, s)| (*k, shown(s), frame_camera(cam, s, req.through.as_ref()))).collect();
                             // Jittered as the render is (Jitter shutter).
-                            let jitter = req.graph.node(&req.node).is_none_or(|n| arclight::ops::blur_jitter(&n.params));
+                            let jitter = req.graph.node(&viewed).is_none_or(|n| arclight::ops::blur_jitter(&n.params));
                             let blur = arclight::render3d::Blur { times, frames: std::iter::once((0, &now, cam.clone())).chain(then.iter().map(|(k, s, c)| (*k, s, c.clone()))).collect(), jitter };
                             Some(Arc::new(arclight::render3d::render_preview_blurred(&now, cam, *format, req.preview, Some(&blur))))
                         }
                         _ => None,
                     };
                     let splats = splats && render.is_some();
-                    let resp = SceneResponse { node: req.node, scene, render, splats, rect: req.rect, millis: t0.elapsed().as_secs_f32() * 1000.0, blur_times };
+                    let in_scene = scene.as_ref().ok().cloned().flatten();
+                    let (ghosts, ghost_errors) = ghosts_of(&mut eval, &req.graph, in_scene.as_deref(), &req.ghosts, req.frame);
+                    let resp = SceneResponse { node: req.node, scene, render, splats, rect: req.rect, millis: t0.elapsed().as_secs_f32() * 1000.0, blur_times, ghosts, ghost_errors };
                     if resp_tx.send(resp).is_err() {
                         break;
                     }
@@ -304,6 +314,74 @@ fn view_blur_times(graph: &Graph, id: &str, frame: i64) -> Vec<f64> {
     arclight::render3d::Blur::times(times[0] - share / 2.0, share * times.len() as f64, VIEW_BLUR_TIMES)
 }
 
+/// The node whose 3D scene viewing `id` shows: the nearest up its inputs
+/// (itself first, breadth-first, a node's main input before the others: a
+/// Merge's B, its background, before its A) that makes a scene (a Camera,
+/// Card, Scene…), renders one (a Scanline Render) or solves one (a Camera
+/// Tracker). So viewing a Grade or a Merge after a render shows the
+/// render's scene.
+pub fn scene_source(graph: &Graph, id: &str) -> Option<String> {
+    use arclight::ops;
+    let shows = |op: &str| ops::output_kind(op) == ops::Kind::Scene || matches!(op, "scanline_render" | "camera_tracker");
+    let mut queue = std::collections::VecDeque::from([id.to_string()]);
+    let mut seen = std::collections::HashSet::new();
+    while let Some(id) = queue.pop_front() {
+        let Some(n) = graph.node(&id).filter(|_| seen.insert(id.clone())) else { continue };
+        if shows(&n.op) {
+            return Some(id);
+        }
+        let mut order: Vec<usize> = (0..n.inputs.len()).collect();
+        if order.len() > 1 && ops::port(&n.op, 1).is_some_and(|p| p.label == "B") {
+            order.swap(0, 1);
+        }
+        queue.extend(order.into_iter().map(|i| n.inputs[i].clone()).filter(|i| !i.is_empty()));
+    }
+    None
+}
+
+/// The ops a selected node of may be shown as a ghost: one object each.
+const GHOST_OPS: &[&str] = &[
+    "card", "camera", "locator", "cube", "sphere", "cylinder", "plane", "read_geo",
+    "light_ambient", "light_directional", "light_point", "light_spot", "light_area",
+];
+
+/// Whether `scene` holds node `node`'s card, mesh, camera, light or
+/// locator.
+pub fn holds(scene: &arclight::scene::Scene, node: &str) -> bool {
+    scene.cards.iter().any(|c| c.node == node)
+        || scene.meshes.iter().any(|m| m.node == node)
+        || scene.lights.iter().any(|l| l.node == node)
+        || (0..scene.cameras.len()).any(|i| scene.camera_node(i) == node)
+        || (0..scene.points.len()).any(|i| scene.point_node(i) == node)
+}
+
+/// Of `nodes` (the selection), the cards, lights, cameras, locators and
+/// meshes `scene` doesn't hold, each as its own output at `frame`, in one
+/// scene (None if there are none): the 3D view shows them dimmed, so a
+/// node picked in the graph can still be seen and moved. And for each that
+/// can't be made, why.
+pub fn ghosts_of(eval: &mut Evaluator, graph: &Graph, scene: Option<&arclight::scene::Scene>, nodes: &[String], frame: i64) -> (Option<Arc<arclight::scene::Scene>>, Vec<(String, String)>) {
+    let ctx = EvalContext { frame, write_outputs: false };
+    let (mut ghosts, mut errors) = (arclight::scene::Scene::default(), Vec::new());
+    let mut any = false;
+    for id in nodes {
+        let Some(n) = graph.node(id).filter(|n| GHOST_OPS.contains(&n.op.as_str())) else { continue };
+        if scene.is_some_and(|s| holds(s, id)) {
+            continue;
+        }
+        match eval.evaluate(graph, &n.id, &ctx) {
+            Ok(img) => {
+                if let Some(s) = &img.scene {
+                    ghosts.extend(s);
+                    any = true;
+                }
+            }
+            Err(e) => errors.push((id.clone(), e.to_string())),
+        }
+    }
+    (any.then(|| Arc::new(ghosts)), errors)
+}
+
 /// The scene node `id` shows at `frame`: its own output for 3D nodes, a
 /// Scanline Render's scene, camera and extra scene inputs together, a Camera Tracker's
 /// solved camera and points; None for nodes that show no scene.
@@ -348,6 +426,65 @@ pub fn scene_of(eval: &mut Evaluator, graph: &Graph, id: &str, frame: i64) -> Re
 mod tests {
     use super::*;
     use crate::doc::Doc;
+
+    /// A 3D setup with lights on the render's extra inputs, a render on a
+    /// Merge's B with a roto on its A, and 3D nodes outside it.
+    fn staged() -> Graph {
+        serde_json::from_value(serde_json::json!({ "nodes": [
+            { "id": "plate", "op": "constant", "params": { "width": 64, "height": 64 } },
+            { "id": "card", "op": "card" },
+            { "id": "spot", "op": "light_spot" },
+            { "id": "scene", "op": "scene", "inputs": ["card", "spot"] },
+            { "id": "cam", "op": "camera" },
+            { "id": "sun", "op": "light_directional" },
+            { "id": "render", "op": "scanline_render", "inputs": ["scene", "cam", "plate", "sun"] },
+            { "id": "roto", "op": "roto" },
+            { "id": "comp", "op": "merge", "inputs": ["roto", "render"] },
+            { "id": "graded", "op": "grade", "inputs": ["comp"] },
+            { "id": "other", "op": "scanline_render", "inputs": ["scene", "cam"] },
+            { "id": "both", "op": "merge", "inputs": ["other", "render"] },
+            { "id": "loose", "op": "card" },
+            { "id": "cam2", "op": "camera" },
+            { "id": "unrendered", "op": "scene", "inputs": ["cam2"] },
+            { "id": "bulb", "op": "light_point" },
+        ] }))
+        .unwrap()
+    }
+
+    /// Viewing a 2D node after a render shows the render's scene: the
+    /// nearest up its inputs, breadth-first, a Merge's B before its A.
+    #[test]
+    fn a_2d_node_after_a_render_shows_its_scene() {
+        let g = staged();
+        let src = |id: &str| scene_source(&g, id);
+        assert_eq!((src("graded"), src("comp"), src("render"), src("card")), (Some("render".into()), Some("render".into()), Some("render".into()), Some("card".into())));
+        assert_eq!(src("both").as_deref(), Some("render"), "B, the background, first");
+        assert_eq!((src("plate"), src("roto"), src("nope")), (None, None, None));
+        let mut eval = Evaluator::new();
+        let viewed = src("graded").unwrap();
+        let s = scene_of(&mut eval, &g, &viewed, 1).unwrap().unwrap();
+        assert!(["card", "spot", "cam", "sun"].iter().all(|n| holds(&s, n)), "the render's scene, its camera and extra inputs");
+    }
+
+    /// Selected cards, cameras and lights the viewed scene doesn't hold come
+    /// back as ghosts; those it holds, and nodes that aren't objects, don't.
+    #[test]
+    fn selected_objects_outside_the_scene_come_back_as_ghosts() {
+        let g = staged();
+        let mut eval = Evaluator::new();
+        let s = scene_of(&mut eval, &g, "render", 1).unwrap().unwrap();
+        let ask: Vec<String> = ["card", "cam", "sun", "loose", "cam2", "bulb", "graded", "unrendered"].map(String::from).to_vec();
+        let (ghosts, errors) = ghosts_of(&mut eval, &g, Some(&s), &ask, 1);
+        let ghosts = ghosts.unwrap();
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(["loose", "cam2", "bulb"].iter().all(|n| holds(&ghosts, n)));
+        assert!(["card", "cam", "sun"].iter().all(|n| !holds(&ghosts, n)), "in the scene already");
+        assert_eq!((ghosts.cards.len(), ghosts.cameras.len(), ghosts.lights.len()), (1, 1, 1), "not the Scene node's contents");
+        // Viewing just the Scene: the render's camera is a ghost.
+        let only = scene_of(&mut eval, &g, "scene", 1).unwrap().unwrap();
+        assert!(holds(&ghosts_of(&mut eval, &g, Some(&only), &["cam".to_string()], 1).0.unwrap(), "cam"));
+        assert!(ghosts_of(&mut eval, &g, Some(&s), &["card".to_string()], 1).0.is_none());
+    }
 
     /// The 3D view of a blurred render: its shutter times (at most 8, over
     /// the same shutter) and scenes round them; the card's preview smears.
@@ -430,7 +567,7 @@ mod tests {
         let size = arclight::image::Size { width: 64, height: 32 };
         let cam = arclight::geom::Camera { focal: 18.0, ..Default::default() };
         let ask = |splats: bool| {
-            worker.request(SceneRequest { graph: Arc::new(graph.clone()), node: "cap".into(), frame: 1, render: Some((cam.clone(), size)), solid: true, preview: arclight::render3d::Preview::Solid, blur: splats, splats, through: None, rect: None });
+            worker.request(SceneRequest { graph: Arc::new(graph.clone()), node: "cap".into(), frame: 1, render: Some((cam.clone(), size)), solid: true, preview: arclight::render3d::Preview::Solid, blur: splats, splats, through: None, rect: None, ghosts: Vec::new() });
             let t0 = Instant::now();
             loop {
                 if let Some(r) = worker.poll() {

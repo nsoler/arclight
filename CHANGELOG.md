@@ -12,6 +12,19 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.37 — 2026-10-30
+
+- A card, light or camera **selected in the node graph gets its gizmo**
+  in the 3D view wherever it is: the 3D view shows a render's scene also
+  when viewing a node after it (a Merge, a Grade…), and a selected object
+  that isn't in the viewed scene is drawn dashed and can still be moved
+  (the viewer says so). When it can't have a gizmo (behind the view,
+  being looked through, an error), the viewer says why.
+- **Easier picking in the 3D view**: cards seen edge-on, camera frustums
+  and light icons can be clicked near their lines (8 px); clicking again
+  in the same spot picks the next thing under the pointer; what a click
+  would pick is highlighted as you hover.
+
 ## 0.10.36 — 2026-10-30
 
 - **Turn nodes off** to troubleshoot: a switch on each node in the graph

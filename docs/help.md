@@ -270,7 +270,16 @@ or rotate it with G / R or the gizmo to aim it.
 - Left-drag on empty space box-selects (**⇧** adds).
 - **A** selects everything; **⌥A** or **Esc** deselects (**Esc** first
   cancels a box).
+- Click near a card's edge, a camera's frame or a light's icon to pick
+  it (a card seen edge-on too); click again in the same spot for what's
+  behind it. What a click would pick lights up under the pointer.
 - Selecting an object selects its node in the graph, and the other way round.
+- A card, light or camera selected in the node graph gets its gizmo
+  wherever it is: viewing a node after a render (a Merge, a Grade…) still
+  shows the render's scene, and a selected object that isn't in the
+  viewed scene is drawn dashed so you can still move it. When it can't
+  have a gizmo (behind the view, being looked through), the viewer says
+  why.
 - Right-click a Camera Tracker's selected points: **Place Card here** or
   **Place locator**.
 
