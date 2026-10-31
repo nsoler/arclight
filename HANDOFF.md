@@ -30,8 +30,15 @@ done), `docs/help.md` (the in-app help) and
   and weights (bit-identical 4K renders); map table words read once per
   lookup (`MapAt`). 4K AA3 Quality 16: softness 1 22.9 → 15.8 s, 2 51.2 →
   31.4 s, layered bench 35.1 → 22.8 s. Test
-  `many_sample_area_lights_shadow_as_on_the_cpu`. Step 2 (skip uniform
-  footprints) in progress.
+  `many_sample_area_lights_shadow_as_on_the_cpu`.
+- **0.13.4, area-light step 2** (Dev2): a `map_blocks` pass after each
+  shadow map stores per 4×4 texels the nearest caster and the farthest
+  opaque one (map table word 27, 2 words a block, counted in the maps'
+  memory room); a lookup reads the blocks first and skips texel reads
+  when its footprint is wholly lit (1) or shadowed (0). 4×4, not the
+  proposed 8×8: 74–82% of lookups caught vs 65–70%. Bit-identical. 4K AA3
+  Quality 16: softness 1 15.8 → 7.0 s, 2 31.4 → 12.0 s, layered 22.8 →
+  10.6 s (from 22.9 / 51.2 / 35.1 before 0.13.3).
 - **0.13.2, drop a wire on a node's body** (Dev1): `node_editor.rs`
   `body_input` (first free input whose kind fits, in port order, else the
   first that fits; none on a cycle via `doc.is_upstream`) and

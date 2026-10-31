@@ -584,7 +584,7 @@ impl Tables {
             (0..3).for_each(|k| w[20 + k] = f(v.origin[k]));
             w[23] = f(v.texel);
             w[24] = texels as u32;
-            // (25, 26: its layers, from `add_layers`.)
+            // (25, 26: its layers, 27: its blocks, from `add_layers`.)
             maps.extend_from_slice(&w);
             texels += v.res * v.res;
         }
@@ -606,12 +606,14 @@ impl Tables {
             .collect();
     }
 
-    /// Layers for the maps that see a see-through caster, after all the
-    /// depths: [`MAX_LAYERS`] a texel, fewer (2, then 1) for the light
+    /// Each map's blocks (see `map_blocks` in raster.wgsl: 2 words a 4 × 4
+    /// texels) after all the depths; then layers for the maps that see a
+    /// see-through caster: [`MAX_LAYERS`] a texel, fewer (2, then 1) for the light
     /// whose layers take the most while the maps take more than `room`
     /// bytes. False where they don't fit even so.
     fn add_layers(&mut self, room: usize) -> bool {
-        let depths: usize = self.maps.iter().map(|m| m.res * m.res).sum();
+        let blocks = |m: &MapJob| 2 * m.res.div_ceil(4).pow(2);
+        let depths: usize = self.maps.iter().map(|m| m.res * m.res + blocks(m)).sum();
         let lights = self.maps.iter().map(|m| m.light + 1).max().unwrap_or(0);
         let mut texels = vec![0usize; lights];
         for m in self.maps.iter().filter(|m| m.layered) {
@@ -623,7 +625,11 @@ impl Tables {
             let Some(l) = (0..lights).filter(|&l| k[l] > 1).max_by_key(|&l| texels[l] * (2 * k[l] + 1)) else { return false };
             k[l] /= 2;
         }
-        let mut at = depths;
+        let mut at = self.maps.iter().map(|m| m.res * m.res).sum::<usize>();
+        for (i, m) in self.maps.iter().enumerate() {
+            self.tables[self.at[3] + i * MAP_WORDS + 27] = at as u32;
+            at += blocks(m);
+        }
         for (i, m) in self.maps.iter().enumerate() {
             let k = if m.layered { k[m.light] } else { 0 };
             let w = self.at[3] + i * MAP_WORDS;
@@ -690,6 +696,7 @@ fn draw_maps(gpu: &Gpu, tables: &Tables, textures: &Textures) -> wgpu::Buffer {
         return maps;
     }
     let pipeline = gpu.compute_pipeline("render3d/raster", RASTER, "shadow_map");
+    let blocks = gpu.compute_pipeline("render3d/raster", RASTER, "map_blocks");
     let texel_buf = textures.buffer(gpu);
     let out = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("render3d shadow out"), layout: &pipeline.get_bind_group_layout(1), entries: &[wgpu::BindGroupEntry { binding: 0, resource: maps.as_entire_binding() }] });
     let mut encoder = device.create_command_encoder(&Default::default());
@@ -706,6 +713,15 @@ fn draw_maps(gpu: &Gpu, tables: &Tables, textures: &Textures) -> wgpu::Buffer {
         pass.set_bind_group(0, &group, &[]);
         pass.set_bind_group(1, &out, &[]);
         pass.dispatch_workgroups(m.res.div_ceil(16) as u32, m.res.div_ceil(16) as u32, 1);
+        drop(pass);
+        // Then its blocks, from what it drew (the uniform and words only).
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("render3d shadow blocks"), layout: &blocks.get_bind_group_layout(0), entries: &entries[..2] });
+        let out = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("render3d shadow blocks out"), layout: &blocks.get_bind_group_layout(1), entries: &[wgpu::BindGroupEntry { binding: 0, resource: maps.as_entire_binding() }] });
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&blocks);
+        pass.set_bind_group(0, &group, &[]);
+        pass.set_bind_group(1, &out, &[]);
+        pass.dispatch_workgroups(m.res.div_ceil(64) as u32, m.res.div_ceil(64) as u32, 1);
     }
     gpu.queue.submit([encoder.finish()]);
     maps

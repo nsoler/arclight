@@ -389,9 +389,10 @@ fn map_layers(m: u32) -> u32 { return mu(m, 26u); }
 fn map_layer_at(m: u32, i: u32) -> u32 { return mu(m, 25u) + i * (2u * map_layers(m) + 1u); }
 
 // Map m's words a lookup reads per texel: texels across, where its depths
-// and layers start, and its layers a texel.
-struct MapAt { res: i32, depth: u32, layers: u32, k: u32 };
-fn map_at(m: u32) -> MapAt { return MapAt(i32(mu(m, 14u)), mu(m, 24u), mu(m, 25u), map_layers(m)); }
+// and layers start, its layers a texel, and where its blocks start (see
+// `map_blocks`).
+struct MapAt { res: i32, depth: u32, layers: u32, k: u32, blocks: u32 };
+fn map_at(m: u32) -> MapAt { return MapAt(i32(mu(m, 14u)), mu(m, 24u), mu(m, 25u), map_layers(m), mu(m, 27u)); }
 
 // The nearest caster at texel (x, y) of map m, opaque or not.
 fn map_depth(m: u32, x: i32, y: i32) -> f32 {
@@ -440,9 +441,11 @@ fn map_lit_at(a: MapAt, q: vec2<f32>, key: f32) -> f32 {
 // map_lit's (2n + 1)² taps where they fall a texel apart (step 1): each
 // tap as map_lit_at weighs it (its own fraction, worked out the same way)
 // and summed in the same order, but each texel of their footprint read
-// once (a row kept for the next), not four times. False (and nothing
-// summed) where rounding puts a tap on a texel other than the footprint's
-// (then the taps go one by one).
+// once (a row kept for the next), not four times; and none read where the
+// blocks under the footprint say every texel is lit (the taps weighed with
+// 1 for each) or behind an opaque caster (0). False (and nothing summed)
+// where rounding puts a tap on a texel other than the footprint's (then
+// the taps go one by one).
 fn map_lit_grid(a: MapAt, q: vec2<f32>, key: f32, n: i32, out: ptr<function, f32>) -> bool {
     let x0 = floor(q - vec2<f32>(0.5));
     let ix = i32(x0.x) - n;
@@ -457,6 +460,39 @@ fn map_lit_grid(a: MapAt, q: vec2<f32>, key: f32, n: i32, out: ptr<function, f32
         fx[i] = t.x - t0.x;
         fy[i] = t.y - t0.y;
     }
+    let whole = 2 * n + 1;
+    let nb = (a.res + 3) / 4;
+    let bx0 = ix >> 2u;
+    let by0 = iy >> 2u;
+    let bx1 = (ix + w - 1) >> 2u;
+    let by1 = (iy + w - 1) >> 2u;
+    if (bx0 >= 0 && by0 >= 0 && bx1 < nb && by1 < nb) {
+        var near = FAR_AWAY;
+        var far = 0.0;
+        for (var by = by0; by <= by1; by++) {
+            for (var bx = bx0; bx <= bx1; bx++) {
+                let b = a.blocks + 2u * u32(by * nb + bx);
+                near = min(near, maps[b]);
+                far = max(far, maps[b + 1u]);
+            }
+        }
+        if (far < key) {
+            *out = 0.0;
+            return true;
+        }
+        if (!(near < key)) {
+            var sum = 0.0;
+            for (var j = 0; j < w - 1; j++) {
+                let f_y = fy[j];
+                for (var i = 0; i < w - 1; i++) {
+                    let f_x = fx[i];
+                    sum += ((1.0 - f_x) + f_x) * (1.0 - f_y) + ((1.0 - f_x) + f_x) * f_y;
+                }
+            }
+            *out = sum / f32(whole * whole);
+            return true;
+        }
+    }
     var lo: array<f32, 10>;
     var hi: array<f32, 10>;
     for (var i = 0; i < w; i++) { lo[i] = map_lit_texel(a, ix + i, iy, key); }
@@ -470,7 +506,7 @@ fn map_lit_grid(a: MapAt, q: vec2<f32>, key: f32, n: i32, out: ptr<function, f32
         }
         lo = hi;
     }
-    *out = sum / f32((2 * n + 1) * (2 * n + 1));
+    *out = sum / f32(whole * whole);
     return true;
 }
 
@@ -1278,4 +1314,44 @@ fn shadow_map(@builtin(global_invocation_id) gid: vec3<u32>) {
         map_out[base + 2u + 2u * j] = 1.0;
     }
     map_out[base] = limit;
+}
+
+// Map P.cell.w's 4 × 4 texel blocks, after it's drawn (a thread a block):
+// the nearest caster of any kind there, and the farthest opaque one
+// (FAR_AWAY where a texel has layers or is past the map: never wholly
+// behind). A point no further than the first is lit at every texel of the
+// block; one beyond the second, at none.
+@compute @workgroup_size(16, 16)
+fn map_blocks(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let m = P.cell.w;
+    let res = i32(mu(m, 14u));
+    let nb = (res + 3) / 4;
+    if (i32(gid.x) >= nb || i32(gid.y) >= nb) { return; }
+    let k = map_layers(m);
+    var near = FAR_AWAY;
+    var far = 0.0;
+    var plain = true;
+    for (var y = 0; y < 4; y++) {
+        for (var x = 0; x < 4; x++) {
+            let tx = i32(gid.x) * 4 + x;
+            let ty = i32(gid.y) * 4 + y;
+            if (tx >= res || ty >= res) {
+                plain = false;
+                continue;
+            }
+            let i = u32(ty * res + tx);
+            let d = map_out[mu(m, 24u) + i];
+            near = min(near, d);
+            far = max(far, d);
+            if (k > 0u) {
+                let l0 = map_out[map_layer_at(m, i) + 1u];
+                near = min(near, l0);
+                if (l0 < FAR_AWAY) { plain = false; }
+            }
+        }
+    }
+    if (!plain) { far = FAR_AWAY; }
+    let b = mu(m, 27u) + 2u * (gid.y * u32(nb) + gid.x);
+    map_out[b] = near;
+    map_out[b + 1u] = far;
 }

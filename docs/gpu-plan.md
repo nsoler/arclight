@@ -570,8 +570,20 @@ switch, the status and the tests' skip work end to end.
   compared bit for bit; where rounding would put a tap off the
   footprint, the taps go one by one). 4K AA 3, the scene above with a
   Quality 16 area light: 22.9 → 15.8 s at softness 1, 51.2 → 31.4 s at
-  2; the layered scene 35.1 → 22.8 s. Step 2 (skipping footprints wholly
-  lit or shadowed, from per-block nearest / farthest casters) is next.
+  2; the layered scene 35.1 → 22.8 s.
+- **Step 2:** after each map is drawn, `map_blocks` keeps per 4 × 4
+  texels the nearest caster of any kind and the farthest opaque one (or
+  "never wholly behind" where a texel has layers). A lookup reads the
+  blocks under its footprint first: no further than every caster there,
+  each tap is weighed with 1 (no texel read); beyond every one, it's 0;
+  else the texels as in step 1. Same pixels to the bit (4K renders hashed
+  against step 1's). Measured first: 80–91 % of the footprints (1080p,
+  the scenes below) are wholly lit or wholly shadowed; 4 × 4 blocks catch
+  74–82 % of lookups (8 × 8 blocks only 65–70 %: a block straddles the
+  receiving surface's own slope). Memory: 2 words a block, an eighth of
+  the depths, counted in the maps' room. 4K AA 3, Quality 16 area light:
+  15.8 → 7.0 s at softness 1, 31.4 → 12.0 s at 2; the layered scene
+  22.8 → 10.6 s (from 22.9, 51.2 and 35.1 s before step 1).
 - Motion blur and the jittered shutter added up on the GPU
   (`gpu::blurred`): every (cell, time) render into one frame's buffers,
   each cell's pixels packed onto threads, one read-back; the triangles

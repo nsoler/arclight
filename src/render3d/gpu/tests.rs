@@ -279,7 +279,8 @@ fn layers_shrink_to_fit_or_leave_the_frame_to_the_cpu() {
     let surfs = super::super::surfaces(&scene);
     let format = Size { width: 160, height: 90 };
     let prep = prepare(&gpu, &surfs, &scene.lights, &cam, format, Passes::default(), None, None).expect("on the GPU");
-    let depths: usize = prep.tables.maps.iter().map(|m| m.res * m.res).sum();
+    // (With each map's blocks: 2 words a 4 × 4 texels.)
+    let depths: usize = prep.tables.maps.iter().map(|m| m.res * m.res + 2 * m.res.div_ceil(4).pow(2)).sum();
     let layered_texels: usize = prep.tables.maps.iter().filter(|m| m.layered).map(|m| m.res * m.res).sum();
     let layers = |prep: &Prepared| (0..prep.tables.maps.len()).filter(|&i| prep.tables.maps[i].layered).map(|i| prep.tables.tables[prep.tables.at[3] + i * MAP_WORDS + 26]).collect::<Vec<u32>>();
     assert!(layers(&prep).iter().all(|&k| k == MAX_LAYERS as u32));

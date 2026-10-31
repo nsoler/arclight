@@ -17,6 +17,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.4 — 2026-10-31
+
+- GPU: soft shadows render faster again: lookups skip the parts of a
+  shadow map that are wholly lit or wholly in shadow, read from a small
+  summary of each map (4K, a Quality 16 area light: 15.8 s to 7.0 s at
+  softness 1, 31.4 s to 12.0 s at softness 2; 22.9 s and 51.2 s before
+  0.13.3), with the same pixels as before.
+
 ## 0.13.3 — 2026-10-31
 
 - GPU: soft shadows render faster, most of all from area lights at high
