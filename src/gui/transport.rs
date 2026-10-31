@@ -173,30 +173,39 @@ impl Transport {
             }
             ui.separator();
 
+            // Each label wraps with its field.
             let mut f = self.frame;
-            ui.label("Frame");
-            if ui.add(egui::DragValue::new(&mut f).range(first..=last.max(first))).changed() {
+            if together(ui, "frame", |ui| {
+                ui.label("Frame");
+                ui.add(egui::DragValue::new(&mut f).range(first..=last.max(first))).changed()
+            }) {
                 self.seek(f, project);
             }
             ui.separator();
-            ui.label("In");
-            project_changed |= ui.add(egui::DragValue::new(&mut project.first_frame)).changed();
-            ui.label("Out");
-            project_changed |= ui.add(egui::DragValue::new(&mut project.last_frame)).changed();
-            ui.label("FPS");
-            project_changed |= ui
-                .add(egui::DragValue::new(&mut project.fps).range(1.0..=240.0).speed(0.1).max_decimals(3))
-                .changed();
+            project_changed |= together(ui, "in", |ui| {
+                ui.label("In");
+                ui.add(egui::DragValue::new(&mut project.first_frame)).changed()
+            });
+            project_changed |= together(ui, "out", |ui| {
+                ui.label("Out");
+                ui.add(egui::DragValue::new(&mut project.last_frame)).changed()
+            });
+            project_changed |= together(ui, "fps", |ui| {
+                ui.label("FPS");
+                ui.add(egui::DragValue::new(&mut project.fps).range(1.0..=240.0).speed(0.1).max_decimals(3)).changed()
+            });
             ui.checkbox(&mut self.looping, "Loop");
             let tip = if self.sound { "Sound on: plays the viewed clip's audio while playing forward (click to mute)" } else { "Sound off (click to hear the viewed clip's audio while playing forward)" };
             if icon_button(ui, Icon::Sound(self.sound), self.sound, tip) {
                 self.sound = !self.sound;
             }
             ui.separator();
-            ui.label("Format").on_hover_text("The frame size of Constants, Checkerboards and shapes whose own width/height is 0 (the default)");
-            project_changed |= ui.add(egui::DragValue::new(&mut project.format.width).range(1..=16384)).changed();
-            ui.label("×");
-            project_changed |= ui.add(egui::DragValue::new(&mut project.format.height).range(1..=16384)).changed();
+            project_changed |= together(ui, "format", |ui| {
+                ui.label("Format").on_hover_text("The frame size of Constants, Checkerboards and shapes whose own width/height is 0 (the default)");
+                let w = ui.add(egui::DragValue::new(&mut project.format.width).range(1..=16384)).changed();
+                ui.label("×");
+                w | ui.add(egui::DragValue::new(&mut project.format.height).range(1..=16384)).changed()
+            });
             // Measured before the fps readout, which hangs off the right so
             // the row doesn't shift when playback starts.
             let end = ui.min_rect().max;
@@ -308,6 +317,21 @@ fn indent(avail: f32, width: f32) -> f32 {
 }
 
 /// A button with a vector-drawn transport glyph (no reliance on font glyphs).
+/// `add`'s widgets (`name`d, unique in the row) as one item of a
+/// wrapping row: onto the next line together when they won't fit (as
+/// wide as last frame), rather than split across two or past the edge.
+fn together<R>(ui: &mut egui::Ui, name: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let id = ui.scope_id().with(("together", name));
+    let width: Option<f32> = ui.data(|d| d.get_temp(id));
+    let line_start = ui.cursor().min.x <= ui.max_rect().left() + 0.5;
+    if width.is_some_and(|w| w > ui.available_size_before_wrap().x) && !line_start {
+        ui.end_row();
+    }
+    let r = ui.horizontal(add);
+    ui.data_mut(|d| d.insert_temp(id, r.response.rect.width()));
+    r.inner
+}
+
 fn icon_button(ui: &mut egui::Ui, icon: Icon, active: bool, tip: &str) -> bool {
     let size = Vec2::new(30.0, 24.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
@@ -418,6 +442,40 @@ mod tests {
         assert_eq!(indent(1000.0, 600.0), 200.0);
         assert_eq!(indent(600.0, 600.0), 0.0);
         assert_eq!(indent(400.0, 600.0), 0.0, "too wide: from the left");
+    }
+
+    /// Widgets kept together wrap as one: wherever the row runs out, a
+    /// label is on the same line as its field, and both inside the row,
+    /// the next pair too.
+    #[test]
+    fn a_label_wraps_with_its_field() {
+        let width = 320.0;
+        for kept in [true, false] {
+            let (mut split, mut past) = (false, false);
+            for filler in (0..=300).step_by(4) {
+                let ctx = egui::Context::default();
+                for _ in 0..2 {
+                    let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 200.0))), ..Default::default() };
+                    ctx.run_ui(raw, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.add_space(filler as f32);
+                            for name in ["Out", "FPS"] {
+                                let mut v = 100;
+                                let mut add = |ui: &mut egui::Ui| (ui.label(name).rect, ui.add(egui::DragValue::new(&mut v)).rect);
+                                let (label, field) = if kept { together(ui, name, add) } else { add(ui) };
+                                split = (label.center().y - field.center().y).abs() > 1.0;
+                                past = field.right() > width;
+                            }
+                        });
+                    })
+                    .drop_without_applying_deltas();
+                }
+                if split || past {
+                    break;
+                }
+            }
+            assert_eq!((split || past), !kept, "kept together: {kept}; split {split}, past the edge {past}");
+        }
     }
 
     /// The control row, drawn in a window `width` wide for a few frames,

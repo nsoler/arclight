@@ -15,13 +15,17 @@ done), `docs/help.md` (the in-app help) and
 
 ## Start here (next session)
 
-- **In flight (2026-10-31, after 0.12.18):** Dev1 (wD:p9): the
-  transport bar's Out field cut off at the default window size
-  (`src/gui/transport.rs`: In/Out/FPS labels kept with their fields when
-  the row wraps). Dev2: profiling many-sample area-light shadows (20–34 s
+- **In flight (2026-10-31, after 0.12.19):** Dev1 (wD:p9): free, awaiting
+  the next task. Dev2: profiling many-sample area-light shadows (20–34 s
   a 4K frame at 16 samples, even on the GPU), proposal before code. Macs:
   `arclight gpu --check` / `cargo test --release` on Metal not yet run
   (TODO). v0.12.17's macOS DMG: the user builds it on the Mac.
+- **0.12.19, transport labels wrap with their fields** (Dev1):
+  `src/gui/transport.rs`'s `together(ui, name, add)` keeps Frame, In,
+  Out, FPS and Format with their fields; a group nested in a wrapping row
+  never wraps itself (it runs past the edge), so the helper remembers each
+  group's width from the last frame (egui temp data) and calls `end_row`
+  when it won't fit. Test `a_label_wraps_with_its_field`.
 - **0.12.18, GPU frame cache** (Dev1): `FrameCache` entries in
   `src/gui/worker.rs` keep, beside the CPU image, the color of frames
   rendered on the GPU (`gpu::Resident::color`: the render's own rgba

@@ -15,6 +15,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.19 — 2026-10-31
+
+- The transport bar keeps each label with its field (Frame, In, Out, FPS,
+  Format) when it wraps in a narrow window, instead of leaving a field on
+  the next line or past the edge.
+
 ## 0.12.18 — 2026-10-31
 
 - GPU: played frames rendered on the GPU keep their color there, so cached

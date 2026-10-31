@@ -206,8 +206,8 @@ a public release once tested.
       separate budget `gpu.frame_cache_mb` (1024)
 - [ ] Area-light shadows stay slow on the GPU too (16 samples: 20–34 s
       a 4K frame): Dev2 profiling, proposal first
-- [ ] The transport bar's Out field is cut off at the default window
-      size (Dev1, in progress, `src/gui/transport.rs`)
+- [x] The transport bar's Out field is cut off at the default window
+      size (Dev1, 0.12.19: labels wrap with their fields)
 - [ ] Later: skip the target read-back during GPU playback, read back
       lazily for the readout / picker (~5–10 ms a 1080p frame)
 - [ ] Macs: run `arclight gpu --check` and `cargo test --release` on the
