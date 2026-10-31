@@ -245,3 +245,9 @@ a public release once tested.
 - OpenFX hosting (a large project of its own)
 - Copying another product's licensing scheme
 - Nuke script import (originality rule)
+
+- [ ] Scanline Render's Width / Height are ignored when a background is
+      connected (the plate's size wins): say so in help, or let them win
+      (Dev1, 2026-10-31, from the geo-scatter example)
+- [ ] Ellipse's Size is a radius but reads like a diameter: label or
+      tooltip it (Dev1, 2026-10-31)

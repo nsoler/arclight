@@ -17,6 +17,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.15 — 2026-10-31
+
+- Examples: **geo-scatter.json** shows the geometry nodes end to end:
+  rocks and bush cards scattered in a soft patch (a mask image), sized by
+  noise and colored at random with Attribute Set, copied with Instance on
+  Points (the cards facing the camera), and rendered under a sun with
+  shadows. It loads and renders in a fraction of a second; a test keeps it
+  so.
+
 ## 0.13.14 — 2026-10-31
 
 - **Tab** switches the viewer between 2D and 3D wherever the pointer is

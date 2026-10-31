@@ -37,6 +37,14 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.15, geo-scatter example** (Dev1): `examples/geo-scatter.json`
+  (procedural: Plane ground, Ellipse mask, Scatter → Attribute Set →
+  Instance on Points for rocks and face-camera bush cards, sun shadows;
+  ~230 rocks, 40 bushes, ~0.2 s), `tests/examples.rs` (mask, counts,
+  sky / ground / shadow pixels). Released as **v0.13.15**. Rough edges
+  Dev1 noted (TODO): Scanline Render's Width / Height are ignored when a
+  background is wired (it takes the plate's size; help or params should
+  say so); Ellipse's Size is a radius (label reads like a diameter).
 - **0.13.14, Tab anywhere** (Supervisor, user request): `App::shortcuts`
   toggles 2D / 3D on a plain Tab wherever the pointer is (it runs before
   the panels, so the node editor never sees it); text fields return

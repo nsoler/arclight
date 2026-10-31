@@ -1,0 +1,525 @@
+{
+ "project": {
+  "folder": ".",
+  "format": {
+   "width": 960,
+   "height": 540
+  },
+  "fps": 24.0,
+  "first_frame": 1,
+  "last_frame": 1
+ },
+ "nodes": [
+  {
+   "id": "ground",
+   "op": "plane",
+   "params": {
+    "size": [
+     60,
+     60
+    ],
+    "rotate": [
+     -90,
+     0,
+     0
+    ],
+    "color": [
+     0.36,
+     0.3,
+     0.22,
+     1
+    ],
+    "shading": "lambert"
+   },
+   "pos": [
+    40,
+    40
+   ]
+  },
+  {
+   "id": "patch",
+   "op": "ellipse",
+   "params": {
+    "width": 512,
+    "height": 512,
+    "center": [
+     256,
+     256
+    ],
+    "size": [
+     50,
+     36
+    ],
+    "feather": 20
+   },
+   "pos": [
+    40,
+    120
+   ]
+  },
+  {
+   "id": "pebble",
+   "op": "sphere",
+   "params": {
+    "radius": 0.5,
+    "segments": [
+     8,
+     6
+    ],
+    "shading": "lambert",
+    "color": [
+     0.62,
+     0.6,
+     0.56,
+     1
+    ]
+   },
+   "pos": [
+    40,
+    280
+   ]
+  },
+  {
+   "id": "squashed",
+   "op": "transform_geo",
+   "inputs": [
+    "pebble"
+   ],
+   "params": {
+    "scale": [
+     1.0,
+     0.55,
+     0.8
+    ]
+   },
+   "pos": [
+    230,
+    280
+   ]
+  },
+  {
+   "id": "slab",
+   "op": "cube",
+   "params": {
+    "size": [
+     0.8,
+     0.45,
+     0.7
+    ],
+    "rotate": [
+     12,
+     30,
+     8
+    ],
+    "shading": "lambert",
+    "color": [
+     0.6,
+     0.58,
+     0.55,
+     1
+    ]
+   },
+   "pos": [
+    40,
+    360
+   ]
+  },
+  {
+   "id": "rocks",
+   "op": "scene",
+   "inputs": [
+    "squashed",
+    "slab",
+    "",
+    ""
+   ],
+   "pos": [
+    420,
+    280
+   ]
+  },
+  {
+   "id": "scatter_rocks",
+   "op": "scatter",
+   "inputs": [
+    "ground",
+    "patch",
+    ""
+   ],
+   "params": {
+    "density": 16,
+    "min_distance": 0.15,
+    "seed": 1
+   },
+   "pos": [
+    230,
+    120
+   ]
+  },
+  {
+   "id": "rock_look",
+   "op": "attribute_set",
+   "inputs": [
+    "scatter_rocks"
+   ],
+   "params": {
+    "attr1_name": "pscale",
+    "attr1_kind": "float",
+    "attr1_expr": "0.1 + 0.55 * noise3(@P * 0.5)",
+    "attr2_name": "Cd",
+    "attr2_kind": "vec4",
+    "attr2_expr": "[0.55 + 0.25 * random(@id), 0.5 + 0.2 * random(@id), 0.45 + 0.2 * random(@id), 1]"
+   },
+   "pos": [
+    420,
+    120
+   ]
+  },
+  {
+   "id": "rocks_placed",
+   "op": "instance_on_points",
+   "inputs": [
+    "rock_look",
+    "rocks",
+    ""
+   ],
+   "params": {
+    "pick": "random",
+    "seed": 3
+   },
+   "pos": [
+    610,
+    120
+   ]
+  },
+  {
+   "id": "bush_shape",
+   "op": "ellipse",
+   "params": {
+    "width": 128,
+    "height": 256,
+    "center": [
+     64,
+     128
+    ],
+    "size": [
+     104,
+     236
+    ],
+    "color": [
+     0.25,
+     0.5,
+     0.18,
+     1
+    ],
+    "feather": 24
+   },
+   "pos": [
+    40,
+    520
+   ]
+  },
+  {
+   "id": "bush",
+   "op": "card",
+   "inputs": [
+    "bush_shape"
+   ],
+   "params": {
+    "size": [
+     0.35,
+     0.7
+    ],
+    "translate": [
+     0,
+     0.3,
+     0
+    ],
+    "shading": "lambert",
+    "casts_shadows": true
+   },
+   "pos": [
+    230,
+    520
+   ]
+  },
+  {
+   "id": "scatter_bush",
+   "op": "scatter",
+   "inputs": [
+    "ground",
+    "patch",
+    ""
+   ],
+   "params": {
+    "density": 2.5,
+    "min_distance": 0.5,
+    "seed": 2
+   },
+   "pos": [
+    230,
+    200
+   ]
+  },
+  {
+   "id": "bush_look",
+   "op": "attribute_set",
+   "inputs": [
+    "scatter_bush"
+   ],
+   "params": {
+    "attr1_name": "pscale",
+    "attr1_kind": "float",
+    "attr1_expr": "0.45 + 0.45 * random(@id)",
+    "attr2_name": "Cd",
+    "attr2_kind": "vec4",
+    "attr2_expr": "[0.8 + 0.3 * random(@id + 7), 1, 0.7 + 0.3 * random(@id + 9), 1]"
+   },
+   "pos": [
+    420,
+    200
+   ]
+  },
+  {
+   "id": "bushes",
+   "op": "instance_on_points",
+   "inputs": [
+    "bush_look",
+    "bush",
+    "camera"
+   ],
+   "params": {
+    "orient": "face camera",
+    "seed": 5
+   },
+   "pos": [
+    610,
+    200
+   ]
+  },
+  {
+   "id": "camera",
+   "op": "camera",
+   "params": {
+    "focal": 35,
+    "translate": [
+     0,
+     2.6,
+     8
+    ],
+    "rotate": [
+     -15,
+     0,
+     0
+    ]
+   },
+   "pos": [
+    610,
+    440
+   ]
+  },
+  {
+   "id": "sun",
+   "op": "light_directional",
+   "params": {
+    "rotate": [
+     -48,
+     -35,
+     0
+    ],
+    "intensity": 1.1,
+    "color": [
+     1,
+     0.95,
+     0.85,
+     1
+    ],
+    "shadows": true,
+    "shadow_softness": 1.5
+   },
+   "pos": [
+    610,
+    520
+   ]
+  },
+  {
+   "id": "sky",
+   "op": "light_ambient",
+   "params": {
+    "intensity": 0.3,
+    "color": [
+     0.75,
+     0.85,
+     1,
+     1
+    ]
+   },
+   "pos": [
+    610,
+    600
+   ]
+  },
+  {
+   "id": "lights",
+   "op": "scene",
+   "inputs": [
+    "sun",
+    "sky",
+    "camera",
+    ""
+   ],
+   "pos": [
+    800,
+    520
+   ]
+  },
+  {
+   "id": "set",
+   "op": "scene",
+   "inputs": [
+    "ground",
+    "rocks_placed",
+    "bushes",
+    "lights"
+   ],
+   "pos": [
+    800,
+    200
+   ]
+  },
+  {
+   "id": "sky_bg",
+   "op": "constant",
+   "params": {
+    "width": 960,
+    "height": 540,
+    "color": [
+     0.55,
+     0.68,
+     0.85,
+     1
+    ]
+   },
+   "pos": [
+    990,
+    280
+   ]
+  },
+  {
+   "id": "render",
+   "op": "scanline_render",
+   "inputs": [
+    "set",
+    "camera",
+    "sky_bg"
+   ],
+   "params": {
+    "width": 960,
+    "height": 540,
+    "samples": 2
+   },
+   "pos": [
+    990,
+    200
+   ]
+  },
+  {
+   "id": "viewer",
+   "op": "viewer",
+   "inputs": [
+    "render"
+   ],
+   "pos": [
+    1180,
+    200
+   ]
+  }
+ ],
+ "backdrops": [
+  {
+   "id": "bd_ground",
+   "title": "Ground, mask",
+   "pos": [
+    25,
+    10
+   ],
+   "size": [
+    170,
+    155
+   ],
+   "color": [
+    0.25,
+    0.3,
+    0.25
+   ]
+  },
+  {
+   "id": "bd_scatter",
+   "title": "Scatter, look, instance",
+   "pos": [
+    215,
+    90
+   ],
+   "size": [
+    550,
+    155
+   ],
+   "color": [
+    0.3,
+    0.27,
+    0.22
+   ]
+  },
+  {
+   "id": "bd_rocks",
+   "title": "Rock shapes",
+   "pos": [
+    25,
+    250
+   ],
+   "size": [
+    550,
+    155
+   ],
+   "color": [
+    0.28,
+    0.28,
+    0.3
+   ]
+  },
+  {
+   "id": "bd_bush",
+   "title": "Bush card",
+   "pos": [
+    25,
+    490
+   ],
+   "size": [
+    360,
+    75
+   ],
+   "color": [
+    0.22,
+    0.3,
+    0.22
+   ]
+  },
+  {
+   "id": "bd_shot",
+   "title": "Camera, sun, sky",
+   "pos": [
+    595,
+    410
+   ],
+   "size": [
+    360,
+    235
+   ],
+   "color": [
+    0.3,
+    0.25,
+    0.3
+   ]
+  }
+ ]
+}

@@ -416,6 +416,9 @@ selected object.
   blur, and each gets its own number in the id pass. **Realize
   Instances** makes them ordinary objects when a later node needs to edit
   them.
+- **Example:** File ▸ Open `examples/geo-scatter.json`: a masked Scatter
+  of rocks and bush cards, sized and colored by Attribute Set and copied
+  by Instance on Points, under a sun with shadows.
 - **Read Geo** reads an OBJ file (with its MTL colors and textures), a
   glTF file (.gltf, .glb) or an Alembic cache (.abc): its meshes move and
   deform frame by frame. **Frame rate** (set to the project's when you
