@@ -446,7 +446,9 @@ selected object.
   along and around it. **Points on Curve** sets points along curves (a
   count, a spacing, or the curve's own points), each knowing the curve's
   direction and up, so Instance on Points stands fence posts or lampposts
-  along a road, facing along it. With a Curve selected,
+  along a road, facing along it. A profile curve is read flat in its own
+  X and Y, wherever it sits in the scene; ribbons and open profiles have
+  no end caps (caps close a tube's ends only). With a Curve selected,
   its points show as squares in the 3D view. Click one to pick it
   (Shift-click for more), drag it, or press G, R or S to move, turn or
   scale the picked points about their middle (with nothing picked, G, R

@@ -737,13 +737,10 @@ examples/
   media/testsrc.mp4 5 s test clip used by the GUI starter project
 ```
 
-## Roadmap ideas
+## Roadmap
 
-- Bounding-box / region-of-interest propagation so ops only touch covered pixels
-- Tiled, cached evaluation for large plates
-- More ops: color-space nodes, keyer, defocus, time/sequence I/O
-- Multi-select of nodes; a normalized view and key copy/paste in the curve editor
-- GPU display transform / OCIO in the viewer
+See [ROADMAP.md](ROADMAP.md): where the project is, what comes next, and
+how to help.
 
 ## License
 

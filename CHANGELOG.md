@@ -17,6 +17,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.34 — 2026-10-31
+
+- Fixed: Project 3D with nothing connected to its image input says so,
+  instead of turning what it lands on black.
+- `ROADMAP.md`: where the project is, what comes next and how to help
+  (the README's roadmap section points there). The help says how Curve
+  to Mesh reads a profile curve and where it puts caps.
+
 ## 0.13.33 — 2026-10-31
 
 - Geometry: a **Subdivide** node splits meshes' triangles, Loop

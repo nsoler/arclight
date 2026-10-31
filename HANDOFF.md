@@ -37,6 +37,12 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.34, fix + ROADMAP.md** (Dev2 fix, Supervisor docs): Project 3D
+  treats an empty image (an unconnected input) as missing and errors.
+  `ROADMAP.md` (public: status by phase, Now / Next / Later, How to help);
+  TODO.md gains "After the phase 13 pause" (detachable panels first, the
+  Project 3D / particle-id rough edges Dev2 listed). Keep ROADMAP.md in
+  step with TODO.md when phases end.
 - **0.13.33, P5: Subdivide** (Dev1): `subdivide_once` + Loop rules on
   welded positions (beta 3/16 for n = 3, else 3/(8n); boundary 3/4 + 1/8
   + 1/8), original vertex layout kept (seams stay seams, no cracks);

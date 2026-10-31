@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-A running list of what's still wanted, as of 0.12.17 (2026-10-31). The
+A running list of what's still wanted, as of 0.13.34 (2026-10-31). The
 3D plan (`docs/phase-4-plan.md`, M1–M13) is done; this is what's left
 around it. `HANDOFF.md` has the details and history; add items here as
 they come up and strike them (or delete them) when they ship.
@@ -204,8 +204,8 @@ a public release once tested.
 - [x] GPU frame cache for playback (Dev1, 0.12.18): cached frames keep
       their color GPU-resident and play through the zero-copy display;
       separate budget `gpu.frame_cache_mb` (1024)
-- [ ] Area-light shadows stay slow on the GPU too (16 samples: 20–34 s
-      a 4K frame): Dev2 profiling, proposal first
+- [x] Area-light shadows stay slow on the GPU too (16 samples: 20–34 s
+      a 4K frame): 0.13.3 / 0.13.4, 22.9 → 7.0 s
 - [x] The transport bar's Out field is cut off at the default window
       size (Dev1, 0.12.19: labels wrap with their fields)
 - [ ] Later: skip the target read-back during GPU playback, read back
@@ -227,12 +227,51 @@ a public release once tested.
       %APPDATA% folders, .dll plugins (in-process), a zip asset; needs a
       real Windows PC for GUI testing; unsigned → SmartScreen warning
 
+## After the phase 13 pause (user, 2026-10-31)
+
+Phase 13 ends with a pause for the user's hand testing; these come
+after it. `ROADMAP.md` is the public summary of this list.
+
+- [ ] **Detachable panels for dual monitors** (first UI item after the
+      pause; Dev1): the Node Graph in its own OS window (egui immediate
+      viewport: `editor.ui(ui, &mut doc, …)` drawn in it), docked back
+      when closed, state and size in settings.json (Wayland: the
+      compositor places it; X11 / macOS: position and monitor too);
+      route graph shortcuts per window (⇧Tab, ⇧E, F, Delete, ⌘A, D, V,
+      Tab, undo / redo / save), popups and file drops in that window.
+      Built generic, so the Viewer (full screen on a second monitor),
+      Curve Editor and Properties can detach too. About two reports.
+- [ ] Project 3D under motion blur renders on the CPU, and each
+      projector's depth map is drawn again per time sample: cache it,
+      then the GPU (Dev2)
+- [ ] Project 3D occlusion on the GPU: an instanced copy straddling the
+      projector's near plane isn't in its depth map (lights' maps split
+      those out; projectors don't). Rare (Dev2)
+- [ ] Project 3D frame hold: the live projector / image still count in
+      the node's key, so upstream changes re-evaluate it though the held
+      result is the same (extra work only) (Dev2)
+- [ ] Project 3D targets are node names fixed at the node: a mesh renamed
+      or merged under another node downstream would lose its projection
+      (none does that today) (Dev2)
+- [ ] Particles to Points ids pack emitter (8 bits) and birth count (24
+      bits): past ~16.7 M births ids wrap (only Instance on Points'
+      random pick by id cares) (Dev2)
+- [ ] Project 3D: bake a projection to a uv texture (P8's "later")
+- [ ] Geo Info: per-point selection in the sheet's filter; world-space
+      values
+- [ ] Scanline Render's Width / Height are ignored when a background is
+      connected (the plate's size wins): say so in help, or let them win
+      (Dev1, 2026-10-31, from the geo-scatter example)
+- [ ] Ellipse's Size is a radius but reads like a diameter: label or
+      tooltip it (Dev1, 2026-10-31)
+
 ## Before going public
 
 - [ ] Licence (MIT / Apache or GPL), a LICENSE and a NOTICES file
 - [ ] Audit the repo for anything private (paths, emails in notes,
       `examples/mad-martian.png`, where `musicmen.MP4` came from)
-- [ ] A public-facing README, issue templates, CONTRIBUTING
+- [ ] A public-facing README, issue templates, CONTRIBUTING (a
+      `ROADMAP.md` with "How to help" exists since 0.13.34)
 - [ ] Actions is free for public repos: the macOS DMG and wheels should
       build there again
 
@@ -246,8 +285,3 @@ a public release once tested.
 - Copying another product's licensing scheme
 - Nuke script import (originality rule)
 
-- [ ] Scanline Render's Width / Height are ignored when a background is
-      connected (the plate's size wins): say so in help, or let them win
-      (Dev1, 2026-10-31, from the geo-scatter example)
-- [ ] Ellipse's Size is a radius but reads like a diameter: label or
-      tooltip it (Dev1, 2026-10-31)

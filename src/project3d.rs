@@ -98,7 +98,9 @@ pub fn project_3d(params: &Value, mut scene: Scene, image: Option<&Image>, proje
     let Some(camera) = projector.and_then(|s| s.cameras.first()) else {
         bail!("Project 3D: connect a scene with a camera (the projector) to its projector input");
     };
-    let image = image.filter(|i| i.scene.is_none()).ok_or_else(|| anyhow::anyhow!("Project 3D: connect the image to project to its image input"))?;
+    // (An unconnected input arrives as an empty image: nothing to project,
+    // not a clear one that would blacken what it lands on.)
+    let image = image.filter(|i| i.scene.is_none() && !i.window().is_empty()).ok_or_else(|| anyhow::anyhow!("Project 3D: connect the image to project to its image input"))?;
     let group = params["group"].as_str().unwrap_or("").trim();
     let take = |node: &str| group.is_empty() || geo::glob(group, node);
     // Cards and meshes by their nodes; instances (by theirs, or by one of
@@ -346,6 +348,11 @@ mod tests {
         assert_eq!(scene_at(&g, "pr", 1).projections[0].targets, vec!["wall".to_string()]);
         let g = graph(json!([{ "id": "bad", "op": "project_3d", "inputs": ["wall", "plate", ""] }]));
         assert!(Evaluator::new().evaluate(&g, "bad", &EvalContext { frame: 1, write_outputs: false }).is_err());
+        // Nor without its image (an empty one, as an unconnected input
+        // arrives): an error, not the cards blackened.
+        let g = graph(json!([{ "id": "blank", "op": "project_3d", "inputs": ["wall", "", "proj"] }]));
+        let err = Evaluator::new().evaluate(&g, "blank", &EvalContext { frame: 1, write_outputs: false }).err().expect("an error");
+        assert!(format!("{err}").contains("connect the image"), "{err}");
     }
 
     /// With motion blur the projection rides on a moving card: projected
