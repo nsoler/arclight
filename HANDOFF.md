@@ -37,6 +37,17 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **PAUSED for the user's hand testing (2026-10-31), released v0.13.34**
+  (Linux assets; the user builds and posts the macOS DMG from the tag).
+  Left of phase 13, all Dev1's, to bring in after the pause: **Displace**
+  is in the shared tree UNCOMMITTED (src/geo_mesh.rs, Dev1's lines in
+  src/ops.rs, src/geo_attr.rs `fbm` pub(crate); its 12 geo_mesh tests
+  pass, the full run and report weren't done); **Extrude** and **Write
+  Geo** are only in Dev1's scratch copies (`../.verify/dev1-mesh`,
+  `../.verify/dev1-wg`), tested; Write Geo adds the gltf `extras`
+  feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
+  "After the phase 13 pause" (detachable panels first). Dev2: done,
+  standing by. `target/release` (the launcher) is 0.13.33.
 - **0.13.34, fix + ROADMAP.md** (Dev2 fix, Supervisor docs): Project 3D
   treats an empty image (an unconnected input) as missing and errors.
   `ROADMAP.md` (public: status by phase, Now / Next / Later, How to help);
