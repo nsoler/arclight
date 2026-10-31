@@ -7,6 +7,13 @@ they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
+- [ ] 0.11.1–0.11.2 (before the beta): run `ARCLIGHT_CRASH_TEST=panic
+      arclight-gui` (also `segv`, `abort`, and `worker`, which should only
+      show an error): a report is saved, unsaved changes land in the
+      autosave, and the next start shows "Arclight closed unexpectedly"
+      (View / Copy / Report on GitHub / Don't ask again); Help ▸ Report a
+      problem. Plugins: the example's Film Grain / Vignette render as
+      before, on Linux and in the Mac DMG (helper processes there too)
 - [X] 0.10.34–0.10.35: sound. Open a clip with sound in a Media In and
       view it; L plays it in step (lips / claps against the picture);
       K / Space / J / arrows / scrubbing are silent; a short loop restarts
