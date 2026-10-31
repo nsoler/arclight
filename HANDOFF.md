@@ -37,6 +37,15 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.19, P4b B2: instanced shadow maps** (Dev2): `shadow.rs`
+  `plan_in` / `extent_of` (extent over every copy's placed vertices);
+  copies behind the camera are records too; per map, copies reaching in
+  front of its near plane become maps-only surfaces with CPU-clipped
+  triangles, masked out of that map's GPU bin; `shadow_map` walks the
+  instance bin through `map_caster()`; maps with see-through copies go
+  layered. Lists made and freed map by map. 10k spheres + sun 1473 → 148
+  ms. Many-map lights cost maps × copies. Motion blur / motion pass still
+  take the expansion (B3). gpu --check 66 rows.
 - **0.13.18, P3: Falloff** (Dev1): `falloff` in geo_attr.rs, distance
   to the from input's curves (segments), else its points (k-d tree:
   `geo_attr::KdTree`, median split, nearest / within, reused by

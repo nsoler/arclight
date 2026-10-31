@@ -286,8 +286,15 @@ pub(super) struct LightView {
 /// The maps a render's `lights` need (None for a light without shadows):
 /// what [`Shadows::build`] draws, for the casters among `surfs`.
 pub(super) fn plan(surfs: &[Surface], lights: &[Light]) -> Vec<Option<LightView>> {
+    plan_in(surfs, lights, || extent(surfs))
+}
+
+/// [`plan`], the scene's extent (its middle and radius, as [`extent`]
+/// works it out from every surface's points) from `extent`, asked only
+/// where a map is wanted.
+pub(super) fn plan_in(surfs: &[Surface], lights: &[Light], extent: impl FnOnce() -> Option<(Vec3, f64)>) -> Vec<Option<LightView>> {
     let wanted = lights.iter().any(|l| l.shadows && l.enabled && l.kind != LightKind::Ambient) && surfs.iter().any(|s| s.casts);
-    let scene = if wanted { extent(surfs) } else { None };
+    let scene = if wanted { extent() } else { None };
     lights
         .iter()
         .map(|l| {
@@ -378,6 +385,12 @@ pub(super) struct Shadows {
 /// A sphere holding every surface's corners in the scene.
 fn extent(surfs: &[Surface]) -> Option<(Vec3, f64)> {
     let pts: Vec<Vec3> = surfs.iter().flat_map(|s| s.positions.iter().map(|p| geom::transform_point(&s.world, p))).collect();
+    extent_of(&pts)
+}
+
+/// The middle of the box round `pts` and the farthest of them from it (at
+/// least 1e-6): a scene's extent.
+pub(super) fn extent_of(pts: &[Vec3]) -> Option<(Vec3, f64)> {
     let first = *pts.first()?;
     let (lo, hi) = pts.iter().fold((first, first), |(lo, hi), p| (lo.inf(p), hi.sup(p)));
     let c = (lo + hi) / 2.0;

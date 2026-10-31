@@ -110,19 +110,23 @@ pub(super) fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], 
 }
 
 /// [`draw_passes`] with `sets`' instances drawn instanced (see
-/// instances.rs; `headlight`: theirs shaded as the 3D view's Solid). None
-/// where it can't (then the caller draws them as surfaces of their own):
-/// shadows, the motion pass and motion blur take that way for now.
+/// instances.rs; `headlight`: theirs shaded as the 3D view's Solid), in
+/// the shadow maps too. None where it can't (then the caller draws them as
+/// surfaces of their own): the motion pass and motion blur take that way
+/// for now.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_instanced(surfs: &[Surface], sets: &[crate::geo::Instances], headlight: bool, lights: &[Light], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes, next: Option<(&Scene, &Camera)>, cell: Option<Cell>, splats: Option<&splats::Prepared>) -> Option<Image> {
     #[cfg(test)]
     if !tests::GPU_ON.with(|on| on.get()) {
         return None;
     }
-    if format.width == 0 || format.height == 0 || passes.motion || next.is_some() || lights.iter().any(|l| l.shadows) || splats.is_some_and(|sp| sp.gpu().is_none()) {
+    if format.width == 0 || format.height == 0 || passes.motion || next.is_some() || splats.is_some_and(|sp| sp.gpu().is_none()) {
         return None;
     }
-    let plan = instances::Plan::new(surfs, sets, headlight, cam)?;
+    let mut plan = instances::Plan::new(surfs, sets, headlight, cam)?;
+    if lights.iter().any(|l| l.shadows) {
+        plan.plan_shadows(lights);
+    }
     let gpu = crate::gpu::get()?;
     match draw_with(&gpu, &plan.surfs, Some(&plan), lights, points, cam, format, samples, passes, next, cell, splats) {
         Ok(img) => {
@@ -168,10 +172,14 @@ pub(super) fn preview(scene: &Scene, cam: &Camera, format: Size, look: super::Pr
     if splats.as_ref().is_some_and(|sp| sp.gpu().is_none()) {
         return None;
     }
-    // Instances drawn instanced (each its own surface where shadows are
-    // drawn: those take that way for now).
+    // Instances drawn instanced.
     let sets = &scene.instances;
-    let plan = (sets.iter().any(|g| !g.is_empty()) && !lights.iter().any(|l| l.shadows)).then(|| instances::Plan::new(&surfs, sets, solid, cam)).flatten();
+    let plan = sets.iter().any(|g| !g.is_empty()).then(|| instances::Plan::new(&surfs, sets, solid, cam)).flatten().map(|mut p| {
+        if lights.iter().any(|l| l.shadows) {
+            p.plan_shadows(&lights);
+        }
+        p
+    });
     let expanded: Vec<Surface> = match plan {
         Some(_) => Vec::new(),
         None => surfs
@@ -198,8 +206,9 @@ pub(super) fn preview(scene: &Scene, cam: &Camera, format: Size, look: super::Pr
 
 fn preview_on(gpu: &Arc<Gpu>, surfs: &[Surface], plan: Option<&instances::Plan>, lights: &[Light], cam: &Camera, format: Size, splats: Option<&splats::Prepared>) -> Result<Option<crate::gpu::Resident>> {
     let Some(prep) = prepare(gpu, surfs, plan, lights, cam, format, Passes::default(), None, splats) else { return Ok(None) };
-    let maps = gpu.scoped(|| Ok(draw_maps(gpu, &prep.tables, &prep.textures)))?;
-    let inst = instance_buffers(gpu, &prep, plan, cam, format)?;
+    let records = instance_records(gpu, &prep, plan);
+    let maps = gpu.scoped(|| draw_maps(gpu, &prep.tables, &prep.textures, records.as_ref().zip(plan)))?;
+    let inst = instance_buffers(gpu, records, plan, cam, format)?;
     let image = gpu.scoped(|| {
         let frame = Frame::take(gpu, format.width, format.height, prep.layout.slots.stride);
         frame.clear(gpu);
@@ -321,11 +330,14 @@ fn prepare(gpu: &Gpu, surfs: &[Surface], plan: Option<&instances::Plan>, lights:
     }
     // Shadow maps, as shadow.rs plans them, with layers for casters that
     // let some light through.
-    let shadows = shadow::plan(surfs, lights);
-    let see: Vec<bool> = if shadows.iter().any(Option::is_some) { surfs.iter().map(sees_through).collect() } else { vec![false; surfs.len()] };
+    // (With instances: planned for the scene with every one in it.)
+    let shadows = plan.and_then(|p| p.shadows.clone()).unwrap_or_else(|| shadow::plan(surfs, lights));
+    // (A prototype lets light through where it does, or an instance's tint
+    // makes it.)
+    let see: Vec<bool> = if shadows.iter().any(Option::is_some) { surfs.iter().enumerate().map(|(k, s)| sees_through(s) || plan.is_some_and(|p| k >= p.plain && s.triangles.is_empty() && s.instance.is_none() && p.sees_through(k))).collect() } else { vec![false; surfs.len()] };
     let (bins, levels_at) = binned(&tris, format.width, format.height, &textures.levels);
     let mut tables = Tables { tris: tri_table(&tris), bins, levels_at, tables: surf_table(surfs, &textures.base, &layout, &see), at: [0; 4], maps: Vec::new(), map_words: 0 };
-    tables.add_lights(surfs, lights, &layout, &shadows, &textures.levels, &see);
+    tables.add_lights(surfs, plan, lights, &layout, &shadows, &textures.levels, &see);
     // Each splat set's object (+ 1) and whether it's a holdout.
     let splat_table = tables.tables.len();
     for (k, n) in splat_nodes.iter().enumerate() {
@@ -354,8 +366,9 @@ fn draw_with(gpu: &Gpu, surfs: &[Surface], plan: Option<&instances::Plan>, light
     let Some(prep) = prepare(gpu, surfs, plan, lights, cam, format, passes, next, splats) else { return Ok(None) };
     let next_cam = next.map_or(cam, |n| n.1);
     let wants_kept = passes.position || passes.normal || passes.uv || passes.motion || passes.id;
-    let maps = gpu.scoped(|| Ok(draw_maps(gpu, &prep.tables, &prep.textures)))?;
-    let inst = instance_buffers(gpu, &prep, plan, cam, format)?;
+    let records = instance_records(gpu, &prep, plan);
+    let maps = gpu.scoped(|| draw_maps(gpu, &prep.tables, &prep.textures, records.as_ref().zip(plan)))?;
+    let inst = instance_buffers(gpu, records, plan, cam, format)?;
     let render = |deep: bool| {
         gpu.scoped(|| {
             let frame = Frame::take(gpu, format.width, format.height, prep.layout.slots.stride);
@@ -392,14 +405,20 @@ fn draw_with(gpu: &Gpu, surfs: &[Surface], plan: Option<&instances::Plan>, light
     Ok(Some(img))
 }
 
-/// The records of `plan`'s instances drawn here and their tiles' lists
-/// (binned on the GPU), if there are any.
+/// The records of `plan`'s instances drawn here (their objects filled in,
+/// in `prep`), if there are any.
+fn instance_records(gpu: &Gpu, prep: &Prepared, plan: Option<&instances::Plan>) -> Option<wgpu::Buffer> {
+    plan.filter(|p| !p.is_empty())?;
+    Some(gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("instance records"), contents: bytemuck::cast_slice(&prep.records), usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC }))
+}
+
+/// `records` and their bins' lists for the camera (binned on the GPU), if
+/// there are any.
 #[allow(clippy::type_complexity)]
-fn instance_buffers<'p>(gpu: &Gpu, prep: &Prepared, plan: Option<&'p instances::Plan>, cam: &Camera, format: Size) -> Result<Option<(wgpu::Buffer, wgpu::Buffer, usize, &'p instances::Plan<'p>)>> {
-    let Some(p) = plan.filter(|p| !p.is_empty()) else { return Ok(None) };
+fn instance_buffers<'p>(gpu: &Gpu, records: Option<wgpu::Buffer>, plan: Option<&'p instances::Plan>, cam: &Camera, format: Size) -> Result<Option<(wgpu::Buffer, wgpu::Buffer, usize, &'p instances::Plan<'p>)>> {
+    let (Some(records), Some(p)) = (records, plan) else { return Ok(None) };
     gpu.scoped(|| {
-        let records = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("instance records"), contents: bytemuck::cast_slice(&prep.records), usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC });
-        let (lists, entries) = instances::bin(gpu, p, cam, format, &records)?;
+        let (lists, entries) = instances::bin(gpu, p, cam, format, &records, &[])?;
         Ok(Some((records, lists, entries, p)))
     })
 }
@@ -490,7 +509,7 @@ fn blur_on(gpu: &Gpu, scene: &Scene, cam: &Camera, format: Size, samples: usize,
                 });
                 if streams.is_empty() {
                     gpu.scoped(|| {
-                        let maps = draw_maps(gpu, &prep.tables, &prep.textures);
+                        let maps = draw_maps(gpu, &prep.tables, &prep.textures, None)?;
                         dispatch(gpu, &prep, &maps, f, &c, format, n, cell, false, now_splats.as_ref(), None);
                         Ok(())
                     })?;
@@ -503,7 +522,7 @@ fn blur_on(gpu: &Gpu, scene: &Scene, cam: &Camera, format: Size, samples: usize,
                     gpu.scoped(|| {
                         x.frame.clear(gpu);
                         if !surfs.is_empty() || now_splats.is_some() {
-                            let maps = draw_maps(gpu, &prep.tables, &prep.textures);
+                            let maps = draw_maps(gpu, &prep.tables, &prep.textures, None)?;
                             dispatch(gpu, &prep, &maps, &x.frame, &c, format, n, cell, false, now_splats.as_ref(), None);
                         }
                         let mut encoder = gpu.device.create_command_encoder(&Default::default());
@@ -598,6 +617,23 @@ struct MapJob {
     far: f64,
     light: usize,
     layered: bool,
+    /// Its camera (for binning the instances), and the instances it draws
+    /// as surfaces of their own instead (a bit each; empty: none).
+    cam: Camera,
+    skip: Vec<u32>,
+}
+
+/// The shadow maps `plan` makes, in order, each with its light.
+pub(super) fn map_views(plan: &[Option<shadow::LightView>]) -> Vec<(usize, &shadow::View)> {
+    plan.iter()
+        .enumerate()
+        .filter_map(|(li, l)| l.as_ref().map(|l| (li, l)))
+        .flat_map(|(li, l)| l.sources.iter().map(move |src| (li, src)))
+        .flat_map(|(li, src)| match src {
+            shadow::SourceView::One(v) => vec![(li, v)],
+            shadow::SourceView::Cube { faces, .. } => faces.iter().map(|v| (li, v)).collect(),
+        })
+        .collect()
 }
 
 /// The most see-through casters a shadow map's texel keeps (as many as
@@ -630,20 +666,12 @@ impl Tables {
     /// The lights, their shadows, their shadow sources and maps after the
     /// surfaces, and the maps to draw (each set up on the CPU as shadow.rs
     /// sets up its own).
-    fn add_lights(&mut self, surfs: &[Surface], lights: &[Light], layout: &Layout, plan: &[Option<shadow::LightView>], levels: &[u32], see: &[bool]) {
+    #[allow(clippy::too_many_arguments)]
+    fn add_lights(&mut self, surfs: &[Surface], inst: Option<&instances::Plan>, lights: &[Light], layout: &Layout, plan: &[Option<shadow::LightView>], levels: &[u32], see: &[bool]) {
         self.at[0] = self.tables.len();
         self.tables.extend(light_table(lights, layout));
         // Each map, with its light.
-        let views: Vec<(usize, &shadow::View)> = plan
-            .iter()
-            .enumerate()
-            .filter_map(|(li, l)| l.as_ref().map(|l| (li, l)))
-            .flat_map(|(li, l)| l.sources.iter().map(move |src| (li, src)))
-            .flat_map(|(li, src)| match src {
-                shadow::SourceView::One(v) => vec![(li, v)],
-                shadow::SourceView::Cube { faces, .. } => faces.iter().map(|v| (li, v)).collect(),
-            })
-            .collect();
+        let views = map_views(plan);
         let (mut shl, mut srcs, mut maps) = (Vec::new(), Vec::new(), Vec::new());
         let (mut first_src, mut first_map) = (0u32, 0u32);
         let f = |v: f64| (v as f32).to_bits();
@@ -699,13 +727,38 @@ impl Tables {
         self.at[3] = self.tables.len();
         self.tables.extend(maps);
         self.map_words = texels;
+        // (Instances drawn here: in every map, those that see through any
+        // making it layered.)
+        let inst_see = inst.is_some_and(|p| !p.is_empty() && see.iter().enumerate().any(|(k, s)| *s && k >= p.plain && surfs[k].instance.is_none()));
         self.maps = views
             .par_iter()
-            .map(|&(light, v)| {
-                let tris = super::triangles(surfs, &v.cam, Size { width: v.res, height: v.res }, None);
-                let layered = tris.iter().any(|t| see[t.surf]);
+            .enumerate()
+            .map(|(m, &(light, v))| {
+                let size = Size { width: v.res, height: v.res };
+                let mut tris = super::triangles(surfs, &v.cam, size, None);
+                // The instances this map draws as surfaces of their own:
+                // their triangles (clipped by its near plane) here alone.
+                let own = inst.map_or(&[][..], |p| p.map_own.get(m).map_or(&[][..], Vec::as_slice));
+                for &k in own {
+                    if let Some((s, at)) = inst.and_then(|p| p.own_full(k)) {
+                        tris.extend(super::triangles(&[s], &v.cam, size, None).into_iter().map(|mut t| {
+                            t.surf = at;
+                            t
+                        }));
+                    }
+                }
+                let layered = inst_see || tris.iter().any(|t| see[t.surf]);
                 let (bins, levels_at) = binned(&tris, v.res, v.res, levels);
-                MapJob { tris: tri_table(&tris), bins, levels_at, res: v.res, near: v.cam.near, far: v.cam.far, light, layered }
+                // The rest of the instances, binned on the GPU: those this
+                // map draws itself left out (one bit each).
+                let mut skip = Vec::new();
+                if !own.is_empty() {
+                    skip = vec![0u32; inst.map_or(0, |p| p.drawn.len()).div_ceil(32)];
+                    for &k in own {
+                        skip[k as usize / 32] |= 1 << (k % 32);
+                    }
+                }
+                MapJob { tris: tri_table(&tris), bins, levels_at, res: v.res, near: v.cam.near, far: v.cam.far, light, layered, cam: v.cam.clone(), skip }
             })
             .collect();
     }
@@ -795,26 +848,41 @@ fn opaque(img: &Arc<Image>) -> bool {
 }
 
 /// Draw every shadow map of `tables` (a dispatch each) into one buffer.
-fn draw_maps(gpu: &Gpu, tables: &Tables, textures: &Textures) -> wgpu::Buffer {
+fn draw_maps(gpu: &Gpu, tables: &Tables, textures: &Textures, inst: Option<(&wgpu::Buffer, &instances::Plan)>) -> Result<wgpu::Buffer> {
     let device = &gpu.device;
     let maps = device.create_buffer(&wgpu::BufferDescriptor { label: Some("render3d shadow maps"), size: (tables.map_words.max(1) * 4) as u64, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false });
     if tables.maps.is_empty() {
-        return maps;
+        return Ok(maps);
     }
     let pipeline = gpu.compute_pipeline("render3d/raster", RASTER, "shadow_map");
     let no_records = storage(gpu, &[], "render3d shadow (no instances)");
+    let inst = inst.filter(|(_, p)| !p.is_empty());
     let blocks = gpu.compute_pipeline("render3d/raster", RASTER, "map_blocks");
     let texel_buf = textures.buffer(gpu);
     let out = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("render3d shadow out"), layout: &pipeline.get_bind_group_layout(1), entries: &[wgpu::BindGroupEntry { binding: 0, resource: maps.as_entire_binding() }] });
     let mut encoder = device.create_command_encoder(&Default::default());
     for (k, m) in tables.maps.iter().enumerate() {
-        let (all, at) = joined(&m.bins, m.levels_at, &tables.tables, &m.tris);
-        let params = tables.params(m.res, m.res, 1, [0, 0, 0, k as u32], [0; 4], [0; 4], [0; 4], at, [m.near as f32, m.far as f32, 0.0], Vec3::zeros(), Vec3::zeros(), [0; 4]);
+        let (mut all, at) = joined(&m.bins, m.levels_at, &tables.tables, &m.tris);
+        let mut params = tables.params(m.res, m.res, 1, [0, 0, 0, k as u32], [0; 4], [0; 4], [0; 4], at, [m.near as f32, m.far as f32, if m.cam.is_ortho() { 1.0 } else { 0.0 }], Vec3::zeros(), Vec3::zeros(), [0; 4]);
+        // The instances, binned for this map (those it draws itself left
+        // out); their records and lists where the raster has them.
+        let mut lists = None;
+        if let Some((records, p)) = inst {
+            let size = Size { width: m.res, height: m.res };
+            let protos_at = all.len();
+            all.extend_from_slice(&p.protos);
+            let (l, entries) = instances::bin(gpu, p, &m.cam, size, records, &m.skip)?;
+            let bins = m.res.div_ceil(instances::BIN).pow(2);
+            params[44..48].copy_from_slice(&[(bins + 1) as u32, 0, 0, protos_at as u32]);
+            params[48..64].copy_from_slice(&instances::lens_words(&m.cam, size));
+            params[63] = entries as u32;
+            lists = Some(l);
+        }
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("render3d shadow params"), contents: bytemuck::cast_slice(&params), usage: wgpu::BufferUsages::UNIFORM });
         let word_buf = storage(gpu, &all, "render3d shadow words");
-        // (And the instances' records, which the shared triangle reads name:
-        // none here, the maps draw surfaces' triangles only.)
-        let buffers = [(0, &uniform), (1, &word_buf), (2, &*texel_buf), (7, &no_records)];
+        // (And the instances' records and lists, or stand-ins.)
+        let records = inst.map_or(&no_records, |(r, _)| r);
+        let buffers = [(0, &uniform), (1, &word_buf), (2, &*texel_buf), (7, records), (8, lists.as_ref().unwrap_or(&no_records))];
         let entries: Vec<wgpu::BindGroupEntry> = buffers.iter().map(|(i, b)| wgpu::BindGroupEntry { binding: *i, resource: b.as_entire_binding() }).collect();
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("render3d shadow"), layout: &pipeline.get_bind_group_layout(0), entries: &entries });
         let mut pass = encoder.begin_compute_pass(&Default::default());
@@ -831,9 +899,14 @@ fn draw_maps(gpu: &Gpu, tables: &Tables, textures: &Textures) -> wgpu::Buffer {
         pass.set_bind_group(0, &group, &[]);
         pass.set_bind_group(1, &out, &[]);
         pass.dispatch_workgroups(m.res.div_ceil(64) as u32, m.res.div_ceil(64) as u32, 1);
+        drop(pass);
+        // (With instances, each map's lists go once its passes are in.)
+        if inst.is_some() {
+            gpu.queue.submit([std::mem::replace(&mut encoder, device.create_command_encoder(&Default::default())).finish()]);
+        }
     }
     gpu.queue.submit([encoder.finish()]);
-    maps
+    Ok(maps)
 }
 
 /// The words the shader reads (see `words` in raster.wgsl): `bins` (tile

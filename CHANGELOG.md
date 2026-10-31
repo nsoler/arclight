@@ -17,6 +17,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.19 — 2026-10-31
+
+- GPU: shadows cast by instances now render through GPU instancing too
+  (each copy's triangles set up on the GPU for every shadow map): 10,000
+  instanced meshes with a sun's shadows render in about 150 ms instead of
+  1.5 s at 1080p.
+
 ## 0.13.18 — 2026-10-31
 
 - Geometry: a **Falloff** node gives points, mesh points or instances a

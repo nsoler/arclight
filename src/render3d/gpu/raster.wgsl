@@ -1424,6 +1424,45 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
     }
 }
 
+
+// A map texel's casters so far (`shadow_map`): the nearest opaque one's
+// distance; the see-through ones nearer than it, nearest first (as many as
+// gathered; a tie after the one before, as the CPU's sort keeps them):
+// distance and alpha, and surface; where some were left out, the nearest
+// of those.
+var<private> map_d: f32;
+var<private> map_lay: array<vec2<f32>, LAYERS_GATHERED>;
+var<private> map_lay_surf: array<u32, LAYERS_GATHERED>;
+var<private> map_count: u32;
+var<private> map_cut: f32;
+
+// A caster `key` from the light, `a` opaque, of surface `s` (flags `f`):
+// the nearest opaque one, or a layer.
+fn map_caster(key: f32, a: f32, f: u32, s: u32) {
+    if ((f & S_SEE_THROUGH) == 0u || a >= OPAQUE_ALPHA) {
+        map_d = min(map_d, key);
+        return;
+    }
+    if (key >= map_d || key >= map_cut) { return; }
+    var at = map_count;
+    while (at > 0u && map_lay[at - 1u].x > key) { at--; }
+    if (map_count == LAYERS_GATHERED) {
+        if (at == LAYERS_GATHERED) {
+            map_cut = key;
+            return;
+        }
+        map_cut = min(map_cut, map_lay[LAYERS_GATHERED - 1u].x);
+        map_count--;
+    }
+    for (var i = map_count; i > at; i--) {
+        map_lay[i] = map_lay[i - 1u];
+        map_lay_surf[i] = map_lay_surf[i - 1u];
+    }
+    map_lay[at] = vec2<f32>(key, a);
+    map_lay_surf[at] = s;
+    map_count++;
+}
+
 // ---- shadow maps --------------------------------------------------------
 
 // The map being drawn (P.cell.w is its index; P.size its texels across,
@@ -1447,15 +1486,9 @@ fn shadow_map(@builtin(global_invocation_id) gid: vec3<u32>) {
     let x = i32(gid.x);
     let y = i32(gid.y);
     let q = vec2<f32>(f32(gid.x) + 0.5, f32(gid.y) + 0.5);
-    var d = FAR_AWAY;
-    // The see-through casters nearer than d, nearest first (as many as
-    // gathered; a tie after the one before, as the CPU's sort keeps them):
-    // distance and alpha, and surface. Where some were left out, the
-    // nearest of those.
-    var lay: array<vec2<f32>, LAYERS_GATHERED>;
-    var lay_surf: array<u32, LAYERS_GATHERED>;
-    var count = 0u;
-    var cut = FAR_AWAY;
+    map_d = FAR_AWAY;
+    map_count = 0u;
+    map_cut = FAR_AWAY;
     for (var k = first; k < last; k++) {
         let t = words[k];
         if (x < ti(t, 14u) || x >= ti(t, 16u) || y < ti(t, 15u) || y >= ti(t, 17u)) { continue; }
@@ -1466,30 +1499,39 @@ fn shadow_map(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (c.x < 0.0) { continue; }
         let a = surface_color(s, tri_uv(t, s, c.yzw), 0.0).a;
         if (a <= 0.0) { continue; }
-        let key = map_key(m, tri_world(t, s, c.yzw));
-        if ((f & S_SEE_THROUGH) == 0u || a >= OPAQUE_ALPHA) {
-            d = min(d, key);
-            continue;
-        }
-        if (key >= d || key >= cut) { continue; }
-        var at = count;
-        while (at > 0u && lay[at - 1u].x > key) { at--; }
-        if (count == LAYERS_GATHERED) {
-            if (at == LAYERS_GATHERED) {
-                cut = key;
-                continue;
-            }
-            cut = min(cut, lay[LAYERS_GATHERED - 1u].x);
-            count--;
-        }
-        for (var i = count; i > at; i--) {
-            lay[i] = lay[i - 1u];
-            lay_surf[i] = lay_surf[i - 1u];
-        }
-        lay[at] = vec2<f32>(key, a);
-        lay_surf[at] = s;
-        count++;
+        map_caster(map_key(m, tri_world(t, s, c.yzw)), a, f, s);
     }
+    // The instances' triangles over this texel (as the raster's: by their
+    // boxes, from their setups).
+    if (P.inst.x != 0u) {
+        let bin = (gid.y / INST_BIN) * ((res + INST_BIN - 1u) / INST_BIN) + gid.x / INST_BIN;
+        let ia = lists[P.inst.z + bin];
+        let ib = lists[P.inst.z + bin + 1u];
+        let entries = P.inst.z + P.inst.x;
+        let setups = entries + 4u * bitcast<u32>(P.lens.w);
+        let ortho = P.cam.z != 0.0;
+        for (var k = ia; k < ib; k++) {
+            let at = entries + 4u * k;
+            let b0 = lists[at + 1u];
+            let b1 = lists[at + 2u];
+            if (x < i32(b0 & 0xffffu) || y < i32(b0 >> 16u) || x >= i32(b1 & 0xffffu) || y >= i32(b1 >> 16u)) { continue; }
+            let g = lists[at];
+            let su_at = setups + 10u * g;
+            let t = INSTANCE | g;
+            let s = INSTANCE | lists[su_at + 9u];
+            let ps = hit_surface(s);
+            let f = su(ps, 12u);
+            if ((f & S_CASTS) == 0u || (f & S_HOLDOUT) != 0u) { continue; }
+            let c = cover(Tri3(vec2<f32>(bitcast<f32>(lists[su_at]), bitcast<f32>(lists[su_at + 1u])), vec2<f32>(bitcast<f32>(lists[su_at + 2u]), bitcast<f32>(lists[su_at + 3u])), vec2<f32>(bitcast<f32>(lists[su_at + 4u]), bitcast<f32>(lists[su_at + 5u])), vec3<f32>(bitcast<f32>(lists[su_at + 6u]), bitcast<f32>(lists[su_at + 7u]), bitcast<f32>(lists[su_at + 8u])), ortho), q);
+            if (c.x < 0.0) { continue; }
+            let a = surface_color(ps, tri_uv(t, s, c.yzw), 0.0).a * hit_tint(s).a;
+            if (a <= 0.0) { continue; }
+            map_caster(map_key(m, tri_world(t, s, c.yzw)), a, f, s);
+        }
+    }
+    let d = map_d;
+    let count = map_count;
+    let cut = map_cut;
     let i = gid.y * res + gid.x;
     map_out[mu(m, 24u) + i] = d;
     let kmax = map_layers(m);
@@ -1502,15 +1544,15 @@ fn shadow_map(@builtin(global_invocation_id) gid: vec3<u32>) {
     var prev = 0u;
     var limit = cut;
     for (var j = 0u; j < count; j++) {
-        let key = lay[j].x;
+        let key = map_lay[j].x;
         if (key >= d) { break; }
-        if (kept > 0u && lay_surf[j] == lay_surf[prev] && abs(lay[prev].x - key) <= 1e-6 * abs(lay[prev].x)) { continue; }
+        if (kept > 0u && map_lay_surf[j] == map_lay_surf[prev] && abs(map_lay[prev].x - key) <= 1e-6 * abs(map_lay[prev].x)) { continue; }
         if (kept == kmax) {
             limit = min(limit, key);
             break;
         }
         map_out[base + 1u + 2u * kept] = key;
-        map_out[base + 2u + 2u * kept] = 1.0 - lay[j].y;
+        map_out[base + 2u + 2u * kept] = 1.0 - map_lay[j].y;
         kept++;
         prev = j;
     }

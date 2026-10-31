@@ -241,7 +241,8 @@ pub(crate) fn rows(gpu: &Gpu) -> Vec<CheckRow> {
         blur_row(Size { width: 960, height: 540 }),
         sprites_row(Size { width: 960, height: 540 }),
         splats_row(hd),
-        instances_row(gpu, hd),
+        instances_row(gpu, hd, false),
+        instances_row(gpu, hd, true),
         row(gpu, "3D view, solid", &scene, &cam, hd, 1, Passes::DEPTH, true),
     ]
 }
@@ -370,22 +371,34 @@ pub(super) fn instanced_field(n: usize) -> (Scene, Camera) {
     (scene, cam)
 }
 
-/// The instancing row: 10k cards and 500 spheres drawn instanced, against
-/// the CPU drawing each as a surface of its own.
-fn instances_row(gpu: &Gpu, size: Size) -> CheckRow {
-    let (scene, cam) = instanced_field(10_000);
+/// The instancing rows: 10k cards and 500 spheres drawn instanced, against
+/// the CPU drawing each as a surface of its own; with `shadows`, the sun
+/// casting shadows and a point light among them too.
+fn instances_row(gpu: &Gpu, size: Size, shadows: bool) -> CheckRow {
+    let (mut scene, cam) = instanced_field(10_000);
+    if shadows {
+        scene.lights[0].shadows = true;
+        let mut lamp = crate::shade::Light::new(crate::shade::LightKind::Point, crate::geom::trs([0.5, 0.0, -6.0], [0.0; 3], [1.0; 3]));
+        lamp.shadows = true;
+        lamp.node = "lamp".into();
+        scene.lights.push(lamp);
+    }
     let passes = Passes::from_names(["depth", "id"]);
     let all = super::super::surfaces(&scene);
     let plain = super::super::plain_surfaces(&scene);
     let cpu_draw = || crate::gpu::cpu_only(|| super::super::draw_passes(&all, &scene.lights, &[], &cam, size, 2, passes, None, None, None));
     let gpu_draw = || -> anyhow::Result<Option<Image>> {
-        let Some(plan) = super::instances::Plan::new(&plain, &scene.instances, false, &cam) else { return Ok(None) };
+        let Some(mut plan) = super::instances::Plan::new(&plain, &scene.instances, false, &cam) else { return Ok(None) };
+        if shadows {
+            plan.plan_shadows(&scene.lights);
+        }
         super::draw_with(gpu, &plan.surfs, Some(&plan), &scene.lights, &[], &cam, size, 2, passes, None, None, None)
     };
     let _ = gpu_draw();
     let (cpu, cpu_ms) = timed(cpu_draw);
     let (out, gpu_ms) = timed(gpu_draw);
-    judge("3D render, 10k instanced cards", format!("{}x{}", size.width, size.height), &cpu, out, cpu_ms, gpu_ms)
+    let case = if shadows { "3D render, instances, shadows" } else { "3D render, 10k instanced cards" };
+    judge(case, format!("{}x{}", size.width, size.height), &cpu, out, cpu_ms, gpu_ms)
 }
 
 fn judge(case: &str, size: String, cpu: &Image, out: anyhow::Result<Option<Image>>, cpu_ms: f64, gpu_ms: f64) -> CheckRow {

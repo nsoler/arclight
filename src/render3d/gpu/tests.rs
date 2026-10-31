@@ -344,6 +344,41 @@ fn instances_drawn_instanced_match_the_cpu() {
     assert!(again.pixels == out.pixels, "the same every time");
 }
 
+/// Instances cast shadows drawn instanced in the maps as on the CPU: a
+/// sun's, a see-through copy's (layers), and a point light's among them
+/// (cube maps, copies crossing a face's near plane drawn as their own).
+#[test]
+fn instances_cast_shadows_drawn_instanced() {
+    if crate::gpu::test_device().is_none() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let (mut copies, _) = super::super::tests::instanced();
+    let mut lamp = crate::shade::Light::new(crate::shade::LightKind::Point, crate::geom::trs([0.0, 0.5, -8.0], [0.0; 3], [1.0; 3]));
+    lamp.shadows = true;
+    lamp.node = "lamp".into();
+    copies.lights.push(lamp);
+    let cam = super::super::tests::camera();
+    let format = Size { width: 160, height: 80 };
+    let passes = Passes::from_names(["depth", "shadow", "lights", "id"]);
+    let cpu = crate::gpu::cpu_only(|| super::super::render_passes(&copies, &cam, format, 2, None, passes));
+    let before = INSTANCED.with(|n| n.get());
+    let out = with_gpu(|| super::super::render_passes(&copies, &cam, format, 2, None, passes));
+    assert_eq!(INSTANCED.with(|n| n.get()), before + 1, "drawn instanced: {:?}", crate::gpu::last_error());
+    for (name, mean, off) in differences(&cpu, &out) {
+        let (most_mean, most_off) = super::check::allowed(&name);
+        assert!(mean <= most_mean && off <= most_off, "{name}: mean {mean:.2e}, {:.3} % of values off", off * 100.0);
+    }
+    // The point light sits among the copies: some cross its faces' near
+    // planes and are drawn there as surfaces of their own.
+    let plain: Vec<super::super::Surface> = Vec::new();
+    let mut plan = instances::Plan::new(&plain, &copies.instances, false, &cam).unwrap();
+    plan.plan_shadows(&copies.lights);
+    assert!(plan.map_own.iter().any(|m| !m.is_empty()), "{:?}", plan.map_own);
+    let shadowed = |img: &Image| img.plane("shadow.R").unwrap().data.iter().filter(|v| **v > 0.02).count();
+    assert!(shadowed(&cpu) > 60, "there are shadows: {}", shadowed(&cpu));
+}
+
 /// The raster and the instances' binning set an instance's corners up
 /// with the same function (so a triangle is binned where it's drawn).
 #[test]
@@ -357,8 +392,8 @@ fn instance_corners_are_set_up_alike_in_both_shaders() {
 }
 
 /// Instances near the camera: one crossing the near plane drawn as the
-/// CPU draws it (its triangles clipped), one behind the camera not at
-/// all; a stack of see-through copies deeper than a sample keeps, those
+/// CPU draws it (its triangles clipped), one behind the camera not seen
+/// (though drawn into shadow maps); a stack of see-through copies deeper than a sample keeps, those
 /// pixels from the CPU; and the 3D view's preview drawn instanced too.
 #[test]
 fn instances_near_the_camera_deep_stacks_and_the_3d_view() {
@@ -377,7 +412,7 @@ fn instances_near_the_camera_deep_stacks_and_the_3d_view() {
     let set = Instances { prototypes: vec![Prototype::Model(cube.clone())], which: vec![0; 4], worlds, node: "near".into(), ..Instances::default() };
     let scene = Scene { instances: vec![set], ..Scene::default() };
     let plan = instances::Plan::new(&[], &scene.instances, false, &cam).unwrap();
-    assert_eq!(plan.drawn.len(), 2, "the two in front, instanced");
+    assert_eq!(plan.drawn.len(), 3, "the two in front and the one behind (for shadow maps), instanced");
     assert_eq!(plan.surfs.len() - plan.plain, 2, "a prototype and the one crossing the near plane");
     let passes = Passes::from_names(["depth", "id"]);
     let check = |scene: &Scene, what: &str| {

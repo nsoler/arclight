@@ -28,6 +28,8 @@ struct Params {
     // focal length in pixels (orthographic: pixels a unit), the frame's
     // middle x and y, (unused)
     lens: vec4<f32>,
+    // instances left out (1: those `skip` marks), (unused)
+    flags: vec4<u32>,
 };
 
 @group(0) @binding(0) var<uniform> P: Params;
@@ -48,6 +50,8 @@ struct Params {
 // here rather than at every pixel): its corners in frame pixels, then 1 /
 // depth at each; then its instance.
 @group(0) @binding(7) var<storage, read_write> setups: array<f32>;
+// The instances left out (a bit each: drawn as surfaces of their own).
+@group(0) @binding(8) var<storage, read> skip: array<u32>;
 
 fn iu(i: u32, k: u32) -> u32 { return records[i * INST_WORDS + k]; }
 fn irow(i: u32, r: u32) -> vec4<f32> {
@@ -128,7 +132,12 @@ fn index(gid: vec3<u32>) -> u32 { return gid.x + gid.y * 65535u * 256u; }
 fn count(@builtin(global_invocation_id) gid: vec3<u32>) {
     let g = index(gid);
     if (g >= P.counts.y) { return; }
-    let k = corners_of(g);
+    var k = corners_of(g);
+    // Left out: set up as having no area, so no bin takes it.
+    if (P.flags.x != 0u) {
+        let i = instance_of(g);
+        if ((skip[i / 32u] & (1u << (i % 32u))) != 0u) { k = array<vec3<f32>, 3>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0)); }
+    }
     for (var j = 0u; j < 3u; j++) {
         setups[10u * g + 2u * j] = k[j].x;
         setups[10u * g + 2u * j + 1u] = k[j].y;

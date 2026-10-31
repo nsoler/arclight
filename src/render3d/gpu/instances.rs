@@ -9,12 +9,12 @@
 //!
 //! An instance crossing the camera's near plane is drawn as the CPU
 //! renderer draws it (its own surface, its triangles clipped and set up on
-//! the CPU, in the ordinary triangle table); one wholly behind it isn't
-//! drawn. Triangle numbers run over the instances drawn here in order,
+//! the CPU, in the ordinary triangle table); so is one crossing a shadow
+//! map's, in that map (a surface of its own drawn there only). Triangle numbers run over the instances drawn here in order,
 //! each instance's prototype's triangles in order: the order the CPU
 //! renderer's surfaces have them in, so ties go the same way.
 
-use super::super::{instance_surface, instance_tint, Surface, Tri};
+use super::super::{instance_surface, instance_tint, shadow, Surface, Tri};
 use crate::geo::{Instances, Prototype};
 use crate::geom::{self, Camera, Mat4, Vec3};
 use crate::gpu::Gpu;
@@ -60,6 +60,16 @@ pub(super) struct Plan<'a> {
     /// the id pass).
     pub ordinals: Vec<usize>,
     sets: &'a [Instances],
+    /// Each instance drawn here: the box round it in the scene.
+    boxes: Vec<(Vec3, Vec3)>,
+    /// The shadow maps (see [`Plan::plan_shadows`]): as shadow.rs plans
+    /// them, for the scene with every instance in it; each map's instances
+    /// drawn there as surfaces of their own (by their number here), and
+    /// those surfaces (in `surfs`, no triangles of their own: the map's
+    /// are added for it alone).
+    pub shadows: Option<Vec<Option<shadow::LightView>>>,
+    pub map_own: Vec<Vec<u32>>,
+    pub own_surface: std::collections::HashMap<u32, usize>,
 }
 
 /// A prototype's key: its set and its number there.
@@ -104,13 +114,10 @@ impl<'a> Plan<'a> {
                         let Some(corners) = boxes[g.which[i] as usize] else { return (Way::None, Mat4::identity()) };
                         let to_cam = view * g.worlds[i];
                         let depths = corners.map(|c| -geom::transform_point(&to_cam, &c).z);
-                        let way = if depths.iter().all(|d| *d >= near) {
-                            Way::Here
-                        } else if depths.iter().all(|d| *d < near) {
-                            Way::None
-                        } else {
-                            Way::Cpu
-                        };
+                        // (Wholly nearer than the near plane, or behind the
+                        // camera: drawn here all the same, for the shadow
+                        // maps; the camera's view passes them by.)
+                        let way = if depths.iter().all(|d| *d >= near) || depths.iter().all(|d| *d < near) { Way::Here } else { Way::Cpu };
                         (way, g.worlds[i] * own)
                     })
                     .collect()
@@ -206,7 +213,24 @@ impl<'a> Plan<'a> {
         }
         protos.extend(table.iter().flatten());
         protos.extend(data);
-        Some(Plan { surfs: out, plain, nodes, protos, drawn, records, firsts, triangles: total as u32, ordinals, sets })
+        let boxes = drawn
+            .par_iter()
+            .map(|&(si, i, world): &(usize, usize, Mat4)| {
+                let g = &sets[si];
+                let local = match &g.prototypes[g.which[i] as usize] {
+                    Prototype::Model(m) => m.mesh.bounds(),
+                    Prototype::Card(c) => {
+                        let [w, h] = c.size.map(|v| v / 2.0);
+                        Some((Vec3::new(-w, -h, 0.0), Vec3::new(w, h, 0.0)))
+                    }
+                    Prototype::Splats(_) => None,
+                };
+                let Some((lo, hi)) = local else { return (Vec3::zeros(), Vec3::zeros()) };
+                let pts = crate::geo::corners(lo, hi).map(|c| geom::transform_point(&world, &c));
+                pts.iter().fold((pts[0], pts[0]), |(a, b), p| (a.inf(p), b.sup(p)))
+            })
+            .collect();
+        Some(Plan { surfs: out, plain, nodes, protos, drawn, records, firsts, triangles: total as u32, ordinals, sets, boxes, shadows: None, map_own: Vec::new(), own_surface: std::collections::HashMap::new() })
     }
 
     /// The records with each one's object: 1 + its set's node's index in
@@ -242,6 +266,88 @@ impl<'a> Plan<'a> {
         Some((tri, (objects + 1 + ordinal) as f32))
     }
 
+    /// Plan the shadow maps of `lights` (as shadow.rs does for the scene
+    /// with every instance a surface of its own), and which instances each
+    /// map draws as surfaces of their own: those reaching in front of its
+    /// near plane (their triangles clipped on the CPU there).
+    pub fn plan_shadows(&mut self, lights: &[crate::shade::Light]) {
+        let sets = self.sets;
+        let plain = &self.surfs[..self.plain];
+        let extent = || {
+            // Every point of the ordinary surfaces and of each instance (a
+            // mesh's or card's) placed: what the CPU's extent takes.
+            let mut pts: Vec<Vec3> = plain.iter().flat_map(|s| s.positions.iter().map(|p| geom::transform_point(&s.world, p))).collect();
+            let more: Vec<Vec<Vec3>> = sets
+                .iter()
+                .map(|g| {
+                    (0..g.len())
+                        .into_par_iter()
+                        .flat_map_iter(|i| {
+                            let (local, own): (Vec<Vec3>, Mat4) = match &g.prototypes[g.which[i] as usize] {
+                                Prototype::Model(m) => (m.mesh.positions.clone(), m.world),
+                                Prototype::Card(c) => (super::super::card_surface(c).positions.into_owned(), c.world),
+                                Prototype::Splats(_) => (Vec::new(), Mat4::identity()),
+                            };
+                            let w = g.worlds[i] * own;
+                            local.into_iter().map(move |p| geom::transform_point(&w, &p))
+                        })
+                        .collect()
+                })
+                .collect();
+            pts.extend(more.into_iter().flatten());
+            shadow::extent_of(&pts)
+        };
+        let planned = shadow::plan_in(&self.surfs, lights, extent);
+        let mut own: Vec<Vec<u32>> = Vec::new();
+        for (_, v) in super::map_views(&planned) {
+            let view = v.cam.view();
+            let near = v.cam.near.max(1e-6);
+            let row: Vec3 = Vec3::new(view[(2, 0)], view[(2, 1)], view[(2, 2)]);
+            let reach = row.abs();
+            let crossing: Vec<u32> = (0..self.drawn.len() as u32)
+                .into_par_iter()
+                .filter(|&k| {
+                    let (lo, hi) = self.boxes[k as usize];
+                    let (c, half) = ((lo + hi) / 2.0, (hi - lo) / 2.0);
+                    let depth = -(row.dot(&c) + view[(2, 3)]);
+                    let spread = reach.dot(&half);
+                    depth - spread < near && depth + spread >= near
+                })
+                .collect();
+            for &k in &crossing {
+                if !self.own_surface.contains_key(&k) {
+                    let (si, i, _) = self.drawn[k as usize];
+                    if let Some(mut s) = instance_surface(&sets[si], i, (self.ordinals[si] + i) as u32) {
+                        s.triangles = Cow::Owned(Vec::new());
+                        self.own_surface.insert(k, self.surfs.len());
+                        self.surfs.push(s);
+                    }
+                }
+            }
+            own.push(crossing);
+        }
+        self.map_own = own;
+        self.shadows = Some(planned);
+    }
+
+    /// Instance `k`'s surface with its own triangles (for a map drawing it
+    /// so), and where it is in `surfs`.
+    pub fn own_full(&self, k: u32) -> Option<(Surface<'a>, usize)> {
+        let at = *self.own_surface.get(&k)?;
+        let (si, i, _) = self.drawn[k as usize];
+        Some((instance_surface(&self.sets[si], i, (self.ordinals[si] + i) as u32)?, at))
+    }
+
+    /// Whether prototype p's instances let light through anywhere (it does,
+    /// or an instance's tint makes it less than opaque).
+    pub fn sees_through(&self, proto_surface: usize) -> bool {
+        (0..self.drawn.len()).any(|k| {
+            let r = &self.records[k * INST_WORDS..(k + 1) * INST_WORDS];
+            let a = f32::from_bits(r[19]);
+            self.protos[r[12] as usize * PROTO_WORDS] as usize == proto_surface && a > 0.0 && a < 1.0
+        })
+    }
+
     pub fn is_empty(&self) -> bool {
         self.drawn.is_empty()
     }
@@ -253,7 +359,7 @@ impl<'a> Plan<'a> {
 /// four words; each bin's in no particular order), then each triangle set
 /// up (10 words, its instance last); and how many entries. Errors where they won't fit a
 /// binding.
-pub(super) fn bin(gpu: &Gpu, plan: &Plan, cam: &Camera, format: Size, records: &wgpu::Buffer) -> Result<(wgpu::Buffer, usize)> {
+pub(super) fn bin(gpu: &Gpu, plan: &Plan, cam: &Camera, format: Size, records: &wgpu::Buffer, skip: &[u32]) -> Result<(wgpu::Buffer, usize)> {
     let device = &gpu.device;
     let limit = gpu.limits.max_storage_buffer_binding_size as usize;
     let (tx, ty) = (format.width.div_ceil(BIN), format.height.div_ceil(BIN));
@@ -267,16 +373,18 @@ pub(super) fn bin(gpu: &Gpu, plan: &Plan, cam: &Camera, format: Size, records: &
     p[..4].copy_from_slice(&[format.width as u32, format.height as u32, tx as u32, ty as u32]);
     p[4..8].copy_from_slice(&[plan.drawn.len() as u32, plan.triangles, tiles as u32, cam.is_ortho() as u32]);
     p[8..24].copy_from_slice(&lens_words(cam, format));
+    p[24] = !skip.is_empty() as u32;
+    let skips = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("instances left out"), contents: bytemuck::cast_slice(if skip.is_empty() { &[0u32][..] } else { skip }), usage: wgpu::BufferUsages::STORAGE });
     let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("instance params"), contents: bytemuck::cast_slice(&p), usage: wgpu::BufferUsages::UNIFORM });
     let none = storage(16, "instance entries (none yet)");
     let setup_bytes = plan.triangles as usize * 40;
     let setups = storage(setup_bytes, "instance triangles set up");
     let pass = |encoder: &mut wgpu::CommandEncoder, entry: &'static str, pairs: &wgpu::Buffer, size: (u32, u32)| {
         let pipeline = gpu.compute_pipeline("render3d/instances", SHADER, entry);
-        let all: [&wgpu::Buffer; 8] = [&uniform, &protos, records, &counts, &starts, &cursors, pairs, &setups];
+        let all: [&wgpu::Buffer; 9] = [&uniform, &protos, records, &counts, &starts, &cursors, pairs, &setups, &skips];
         // (Each entry's layout has only the bindings it uses.)
         let used: &[u32] = match entry {
-            "count" => &[0, 1, 2, 3, 7],
+            "count" => &[0, 1, 2, 3, 7, 8],
             "offsets" => &[0, 3, 4, 5],
             _ => &[0, 4, 5, 6, 7],
         };
