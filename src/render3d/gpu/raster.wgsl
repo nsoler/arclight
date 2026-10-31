@@ -6,8 +6,8 @@
 // as shadow.rs's `Shadows::visible` does.
 //
 // Tables are flat u32 words (f32 values as their bits), laid out by
-// mod.rs: TRI_WORDS a triangle, LEVEL_WORDS a texture level (in `bins`);
-// in `tables`, SURF_WORDS a surface, then from P.shadow: LIGHT_WORDS a
+// mod.rs: TRI_WORDS a triangle, LEVEL_WORDS a texture level (in `words`);
+// in the tables, SURF_WORDS a surface, then from P.shadow: LIGHT_WORDS a
 // light, SHL_WORDS a light's shadows, SRC_WORDS a shadow source (one map
 // or a cube of six), MAP_WORDS a map.
 
@@ -19,6 +19,14 @@ const MAX_LIGHT_NODES: u32 = 16u;
 const TILE: u32 = 16u;
 const NONE: u32 = 0xffffffffu;
 const OVERFLOW: u32 = 0x80000000u;
+// A kept surface that's a splat (with its number).
+const SPLAT: u32 = 0x40000000u;
+const PROJ_WORDS: u32 = 12u;
+const SPLAT_SET_WORDS: u32 = 2u;
+// A pixel's splats stop once less than this shows through them; ones
+// fainter than SPLAT_ALPHA_MIN add nothing (as splats.rs).
+const T_MIN: f32 = 1e-4;
+const SPLAT_ALPHA_MIN: f32 = 1.0 / 255.0;
 // How much light may still come through a sample's 16 nearest surfaces
 // with more behind them before the pixel goes to the CPU: below it, what
 // the rest would add is within the GPU's tolerance.
@@ -72,7 +80,8 @@ struct Params {
     parts: vec4<u32>,
     // lights, light nodes, objects, shadow at
     counts: vec4<u32>,
-    // where the tile lists start and the texture levels start, in `bins`
+    // where (in `words`) the tile starts, the texture levels, the tables
+    // and the triangles start
     tables: vec4<u32>,
     // near, far, orthographic (1) or not (0)
     cam: vec4<f32>,
@@ -83,39 +92,52 @@ struct Params {
     // where the lights, their shadows, the shadow sources and the maps
     // start in `tables`
     shadow: vec4<u32>,
+    // splats: there are some (1) or not, where the pairs start in `lists`
+    // (after the tile starts), where the sets' table starts in `words`
+    // (SPLAT_SET_WORDS a set: object + 1, holdout), (unused)
+    splat: vec4<u32>,
 };
 
 @group(0) @binding(0) var<uniform> P: Params;
-@group(0) @binding(1) var<storage, read> tris: array<u32>;
-@group(0) @binding(2) var<storage, read> bins: array<u32>;
-@group(0) @binding(3) var<storage, read> tables: array<u32>;
-@group(0) @binding(4) var<storage, read> texels: array<vec4<f32>>;
+// The frame's tables, one after another: the tiles' triangle lists (from
+// 0: tile starts, then the lists), the texture levels (from P.tables.y),
+// the surfaces, lights and shadows' tables (from P.tables.z) and the
+// triangles (from P.tables.w).
+@group(0) @binding(1) var<storage, read> words: array<u32>;
+@group(0) @binding(2) var<storage, read> texels: array<vec4<f32>>;
 // Every shadow map's texels: the nearest caster's distance (FAR_AWAY:
 // none).
-@group(0) @binding(5) var<storage, read> maps: array<f32>;
-@group(0) @binding(6) var<storage, read_write> out_color: array<vec4<f32>>;
-@group(0) @binding(7) var<storage, read_write> out_extra: array<f32>;
-// Each pixel's nearest surfaces, in four parts of `pixels` entries each
+@group(0) @binding(3) var<storage, read> maps: array<f32>;
+@group(0) @binding(4) var<storage, read_write> out_color: array<vec4<f32>>;
+@group(0) @binding(5) var<storage, read_write> out_extra: array<f32>;
+// Each pixel's nearest surfaces, in five parts of `pixels` entries each
 // (the last a quarter as long): the nearest surface seen at least half
 // opaque and the nearest fainter one, kept from row to row as (triangle +
 // 1, 0 none; overflow in the first's top bit, barycentric b0, b1, depth
-// bits); after the last row, the one the passes take; and every pixel's
-// depth, four to an entry (0 nothing; all bits set: overflowed). The
-// buffers start cleared.
-@group(0) @binding(8) var<storage, read_write> out_hits: array<vec4<u32>>;
+// bits); after the last row, the one the passes take (a splat: SPLAT and
+// its number, depth last); where the samples' blends first got half
+// opaque, nearest (1 if any, depth bits, the splat there or NONE), kept
+// from row to row; and every pixel's depth, four to an entry (0 nothing;
+// all bits set: overflowed). The buffers start cleared.
+@group(0) @binding(6) var<storage, read_write> out_hits: array<vec4<u32>>;
+// The view's splats (splat_view.wgsl): each splat seen, PROJ_WORDS a
+// splat; and each tile's start, then the (depth, splat) pairs nearest
+// first.
+@group(0) @binding(7) var<storage, read> proj: array<u32>;
+@group(0) @binding(8) var<storage, read> lists: array<u32>;
 
-fn tu(t: u32, k: u32) -> u32 { return tris[t * TRI_WORDS + k]; }
-fn tf(t: u32, k: u32) -> f32 { return bitcast<f32>(tris[t * TRI_WORDS + k]); }
+fn tu(t: u32, k: u32) -> u32 { return words[P.tables.w + t * TRI_WORDS + k]; }
+fn tf(t: u32, k: u32) -> f32 { return bitcast<f32>(words[P.tables.w + t * TRI_WORDS + k]); }
 fn tv2(t: u32, k: u32) -> vec2<f32> { return vec2<f32>(tf(t, k), tf(t, k + 1u)); }
 fn tv3(t: u32, k: u32) -> vec3<f32> { return vec3<f32>(tf(t, k), tf(t, k + 1u), tf(t, k + 2u)); }
-fn ti(t: u32, k: u32) -> i32 { return bitcast<i32>(tris[t * TRI_WORDS + k]); }
+fn ti(t: u32, k: u32) -> i32 { return bitcast<i32>(words[P.tables.w + t * TRI_WORDS + k]); }
 
-fn su(s: u32, k: u32) -> u32 { return tables[s * SURF_WORDS + k]; }
-fn sf(s: u32, k: u32) -> f32 { return bitcast<f32>(tables[s * SURF_WORDS + k]); }
+fn su(s: u32, k: u32) -> u32 { return words[P.tables.z + s * SURF_WORDS + k]; }
+fn sf(s: u32, k: u32) -> f32 { return bitcast<f32>(words[P.tables.z + s * SURF_WORDS + k]); }
 fn sv3(s: u32, k: u32) -> vec3<f32> { return vec3<f32>(sf(s, k), sf(s, k + 1u), sf(s, k + 2u)); }
 
-fn lu(l: u32, k: u32) -> u32 { return tables[P.shadow.x + l * LIGHT_WORDS + k]; }
-fn lf(l: u32, k: u32) -> f32 { return bitcast<f32>(tables[P.shadow.x + l * LIGHT_WORDS + k]); }
+fn lu(l: u32, k: u32) -> u32 { return words[P.tables.z + P.shadow.x + l * LIGHT_WORDS + k]; }
+fn lf(l: u32, k: u32) -> f32 { return bitcast<f32>(words[P.tables.z + P.shadow.x + l * LIGHT_WORDS + k]); }
 fn lv3(l: u32, k: u32) -> vec3<f32> { return vec3<f32>(lf(l, k), lf(l, k + 1u), lf(l, k + 2u)); }
 fn lv4(l: u32, k: u32) -> vec4<f32> { return vec4<f32>(lf(l, k), lf(l, k + 1u), lf(l, k + 2u), lf(l, k + 3u)); }
 
@@ -190,7 +212,7 @@ fn tri_normal(t: u32, b: vec3<f32>) -> vec3<f32> {
 
 // ---- textures ---------------------------------------------------------
 
-fn lw(l: u32, k: u32) -> u32 { return bins[P.tables.y + l * LEVEL_WORDS + k]; }
+fn lw(l: u32, k: u32) -> u32 { return words[P.tables.y + l * LEVEL_WORDS + k]; }
 
 // Level l's texel at frame position (x, y): transparent outside its data
 // window.
@@ -318,8 +340,8 @@ fn arrive(acc: ptr<function, Lit>, m: Surf, color: vec3<f32>, l: vec3<f32>, e: f
 
 // ---- shadows (shadow.rs) ----------------------------------------------
 
-fn mu(m: u32, k: u32) -> u32 { return tables[P.shadow.w + m * MAP_WORDS + k]; }
-fn mf(m: u32, k: u32) -> f32 { return bitcast<f32>(tables[P.shadow.w + m * MAP_WORDS + k]); }
+fn mu(m: u32, k: u32) -> u32 { return words[P.tables.z + P.shadow.w + m * MAP_WORDS + k]; }
+fn mf(m: u32, k: u32) -> f32 { return bitcast<f32>(words[P.tables.z + P.shadow.w + m * MAP_WORDS + k]); }
 fn mv3(m: u32, k: u32) -> vec3<f32> { return vec3<f32>(mf(m, k), mf(m, k + 1u), mf(m, k + 2u)); }
 fn mv4(m: u32, k: u32) -> vec4<f32> { return vec4<f32>(mf(m, k), mf(m, k + 1u), mf(m, k + 2u), mf(m, k + 3u)); }
 
@@ -417,10 +439,10 @@ fn map_lit(m: u32, p: vec3<f32>, soft: f32, radius: f32) -> f32 {
     return sum / f32((2 * n + 1) * (2 * n + 1));
 }
 
-fn src_u(src: u32, k: u32) -> u32 { return tables[P.shadow.z + src * SRC_WORDS + k]; }
+fn src_u(src: u32, k: u32) -> u32 { return words[P.tables.z + P.shadow.z + src * SRC_WORDS + k]; }
 fn src_at(src: u32) -> vec3<f32> {
     let o = P.shadow.z + src * SRC_WORDS;
-    return vec3<f32>(bitcast<f32>(tables[o + 2u]), bitcast<f32>(tables[o + 3u]), bitcast<f32>(tables[o + 4u]));
+    return vec3<f32>(bitcast<f32>(words[P.tables.z + o + 2u]), bitcast<f32>(words[P.tables.z + o + 3u]), bitcast<f32>(words[P.tables.z + o + 4u]));
 }
 
 // Source src's map for p: its one map, or a cube's face toward p.
@@ -451,10 +473,10 @@ fn src_texel_at(src: u32, p: vec3<f32>) -> f32 {
 fn visible(li: u32, k: u32, m: Surf, l: vec3<f32>) -> f32 {
     if (!m.receives) { return 1.0; }
     let sh = P.shadow.y + li * SHL_WORDS;
-    if (k >= tables[sh + 1u]) { return 1.0; }
-    let src = tables[sh] + k;
-    let soft = bitcast<f32>(tables[sh + 2u]);
-    let radius = bitcast<f32>(tables[sh + 3u]);
+    if (k >= words[P.tables.z + sh + 1u]) { return 1.0; }
+    let src = words[P.tables.z + sh] + k;
+    let soft = bitcast<f32>(words[P.tables.z + sh + 2u]);
+    let radius = bitcast<f32>(words[P.tables.z + sh + 3u]);
     // Off the surface toward the light, more the more it slants.
     let n = select(m.n, -m.n, dot(m.n, l) < 0.0);
     let texel = src_texel_at(src, m.p);
@@ -604,6 +626,153 @@ fn light_shade(li: u32, m_in: Surf) -> Lit {
     return acc;
 }
 
+// ---- splats (splats.rs's fragments) ----------------------------------
+
+struct Frag {
+    depth: f32,
+    color: vec4<f32>,
+    g: u32,
+    capture: u32,
+    valid: bool,
+};
+
+// Where a pixel is in its tile's splats, and how much shows through those
+// so far.
+struct Stream {
+    k: u32,
+    end: u32,
+    through: f32,
+};
+
+fn pjf(g: u32, w: u32) -> f32 { return bitcast<f32>(proj[g * PROJ_WORDS + w]); }
+
+fn stream_at(tile: u32) -> Stream {
+    if (P.splat.x == 0u) { return Stream(0u, 0u, 1.0); }
+    return Stream(lists[tile], lists[tile + 1u], 1.0);
+}
+
+// The next splat at pixel middle q, nearest first: its share there
+// (opacity times the Gaussian), until less than T_MIN shows through.
+fn next_frag(st: ptr<function, Stream>, q: vec2<f32>) -> Frag {
+    var f: Frag;
+    f.valid = false;
+    if ((*st).through < T_MIN) { return f; }
+    while ((*st).k < (*st).end) {
+        let g = lists[P.splat.y + 2u * (*st).k + 1u];
+        (*st).k += 1u;
+        let d = q - vec2<f32>(pjf(g, 0u), pjf(g, 1u));
+        let power = -0.5 * (pjf(g, 2u) * d.x * d.x + pjf(g, 4u) * d.y * d.y) - pjf(g, 3u) * d.x * d.y;
+        // (Past 3σ it counts for nothing, whichever tile it's in.)
+        if (!(power >= -4.5 && power <= 0.0)) { continue; }
+        let alpha = pjf(g, 9u) * exp(power);
+        if (alpha < SPLAT_ALPHA_MIN) { continue; }
+        f = Frag(pjf(g, 5u), vec4<f32>(vec3<f32>(pjf(g, 6u), pjf(g, 7u), pjf(g, 8u)) * alpha, alpha), g, proj[g * PROJ_WORDS + 11u] - 1u, true);
+        (*st).through *= 1.0 - alpha;
+        return f;
+    }
+    return f;
+}
+
+// The splats alone at a pixel (where a sample meets no surface): blended
+// once, as splats.rs's `blend_alone` does.
+struct Alone {
+    acc: vec4<f32>,
+    held: f32,
+    emission: vec3<f32>,
+    mattes: array<f32, 32>,
+    half: vec4<u32>,
+    dominant: u32,
+    share: f32,
+    any: bool,
+    through: f32,
+};
+
+fn alone_add(a: ptr<function, Alone>, f: Frag, mattes: bool) {
+    (*a).any = true;
+    let k = 1.0 - (*a).acc.a - (*a).held;
+    let share = f.color.a * k;
+    if ((*a).dominant == NONE || share > (*a).share) {
+        (*a).dominant = f.g;
+        (*a).share = share;
+    }
+    let o = splat_object(f.capture);
+    if (mattes && o > 0u) { (*a).mattes[o - 1u] += f.color.a * k; }
+    if (splat_holdout(f.capture)) {
+        (*a).held += f.color.a * k;
+    } else {
+        (*a).acc += f.color * k;
+        (*a).emission += f.color.rgb * k;
+    }
+    if ((*a).half.x == 0u && (*a).acc.a >= 0.5) { (*a).half = vec4<u32>(1u, bitcast<u32>(f.depth), f.g, 0u); }
+}
+
+// A batch of a tile's splats in workgroup memory, loaded by the whole
+// workgroup together: center and conic xx xy; conic yy, depth, opacity,
+// capture (bits); color; which splat.
+const BATCH: u32 = 256u;
+var<workgroup> batch_a: array<vec4<f32>, 256>;
+var<workgroup> batch_b: array<vec4<f32>, 256>;
+var<workgroup> batch_c: array<vec4<f32>, 256>;
+var<workgroup> batch_g: array<u32, 256>;
+var<workgroup> wg_start: u32;
+var<workgroup> wg_end: u32;
+var<workgroup> wg_live: atomic<u32>;
+var<workgroup> wg_live_n: u32;
+
+// The splats alone at each pixel of workgroup `tile` (a 16 × 16 tile),
+// taken a batch at a time for the whole workgroup (much quicker than each
+// pixel reading the list on its own); every thread must call it (`in_frame`:
+// a pixel of the frame, at `pq`).
+fn alone_batched(a: ptr<function, Alone>, tile: u32, li: u32, in_frame: bool, pq: vec2<f32>, mattes: bool) {
+    if (li == 0u) {
+        wg_start = lists[tile];
+        wg_end = lists[tile + 1u];
+    }
+    let start = workgroupUniformLoad(&wg_start);
+    let end = workgroupUniformLoad(&wg_end);
+    var done = !in_frame;
+    for (var b = start; b < end; b += BATCH) {
+        let k = b + li;
+        if (k < end) {
+            let g = lists[P.splat.y + 2u * k + 1u];
+            batch_a[li] = vec4<f32>(pjf(g, 0u), pjf(g, 1u), pjf(g, 2u), pjf(g, 3u));
+            batch_b[li] = vec4<f32>(pjf(g, 4u), pjf(g, 5u), pjf(g, 9u), bitcast<f32>(proj[g * PROJ_WORDS + 11u] - 1u));
+            batch_c[li] = vec4<f32>(pjf(g, 6u), pjf(g, 7u), pjf(g, 8u), 0.0);
+            batch_g[li] = g;
+        }
+        workgroupBarrier();
+        if (!done) {
+            let n = min(BATCH, end - b);
+            for (var i = 0u; i < n; i++) {
+                let ba = batch_a[i];
+                let bb = batch_b[i];
+                let d = pq - ba.xy;
+                let power = -0.5 * (ba.z * d.x * d.x + bb.x * d.y * d.y) - ba.w * d.x * d.y;
+                if (!(power >= -4.5 && power <= 0.0)) { continue; }
+                let alpha = bb.z * exp(power);
+                if (alpha < SPLAT_ALPHA_MIN) { continue; }
+                alone_add(a, Frag(bb.y, vec4<f32>(batch_c[i].rgb * alpha, alpha), batch_g[i], bitcast<u32>(bb.w), true), mattes);
+                (*a).through *= 1.0 - alpha;
+                if ((*a).through < T_MIN) {
+                    done = true;
+                    break;
+                }
+            }
+        }
+        // On while any pixel still sees through.
+        if (!done) { atomicOr(&wg_live, 1u); }
+        workgroupBarrier();
+        if (li == 0u) {
+            wg_live_n = atomicLoad(&wg_live);
+            atomicStore(&wg_live, 0u);
+        }
+        if (workgroupUniformLoad(&wg_live_n) == 0u) { break; }
+    }
+}
+
+fn splat_object(k: u32) -> u32 { return words[P.splat.z + k * SPLAT_SET_WORDS]; }
+fn splat_holdout(k: u32) -> bool { return words[P.splat.z + k * SPLAT_SET_WORDS + 1u] != 0u; }
+
 // ---- the pixel --------------------------------------------------------
 
 struct Hit {
@@ -630,6 +799,13 @@ var<private> sums: Sums;
 // A later sample takes over only when nearer by more than f32's rounding:
 // where the samples are at the same depth (a card facing the camera), the
 // first one stays, as on the CPU.
+// The nearer of two "got half opaque" records (the first if as near).
+fn nearer(a: vec4<u32>, b: vec4<u32>) -> vec4<u32> {
+    if (a.x == 0u) { return b; }
+    if (b.x != 0u && bitcast<f32>(b.y) < bitcast<f32>(a.y)) { return b; }
+    return a;
+}
+
 fn see(which: u32, h: Hit) {
     let had = seen[which];
     if (had.x == 0u || h.depth < bitcast<f32>(had.w) * (1.0 - 1e-5)) {
@@ -638,7 +814,7 @@ fn see(which: u32, h: Hit) {
 }
 
 @compute @workgroup_size(16, 16)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
     let w = P.size.x;
     let h = P.size.y;
     // With a jitter cell, a thread each of the cell's pixels only (every
@@ -646,16 +822,28 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let side = P.cell.x;
     var g = gid.xy;
     if (side > 0u) { g = gid.xy * side + P.cell.yz; }
-    if (g.x >= w || g.y >= h) { return; }
+    let in_frame = g.x < w && g.y < h;
+    let pq = vec2<f32>(f32(g.x) + 0.5, f32(g.y) + 0.5);
+    let flags = P.slots.y;
+    // The splats alone, first (before any thread leaves: the workgroup
+    // loads them together, a tile being a workgroup without a cell).
+    var alone: Alone;
+    alone.dominant = NONE;
+    alone.share = -1.0;
+    alone.through = 1.0;
+    if (P.splat.x != 0u && side == 0u) {
+        alone_batched(&alone, wid.y * P.size.w + wid.x, li, in_frame, pq, (flags & MATTES) != 0u);
+    }
+    if (!in_frame) { return; }
     let px = g.y * w + g.x;
     let tile = (g.y / TILE) * P.size.w + g.x / TILE;
-    let first = bins[P.tables.x + tile];
-    let last = bins[P.tables.x + tile + 1u];
-    if (first == last) { return; }
+    let first = words[P.tables.x + tile];
+    let last = words[P.tables.x + tile + 1u];
+    let splat_tile = stream_at(tile);
+    if (first == last && splat_tile.k == splat_tile.end) { return; }
 
     let n = P.size.z;
     let j = P.cell.w;
-    let flags = P.slots.y;
     let n_lights = P.counts.x;
     let x = i32(g.x);
     let y = i32(g.y);
@@ -666,6 +854,24 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     seen[1] = out_hits[pixels + px];
     var overflowed = (seen[0].x & OVERFLOW) != 0u;
     seen[0].x = seen[0].x & ~OVERFLOW;
+    // Where the samples' blends first got half opaque, nearest (kept from
+    // row to row): 1 if any, depth bits, the splat there or NONE.
+    var median = out_hits[3u * pixels + px];
+
+    // (With a jitter cell: each pixel through the list on its own.)
+    if (P.splat.x != 0u && side != 0u) {
+        var st = splat_tile;
+        loop {
+            let f = next_frag(&st, pq);
+            if (!f.valid) { break; }
+            alone_add(&alone, f, (flags & MATTES) != 0u);
+        }
+    }
+    let any_splat = alone.any;
+    let alone_acc = alone.acc;
+    let alone_emission = alone.emission;
+    let alone_half = alone.half;
+    let dominant = alone.dominant;
 
     for (var i = 0u; i < n; i++) {
         // This sample's surfaces, nearest first (ties by triangle).
@@ -673,7 +879,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var count = 0u;
         var dropped = false;
         for (var k = first; k < last; k++) {
-            let t = bins[k];
+            let t = words[k];
             if (x < ti(t, 14u) || x >= ti(t, 16u) || y < ti(t, 15u) || y >= ti(t, 17u)) { continue; }
             let q = vec2<f32>(f32(x - ti(t, 12u)), f32(y - ti(t, 13u))) + vec2<f32>((f32(i) + 0.5) / f32(n), (f32(j) + 0.5) / f32(n));
             let c = cover(t, q);
@@ -694,14 +900,46 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             hits[at] = Hit(d, t, c.yz, surf);
             count++;
         }
-        if (count == 0u) { continue; }
+        if (count == 0u) {
+            // No surface: the splats alone.
+            if (any_splat) {
+                sums.color += alone_acc;
+                median = nearer(median, alone_half);
+                for (var o = 0u; o < 32u; o++) { sums.mattes[o] += alone.mattes[o]; }
+                if ((flags & ANY_PART) != 0u) { sums.parts[2] += alone_emission; }
+            }
+            continue;
+        }
 
-        // Front to back, premultiplied; a holdout takes its share of
-        // what's left without adding to it.
+        // Front to back, premultiplied, with the splats in depth order
+        // among them; a holdout takes its share of what's left without
+        // adding to it.
         var acc = vec4<f32>(0.0);
         var held = 0.0;
-        for (var m = 0u; m < count; m++) {
+        var half = vec4<u32>(0u);
+        var st = splat_tile;
+        var f = next_frag(&st, pq);
+        var m = 0u;
+        loop {
+            let has_hit = m < count;
+            if (!has_hit && !f.valid) { break; }
+            if (f.valid && (!has_hit || f.depth < hits[m].depth)) {
+                let k = 1.0 - acc.a - held;
+                let o = splat_object(f.capture);
+                if ((flags & MATTES) != 0u && o > 0u) { sums.mattes[o - 1u] += f.color.a * k; }
+                if (splat_holdout(f.capture)) {
+                    held += f.color.a * k;
+                } else {
+                    acc += f.color * k;
+                    if ((flags & ANY_PART) != 0u) { sums.parts[2] += f.color.rgb * k; }
+                }
+                if (half.x == 0u && acc.a >= 0.5) { half = vec4<u32>(1u, bitcast<u32>(f.depth), f.g, 0u); }
+                if (acc.a + held >= 1.0) { break; }
+                f = next_frag(&st, pq);
+                continue;
+            }
             let hit = hits[m];
+            m += 1u;
             let t = hit.tri;
             let s = hit.surf;
             let b = vec3<f32>(hit.b, 1.0 - hit.b.x - hit.b.y);
@@ -779,8 +1017,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     sums.shadow += lost * k;
                 }
             }
+            if (half.x == 0u && acc.a >= 0.5) { half = vec4<u32>(1u, bitcast<u32>(hit.depth), NONE, 0u); }
             if (acc.a + held >= 1.0) { break; }
         }
+        median = nearer(median, half);
         // Surfaces left out behind the 16 kept matter only if light still
         // came through those: more than 1e-4 of it (see OVERFLOW_LEFT).
         if (dropped && 1.0 - acc.a - held > OVERFLOW_LEFT) { overflowed = true; }
@@ -825,14 +1065,25 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (overflowed) { nearest.x = nearest.x | OVERFLOW; }
     out_hits[px] = nearest;
     out_hits[pixels + px] = seen[1];
+    out_hits[3u * pixels + px] = median;
     if (j + 1u == n) {
-        // The surface the passes take, and the depth.
+        // The surface the passes take, and the depth: with splats here,
+        // where the blend got half opaque (the splat giving the most, if
+        // it got there at a splat); else the surface's.
         var chosen = seen[1];
         if (seen[0].x != 0u) { chosen = seen[0]; }
-        out_hits[2u * pixels + px] = chosen;
         var depth = select(0u, chosen.w, chosen.x != 0u);
+        if (any_splat && median.x != 0u) {
+            depth = median.y;
+            if (median.z != NONE) {
+                var top = median.z;
+                if (dominant != NONE) { top = dominant; }
+                chosen = vec4<u32>(SPLAT | top, 0u, 0u, median.y);
+            }
+        }
+        out_hits[2u * pixels + px] = chosen;
         if (overflowed) { depth = 0xffffffffu; }
-        out_hits[3u * pixels + px / 4u][px % 4u] = depth;
+        out_hits[4u * pixels + px / 4u][px % 4u] = depth;
     }
 }
 
@@ -851,14 +1102,14 @@ fn shadow_map(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= res || gid.y >= res) { return; }
     let m = P.cell.w;
     let tile = (gid.y / TILE) * P.size.w + gid.x / TILE;
-    let first = bins[P.tables.x + tile];
-    let last = bins[P.tables.x + tile + 1u];
+    let first = words[P.tables.x + tile];
+    let last = words[P.tables.x + tile + 1u];
     let x = i32(gid.x);
     let y = i32(gid.y);
     let q = vec2<f32>(f32(gid.x) + 0.5, f32(gid.y) + 0.5);
     var d = FAR_AWAY;
     for (var k = first; k < last; k++) {
-        let t = bins[k];
+        let t = words[k];
         if (x < ti(t, 14u) || x >= ti(t, 16u) || y < ti(t, 15u) || y >= ti(t, 17u)) { continue; }
         let s = tu(t, 10u);
         let f = su(s, 12u);

@@ -13,7 +13,7 @@ struct Params {
 };
 
 // All set: a pixel whose samples met more surfaces than kept (see
-// raster.wgsl's `out_hits`).
+// raster.wgsl's `out_hits`: its depth words).
 const OVERFLOWED: u32 = 0xffffffffu;
 
 @group(0) @binding(0) var<uniform> P: Params;
@@ -44,7 +44,7 @@ fn resolve(@builtin(global_invocation_id) gid: vec3<u32>) {
     let px = gid.y * w + gid.x;
     let pixels = w * h;
     picture[px] = time_color[px] / f32(P.size.w);
-    let bits = time_hits[3u * pixels + px / 4u][px % 4u];
+    let bits = time_hits[4u * pixels + px / 4u][px % 4u];
     depth[px] = select(bitcast<f32>(bits), 0.0, bits == OVERFLOWED);
 }
 
@@ -62,7 +62,7 @@ fn add(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var k = 0u; k < stride; k++) {
         sum_extra[px * stride + k] += time_extra[px * stride + k];
     }
-    if (time_hits[3u * pixels + px / 4u][px % 4u] == OVERFLOWED) {
-        sum_hits[3u * pixels + px / 4u][px % 4u] = OVERFLOWED;
+    if (time_hits[4u * pixels + px / 4u][px % 4u] == OVERFLOWED) {
+        sum_hits[4u * pixels + px / 4u][px % 4u] = OVERFLOWED;
     }
 }

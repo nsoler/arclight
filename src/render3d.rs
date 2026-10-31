@@ -977,6 +977,11 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
 /// index in the frame; the rest left empty).
 #[allow(clippy::too_many_arguments)]
 fn draw_cpu(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes, next: Option<(&Scene, &Camera)>, cell: Option<Cell>, splats: Option<&splats::Prepared>, only: Option<&[bool]>) -> Image {
+    // (Splats prepared on the GPU: their CPU view made now, not inside the
+    // rows' parallel loop.)
+    if let Some(sp) = splats {
+        sp.for_cpu();
+    }
     let n = samples.clamp(1, 16);
     // With the motion pass: each surface's vertices a frame later.
     let next_cam = next.map_or(cam, |n| n.1);

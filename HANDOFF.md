@@ -30,6 +30,16 @@ done), `docs/help.md` (the in-app help) and
   "Dropped TexturesDelta with 1 unapplied deltas" (egui 0.37) now end
   `ctx.run_ui(..)` with `.drop_without_applying_deltas()` instead of
   `let _ =`; all GUI tests pass. **Tip:** do the same in new egui tests.
+- **0.12.10, GPU G6** (Dev2): `src/render3d/gpu/splat_view.rs` +
+  `splat_view.wgsl` prepare the view on the GPU and keep it there (only
+  the pair count comes back); `raster.wgsl` blends it, a tile's
+  workgroup loading 256 splats at a time, merged per sample with
+  surfaces. `splats::Prepared` holds the GPU view; the CPU's view is only
+  built if the CPU renders, before its parallel loop (a lazy OnceLock
+  inside rayon rows deadlocked). Per-frame tables share one words buffer
+  (portable 8-buffer limit). Follow-ups: keep the splats-alone blend
+  between sample rows (most of the 4K cost), splats in the GPU
+  motion-blur sum. **The plan's G1–G7 are all done.**
 - **0.12.9, GPU G7** (Dev1): `gpu::for_window` hands the engine's
   device to eframe (`WgpuSetup::Existing`; None with ARCLIGHT_GPU=0, no /
   software adapter, GL, or without the gpu feature: eframe makes its

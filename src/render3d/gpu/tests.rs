@@ -24,7 +24,7 @@ fn with_gpu<R>(f: impl FnOnce() -> R) -> R {
 fn compare(gpu: &Gpu, scene: &Scene, cam: &Camera, format: Size, samples: usize, passes: Passes, cell: Option<Cell>) {
     let surfs = super::super::surfaces(scene);
     let cpu = crate::gpu::cpu_only(|| super::super::draw_passes(&surfs, &scene.lights, &scene.points, cam, format, samples, passes, None, cell, None));
-    let out = draw(gpu, &surfs, &scene.lights, &scene.points, cam, format, samples, passes, None, cell).expect("no GPU error").expect("rendered on the GPU");
+    let out = draw(gpu, &surfs, &scene.lights, &scene.points, cam, format, samples, passes, None, cell, None).expect("no GPU error").expect("rendered on the GPU");
     for (name, mean, off) in differences(&cpu, &out) {
         let (most_mean, most_off) = super::check::allowed(&name);
         assert!(mean <= most_mean && off <= most_off, "{name}: mean {mean:.2e}, {:.3} % of values off", off * 100.0);
@@ -73,7 +73,7 @@ fn the_3d_views_solid_shading_matches() {
     }
     let format = Size { width: 320, height: 180 };
     let cpu = crate::gpu::cpu_only(|| super::super::draw_passes(&surfs, &[], &[], &cam, format, 1, Passes::DEPTH, None, None, None));
-    let out = draw(&gpu, &surfs, &[], &[], &cam, format, 1, Passes::DEPTH, None, None).unwrap().unwrap();
+    let out = draw(&gpu, &surfs, &[], &[], &cam, format, 1, Passes::DEPTH, None, None, None).unwrap().unwrap();
     for (name, mean, off) in differences(&cpu, &out) {
         assert!(mean <= 1e-3 && off <= 0.01, "{name}: mean {mean:.2e}, {:.3} % off", off * 100.0);
     }
@@ -102,7 +102,7 @@ fn inside_a_surface_the_values_agree_closely() {
     let surfs = super::super::surfaces(&scene);
     let passes = Passes::from_names(["diffuse", "specular", "emission"]);
     let cpu = crate::gpu::cpu_only(|| super::super::draw_passes(&surfs, &scene.lights, &[], &cam, format, 2, passes, None, None, None));
-    let out = draw(&gpu, &surfs, &scene.lights, &[], &cam, format, 2, passes, None, None).unwrap().unwrap();
+    let out = draw(&gpu, &surfs, &scene.lights, &[], &cam, format, 2, passes, None, None, None).unwrap().unwrap();
     let worst = cpu.pixels.iter().flatten().zip(out.pixels.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
     assert!(worst <= 5e-4, "color off by {worst}");
     for p in cpu.planes.iter().filter(|p| !nearest_pass(&p.name)) {
@@ -140,7 +140,7 @@ fn deep_see_through_stacks_take_their_pixels_from_the_cpu() {
         let format = Size { width: 48, height: 32 };
         let passes = Passes::from_names(["depth", "mattes"]);
         let cpu = crate::gpu::cpu_only(|| super::super::draw_passes(&surfs, &[], &[], &cam, format, 2, passes, None, None, None));
-        let out = draw(&gpu, &surfs, &[], &[], &cam, format, 2, passes, None, None).unwrap().expect("rendered");
+        let out = draw(&gpu, &surfs, &[], &[], &cam, format, 2, passes, None, None, None).unwrap().expect("rendered");
         let worst = cpu.pixels.iter().flatten().zip(out.pixels.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
         assert!(worst <= 1e-3, "opacity {opacity}: off by {worst}");
         for (name, mean, off) in differences(&cpu, &out) {
@@ -182,7 +182,7 @@ fn render_passes_goes_through_the_gpu() {
     let passes = Passes::from_names(["depth", "id"]);
     let cpu = super::super::render_passes(&scene, &cam, format, 2, None, passes);
     let surfs = super::super::surfaces(&scene);
-    let direct = draw(&gpu, &surfs, &scene.lights, &scene.points, &cam, format, 2, passes, None, None).unwrap().unwrap();
+    let direct = draw(&gpu, &surfs, &scene.lights, &scene.points, &cam, format, 2, passes, None, None, None).unwrap().unwrap();
     let through = with_gpu(|| super::super::render_passes(&scene, &cam, format, 2, None, passes));
     assert_eq!(through.pixels, direct.pixels, "rendered by the GPU");
     assert!(differences(&cpu, &through).iter().all(|(_, mean, off)| *mean <= 1e-2 && *off <= 0.01));
@@ -206,7 +206,7 @@ fn shadows_match_the_cpu_render() {
     let surfs = super::super::surfaces(&scene);
     let passes = Passes::from_names(["shadow"]);
     let cpu = crate::gpu::cpu_only(|| super::super::draw_passes(&surfs, &scene.lights, &[], &cam, format, 1, passes, None, None, None));
-    let out = draw(&gpu, &surfs, &scene.lights, &[], &cam, format, 1, passes, None, None).unwrap().unwrap();
+    let out = draw(&gpu, &surfs, &scene.lights, &[], &cam, format, 1, passes, None, None, None).unwrap().unwrap();
     let shadowed = |img: &Image| img.plane("shadow.R").unwrap().data.iter().filter(|v| **v > 0.02).count();
     assert!(shadowed(&cpu) > 320 * 180 / 10, "{} shadowed pixels", shadowed(&cpu));
     assert!(shadowed(&cpu).abs_diff(shadowed(&out)) < 320 * 180 / 200, "{} against {}", shadowed(&cpu), shadowed(&out));
@@ -225,7 +225,7 @@ fn see_through_casters_render_on_the_cpu() {
     let (scene, cam) = scene_of(&busy_shadowed(PERSPECTIVE).replace(r#", "casts_shadows": false"#, ""));
     let surfs = super::super::surfaces(&scene);
     let format = Size { width: 64, height: 36 };
-    assert!(draw(&gpu, &surfs, &scene.lights, &[], &cam, format, 1, Passes::DEPTH, None, None).unwrap().is_none());
+    assert!(draw(&gpu, &surfs, &scene.lights, &[], &cam, format, 1, Passes::DEPTH, None, None, None).unwrap().is_none());
 }
 
 /// Motion blur added up on the GPU (each pixel's times jittered by its
@@ -335,5 +335,75 @@ fn motion_blur_with_sprites_adds_up_on_the_gpu() {
         }
         // Added up over a background: time by time.
         assert_eq!(with_gpu(|| blurred(&s0, &cam, format, 2, mixed, &blur, &frames, true)).is_some(), blend == "over");
+    }
+}
+
+/// The lizard capture (examples/hornedlizard.json, cropped as there) and
+/// its camera.
+fn lizard() -> (Arc<Scene>, Camera) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hornedlizard.json");
+    let graph = crate::graph::Graph::from_file(&path).expect("the example");
+    let mut e = crate::graph::Evaluator::new();
+    let ctx = crate::ops::EvalContext { frame: 1, write_outputs: false };
+    let scene = e.evaluate(&graph, "crop", &ctx).expect("splats").scene.clone().expect("a scene");
+    let cam = e.evaluate(&graph, "camera", &ctx).expect("camera").scene.as_ref().expect("a camera").cameras[0].clone();
+    (scene, cam)
+}
+
+/// A view of splats prepared on the GPU is the CPU's: nearly the same
+/// splats (a borderline one may cull the other way in f32), the same
+/// picture within D8's statistics, and the same lists every time.
+#[test]
+fn splats_prepared_on_the_gpu_render_as_on_the_cpu() {
+    if crate::gpu::test_device().is_none() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let (scene, cam) = lizard();
+    for (format, degree) in [(Size { width: 320, height: 180 }, 3u8), (Size { width: 200, height: 300 }, 1)] {
+        let cpu = super::super::splats::project_all(&scene.splats, &cam, format, degree).unwrap();
+        let gpu = with_gpu(|| super::splat_view::project_all(&scene.splats, &cam, format, degree)).expect("on the GPU");
+        let (a, b) = (cpu.splats.len() as f64, gpu.splats.len() as f64);
+        assert!((a - b).abs() <= a * 1e-3 && a > 1000.0, "{a} splats on the CPU, {b} on the GPU");
+        let again = with_gpu(|| super::splat_view::project_all(&scene.splats, &cam, format, degree)).unwrap();
+        assert!(again.order == gpu.order && again.ranges == gpu.ranges, "the same lists every time");
+        let cpu_img = crate::gpu::cpu_only(|| super::super::render_passes(&scene, &cam, format, 1, None, Passes::DEPTH));
+        // (A new camera, a hair moved, so the view isn't one the CPU kept.)
+        let moved = Camera { near: cam.near * (1.0 + 1e-9), ..cam.clone() };
+        let gpu_img = with_gpu(|| super::super::render_passes(&scene, &moved, format, 1, None, Passes::DEPTH));
+        for (name, mean, off) in differences(&cpu_img, &gpu_img) {
+            let (most_mean, most_off) = super::check::allowed(&name);
+            assert!(mean <= most_mean && off <= most_off, "{name}: mean {mean:.2e}, {:.3} % of values off", off * 100.0);
+        }
+    }
+}
+
+/// Splats blended on the GPU (their view prepared there too) match the
+/// CPU's: alone, and mixed in depth order with surfaces (a see-through
+/// card, a holdout), every pass.
+#[test]
+fn splats_blend_on_the_gpu_as_on_the_cpu() {
+    if crate::gpu::test_device().is_none() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let (lizard, cam) = lizard();
+    let (busy_scene, _) = scene_of(&busy(PERSPECTIVE));
+    let mut mixed = (*lizard).clone();
+    mixed.extend(&busy_scene);
+    let format = Size { width: 240, height: 140 };
+    for (scene, samples) in [(&*lizard, 1), (&mixed, 2)] {
+        let passes = Passes::from_names(Passes::NAMES);
+        let cpu = crate::gpu::cpu_only(|| super::super::render_passes(scene, &cam, format, samples, None, passes));
+        let out = with_gpu(|| super::super::render_passes(scene, &cam, format, samples, None, passes));
+        // (On the GPU: its view is the GPU's.)
+        assert!(with_gpu(|| super::super::splats::prepare(&scene.splats, &cam, format)).is_some_and(|p| p.gpu().is_some()));
+        for (name, mean, off) in differences(&cpu, &out) {
+            let (most_mean, most_off) = super::check::allowed(&name);
+            assert!(mean <= most_mean && off <= most_off, "{} surfaces, {name}: mean {mean:.2e}, {:.3} % of values off", scene.cards.len(), off * 100.0);
+        }
+        // The splats' passes are there: P, N and id where the splats are.
+        let id = out.plane("id").unwrap();
+        assert!(id.data.iter().filter(|v| **v > 0.0).count() > format.width * format.height / 10);
     }
 }

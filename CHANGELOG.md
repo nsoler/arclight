@@ -15,6 +15,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.10 — 2026-10-31
+
+- GPU: **Gaussian splats render on the GPU**: the view is prepared
+  (projected, colored, sorted per tile) and blended there, mixed with
+  surfaces as on the CPU, every pass included. The 3D view orbits the
+  lizard sample at 10.7 ms a frame at 720p instead of 60 (17 ms instead
+  of 82 at 1080p). This completes the GPU plan's G1–G7.
+
 ## 0.12.9 — 2026-10-31
 
 - GPU: **the viewer shows results made on the GPU straight from the

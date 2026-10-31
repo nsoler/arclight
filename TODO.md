@@ -13,6 +13,9 @@ they come up and strike them (or delete them) when they ship.
       gpu` names the GPU (Metal; "unified memory" on the M4 Pro), `arclight
       gpu --check` passes, and `cargo test --release` there (the GPU tests
       run on Metal)
+- [ ] 0.12.10 (GPU G6): `examples/hornedlizard.json` in the 3D view
+      orbits smoothly with the GPU on; its render looks the same with
+      `ARCLIGHT_GPU=0`; on the Macs too
 - [ ] 0.12.9 (GPU G7): view a 4K GPU chain (blurs, grade): it looks the
       same as with `ARCLIGHT_GPU=0`, and scrubbing is smooth; pixel
       readout values unchanged. On the M4 Pro and the Intel Mac too

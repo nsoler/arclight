@@ -40,15 +40,15 @@ const DILATE: f64 = 0.3;
 /// A splat as seen: where its center lands (frame pixels), its ellipse as
 /// the inverse 2D covariance (xx, xy, yy), its depth, color and opacity.
 #[derive(Clone, Copy, Debug)]
-struct Projected {
-    center: [f32; 2],
-    conic: [f32; 3],
-    depth: f32,
-    color: [f32; 3],
-    opacity: f32,
+pub(super) struct Projected {
+    pub(super) center: [f32; 2],
+    pub(super) conic: [f32; 3],
+    pub(super) depth: f32,
+    pub(super) color: [f32; 3],
+    pub(super) opacity: f32,
     /// Which set it's from, and which splat of it.
-    set: u32,
-    src: u32,
+    pub(super) set: u32,
+    pub(super) src: u32,
 }
 
 /// One splat's share at a pixel: its depth, premultiplied color, and which
@@ -62,16 +62,13 @@ pub(super) struct Fragment {
 
 /// A view's splats, projected, binned into tiles and sorted by depth
 /// (kept for re-renders of the same view: see [`prepare`]).
-struct View {
-    splats: Vec<Projected>,
-    tiles_x: usize,
+pub(super) struct View {
+    pub(super) splats: Vec<Projected>,
+    pub(super) tiles_x: usize,
     /// Per tile: its range in `order`.
-    ranges: Vec<(u32, u32)>,
+    pub(super) ranges: Vec<(u32, u32)>,
     /// Splat indices, by tile then nearest first.
-    order: Vec<u32>,
-    /// Per set: its node, and whether it's a holdout.
-    nodes: Vec<String>,
-    holdout: Vec<bool>,
+    pub(super) order: Vec<u32>,
 }
 
 impl View {
@@ -82,11 +79,25 @@ impl View {
 
 /// A view's splats ready to blend, and per splat, when asked for, its
 /// normal (see [`add_normals`](Prepared::add_normals)) and how far its
-/// center moves on the frame by the next frame.
+/// center moves on the frame by the next frame. Prepared on the GPU (and
+/// kept there for the GPU's renderer), the CPU's own view, normals and
+/// motion are only worked out if the CPU renders with them.
 pub(super) struct Prepared {
-    view: Arc<View>,
-    normals: Vec<[f32; 3]>,
-    motion: Vec<[f32; 2]>,
+    sets: Vec<Arc<Splats>>,
+    cam: Camera,
+    format: Size,
+    degree: u8,
+    nodes: Vec<String>,
+    holdout: Vec<bool>,
+    view: std::sync::OnceLock<Option<Arc<View>>>,
+    #[cfg(feature = "gpu")]
+    gpu: Option<Arc<super::gpu::splat_view::GpuView>>,
+    want_normals: bool,
+    normals: std::sync::OnceLock<Vec<[f32; 3]>>,
+    /// With the motion pass: the sets and camera a frame later.
+    next: Option<(Vec<Arc<Splats>>, Camera)>,
+    want_motion: bool,
+    motion: std::sync::OnceLock<Vec<[f32; 2]>>,
 }
 
 /// A prepared view as kept: what it's of.
@@ -102,6 +113,11 @@ struct Kept {
 /// nothing about the splats or the camera (a pass, the anti-aliasing,
 /// something else in the scene) doesn't project and sort them again.
 static KEPT: std::sync::Mutex<Vec<Kept>> = std::sync::Mutex::new(Vec::new());
+/// The views prepared last on the GPU (newest last), as [`KEPT`].
+#[cfg(feature = "gpu")]
+#[allow(clippy::type_complexity)]
+static KEPT_GPU: std::sync::Mutex<Vec<(Vec<Arc<Splats>>, Camera, Size, u8, Arc<super::gpu::splat_view::GpuView>)>> = std::sync::Mutex::new(Vec::new());
+
 /// How many views, and how much memory, [`KEPT`] holds at most (more
 /// views in tests, which run side by side).
 const KEPT_VIEWS: usize = if cfg!(test) { 64 } else { 4 };
@@ -237,9 +253,52 @@ pub(super) fn prepare_upto(sets: &[Arc<Splats>], cam: &Camera, format: Size, deg
     if sets.iter().all(|s| s.is_empty()) {
         return None;
     }
+    let matches = |k_sets: &[Arc<Splats>], k_cam: &Camera, k_format: Size, k_degree: u8| *k_cam == *cam && k_format == format && k_degree == degree && k_sets.len() == sets.len() && k_sets.iter().zip(sets).all(|(a, b)| same(a, b));
+    let blank = |view: Option<Arc<View>>| Prepared {
+        sets: sets.to_vec(),
+        cam: cam.clone(),
+        format,
+        degree,
+        nodes: sets.iter().map(|s| s.node.clone()).collect(),
+        holdout: sets.iter().map(|s| s.holdout).collect(),
+        view: view.map_or_else(std::sync::OnceLock::new, |v| std::sync::OnceLock::from(Some(v))),
+        #[cfg(feature = "gpu")]
+        gpu: None,
+        want_normals: false,
+        normals: std::sync::OnceLock::new(),
+        next: None,
+        want_motion: false,
+        motion: std::sync::OnceLock::new(),
+    };
+    // On the GPU where it can (see gpu/splat_view.rs): kept there.
+    #[cfg(feature = "gpu")]
+    if super::gpu::splat_view::usable().is_some() {
+        let kept_gpu = {
+            let mut kept = KEPT_GPU.lock().unwrap_or_else(|e| e.into_inner());
+            let hit = kept.iter().position(|k| matches(&k.0, &k.1, k.2, k.3));
+            hit.map(|i| {
+                let k = kept.remove(i);
+                let v = k.4.clone();
+                kept.push(k);
+                v
+            })
+        };
+        let on_gpu = kept_gpu.or_else(|| {
+            let v = Arc::new(super::gpu::splat_view::prepare(sets, cam, format, degree)?);
+            let mut kept = KEPT_GPU.lock().unwrap_or_else(|e| e.into_inner());
+            kept.push((sets.to_vec(), cam.clone(), format, degree, v.clone()));
+            while kept.len() > 2 {
+                kept.remove(0);
+            }
+            Some(v)
+        });
+        if let Some(v) = on_gpu {
+            return (v.pairs > 0).then(|| Prepared { gpu: Some(v), ..blank(None) });
+        }
+    }
     let found = {
         let mut kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
-        let hit = kept.iter().position(|k| k.cam == *cam && k.format == format && k.degree == degree && k.sets.len() == sets.len() && k.sets.iter().zip(sets).all(|(a, b)| same(a, b)));
+        let hit = kept.iter().position(|k| matches(&k.sets, &k.cam, k.format, k.degree));
         hit.map(|i| {
             let k = kept.remove(i);
             let view = k.view.clone();
@@ -247,23 +306,20 @@ pub(super) fn prepare_upto(sets: &[Arc<Splats>], cam: &Camera, format: Size, deg
             view
         })
     };
-    let view = match found {
-        Some(v) => v,
-        None => {
-            let v = Arc::new(project_all(sets, cam, format, degree)?);
-            let mut kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
-            kept.push(Kept { sets: sets.to_vec(), cam: cam.clone(), format, degree, view: v.clone() });
-            while kept.len() > KEPT_VIEWS || (kept.len() > 1 && kept.iter().map(|k| k.view.bytes()).sum::<usize>() > KEPT_BYTES) {
-                kept.remove(0);
-            }
-            v
-        }
-    };
-    (!view.splats.is_empty()).then(|| Prepared { view, normals: Vec::new(), motion: Vec::new() })
+    if let Some(view) = found {
+        return (!view.splats.is_empty()).then(|| blank(Some(view)));
+    }
+    let v = Arc::new(project_all(sets, cam, format, degree)?);
+    let mut kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
+    kept.push(Kept { sets: sets.to_vec(), cam: cam.clone(), format, degree, view: v.clone() });
+    while kept.len() > KEPT_VIEWS || (kept.len() > 1 && kept.iter().map(|k| k.view.bytes()).sum::<usize>() > KEPT_BYTES) {
+        kept.remove(0);
+    }
+    (!v.splats.is_empty()).then(|| blank(Some(v)))
 }
 
 /// [`prepare_upto`]'s work: project, cull, bin and sort.
-fn project_all(sets: &[Arc<Splats>], cam: &Camera, format: Size, degree: u8) -> Option<View> {
+pub(super) fn project_all(sets: &[Arc<Splats>], cam: &Camera, format: Size, degree: u8) -> Option<View> {
     let view = cam.view();
     let eye = geom::transform_point(&cam.world, &Vec3::zeros());
     let splats: Vec<Projected> = sets
@@ -279,7 +335,7 @@ fn project_all(sets: &[Arc<Splats>], cam: &Camera, format: Size, degree: u8) -> 
         })
         .collect();
     if splats.is_empty() {
-        return Some(View { splats, tiles_x: 0, ranges: Vec::new(), order: Vec::new(), nodes: Vec::new(), holdout: Vec::new() });
+        return Some(View { splats, tiles_x: 0, ranges: Vec::new(), order: Vec::new() });
     }
     let tiles_x = format.width.div_ceil(TILE);
     let tiles_y = format.height.div_ceil(TILE);
@@ -326,21 +382,41 @@ fn project_all(sets: &[Arc<Splats>], cam: &Camera, format: Size, degree: u8) -> 
         at += tile.len() as u32;
     }
     let order: Vec<u32> = rows.into_par_iter().flat_map_iter(|row| row.into_iter().flatten()).collect();
-    let nodes = sets.iter().map(|s| s.node.clone()).collect();
-    let holdout = sets.iter().map(|s| s.holdout).collect();
-    Some(View { splats, tiles_x, ranges, order, nodes, holdout })
+    Some(View { splats, tiles_x, ranges, order })
 }
 
 impl Prepared {
+    /// The view on the GPU, if it was prepared there.
+    #[cfg(feature = "gpu")]
+    pub(super) fn gpu(&self) -> Option<&super::gpu::splat_view::GpuView> {
+        self.gpu.as_deref()
+    }
+
+    /// Work out now what the CPU renderer will ask for (its view, and the
+    /// normals and motion when wanted): before its parallel loops, which
+    /// mustn't wait on each other for it.
+    pub(super) fn for_cpu(&self) {
+        let _ = (self.view(), self.normals(), self.motions());
+    }
+
+    /// The CPU's view (worked out now if the GPU prepared the splats); an
+    /// empty one if none shows on the CPU.
+    fn view(&self) -> &View {
+        static EMPTY: std::sync::OnceLock<View> = std::sync::OnceLock::new();
+        let v = self.view.get_or_init(|| project_all(&self.sets, &self.cam, self.format, self.degree).map(Arc::new));
+        v.as_deref().unwrap_or_else(|| EMPTY.get_or_init(|| View { splats: Vec::new(), tiles_x: 0, ranges: Vec::new(), order: Vec::new() }))
+    }
+
     /// Pixel (`x`, `y`)'s splats into `out` (cleared first), nearest
     /// first, until less than [`T_MIN`] shows through them.
     pub(super) fn fragments(&self, x: usize, y: usize, out: &mut Vec<Fragment>) {
         out.clear();
-        let Some(&(a, b)) = self.view.ranges.get((y / TILE) * self.view.tiles_x + x / TILE) else { return };
+        let view = self.view();
+        let Some(&(a, b)) = view.ranges.get((y / TILE) * view.tiles_x + x / TILE) else { return };
         let q = [x as f32 + 0.5, y as f32 + 0.5];
         let mut through = 1.0f32;
-        for &i in &self.view.order[a as usize..b as usize] {
-            let s = &self.view.splats[i as usize];
+        for &i in &view.order[a as usize..b as usize] {
+            let s = &view.splats[i as usize];
             let (dx, dy) = (q[0] - s.center[0], q[1] - s.center[1]);
             let power = -0.5 * (s.conic[0] * dx * dx + s.conic[2] * dy * dy) - s.conic[1] * dx * dy;
             // (Past 3σ it counts for nothing, whichever tile it's in.)
@@ -361,26 +437,39 @@ impl Prepared {
 
     /// The sets' nodes, in order.
     pub(super) fn nodes(&self) -> &[String] {
-        &self.view.nodes
+        &self.nodes
     }
 
     /// Which set splat `i` (as in a [`Fragment`]) is from.
     pub(super) fn set_of(&self, i: u32) -> usize {
-        self.view.splats[i as usize].set as usize
+        self.view().splats[i as usize].set as usize
     }
 
     /// Whether set `k` is a holdout.
     pub(super) fn holdout(&self, k: usize) -> bool {
-        self.view.holdout[k]
+        self.holdout[k]
     }
 
     /// Each splat's normal (for the N pass): its shortest axis in the scene
     /// (through the placement's inverse transpose, as normals go), turned
     /// toward the camera at `cam`.
-    pub(super) fn add_normals(&mut self, sets: &[Arc<Splats>], cam: &Camera) {
+    pub(super) fn add_normals(&mut self, _sets: &[Arc<Splats>], _cam: &Camera) {
+        self.want_normals = true;
+    }
+
+    /// Splat `i`'s normal (when asked for), worked out for every splat of
+    /// the CPU's view the first time.
+    fn normals(&self) -> &[[f32; 3]] {
+        if !self.want_normals {
+            return &[];
+        }
+        self.normals.get_or_init(|| self.normals_of(&self.sets, &self.cam))
+    }
+
+    fn normals_of(&self, sets: &[Arc<Splats>], cam: &Camera) -> Vec<[f32; 3]> {
         let normal_of: Vec<nalgebra::Matrix3<f64>> = sets.iter().map(|s| linear(&s.world).try_inverse().unwrap_or_else(nalgebra::Matrix3::identity).transpose()).collect();
-        self.normals = self
-            .view
+        self
+            .view()
             .splats
             .par_iter()
             .map(|p| {
@@ -393,7 +482,7 @@ impl Prepared {
                 let n = if n.dot(&cam.to_eye(&at)) < 0.0 { -n } else { n };
                 [n.x as f32, n.y as f32, n.z as f32]
             })
-            .collect();
+            .collect()
     }
 
     /// Each splat's motion on the frame (for the motion pass): where its
@@ -401,12 +490,26 @@ impl Prepared {
     /// the same set is there in the same place in the list, else as now;
     /// seen through `next`'s camera) less where it is now; 0 if it goes
     /// behind the camera.
-    pub(super) fn add_motion(&mut self, sets: &[Arc<Splats>], next: Option<(&[Arc<Splats>], &Camera)>, cam: &Camera, format: Size) {
+    pub(super) fn add_motion(&mut self, _sets: &[Arc<Splats>], next: Option<(&[Arc<Splats>], &Camera)>, _cam: &Camera, _format: Size) {
+        self.want_motion = true;
+        self.next = next.map(|(s, c)| (s.to_vec(), c.clone()));
+    }
+
+    /// Splat `i`'s motion (when asked for), worked out for every splat of
+    /// the CPU's view the first time.
+    fn motions(&self) -> &[[f32; 2]] {
+        if !self.want_motion {
+            return &[];
+        }
+        self.motion.get_or_init(|| self.motion_of(&self.sets, self.next.as_ref().map(|(s, c)| (&s[..], c)), &self.cam, self.format))
+    }
+
+    fn motion_of(&self, sets: &[Arc<Splats>], next: Option<(&[Arc<Splats>], &Camera)>, cam: &Camera, format: Size) -> Vec<[f32; 2]> {
         let (later, next_cam) = next.unwrap_or((sets, cam));
         let worlds: Vec<Mat4> = sets.iter().enumerate().map(|(k, s)| later.get(k).filter(|l| l.node == s.node && l.len() == s.len()).map_or(s.world, |l| l.world)).collect();
         let view = next_cam.view();
-        self.motion = self
-            .view
+        self
+            .view()
             .splats
             .par_iter()
             .map(|p| {
@@ -414,22 +517,53 @@ impl Prepared {
                 let at = geom::transform_point(&(view * worlds[p.set as usize]), &Vec3::from(s.positions[p.src as usize].map(f64::from)));
                 next_cam.project_camera(&at, format).map_or([0.0; 2], |(q, _)| [q[0] as f32 - p.center[0], q[1] as f32 - p.center[1]])
             })
-            .collect();
+            .collect()
+    }
+
+    /// Splat `i` of set `k`'s normal (with the N pass) and motion (with the
+    /// motion pass), as [`normals_of`](Self::normals_of) and
+    /// [`motion_of`](Self::motion_of) work them out for the CPU's view:
+    /// for the GPU's renderer, one pixel's splat at a time.
+    #[cfg(feature = "gpu")]
+    pub(super) fn splat_passes(&self, k: usize, i: usize) -> (Option<[f32; 3]>, Option<[f32; 2]>) {
+        let s = &self.sets[k];
+        let pos = Vec3::from(s.positions[i].map(f64::from));
+        let normal = self.want_normals.then(|| {
+            let normal_of = linear(&s.world).try_inverse().unwrap_or_else(nalgebra::Matrix3::identity).transpose();
+            let sc = s.scales[i];
+            let axis = (0..3).min_by(|&a, &b| sc[a].total_cmp(&sc[b])).unwrap_or(2);
+            let n = normal_of * rotation(s.rotations[i]).column(axis);
+            let at = geom::transform_point(&s.world, &pos);
+            let n = n.try_normalize(1e-300).unwrap_or_else(Vec3::z);
+            let n = if n.dot(&self.cam.to_eye(&at)) < 0.0 { -n } else { n };
+            [n.x as f32, n.y as f32, n.z as f32]
+        });
+        let motion = self.want_motion.then(|| {
+            let (later, next_cam) = self.next.as_ref().map_or((&self.sets[..], &self.cam), |(l, c)| (&l[..], c));
+            let world = later.get(k).filter(|l| l.node == s.node && l.len() == s.len()).map_or(s.world, |l| l.world);
+            let now = self.cam.project_camera(&geom::transform_point(&(self.cam.view() * s.world), &pos), self.format);
+            let then = next_cam.project_camera(&geom::transform_point(&(next_cam.view() * world), &pos), self.format);
+            match (now, then) {
+                (Some((a, _)), Some((b, _))) => [b[0] as f32 - a[0] as f32, b[1] as f32 - a[1] as f32],
+                _ => [0.0; 2],
+            }
+        });
+        (normal, motion)
     }
 
     /// Splat `i`'s normal and motion, if worked out.
     pub(super) fn normal(&self, i: u32) -> Option<[f32; 3]> {
-        self.normals.get(i as usize).copied()
+        self.normals().get(i as usize).copied()
     }
 
     pub(super) fn motion(&self, i: u32) -> Option<[f32; 2]> {
-        self.motion.get(i as usize).copied()
+        self.motions().get(i as usize).copied()
     }
 
     /// How many splats show (after culling).
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
-        self.view.splats.len()
+        self.view().splats.len()
     }
 }
 
@@ -669,15 +803,15 @@ mod tests {
         let cam = camera();
         let a = prepare(std::slice::from_ref(&s), &cam, FMT).unwrap();
         let b = prepare(std::slice::from_ref(&s), &cam, FMT).unwrap();
-        assert!(Arc::ptr_eq(&a.view, &b.view), "kept");
+        assert!(std::ptr::eq(a.view(), b.view()), "kept");
         let moved = Arc::new(Splats { world: geom::trs([0.1, 0.0, 0.0], [0.0; 3], [1.0; 3]), ..(*s).clone() });
-        assert!(!Arc::ptr_eq(&a.view, &prepare(&[moved], &cam, FMT).unwrap().view), "moved: anew");
+        assert!(!std::ptr::eq(a.view(), prepare(&[moved], &cam, FMT).unwrap().view()), "moved: anew");
         let turned = Camera { world: geom::trs([0.0; 3], [0.0, 1.0, 0.0], [1.0; 3]), ..cam.clone() };
-        assert!(!Arc::ptr_eq(&a.view, &prepare(std::slice::from_ref(&s), &turned, FMT).unwrap().view), "another camera: anew");
-        assert!(!Arc::ptr_eq(&a.view, &prepare_upto(std::slice::from_ref(&s), &cam, FMT, 1).unwrap().view), "another SH degree: anew");
+        assert!(!std::ptr::eq(a.view(), prepare(std::slice::from_ref(&s), &turned, FMT).unwrap().view()), "another camera: anew");
+        assert!(!std::ptr::eq(a.view(), prepare_upto(std::slice::from_ref(&s), &cam, FMT, 1).unwrap().view()), "another SH degree: anew");
         // An equal copy (not the same arrays) isn't taken for the same.
         let copy = Arc::new(Splats { positions: Arc::new((*s.positions).clone()), ..(*s).clone() });
-        assert!(!Arc::ptr_eq(&a.view, &prepare(std::slice::from_ref(&copy), &cam, FMT).unwrap().view));
+        assert!(!std::ptr::eq(a.view(), prepare(std::slice::from_ref(&copy), &cam, FMT).unwrap().view()));
         // Kept or not, the picture is the same.
         let sc = |s: Arc<Splats>| scene(s);
         let first = render_passes(&sc(copy.clone()), &cam, FMT, 2, None, Passes::DEPTH);

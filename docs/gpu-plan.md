@@ -582,6 +582,26 @@ switch, the status and the tests' skip work end to end.
 - The 3D view's settled splat render becomes interactive (the dots stay
   for very heavy captures while moving).
 - Tests: the S1–S3 cases GPU vs CPU (D8).
+- **Done (G6a + G6b, one version):** `splat_view.wgsl` prepares a view
+  on the GPU (each splat seen and culled as on the CPU, its SH color,
+  each tile's (depth, splat) list, sorted per tile in workgroup memory or
+  in place: no global radix sort needed; ties by splat, so the same
+  order every time); the view stays on the GPU (`GpuView`, nothing read
+  back but the pair count). `raster.wgsl` blends it: each 16 × 16 tile's
+  workgroup loads its splats 256 at a time into workgroup memory (each
+  pixel reading the list on its own was 3× slower than the CPU), the
+  splats alone once per pixel, merged per sample in depth order with the
+  surfaces where there are some; depth, P, N, motion and id from the
+  splat where the blend got half opaque, as on the CPU. G6a alone (the
+  view read back to the CPU) gave only 10–20 %, so both ship together.
+  The CPU's view is made only if the CPU renders (a fallback), before its
+  parallel loop. Measured (RTX 5070, the hornedlizard example, 644 k
+  splats after its crop), the 3D view orbiting: 720p 10.7 ms a frame
+  against 60 ms, 1080p 17 ms against 82 ms. Scanline Render: 1080p 21 ms
+  against 61 ms (the capture kept); a capture new at every render (Splat
+  Crop re-evaluated) pays its upload (~150 MB) each time. Follow-ups:
+  keep the splats-alone blend between sample rows (AA renders redo it
+  each row), splats in the GPU's motion-blur sum.
 
 ### G7: Zero-copy viewing [Dev1]
 

@@ -178,6 +178,7 @@ pub(crate) fn rows(gpu: &Gpu) -> Vec<CheckRow> {
         row(gpu, "3D render, shadows (4 lights)", &shaded, &cam, hd, 2, Passes::from_names(["depth", "shadow", "lights"]), false),
         blur_row(Size { width: 960, height: 540 }),
         sprites_row(Size { width: 960, height: 540 }),
+        splats_row(hd),
         row(gpu, "3D view, solid", &scene, &cam, hd, 1, Passes::DEPTH, true),
     ]
 }
@@ -193,7 +194,7 @@ fn row(gpu: &Gpu, case: &str, scene: &Scene, cam: &Camera, format: Size, samples
     }
     let size = format!("{}x{}", format.width, format.height);
     let cpu_draw = || crate::gpu::cpu_only(|| super::super::draw_passes(&surfs, lights, &scene.points, cam, format, samples, passes, None, None, None));
-    let gpu_draw = || draw(gpu, &surfs, lights, &scene.points, cam, format, samples, passes, None, None);
+    let gpu_draw = || draw(gpu, &surfs, lights, &scene.points, cam, format, samples, passes, None, None, None);
     // Once each first: the GPU builds its pipelines, and textures go up.
     let _ = gpu_draw();
     let (cpu, cpu_ms) = timed(cpu_draw);
@@ -230,6 +231,56 @@ fn sprites_row(size: Size) -> CheckRow {
     let (cpu, cpu_ms) = timed(|| crate::gpu::cpu_only(render));
     let (out, gpu_ms) = timed(render);
     judge("particle sprites, big, textured", format!("{}x{}", size.width, size.height), &cpu, Ok(Some(out)), cpu_ms, gpu_ms)
+}
+
+/// `n` Gaussian splats in a cloud in front of the default camera (SH
+/// degree 1, every size and turn, the same every time).
+pub(super) fn cloud(n: usize) -> Arc<crate::splat::Splats> {
+    let mut h = 777u32;
+    let mut r = move || {
+        h ^= h << 13;
+        h ^= h >> 17;
+        h ^= h << 5;
+        (h % 100_000) as f32 / 100_000.0
+    };
+    let mut parts = (Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n * 12));
+    for _ in 0..n {
+        parts.0.push([r() * 4.0 - 2.0, r() * 2.4 - 1.2, -3.0 - r() * 4.0]);
+        let s = 0.003 + r() * r() * 0.08;
+        parts.1.push([s, s * (0.3 + r()), s * (0.3 + r())]);
+        parts.2.push([r() - 0.5, r() - 0.5, r() - 0.5, r() - 0.5]);
+        parts.3.push(0.2 + 0.8 * r());
+        for _ in 0..12 {
+            parts.4.push(r() * 2.0 - 1.0);
+        }
+    }
+    Arc::new(crate::splat::Splats {
+        positions: Arc::new(parts.0),
+        scales: Arc::new(parts.1),
+        rotations: Arc::new(parts.2),
+        opacity: Arc::new(parts.3),
+        sh: Arc::new(parts.4),
+        sh_degree: 1,
+        world: crate::geom::Mat4::identity(),
+        holdout: false,
+        node: "cloud".into(),
+    })
+}
+
+/// The splats row: 200 000 splats (a capture's worth) through Scanline
+/// Render, the view prepared and blended on the GPU.
+fn splats_row(size: Size) -> CheckRow {
+    let scene = Scene { splats: vec![cloud(200_000)], ..Scene::default() };
+    let cam = Camera::default();
+    let render = |turn: f64| {
+        // (Each render from a camera turned a little: a view not kept.)
+        let cam = Camera { world: crate::geom::trs([0.0; 3], [0.0, turn, 0.0], [1.0; 3]), ..cam.clone() };
+        super::super::render_passes(&scene, &cam, size, 1, None, Passes::DEPTH)
+    };
+    let _ = render(0.1);
+    let (cpu, cpu_ms) = timed(|| crate::gpu::cpu_only(|| render(0.2)));
+    let (out, gpu_ms) = timed(|| render(0.2));
+    judge("3D render, 200k splats", format!("{}x{}", size.width, size.height), &cpu, Ok(Some(out)), cpu_ms, gpu_ms)
 }
 
 /// A row from a CPU render and the GPU's (`out`), and their times.
