@@ -319,9 +319,10 @@ dependencies = [
 
 [[package]]
 name = "arclight"
-version = "0.11.5"
+version = "0.12.0"
 dependencies = [
  "anyhow",
+ "bytemuck",
  "clap",
  "cpal",
  "eframe",
@@ -332,25 +333,28 @@ dependencies = [
  "image",
  "libc",
  "libloading 0.9.0",
+ "naga",
  "nalgebra",
+ "pollster 1.0.1",
  "pulldown-cmark",
  "rayon",
  "rfd",
  "serde",
  "serde_json",
  "tiff",
+ "wgpu",
 ]
 
 [[package]]
 name = "arclight-plugin-example"
-version = "0.11.5"
+version = "0.12.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "arclt"
-version = "0.11.5"
+version = "0.12.0"
 dependencies = [
  "arclight",
  "pyo3",

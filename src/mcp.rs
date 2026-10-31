@@ -166,10 +166,18 @@ static TOOLS: &[Tool] = &[
             "frame": {"type": "integer"},
             "path": {"type": "string"},
             "preview": {"type": "boolean"},
-            "preview_size": {"type": "integer", "description": "Longest side of the preview in pixels (default 512)."}
+            "preview_size": {"type": "integer", "description": "Longest side of the preview in pixels (default 512)."},
+            "cpu": {"type": "boolean", "description": "Render on the CPU only, for exact reproducible results (default: the GPU where it can)."}
         }, "required": ["node"]}),
     tool!("render_output", "Render the whole frame range of a media_out node to its file(s).",
-        {"type": "object", "properties": {"node": {"type": "string"}}, "required": ["node"]}),
+        {"type": "object", "properties": {
+            "node": {"type": "string"},
+            "cpu": {"type": "boolean", "description": "Render on the CPU only (default: the GPU where it can)."}
+        }, "required": ["node"]}),
+    tool!("gpu_info", "Whether GPU acceleration is in use: status line, adapter, backend, limits and transfer path, or why rendering is on the CPU.",
+        {"type": "object", "properties": {}}),
+    tool!("gpu_check", "Run the GPU self-test: every GPU path against the CPU on generated images, with errors, tolerances and timings. Takes seconds.",
+        {"type": "object", "properties": {}}),
     tool!("probe_media", "Metadata of an image, image sequence (####) or video file: size, frame range, fps, and a video's sound (sample rate, channels, duration; null without).",
         {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}),
     tool!("new_graph", "Start an empty graph (undoable).", {"type": "object", "properties": {}}),
@@ -236,7 +244,7 @@ pub fn is_gui_tool(tool: &str) -> bool {
 /// Tools that can run for a long time: front ends with an interactive
 /// thread (the GUI) run these on a worker, on a snapshot of the graph.
 pub fn is_render_tool(tool: &str) -> bool {
-    matches!(tool, "render_frame" | "render_output")
+    matches!(tool, "render_frame" | "render_output" | "gpu_check")
 }
 
 /// Run one graph tool against `s`. Returns the tool's JSON result. A
@@ -249,6 +257,14 @@ pub fn call_tool(s: &mut Session, tool: &str, args: &Value) -> Result<Value> {
 /// (which can also cancel it).
 pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progress: &Progress) -> Result<Value> {
     crate::crash::note(format!("tool {tool}"));
+    // "cpu": true renders on the CPU only (see `gpu::cpu_only`).
+    if args.get("cpu").and_then(Value::as_bool) == Some(true) {
+        return crate::gpu::cpu_only(|| run_tool(s, tool, args, progress));
+    }
+    run_tool(s, tool, args, progress)
+}
+
+fn run_tool(s: &mut Session, tool: &str, args: &Value, progress: &Progress) -> Result<Value> {
     let ok = || json!({"ok": true});
     Ok(match tool {
         "list_ops" => {
@@ -458,6 +474,14 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
             json!({"frames": frames, "path": s.node(node).and_then(|n| n.params.get("path")).cloned()})
         }
         "probe_media" => probe_media(Path::new(str_arg(args, "path")?))?,
+        "gpu_info" => crate::gpu::info(),
+        "gpu_check" => {
+            let report = crate::gpu::check::run();
+            let mut out = serde_json::to_value(&report)?;
+            out["passed"] = json!(report.passed());
+            out["summary"] = json!(report.summary());
+            out
+        }
         "new_graph" => {
             s.clear();
             ok()

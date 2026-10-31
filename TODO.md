@@ -7,6 +7,13 @@ they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
+- [ ] 0.12.0 (GPU G1): Preferences ▸ Performance ▸ GPU acceleration off /
+      on and the About line follows; `ARCLIGHT_GPU=0` greys it; Help ▸
+      GPU self-test. On the **M4 Pro** and the **Intel Mac**: `arclight
+      gpu` names the GPU (Metal; "unified memory" on the M4 Pro), `arclight
+      gpu --check` passes, and `cargo test --release` there (the GPU tests
+      run on Metal)
+
 - [ ] 0.11.4: the 3D view with a mouse (user found it hard and erratic in
       0.11.3): select a Camera / Card / light and the All gizmo shows
       (arrows, rings, cubes); drag each ring, including one seen nearly

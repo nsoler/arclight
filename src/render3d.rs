@@ -32,6 +32,13 @@ mod particles;
 mod shadow;
 mod splats;
 
+/// The 3D renderer's rows in the GPU self-test ([`crate::gpu::check`]):
+/// none until the renderer runs on the GPU.
+#[cfg(feature = "gpu")]
+pub fn gpu_checks(_gpu: &crate::gpu::Gpu) -> Vec<crate::gpu::check::CheckRow> {
+    Vec::new()
+}
+
 /// A triangle mesh to draw, in its own space, placed by `world`, colored
 /// by `color` times its texture (if any).
 pub(crate) struct Surface<'a> {

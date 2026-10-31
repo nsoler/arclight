@@ -35,6 +35,10 @@ enum Command {
         /// Print each node as it is evaluated.
         #[arg(short, long)]
         verbose: bool,
+        /// Render on the CPU only (exact, reproducible results), as with
+        /// ARCLIGHT_GPU=0.
+        #[arg(long)]
+        cpu: bool,
     },
     /// Write a built-in demo graph and render it, proving the pipeline end to
     /// end. Produces `<dir>/arclight_demo.png`.
@@ -42,6 +46,9 @@ enum Command {
         /// Output directory.
         #[arg(default_value = ".")]
         dir: PathBuf,
+        /// Render on the CPU only.
+        #[arg(long)]
+        cpu: bool,
     },
     /// Run a Model Context Protocol server for AI agents: JSON-RPC 2.0 over
     /// stdio, or over HTTP with --http.
@@ -54,6 +61,17 @@ enum Command {
         /// Send tools to a running GUI (the newest, or the one with this pid).
         #[arg(long, value_name = "PID", num_args = 0..=1, default_missing_value = "0")]
         attach: Option<u32>,
+    },
+    /// Show whether GPU acceleration is in use: the adapter, its backend,
+    /// limits and transfer path, or why it renders on the CPU.
+    Gpu {
+        /// Run the GPU self-test: every GPU path against the CPU, timed.
+        /// Exits with status 1 if a case fails or the GPU isn't in use.
+        #[arg(long)]
+        check: bool,
+        /// Print JSON (for pasting into an issue).
+        #[arg(long)]
+        json: bool,
     },
     /// List the plugin search path and the plugins found on it.
     Plugins,
@@ -83,12 +101,59 @@ fn main() -> Result<()> {
     arclight::plugin::init();
     arclight::crash::note(format!("command: {}", std::env::args().nth(1).unwrap_or_default()));
     match cli.command {
-        Command::Render { graph, frame, verbose } => render(graph, frame, verbose),
-        Command::Demo { dir } => demo(dir),
+        Command::Render { graph, frame, verbose, cpu } => on_cpu_if(cpu, || render(graph, frame, verbose)),
+        Command::Demo { dir, cpu } => on_cpu_if(cpu, || demo(dir)),
+        Command::Gpu { check, json } => gpu(check, json),
         Command::Mcp { graph, http, attach } => mcp(graph, http, attach),
         Command::Plugins => plugins(),
         Command::Ops { op } => list_ops(op),
     }
+}
+
+/// Run `f`, on the CPU only when `cpu` (`--cpu`).
+fn on_cpu_if<R>(cpu: bool, f: impl FnOnce() -> R) -> R {
+    if cpu { arclight::gpu::cpu_only(f) } else { f() }
+}
+
+fn gpu(check: bool, json: bool) -> Result<()> {
+    use arclight::gpu;
+    if check {
+        let report = gpu::check::run();
+        if json {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            print!("{}", report.table());
+        }
+        if !report.passed() {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    let info = gpu::info();
+    if json {
+        println!("{}", serde_json::to_string_pretty(&info)?);
+        return Ok(());
+    }
+    println!("{}", info["line"].as_str().unwrap_or_default());
+    if let Some(a) = info.get("adapter") {
+        let s = |k: &str| a[k].as_str().unwrap_or_default().to_string();
+        println!("Adapter:   {} ({}, {})", s("name"), s("backend"), s("device_type"));
+        println!("Driver:    {} {}", s("driver"), s("driver_info"));
+        println!("Transfers: {}", info["transfer"].as_str().unwrap_or_default());
+        let l = &a["limits"];
+        let mib = |k: &str| l[k].as_u64().unwrap_or(0) >> 20;
+        println!("Limits:    buffer {} MiB, storage binding {} MiB, 2D texture {}, workgroup {} invocations / {} KiB",
+            mib("max_buffer_size"), mib("max_storage_buffer_binding_size"), l["max_texture_dimension_2d"],
+            l["max_compute_invocations_per_workgroup"], l["max_compute_workgroup_storage_size"].as_u64().unwrap_or(0) >> 10);
+        let features: Vec<&str> = a["features"].as_array().map(|f| f.iter().filter_map(|v| v.as_str()).collect()).unwrap_or_default();
+        if !features.is_empty() {
+            println!("Features:  {}", features.join(", "));
+        }
+    }
+    if let Some(e) = info["last_error"].as_str() {
+        println!("Last GPU error: {e}");
+    }
+    Ok(())
 }
 
 fn mcp(graph: Option<PathBuf>, http: Option<String>, attach: Option<u32>) -> Result<()> {

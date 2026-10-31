@@ -31,7 +31,7 @@ __all__ = [
     "save", "load", "new", "render", "pixels", "to_numpy", "ops", "op_info", "project",
     "undo", "redo", "metadata", "graph", "plugins", "instances", "attach", "detach",
     "select", "view", "view_state", "Backdrop", "backdrops", "backdrop", "create_backdrop",
-    "set_positions", "layout",
+    "set_positions", "layout", "gpu_info", "gpu_check",
 ]
 
 
@@ -245,8 +245,8 @@ class Node:
     def delete(self) -> None:
         delete(self)
 
-    def render(self, frame: int | None = None, path: str | None = None) -> dict:
-        return render(self, frame=frame, path=path)
+    def render(self, frame: int | None = None, path: str | None = None, cpu: bool = False) -> dict:
+        return render(self, frame=frame, path=path, cpu=cpu)
 
     def select(self) -> dict:
         return select(self)
@@ -436,18 +436,20 @@ def new() -> None:
     _call("new_graph")
 
 
-def render(n: "Node | str", frame: int | None = None, path: str | None = None) -> dict:
+def render(n: "Node | str", frame: int | None = None, path: str | None = None, cpu: bool = False) -> dict:
     """Render a node.
 
     For a ``media_out`` node with no ``frame`` this renders its whole frame
     range to its file(s). Otherwise it renders one frame (the project's first
     by default), writes it to ``path`` if given, and returns its size and
-    mean/min/max color.
+    mean/min/max color. ``cpu=True`` renders on the CPU only (exact,
+    reproducible results; by default the GPU is used where it can be).
     """
     name = _name(n)
+    cpu = cpu or None
     if frame is None and path is None and Node(name).op == "media_out":
-        return _call("render_output", node=name)
-    return _call("render_frame", node=name, frame=frame, path=path)
+        return _call("render_output", node=name, cpu=cpu)
+    return _call("render_frame", node=name, frame=frame, path=path, cpu=cpu)
 
 
 def pixels(n: "Node | str", frame: int | None = None) -> tuple[int, int, bytes]:
@@ -505,6 +507,20 @@ def metadata(source: "Node | str") -> dict:
 def graph() -> dict:
     """The whole graph as a dict (nodes, project)."""
     return _call("get_graph")["graph"]
+
+
+def gpu_info() -> dict:
+    """Whether GPU acceleration is in use: ``line`` ("Using <adapter>
+    (<backend>)" or "Using the CPU: <reason>"), ``status``, ``enabled``,
+    ``forced_off`` (ARCLIGHT_GPU=0), and with a GPU its ``adapter`` (name,
+    backend, limits) and ``transfer`` path."""
+    return _call("gpu_info")
+
+
+def gpu_check() -> dict:
+    """Run the GPU self-test (seconds): ``rows`` (case, size, max_abs,
+    max_rel, tolerances, pass, CPU / GPU ms), ``passed`` and ``summary``."""
+    return _call("gpu_check")
 
 
 def plugins() -> list[dict]:

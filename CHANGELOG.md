@@ -15,6 +15,33 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.0 — 2026-10-30
+
+Phase 12 starts: **GPU acceleration** (wgpu: Vulkan on Linux, Metal on
+macOS), branch `wip-ns-gpu`, plan `docs/gpu-plan.md`. This first step
+lays the groundwork: no node runs on the GPU yet, but the switch,
+status and self-test work end to end.
+
+- GPU acceleration core: a `gpu` cargo feature, on by default in the
+  GUI, CLI and Python wheels. The device starts the first time a render
+  needs it.
+- **Edit ▸ Preferences ▸ Performance ▸ GPU acceleration**
+  (settings.json `"gpu": {"enabled"}`, on by default): applies without a
+  restart, shows the GPU in use or why the CPU is, greyed when
+  `ARCLIGHT_GPU=0`; the setting applies to the CLI, MCP and Python too.
+  The About box shows the same.
+- `arclight gpu` shows whether the GPU is in use (adapter, backend,
+  limits, transfer path) or why not; `arclight gpu --check [--json]`
+  runs the GPU self-test (GPU vs CPU, errors and timings; exit status 1
+  on failure), also **Help ▸ GPU self-test**, MCP `gpu_info` /
+  `gpu_check`, Python `arclt.gpu_info()` / `arclt.gpu_check()`.
+- `--cpu` on `arclight render` and `arclight demo`, `"cpu": true` on MCP
+  `render_frame` / `render_output`, `cpu=True` on Python `render`: that
+  render runs on the CPU only, for exact results. `ARCLIGHT_GPU=0` forces
+  the CPU everywhere.
+- Crash reports say whether GPU acceleration was on, and with which
+  adapter; after such a crash the crash dialog offers to turn it off.
+
 ## 0.11.5 — 2026-10-30
 
 - Tests: the GUI tests no longer panic under egui 0.37 with "Dropped

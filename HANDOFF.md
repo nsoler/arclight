@@ -30,6 +30,23 @@ done), `docs/help.md` (the in-app help) and
   "Dropped TexturesDelta with 1 unapplied deltas" (egui 0.37) now end
   `ctx.run_ui(..)` with `.drop_without_applying_deltas()` instead of
   `let _ =`; all GUI tests pass. **Tip:** do the same in new egui tests.
+- **0.12.0, GPU G1** (Dev1 core, Dev2 Preferences): `src/gpu/` (mod,
+  image, check, image.wgsl): lazy headless device, `gpu::{status, get,
+  set_enabled, enabled, cpu_only, test_device, report_error, crash_line}`,
+  `GpuImage` upload / read_back (staging, or shared buffers on integrated
+  GPUs), `arclight gpu [--check] [--json]`, `--cpu`, MCP / Python
+  gpu_info / gpu_check; `render3d::gpu_checks()` is the hook Dev2's 3D
+  rows go in. `enabled()` reads settings.json `"gpu"` raw, so every front
+  end follows the preference. GPU tests start with `let Some(gpu) =
+  gpu::test_device() else { eprintln!("skipped: no GPU adapter");
+  return; };`. The naga test translates every `src/**/*.wgsl` to MSL.
+  The crash dialog's GPU suggestion keys on the "GPU acceleration: on
+  (<adapter>)" line or a backtrace through wgpu / `arclight::gpu` /
+  `render3d::gpu`, not the "GPU:" line (egui's adapter, in every GUI
+  report). `cpu_only` is thread-local: carry it if G2+ spreads nodes over
+  threads. G2's first step: Evaluator cache keys mix in whether the GPU
+  is in use. 4K round trip ~60 ms (staging buffer allocated per readback;
+  a pool is a G2 follow-up). Next: Dev1 G2, Dev2 G4.
 - **Phase 12 (user, 2026-10-30): GPU acceleration (wgpu), 0.12.x on
   branch `wip-ns-gpu`** (from `wip-ns-engine` at 0.11.5, now frozen;
   `main` follows it). Plan: `docs/gpu-plan.md` (Dev2). The user wants a

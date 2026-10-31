@@ -242,9 +242,16 @@ static APP: OnceLock<&'static str> = OnceLock::new();
 static GPU: Mutex<String> = Mutex::new(String::new());
 static SYSTEM: OnceLock<String> = OnceLock::new();
 
-/// The graphics adapter, for reports (the GUI sets it once it knows).
+/// The graphics adapter, for reports (the GUI sets it once it knows, and
+/// the engine when it creates its GPU device).
 pub fn set_gpu(gpu: impl Into<String>) {
     *GPU.lock().unwrap_or_else(|e| e.into_inner()) = gpu.into();
+    refresh_header();
+}
+
+/// Rebuild the header a fatal signal writes (after the GPU switch or
+/// device changed: see [`crate::gpu::crash_line`]).
+pub fn refresh_header() {
     HEADER_SIG.set(header().as_bytes());
 }
 
@@ -273,11 +280,19 @@ fn system() -> &'static str {
     })
 }
 
-/// Version, system and GPU.
+/// Version, system, GPU and whether GPU acceleration is on.
 pub fn header() -> String {
     let app = APP.get().copied().unwrap_or("arclight");
     let gpu = GPU.lock().map(|g| g.clone()).unwrap_or_default();
-    format!("Version: {} {} ({}), {app}\n{}\nGPU: {}", crate::PRODUCT, env!("CARGO_PKG_VERSION"), crate::STAGE, system(), if gpu.is_empty() { "not known" } else { gpu.as_str() })
+    format!(
+        "Version: {} {} ({}), {app}\n{}\nGPU: {}\nGPU acceleration: {}",
+        crate::PRODUCT,
+        env!("CARGO_PKG_VERSION"),
+        crate::STAGE,
+        system(),
+        if gpu.is_empty() { "not known" } else { gpu.as_str() },
+        crate::gpu::crash_line()
+    )
 }
 
 // -- files -----------------------------------------------------------------
@@ -646,7 +661,7 @@ mod tests {
     #[test]
     fn a_report_says_what_happened_and_where() {
         let header = header();
-        assert!(header.contains(env!("CARGO_PKG_VERSION")) && header.contains("OS: ") && header.contains("CPU: ") && header.contains("GPU: "), "{header}");
+        assert!(header.contains(env!("CARGO_PKG_VERSION")) && header.contains("OS: ") && header.contains("CPU: ") && header.contains("GPU: ") && header.contains("GPU acceleration: "), "{header}");
         let r = Report {
             thread: "main".into(),
             message: "index out of bounds".into(),

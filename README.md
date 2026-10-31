@@ -226,6 +226,41 @@ arclight render examples/basic.json -v
 arclight demo ./out
 ```
 
+## GPU acceleration
+
+ArclightVFX renders on the GPU where it can (wgpu: Vulkan on Linux, Metal
+on macOS) and on the CPU everywhere else. The CPU renderer stays the
+reference: GPU results are tested against it within stated tolerances
+(`docs/gpu-plan.md`). The device is created the first time a render needs
+it, never at start-up. Ops move to the GPU milestone by milestone (phase
+12); until an op has a GPU path, it renders on the CPU as before.
+
+```sh
+arclight gpu                 # in use or not, and why; the adapter, backend, limits, transfer path
+arclight gpu --json          # the same as JSON
+arclight gpu --check         # self-test: every GPU path against the CPU, errors and timings
+arclight gpu --check --json  # for pasting into an issue; exit status 1 if a case fails
+arclight render graph.json --cpu   # this render on the CPU only (exact, reproducible)
+```
+
+- **Turning it off:** Edit ▸ Preferences ▸ Performance ▸ GPU acceleration
+  (`"gpu": {"enabled": false}` in settings.json; the CLI, MCP and Python
+  follow it too), or `ARCLIGHT_GPU=0` in the environment, which wins over
+  the setting. `--cpu` (CLI), `"cpu": true` (MCP `render_frame` /
+  `render_output`) and `cpu=True` (Python `render`) do it for one render.
+- **Linux:** needs a Vulkan driver (NVIDIA's, or Mesa's `vulkan-radeon` /
+  `vulkan-intel`). Without one there is no adapter and everything renders
+  on the CPU; `arclight gpu` says so. A software Vulkan adapter (lavapipe)
+  isn't used for rendering.
+- **macOS:** Metal, on Apple Silicon and Intel Macs (macOS 11 and later).
+  On integrated GPUs (Apple Silicon) images move through shared memory
+  ("unified memory" in `arclight gpu`); on discrete ones by copies.
+- **Errors:** a GPU error on a node makes that node render on the CPU; a
+  lost device turns the GPU off for the rest of the session. Results never
+  fail because of the GPU. Crash reports name the adapter and whether GPU
+  acceleration was on.
+- `WGPU_BACKEND` and `WGPU_POWER_PREF` pick another backend or adapter.
+
 ## Graph format
 
 ```json
@@ -442,7 +477,9 @@ Tools: `list_ops`, `describe_op`, `get_graph`, `describe_node`, `create_node`,
 `set_project` (incl. `folder`: relative paths are in it), `render_frame` (stats, optional file and PNG preview the model can
 see), `render_output`, `probe_media`, `new_graph`, `load_graph`, `save_graph`,
 `undo`, `redo`, `list_plugins`, `list_instances`, `attach_instance`,
-`detach_instance`. A few tools only work on an attached GUI: `select_node`
+`detach_instance`, `gpu_info` (GPU acceleration in use or why not, the
+adapter and limits), `gpu_check` (the GPU self-test). `render_frame` and
+`render_output` take `"cpu": true` to render on the CPU only. A few tools only work on an attached GUI: `select_node`
 (selects a node, opens its properties and scrolls the node graph to it),
 `view_node` (shows a node in the viewer, optionally at a frame) and
 `get_view` (what the user is looking at: selection, viewed node, frame,
@@ -481,6 +518,8 @@ arclt.attach()        # from now on, edit the project open in the GUI
 Also: `node`, `nodes`, `delete`, `connect`, `disconnect`, `load`, `new`,
 `pixels`, `ops`, `op_info`, `project`, `undo`, `redo`, `metadata` (media file
 info), `graph`, `plugins`, `instances`, `detach`, `set_positions({node: [x, y]})`, `layout(all=False)`, `backdrops()`, `backdrop(id)`,
+`gpu_info()`, `gpu_check()` (see GPU acceleration; `render(..., cpu=True)`
+renders on the CPU only),
 `create_backdrop(*nodes, title=, color=, font_size=, pos=, size=)` (a
 `Backdrop` with `title` / `color` / `font_size` / `pos` / `size`, `set`, `fit(*nodes)`,
 `nodes()`, `delete()`), and, when attached,
@@ -528,7 +567,7 @@ when its plugin can't start.
 
 | What | Where |
 |------|-------|
-| Settings | `$XDG_CONFIG_HOME/arclight/settings.json`, edited in **Edit ▸ Preferences** (Ctrl/⌘+,) or by hand (unknown keys are kept): `plugin_paths`, `frame_cache_mb` (GUI frame cache, default 1536), `mcp_http_addr`, `interface` (`ui_scale`, `theme` system / dark / light, `snap_to_grid`, `wire_style` curved / straight), `new_project` (`width`, `height`, `fps`, `first_frame`, `last_frame`: what File ▸ New starts with; Project Settings ▸ Save as defaults), `files` (`autosave_minutes` (0 off; writes `<project>.autosave` beside the project, never over it), `recent_count`, `undo_levels`, `project_dir`: the Projects folder, where File ▸ New makes projects' folders and Open starts), `view3d` (`emulate_three_button`, `trackpad` orbit / pan, `zoom_to_pointer`, `invert_zoom`, `default_shading` auto / solid / lit) |
+| Settings | `$XDG_CONFIG_HOME/arclight/settings.json`, edited in **Edit ▸ Preferences** (Ctrl/⌘+,) or by hand (unknown keys are kept): `plugin_paths`, `frame_cache_mb` (GUI frame cache, default 1536), `mcp_http_addr`, `interface` (`ui_scale`, `theme` system / dark / light, `snap_to_grid`, `wire_style` curved / straight), `new_project` (`width`, `height`, `fps`, `first_frame`, `last_frame`: what File ▸ New starts with; Project Settings ▸ Save as defaults), `files` (`autosave_minutes` (0 off; writes `<project>.autosave` beside the project, never over it), `recent_count`, `undo_levels`, `project_dir`: the Projects folder, where File ▸ New makes projects' folders and Open starts), `view3d` (`emulate_three_button`, `trackpad` orbit / pan, `zoom_to_pointer`, `invert_zoom`, `default_shading` auto / solid / lit), `gpu` (`enabled`: GPU acceleration, default on; `ARCLIGHT_GPU=0` overrides) |
 | Crash reports | `$XDG_STATE_HOME/arclight/crashes/` (macOS `~/Library/Logs/Arclight/`), kept on this machine (see Help ▸ Report a problem) |
 | Plugin ops cache | `$XDG_STATE_HOME/arclight/plugin-ops.json` |
 | Recent projects | `$XDG_STATE_HOME/arclight/recent.json` (File ▸ Open Recent) |

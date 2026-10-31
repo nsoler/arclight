@@ -11,6 +11,7 @@ mod curve_editor;
 mod dialogs;
 mod doc;
 mod gizmo3d;
+mod gpu_check;
 mod help;
 mod node_editor;
 mod overlay;
@@ -282,6 +283,10 @@ struct App {
     crash_tested: bool,
     /// Help > ArclightVFX Help (F1).
     help: help::Help,
+    /// GPU acceleration's status for the About box.
+    gpu_status: gpu_check::StatusProbe,
+    /// Help ▸ GPU self-test.
+    gpu_test: gpu_check::SelfTest,
     /// File ▸ Project Settings…
     project_settings: project_settings::ProjectSettings,
     /// The window icon as a texture, for the About dialog (made on first use).
@@ -365,6 +370,8 @@ impl App {
             rescue_revision: None,
             crash_tested: false,
             help: help::Help::default(),
+            gpu_status: Default::default(),
+            gpu_test: Default::default(),
             project_settings: Default::default(),
             logo: None,
             starting: None,
@@ -393,6 +400,14 @@ impl App {
         self.recent.paths.truncate(f.recent_count);
         self.doc.undo_levels = f.undo_levels;
         apply_view3d(&self.settings.view3d, &mut self.viewer.viewport3d);
+        // GPU acceleration: the next evaluation follows the switch. Its
+        // results have their own cache keys, so the viewer only asks again.
+        let gpu_on = self.settings.gpu.enabled;
+        if arclight::gpu::enabled() != gpu_on {
+            arclight::gpu::set_enabled(gpu_on);
+            self.requested = None;
+            self.gpu_status.refresh(ctx);
+        }
     }
 
     /// Settings from the Preferences window: kept, saved and applied.
@@ -1163,11 +1178,12 @@ impl App {
         self.prefs = now;
     }
 
-    /// Help > About: logo, name, author, build time, version, OK.
+    /// Help > About: logo, name, author, build time, version, GPU, OK.
     fn about_dialog(&mut self, ctx: &egui::Context) {
         if !self.about {
             return;
         }
+        let gpu = self.gpu_status.line(ctx);
         let (logo, uv) = self
             .logo
             .get_or_insert_with(|| {
@@ -1217,6 +1233,7 @@ impl App {
                 row(ui, "Created by:", "Nelson Soler");
                 row(ui, "Version:", &format!("{} ({})", env!("CARGO_PKG_VERSION"), arclight::STAGE));
                 row(ui, "Built:", env!("ARCLIGHT_BUILD_TIME"));
+                row(ui, "GPU:", &gpu);
                 ui.add_space(12.0);
                 if ui.add(egui::Button::new("OK").min_size(egui::vec2(80.0, 0.0))).clicked() {
                     ui.close();
@@ -1392,8 +1409,13 @@ impl App {
                     self.crash = crash_dialog::CrashDialog::for_help();
                     ui.close();
                 }
+                if ui.button("GPU self-test…").on_hover_text("Run every GPU operation against the CPU on this computer: differences, pass / fail and speed").clicked() {
+                    self.gpu_test.start(ui.ctx());
+                    ui.close();
+                }
                 if ui.button(format!("About {}…", arclight::PRODUCT)).clicked() {
                     self.about = true;
+                    self.gpu_status.refresh(ui.ctx());
                     ui.close();
                 }
                 ui.separator();
@@ -1593,12 +1615,21 @@ impl eframe::App for App {
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         self.about_dialog(&ctx);
-        if self.crash.ui(&ctx) == Some(crash_dialog::Choice::DontAskAgain) {
-            let mut settings = self.settings.clone();
-            settings.crash_dialog = false;
-            self.set_settings(&ctx, settings);
+        match self.crash.ui(&ctx) {
+            Some(crash_dialog::Choice::DontAskAgain) => {
+                let mut settings = self.settings.clone();
+                settings.crash_dialog = false;
+                self.set_settings(&ctx, settings);
+            }
+            Some(crash_dialog::Choice::TurnOffGpu) => {
+                let mut settings = self.settings.clone();
+                settings.gpu.enabled = false;
+                self.set_settings(&ctx, settings);
+            }
+            None => {}
         }
         self.help.ui(&ctx);
+        self.gpu_test.ui(&ctx);
         self.project_settings.ui(&ctx, &mut self.doc);
         if let Some(project) = self.project_settings.take_defaults() {
             let settings = Settings { new_project: new_project_prefs(&project), ..self.settings.clone() };

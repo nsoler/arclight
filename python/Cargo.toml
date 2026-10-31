@@ -1,6 +1,6 @@
 [package]
 name = "arclt"
-version = "0.11.5"
+version = "0.12.0"
 edition = "2021"
 description = "Python bindings (the `arclt` module) for ArclightVFX Compositor"
 license = "MIT OR Apache-2.0"
@@ -12,6 +12,6 @@ test = false
 doctest = false
 
 [dependencies]
-arclight = { path = "..", default-features = false }
+arclight = { path = "..", default-features = false, features = ["gpu"] }
 pyo3 = { version = "0.30", features = ["abi3-py310"] }
 serde_json = "1"

@@ -88,6 +88,18 @@ class ArcltTest(unittest.TestCase):
         self.assertTrue(arclt.undo())
         self.assertEqual(comp["operation"], "over")
 
+    def test_gpu_info_and_cpu_renders(self):
+        info = arclt.gpu_info()
+        self.assertIn(info["status"]["state"], ("active", "cpu"))
+        self.assertTrue(info["line"].startswith("Using "))
+        self.assertTrue(info["built"])
+        plate = arclt.create_node("constant", width=8, height=4, color=[0.25, 0.5, 1, 1])
+        self.assertEqual(arclt.render(plate, cpu=True), plate.render())
+        if info["status"]["state"] == "active":
+            report = arclt.gpu_check()
+            self.assertTrue(report["passed"], report["summary"])
+            self.assertTrue(all(r["pass"] for r in report["rows"]))
+
     def test_backdrops(self):
         plate = arclt.create_node("constant", name="plate")
         soft = arclt.create_node("blur", plate, name="soft")

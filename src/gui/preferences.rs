@@ -5,7 +5,9 @@
 //! without settings.
 
 use crate::dialogs;
-use arclight::config::{FilePrefs, InterfacePrefs, NewProjectPrefs, Settings, View3dPrefs};
+use crate::gpu_check::StatusProbe;
+use arclight::config::{FilePrefs, GpuPrefs, InterfacePrefs, NewProjectPrefs, Settings, View3dPrefs};
+use arclight::gpu;
 use eframe::egui;
 use std::path::PathBuf;
 
@@ -17,14 +19,16 @@ enum Section {
     NewProject,
     Files,
     View3d,
+    Performance,
 }
 
-const SECTIONS: [(Section, &str); 5] = [
+const SECTIONS: [(Section, &str); 6] = [
     (Section::General, "General"),
     (Section::Interface, "Interface"),
     (Section::NewProject, "New project"),
     (Section::Files, "Files and safety"),
     (Section::View3d, "3D view"),
+    (Section::Performance, "Performance"),
 ];
 
 /// A folder a section asks to choose with the system's dialog.
@@ -44,6 +48,11 @@ pub struct Preferences {
     section: Section,
     /// A folder dialog open for a section, if any.
     browse: Option<dialogs::Pending<Folder>>,
+    /// What GPU acceleration is doing now (as applied, not the draft).
+    gpu_status: StatusProbe,
+    /// Look at the GPU's status again on the next frame (opened, or
+    /// settings just applied).
+    look_again: bool,
 }
 
 impl Preferences {
@@ -51,6 +60,7 @@ impl Preferences {
     pub fn show(&mut self, now: &Settings) {
         self.open = true;
         self.draft = now.clone();
+        self.look_again = true;
     }
 
     /// The window, if open. Some(settings) when Apply or OK asks for them
@@ -60,6 +70,10 @@ impl Preferences {
             return None;
         }
         self.poll_browse(ctx);
+        if std::mem::take(&mut self.look_again) {
+            self.gpu_status.refresh(ctx);
+        }
+        let gpu_line = self.gpu_status.line(ctx);
         let (mut apply, mut close) = (false, false);
         let mut open = true;
         let mut wanted: Option<Folder> = None;
@@ -104,6 +118,7 @@ impl Preferences {
                             Section::NewProject => new_project(ui, &mut s.new_project),
                             Section::Files => files(ui, &mut s.files, &mut wanted),
                             Section::View3d => view3d(ui, &mut s.view3d),
+                            Section::Performance => performance(ui, &mut s.gpu, &gpu_line),
                         }
                     });
                 });
@@ -114,6 +129,8 @@ impl Preferences {
         if !open || close {
             self.open = false;
         }
+        // The app applies them after this returns: look at the GPU then.
+        self.look_again |= apply;
         apply.then(|| self.draft.clone())
     }
 
@@ -342,6 +359,22 @@ fn view3d(ui: &mut egui::Ui, p: &mut View3dPrefs) {
         .on_hover_text("How projects without their own 3D view start. Automatic: as you last chose, else Lit when the scene has lights");
         ui.end_row();
     });
+}
+
+/// GPU acceleration: the switch and what's in use now (`status`). Greyed
+/// out when `ARCLIGHT_GPU=0` decides instead.
+fn performance(ui: &mut egui::Ui, p: &mut GpuPrefs, status: &str) {
+    heading(ui, "Performance");
+    let forced = gpu::forced_off();
+    ui.add_enabled(!forced, egui::Checkbox::new(&mut p.enabled, "GPU acceleration"))
+        .on_hover_text("Render on the graphics card where ArclightVFX can (everything else, and any GPU error, falls back to the CPU). Takes effect when applied, no restart.")
+        .on_disabled_hover_text("ARCLIGHT_GPU=0 is set in the environment, so everything renders on the CPU");
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.weak(if forced { "Using the CPU: ARCLIGHT_GPU=0 is set in the environment" } else { status });
+    });
+    ui.add_space(8.0);
+    ui.weak("Help ▸ GPU self-test compares the GPU with the CPU on this computer.");
 }
 
 fn shading_label(shading: &str) -> &'static str {

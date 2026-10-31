@@ -25,6 +25,7 @@ pub mod expr;
 pub mod features;
 pub mod geom;
 pub mod gltf;
+pub mod gpu;
 pub mod graph;
 pub mod image;
 pub mod light2d;

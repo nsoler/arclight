@@ -662,6 +662,27 @@ defaults**.
   pointer or the middle of the view; **Invert zoom** (wheel, ⌃ + scroll,
   ⌃ + middle-drag); **Shading** for projects without their own 3D view:
   Automatic (as last chosen, else Lit with lights), Solid or Lit.
+- **Performance:** **GPU acceleration** (on by default) renders on the
+  graphics card where ArclightVFX can; anything not done on the GPU, and
+  any GPU error, renders on the CPU instead, so pictures never fail
+  because of it. It takes effect when applied, without a restart. Under
+  it, what's in use now: the graphics card and its API (Vulkan on Linux,
+  Metal on macOS), or "Using the CPU" and why (turned off, no GPU found,
+  an error). Setting `ARCLIGHT_GPU=0` in the environment turns it off
+  whatever Preferences say (the checkbox is then greyed). GPU and CPU
+  results match within a very small tolerance, not bit for bit;
+  `arclight render --cpu` renders on the CPU only.
+
+## GPU self-test
+
+**Help ▸ GPU self-test** runs each GPU operation and the CPU's on the
+same pictures and lists, per row, the largest difference against its
+tolerance, pass or FAIL, and the time each took (the GPU's with and
+without copying pictures to and from the card), with the speedup. The
+first line says which card ran it and whether every row passed. **Copy**
+puts the table on the clipboard, for an issue. The same check from a
+terminal: `arclight gpu --check` (on macOS
+`/Applications/ArclightVFX.app/Contents/MacOS/arclight gpu --check`).
 
 ## If ArclightVFX crashes
 
@@ -674,7 +695,9 @@ read and submit. File names in the report read `<path>` unless you tick
 **Include file names**. **Help ▸ Report a problem** opens the latest
 report any time. An internal error while rendering a frame, in the 3D
 view, sound or a script's call no longer stops that part of ArclightVFX: it
-shows as that frame's error, and a report is saved.
+shows as that frame's error, and a report is saved. When GPU acceleration
+was in use at the crash, the dialog offers **Turn GPU acceleration off**
+(turn it back on in Preferences ▸ Performance).
 
 ## Undo
 
@@ -682,5 +705,5 @@ shows as that frame's error, and a report is saved.
 
 ## Help
 
-**F1** opens this window; **Esc** closes it. Help ▸ About shows the version
-and build.
+**F1** opens this window; **Esc** closes it. Help ▸ About shows the version,
+the build, and the GPU in use (or why the CPU is).

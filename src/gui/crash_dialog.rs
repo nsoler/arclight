@@ -4,7 +4,7 @@
 //! submits. Nothing is sent by ArclightVFX; file paths read `<path>` unless
 //! the user includes them.
 
-use arclight::crash;
+use arclight::{crash, gpu};
 use eframe::egui;
 use std::path::PathBuf;
 
@@ -33,6 +33,8 @@ pub struct CrashDialog {
 pub enum Choice {
     /// Don't ask at the next start after a crash again.
     DontAskAgain,
+    /// Turn GPU acceleration off (Preferences ▸ Performance).
+    TurnOffGpu,
 }
 
 impl CrashDialog {
@@ -111,6 +113,15 @@ impl CrashDialog {
             if let Some(p) = &self.report {
                 ui.weak(p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
             }
+            if self.crashed && gpu_involved(&self.text) && gpu::enabled() && !gpu::forced_off() {
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("GPU acceleration was on. If this happens again, turning it off may help (everything then renders on the CPU).");
+                    if ui.button("Turn GPU acceleration off").on_hover_text("Edit ▸ Preferences ▸ Performance turns it back on").clicked() {
+                        choice = Some(Choice::TurnOffGpu);
+                    }
+                });
+            }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if self.report.is_some() {
@@ -164,6 +175,18 @@ impl CrashDialog {
     }
 }
 
+/// Whether the crash in report `text` may have come from GPU acceleration:
+/// it was on with a device in use, or the backtrace goes through wgpu or
+/// the engine's GPU code. (The "GPU:" line names the window's adapter in
+/// every GUI report, so it doesn't count.)
+fn gpu_involved(text: &str) -> bool {
+    text.lines().any(|l| l.starts_with("GPU acceleration: on") && !l.contains("not used yet"))
+        || text.lines().any(|l| {
+            let l = l.trim_start();
+            l.contains("wgpu") || l.contains("arclight::gpu::") || l.contains("arclight::render3d::gpu::")
+        })
+}
+
 /// `s` for a URL's query: everything but unreserved characters
 /// percent-encoded (UTF-8).
 fn encode(s: &str) -> String {
@@ -204,6 +227,16 @@ mod tests {
         let help = CrashDialog { open: true, ..CrashDialog::default() };
         assert!(help.issue_url().contains("title=ArclightVFX%20problem%3A%20") && help.issue_url().contains(&encode("Steps to reproduce")));
         assert_eq!(encode("a b/é"), "a%20b%2F%C3%A9");
+    }
+
+    #[test]
+    fn turning_the_gpu_off_is_suggested_only_when_it_was_involved() {
+        let head = "Version: ArclightVFX 0.12.0 (beta), arclight-gui\nGPU: NVIDIA GeForce RTX 5070 (Vulkan, DiscreteGpu, driver NVIDIA 615)\n";
+        assert!(!gpu_involved(&format!("{head}GPU acceleration: off (turned off in Preferences)\nPanic: boom")), "the window's adapter alone");
+        assert!(!gpu_involved(&format!("{head}GPU acceleration: on (not used yet)\nPanic: boom")), "no device was made");
+        assert!(gpu_involved(&format!("{head}GPU acceleration: on (NVIDIA GeForce RTX 5070 (Vulkan))\nPanic: boom")));
+        assert!(gpu_involved(&format!("{head}Panic: boom\n  12: wgpu_core::device::queue::submit")), "a backtrace through wgpu");
+        assert!(gpu_involved("Panic: boom\n   3: arclight::gpu::image::read_back"));
     }
 
     #[test]

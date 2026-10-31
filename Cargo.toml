@@ -1,6 +1,6 @@
 [package]
 name = "arclight"
-version = "0.11.5"
+version = "0.12.0"
 edition = "2021"
 description = "ArclightVFX Compositor — an original node-graph image compositor"
 license = "MIT OR Apache-2.0"
@@ -22,8 +22,11 @@ path = "src/gui/main.rs"
 required-features = ["gui"]
 
 [features]
-default = ["gui"]
+default = ["gui", "gpu"]
 gui = ["dep:eframe", "dep:rfd", "dep:egui_commonmark", "dep:cpal"]
+# GPU acceleration (wgpu compute and rendering; see docs/gpu-plan.md).
+# Without it the `gpu` module is a stub that always says "use the CPU".
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -43,6 +46,10 @@ gltf = { version = "1.4", default-features = false, features = ["import", "utils
 egui_commonmark = { version = "0.26", default-features = false, features = ["pulldown_cmark"], optional = true }
 # Sound in the GUI's playback (ALSA on Linux: libasound.so.2 at run time).
 cpal = { version = "0.18", optional = true }
+# The same major version as eframe's, or the types don't match.
+wgpu = { version = "30", optional = true }
+pollster = { version = "1", optional = true }
+bytemuck = { version = "1", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -57,3 +64,6 @@ members = [".", "plugins/example", "python"]
 
 [dev-dependencies]
 pulldown-cmark = { version = "0.13", default-features = false }
+# Every WGSL shader is translated to MSL in a test, so one Metal would
+# reject fails on Linux first (the version wgpu 30 uses).
+naga = { version = "30", features = ["wgsl-in", "msl-out"] }

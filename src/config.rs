@@ -80,6 +80,7 @@ pub struct Settings {
     pub new_project: NewProjectPrefs,
     pub files: FilePrefs,
     pub view3d: View3dPrefs,
+    pub gpu: GpuPrefs,
     /// Ask at the next start after a crash ("ArclightVFX closed
     /// unexpectedly"); off with its "Don't ask again".
     pub crash_dialog: bool,
@@ -98,6 +99,7 @@ impl Default for Settings {
             new_project: NewProjectPrefs::default(),
             files: FilePrefs::default(),
             view3d: View3dPrefs::default(),
+            gpu: GpuPrefs::default(),
             crash_dialog: true,
             other: serde_json::Map::new(),
         }
@@ -185,6 +187,21 @@ pub struct View3dPrefs {
 impl Default for View3dPrefs {
     fn default() -> Self {
         View3dPrefs { emulate_three_button: false, trackpad: "orbit".into(), zoom_to_pointer: true, invert_zoom: false, orbit_selection: true, default_shading: "auto".into() }
+    }
+}
+
+/// GPU acceleration (Preferences ▸ Performance). `ARCLIGHT_GPU=0` in the
+/// environment turns it off whatever this says.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct GpuPrefs {
+    /// Render on the GPU where it can (else everything on the CPU).
+    pub enabled: bool,
+}
+
+impl Default for GpuPrefs {
+    fn default() -> Self {
+        GpuPrefs { enabled: true }
     }
 }
 
@@ -341,6 +358,9 @@ mod tests {
         assert_eq!((d.new_project.width, d.new_project.height, d.new_project.fps, d.new_project.first_frame, d.new_project.last_frame), (1920, 1080, 24.0, 1, 100));
         assert_eq!((d.files.autosave_minutes, d.files.recent_count, d.files.undo_levels, d.files.project_dir.clone()), (0, 10, 200, None));
         assert_eq!((d.view3d.trackpad.as_str(), d.view3d.zoom_to_pointer, d.view3d.default_shading.as_str()), ("orbit", true, "auto"));
+        assert!(d.gpu.enabled, "GPU acceleration on by default");
+        let off: Settings = serde_json::from_str(r#"{"gpu": {"enabled": false}}"#).unwrap();
+        assert_eq!(off, Settings { gpu: GpuPrefs { enabled: false }, ..Settings::default() });
         let part: Settings = serde_json::from_str(r#"{"interface": {"theme": "light"}, "files": {"project_dir": "/shows"}, "from_the_future": {"x": 1}}"#).unwrap();
         assert_eq!(part.interface, InterfacePrefs { theme: "light".into(), ..InterfacePrefs::default() });
         assert_eq!(part.files.project_dir, Some(PathBuf::from("/shows")));
