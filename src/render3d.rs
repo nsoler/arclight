@@ -597,6 +597,20 @@ pub fn render_blurred(scene: &Scene, cam: &Camera, format: Size, samples: usize,
     let Some(blur) = blur.filter(|b| b.times.len() > 1) else { return out };
     let mixed = Passes { depth: false, position: false, normal: false, uv: false, motion: false, id: false, ..passes };
     let frames: Vec<(i64, &Scene)> = blur.frames.iter().map(|f| (f.0, f.1)).collect();
+    // On the GPU, every time added up there (a background without planes
+    // goes over the mean: the same as over each time).
+    #[cfg(feature = "gpu")]
+    if background.is_none_or(|b| b.planes.is_empty()) {
+        if let Some(mean) = gpu::blurred(scene, cam, format, samples, mixed, blur, &frames) {
+            let mean = match background {
+                Some(bg) => over_background(mean, bg),
+                None => mean,
+            };
+            if mean.pixels.len() == out.pixels.len() {
+                return mean_into(out, mean, 1);
+            }
+        }
+    }
     match blur_sum(&blur.times, blur.jitter, |t, cell| render_cell(&scene.at_time(&frames, t), &blur.camera(cam, t), format, samples, background, mixed, None, cell)) {
         Some(sum) if sum.pixels.len() == out.pixels.len() => mean_into(out, sum, blur.times.len()),
         _ => out,
@@ -817,6 +831,8 @@ struct Slots {
     lights: bool,
     #[cfg_attr(not(feature = "gpu"), allow(dead_code))]
     mattes: bool,
+    #[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+    shadow: bool,
 }
 
 impl Slots {
@@ -833,7 +849,7 @@ impl Slots {
         let light_at = slot(&mut k, passes.lights, 3 * light_nodes);
         let shadow_at = slot(&mut k, passes.shadow, 3);
         let any_part = part_on.iter().any(|b| *b) || passes.lights || passes.shadow;
-        Slots { stride: k, p_at, n_at, uv_at, motion_at, id_at, matte_at, part_on, part_at, light_at, shadow_at, any_part, lights: passes.lights, mattes: passes.mattes }
+        Slots { stride: k, p_at, n_at, uv_at, motion_at, id_at, matte_at, part_on, part_at, light_at, shadow_at, any_part, lights: passes.lights, mattes: passes.mattes, shadow: passes.shadow }
     }
 }
 

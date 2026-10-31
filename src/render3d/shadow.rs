@@ -64,10 +64,32 @@ struct Layers {
     nearest: Vec<f32>,
 }
 
-impl Map {
-    /// Draw the casters of `surfs` through `cam` into a `res` square.
-    fn draw(surfs: &[Surface], cam: Camera, res: usize, along: Option<Vec3>, texel: f64) -> Map {
+/// Where a shadow map looks from, before anything is drawn into it.
+#[derive(Clone, Debug)]
+pub(super) struct View {
+    pub cam: Camera,
+    /// Texels across (it's square).
+    pub res: usize,
+    /// A directional light's direction (distances along it from `origin`;
+    /// else straight from the light).
+    pub along: Option<Vec3>,
+    pub origin: Vec3,
+    /// A texel's width at one unit away (perspective), or in scene units
+    /// (directional).
+    pub texel: f64,
+}
+
+impl View {
+    fn new(cam: Camera, res: usize, along: Option<Vec3>, texel: f64) -> View {
         let origin = geom::transform_point(&cam.world, &Vec3::zeros());
+        View { cam, res, along, origin, texel }
+    }
+}
+
+impl Map {
+    /// Draw the casters of `surfs` into view `v`.
+    fn draw(surfs: &[Surface], v: &View) -> Map {
+        let View { cam, res, along, origin, texel } = v.clone();
         let size = Size { width: res, height: res };
         let mut map = Map { cam, res, depth: vec![f32::INFINITY; res * res], along, origin, texel, layers: None };
         // The less than opaque: (texel, distance, surface, alpha).
@@ -234,13 +256,82 @@ fn texel_of(fov: f64, res: usize) -> f64 {
 
 const AXES: [[f64; 3]; 6] = [[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]];
 
-impl Source {
-    /// A cube round `at` (each face a little over 90° across, so filters
-    /// near an edge stay inside one).
-    fn cube(surfs: &[Surface], at: Vec3, res: usize, near: f64, far: f64) -> Source {
+/// Where a light's maps for one shadow sample look from: one view, or a
+/// cube of six round `at` (+X, −X, +Y, −Y, +Z, −Z), each face a little
+/// over 90° across, so filters near an edge stay inside one.
+#[derive(Clone, Debug)]
+pub(super) enum SourceView {
+    One(View),
+    Cube { at: Vec3, faces: Vec<View> },
+}
+
+impl SourceView {
+    fn cube(at: Vec3, res: usize, near: f64, far: f64) -> SourceView {
         const FOV: f64 = 96.0;
-        let faces = AXES.par_iter().map(|a| Map::draw(surfs, pinhole(aim(at, at + Vec3::from(*a)).expect("an axis"), FOV, near, far), res, None, texel_of(FOV, res))).collect();
-        Source::Cube { at, faces }
+        let faces = AXES.iter().map(|a| View::new(pinhole(aim(at, at + Vec3::from(*a)).expect("an axis"), FOV, near, far), res, None, texel_of(FOV, res))).collect();
+        SourceView::Cube { at, faces }
+    }
+}
+
+/// Where each shadow-casting light's maps look from, by shadow sample
+/// (see [`Light::shadow_points`]), and how soft its shadows are.
+#[derive(Clone, Debug)]
+pub(super) struct LightView {
+    pub sources: Vec<SourceView>,
+    pub soft: f64,
+    /// A point or spot light's radius (its penumbra); 0 for the rest.
+    pub radius: f64,
+}
+
+/// The maps a render's `lights` need (None for a light without shadows):
+/// what [`Shadows::build`] draws, for the casters among `surfs`.
+pub(super) fn plan(surfs: &[Surface], lights: &[Light]) -> Vec<Option<LightView>> {
+    let wanted = lights.iter().any(|l| l.shadows && l.enabled && l.kind != LightKind::Ambient) && surfs.iter().any(|s| s.casts);
+    let scene = if wanted { extent(surfs) } else { None };
+    lights
+        .iter()
+        .map(|l| {
+            let (c, r) = scene?;
+            if !l.shadows || !l.enabled {
+                return None;
+            }
+            let reach = |at: Vec3| ((at - c).norm() + r) * 1.01;
+            let near_for = |at: Vec3| (reach(at) * 1e-5).max(1e-4);
+            let sources = match l.kind {
+                LightKind::Ambient => return None,
+                LightKind::Directional => {
+                    let dir = l.direction();
+                    let d = r * 2.0;
+                    let cam = Camera { world: aim(c - dir * d, c)?, ortho: 2.0 * r * 1.02, near: d - r * 1.1, far: d + r * 1.1, ..Camera::default() };
+                    vec![SourceView::One(View::new(cam, SUN_RES, Some(dir), 2.0 * r * 1.02 / SUN_RES as f64))]
+                }
+                LightKind::Spot { cone, .. } if cone + 10.0 <= 170.0 => {
+                    let fov = cone + 10.0;
+                    let at = l.position();
+                    let cam = pinhole(l.world, fov, near_for(at), reach(at));
+                    vec![SourceView::One(View::new(cam, SPOT_RES, None, texel_of(fov, SPOT_RES)))]
+                }
+                LightKind::Spot { .. } | LightKind::Point => {
+                    let at = l.position();
+                    vec![SourceView::cube(at, CUBE_RES, near_for(at), reach(at))]
+                }
+                LightKind::Area { samples, .. } => {
+                    let res = if samples <= 4 { AREA_RES } else { AREA_RES_MANY };
+                    l.shadow_points().into_iter().map(|at| SourceView::cube(at, res, near_for(at), reach(at))).collect()
+                }
+            };
+            Some(LightView { sources, soft: l.shadow_softness, radius: if matches!(l.kind, LightKind::Point | LightKind::Spot { .. }) { l.radius } else { 0.0 } })
+        })
+        .collect()
+}
+
+impl Source {
+    /// The maps of `v`, drawn (a cube's faces at once).
+    fn draw(surfs: &[Surface], v: &SourceView) -> Source {
+        match v {
+            SourceView::One(view) => Source::One(Box::new(Map::draw(surfs, view))),
+            SourceView::Cube { at, faces } => Source::Cube { at: *at, faces: faces.par_iter().map(|f| Map::draw(surfs, f)).collect() },
+        }
     }
 
     fn lit(&self, p: &Vec3, soft: f64, radius: f64) -> f32 {
@@ -295,43 +386,14 @@ fn extent(surfs: &[Surface]) -> Option<(Vec3, f64)> {
 
 impl Shadows {
     /// Shadow maps for each of `lights` that casts shadows (and is on),
-    /// of the casters among `surfs`.
+    /// of the casters among `surfs`: drawn as [`plan`] says.
     pub fn build(surfs: &[Surface], lights: &[Light]) -> Shadows {
-        let wanted = lights.iter().any(|l| l.shadows && l.enabled && l.kind != LightKind::Ambient) && surfs.iter().any(|s| s.casts);
-        let scene = if wanted { extent(surfs) } else { None };
-        let lights = lights
-            .iter()
+        let lights = plan(surfs, lights)
+            .into_iter()
             .map(|l| {
-                let (c, r) = scene?;
-                if !l.shadows || !l.enabled {
-                    return None;
-                }
-                let reach = |at: Vec3| ((at - c).norm() + r) * 1.01;
-                let near_for = |at: Vec3| (reach(at) * 1e-5).max(1e-4);
-                let sources = match l.kind {
-                    LightKind::Ambient => return None,
-                    LightKind::Directional => {
-                        let dir = l.direction();
-                        let d = r * 2.0;
-                        let cam = Camera { world: aim(c - dir * d, c)?, ortho: 2.0 * r * 1.02, near: d - r * 1.1, far: d + r * 1.1, ..Camera::default() };
-                        vec![Source::One(Box::new(Map::draw(surfs, cam, SUN_RES, Some(dir), 2.0 * r * 1.02 / SUN_RES as f64)))]
-                    }
-                    LightKind::Spot { cone, .. } if cone + 10.0 <= 170.0 => {
-                        let fov = cone + 10.0;
-                        let at = l.position();
-                        let cam = pinhole(l.world, fov, near_for(at), reach(at));
-                        vec![Source::One(Box::new(Map::draw(surfs, cam, SPOT_RES, None, texel_of(fov, SPOT_RES))))]
-                    }
-                    LightKind::Spot { .. } | LightKind::Point => {
-                        let at = l.position();
-                        vec![Source::cube(surfs, at, CUBE_RES, near_for(at), reach(at))]
-                    }
-                    LightKind::Area { samples, .. } => {
-                        let res = if samples <= 4 { AREA_RES } else { AREA_RES_MANY };
-                        l.shadow_points().into_par_iter().map(|at| Source::cube(surfs, at, res, near_for(at), reach(at))).collect()
-                    }
-                };
-                Some(LightShadows { sources, soft: l.shadow_softness, radius: if matches!(l.kind, LightKind::Point | LightKind::Spot { .. }) { l.radius } else { 0.0 } })
+                let l = l?;
+                let sources = l.sources.par_iter().map(|v| Source::draw(surfs, v)).collect();
+                Some(LightShadows { sources, soft: l.soft, radius: l.radius })
             })
             .collect();
         Shadows { lights }

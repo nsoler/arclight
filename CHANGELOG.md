@@ -15,6 +15,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.3 — 2026-10-31
+
+- GPU: **shadows render on the GPU**: every light kind's shadow maps are
+  drawn and filtered there as on the CPU (soft edges, a light's radius,
+  the shadow and per-light passes): at 4K about 17× faster than the CPU
+  here. Shadows cast by something see-through still render on the CPU.
+- GPU: **motion blur in Scanline Render adds its times up on the GPU**,
+  read back once: at 4K, 8 times, about 21× faster than the CPU (12.5 s
+  → 0.59 s), 35× with shadows (30 s → 0.87 s).
+
 ## 0.12.2 — 2026-10-31
 
 - GPU: **Scanline Render and the 3D view render on the GPU**: a compute

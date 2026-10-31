@@ -16,9 +16,14 @@ use std::sync::Arc;
 /// A scene and its camera from a graph whose node `scene` makes the
 /// scene and `cam` the camera.
 pub(super) fn scene_of(graph: &str) -> (Arc<Scene>, Camera) {
+    scene_at(graph, 1)
+}
+
+/// [`scene_of`] at `frame`.
+pub(super) fn scene_at(graph: &str, frame: i64) -> (Arc<Scene>, Camera) {
     let graph: Graph = graph.parse().expect("graph");
     let mut e = Evaluator::new();
-    let ctx = EvalContext { frame: 1, write_outputs: false };
+    let ctx = EvalContext { frame, write_outputs: false };
     let scene = e.evaluate(&graph, "scene", &ctx).expect("scene").scene.clone().expect("a scene");
     let cam = e.evaluate(&graph, "cam", &ctx).expect("camera").scene.as_ref().expect("a camera").cameras[0].clone();
     (scene, cam)
@@ -47,6 +52,24 @@ pub(super) fn busy(camera: &str) -> String {
         {camera}
         ]}}"#
     )
+}
+
+/// [`busy`] with every light casting shadows (soft ones from the point
+/// light's radius) but the see-through card casting none (its layered
+/// shadow is the CPU's).
+pub(super) fn busy_shadowed(camera: &str) -> String {
+    busy(camera)
+        .replace(r#""op": "light_directional", "params": {"#, r#""op": "light_directional", "params": {"shadows": true, "#)
+        .replace(r#""op": "light_point", "params": {"#, r#""op": "light_point", "params": {"shadows": true, "#)
+        .replace(r#""op": "light_spot", "params": {"#, r#""op": "light_spot", "params": {"shadows": true, "shadow_softness": 2.0, "#)
+        .replace(r#""op": "light_area", "params": {"#, r#""op": "light_area", "params": {"shadows": true, "#)
+        .replace(r#""opacity": 0.4"#, r#""opacity": 0.4, "casts_shadows": false"#)
+}
+
+/// `graph` (a [`busy`] scene) with its sphere moving across, frames 1 to
+/// 10.
+pub(super) fn moving(graph: &str) -> String {
+    graph.replace(r#""op": "sphere", "inputs": ["tex"], "params": {"#, r#""op": "sphere", "inputs": ["tex"], "params": {"translate": {"keys": [[1, [-0.6, 0, 0]], [10, [0.6, 0.2, 0]]]}, "#)
 }
 
 pub(super) const PERSPECTIVE: &str = r#"{"id": "cam", "op": "camera", "params": {"translate": [0, 0.3, 3.5]}}"#;
@@ -114,11 +137,14 @@ pub(crate) fn rows(gpu: &Gpu) -> Vec<CheckRow> {
     let hd = Size { width: 1920, height: 1080 };
     let (scene, cam) = scene_of(&busy(PERSPECTIVE));
     let (flat, ortho) = scene_of(&busy(ORTHO));
+    let (shaded, _) = scene_of(&busy_shadowed(PERSPECTIVE));
     let all = Passes::from_names(Passes::NAMES);
     vec![
         row(gpu, "3D render, lit, AA 3×3", &scene, &cam, hd, 3, Passes::DEPTH, false),
         row(gpu, "3D render, every pass", &scene, &cam, hd, 3, all, false),
         row(gpu, "3D render, orthographic", &flat, &ortho, hd, 2, Passes::DEPTH, false),
+        row(gpu, "3D render, shadows (4 lights)", &shaded, &cam, hd, 2, Passes::from_names(["depth", "shadow", "lights"]), false),
+        blur_row(Size { width: 960, height: 540 }),
         row(gpu, "3D view, solid", &scene, &cam, hd, 1, Passes::DEPTH, true),
     ]
 }
@@ -139,6 +165,27 @@ fn row(gpu: &Gpu, case: &str, scene: &Scene, cam: &Camera, format: Size, samples
     let _ = gpu_draw();
     let (cpu, cpu_ms) = timed(cpu_draw);
     let (out, gpu_ms) = timed(gpu_draw);
+    judge(case, size, &cpu, out, cpu_ms, gpu_ms)
+}
+
+/// The motion-blur row: the busy scene, its sphere moving, 6
+/// times jittered, at `size` (small: the CPU takes a while), through
+/// Scanline Render's own entry point (which adds the times up on the GPU).
+fn blur_row(hd: Size) -> CheckRow {
+    // (No shadows: slow on the CPU at every time; the shadows row has them,
+    // and the tests blur with shadows.)
+    let graph = moving(&busy(PERSPECTIVE));
+    let ((s0, cam), (s1, _)) = (scene_at(&graph, 4), scene_at(&graph, 5));
+    let blur = super::super::Blur { times: super::super::Blur::times(0.0, 0.5, 6), frames: vec![(0, &*s0, cam.clone()), (1, &*s1, cam.clone())], jitter: true };
+    let render = || super::super::render_blurred(&s0, &cam, hd, 2, None, Passes::DEPTH, None, Some(&blur));
+    let _ = render();
+    let (cpu, cpu_ms) = timed(|| crate::gpu::cpu_only(render));
+    let (out, gpu_ms) = timed(render);
+    judge("3D render, motion blur 6", format!("{}x{}", hd.width, hd.height), &cpu, Ok(Some(out)), cpu_ms, gpu_ms)
+}
+
+/// A row from a CPU render and the GPU's (`out`), and their times.
+fn judge(case: &str, size: String, cpu: &Image, out: anyhow::Result<Option<Image>>, cpu_ms: f64, gpu_ms: f64) -> CheckRow {
     let mut r = CheckRow { case: case.into(), size, max_abs: 0.0, max_rel: 0.0, tol_abs: 1e-3, tol_rel: 0.005, pass: true, cpu_ms, gpu_kernel_ms: gpu_ms, gpu_total_ms: gpu_ms, note: String::new() };
     let out = match out {
         Ok(Some(img)) => img,
@@ -156,7 +203,7 @@ fn row(gpu: &Gpu, case: &str, scene: &Scene, cam: &Camera, format: Size, samples
     // Max abs: the worst mean difference; max rel: the worst share of
     // values off (edges fall a little differently in f32), of the picture
     // and light passes; the nearest-surface passes are held to theirs.
-    for (name, mean, off) in differences(&cpu, &out) {
+    for (name, mean, off) in differences(cpu, &out) {
         let (most_mean, most_off) = allowed(&name);
         if !nearest_pass(&name) {
             r.max_abs = r.max_abs.max(mean);

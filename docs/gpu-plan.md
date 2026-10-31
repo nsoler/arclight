@@ -529,16 +529,26 @@ switch, the status and the tests' skip work end to end.
 
 ### G5: Shadows, motion blur, particles [Dev2]
 
-- Shadow maps on the GPU (`shadow.rs`'s maps: directional / spot depth
-  maps, point-light cube maps, area-light points, softness), drawn once
-  per time sample by a depth-only variant of G4's rasterizer (nearest
-  caster per texel, see-through casters as layers), looked up with the
-  CPU's filtering inside the light loop. Maps are 128–2048 texels a side:
-  6–25 MB a light.
-- Motion blur and the jittered shutter accumulated on the GPU: one frame
-  of buffers summed over every time and cell (G4 reads each time back and
-  sums on the CPU: 1080p, 8 times, 1.2 s against the CPU's 3–6 s), one
-  read-back at the end; the triangles set up on the CPU per time.
+- **Done (shadows + motion blur, one version):** shadow maps on the GPU,
+  as `shadow::plan` places them (the CPU draws the same ones): a
+  depth-only `shadow_map` entry in `raster.wgsl` draws every map (sun,
+  spot, point cubes, area-light cubes), and the light loop looks them up
+  as `Shadows::visible` does (offset off the surface, cube face, bilinear
+  compare, PCF, the blocker search for a light's radius), with the shadow
+  and per-light passes. Casters that let light through (opacity below 1,
+  a texture with partial alpha or a window short of its frame) keep the
+  frame on the CPU for now: their layered shadows are a follow-up.
+- Motion blur and the jittered shutter added up on the GPU
+  (`gpu::blurred`): every (cell, time) render into one frame's buffers,
+  each cell's pixels packed onto threads, one read-back; the triangles
+  and shadow maps set up per time. Frames with sprites, points, splats or
+  a background with planes take the per-time path as before.
+- Measured, 4K, the measured scene, AA 3×3 (CPU / GPU): shadows 2455 /
+  143 ms (17×); motion blur 8 12.5 s / 593 ms (21×); motion blur 8 +
+  shadows 30.2 s / 873 ms (35×). The plan's < 0.3 s for the last is not
+  met yet: the frame's own render (~120 ms, for depth and the other
+  nearest-surface passes) and 32 sets of shadow maps (8 times × 4 jitter
+  cells) remain; sharing maps between nearby times is the next step.
 - Particles: sprites (textured, sequences) and instanced meshes on the
   GPU, motion blur included.
 - Target (4K, the measured scene): motion blur 8 + shadows from 28 s to

@@ -1,10 +1,15 @@
 // Scanline Render on the GPU: one thread per pixel, the same steps as the
 // CPU renderer's `draw_passes` (see mod.rs). Each dispatch takes one row
-// of every pixel's samples and adds to what the earlier rows left.
+// of every pixel's samples and adds to what the earlier rows left. A
+// second entry point, `shadow_map`, draws a light's shadow map as
+// shadow.rs does (the nearest caster per texel); the shading looks them up
+// as shadow.rs's `Shadows::visible` does.
 //
 // Tables are flat u32 words (f32 values as their bits), laid out by
-// mod.rs: TRI_WORDS a triangle, SURF_WORDS a surface, LIGHT_WORDS a light,
-// LEVEL_WORDS a texture level.
+// mod.rs: TRI_WORDS a triangle, LEVEL_WORDS a texture level (in `bins`);
+// in `tables`, SURF_WORDS a surface, then from P.shadow: LIGHT_WORDS a
+// light, SHL_WORDS a light's shadows, SRC_WORDS a shadow source (one map
+// or a cube of six), MAP_WORDS a map.
 
 // The surfaces a sample keeps (mod.rs builds a second pipeline with more,
 // for frames where these overflow).
@@ -23,6 +28,11 @@ const TRI_WORDS: u32 = 42u;
 const SURF_WORDS: u32 = 16u;
 const LIGHT_WORDS: u32 = 36u;
 const LEVEL_WORDS: u32 = 8u;
+const SHL_WORDS: u32 = 4u;
+const SRC_WORDS: u32 = 8u;
+const MAP_WORDS: u32 = 28u;
+// Nothing in a shadow map's texel.
+const FAR_AWAY: f32 = 3.0e38;
 
 // Flags.
 const DIFFUSE: u32 = 1u;
@@ -32,6 +42,16 @@ const AMBIENT: u32 = 8u;
 const LIGHTS: u32 = 16u;
 const MATTES: u32 = 32u;
 const ANY_PART: u32 = 64u;
+const SHADOW: u32 = 128u;
+
+// Surface flags.
+const S_MATERIAL: u32 = 1u;
+const S_HOLDOUT: u32 = 8u;
+const S_HEADLIGHT: u32 = 16u;
+const S_TWO_SIDED: u32 = 32u;
+const S_WRAP: u32 = 64u;
+const S_CASTS: u32 = 128u;
+const S_RECEIVES: u32 = 256u;
 
 // Light kinds.
 const K_AMBIENT: u32 = 0u;
@@ -50,7 +70,7 @@ struct Params {
     slots: vec4<u32>,
     // diffuse, specular, emission, ambient at
     parts: vec4<u32>,
-    // lights, light nodes, objects, (unused)
+    // lights, light nodes, objects, shadow at
     counts: vec4<u32>,
     // where the tile lists start and the texture levels start, in `bins`
     tables: vec4<u32>,
@@ -60,14 +80,19 @@ struct Params {
     eye: vec4<f32>,
     // its +Z in the scene (back toward an orthographic camera)
     back: vec4<f32>,
+    // where the lights, their shadows, the shadow sources and the maps
+    // start in `tables`
+    shadow: vec4<u32>,
 };
 
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var<storage, read> tris: array<u32>;
 @group(0) @binding(2) var<storage, read> bins: array<u32>;
-@group(0) @binding(3) var<storage, read> surfs: array<u32>;
-@group(0) @binding(4) var<storage, read> lights: array<u32>;
-@group(0) @binding(5) var<storage, read> texels: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read> tables: array<u32>;
+@group(0) @binding(4) var<storage, read> texels: array<vec4<f32>>;
+// Every shadow map's texels: the nearest caster's distance (FAR_AWAY:
+// none).
+@group(0) @binding(5) var<storage, read> maps: array<f32>;
 @group(0) @binding(6) var<storage, read_write> out_color: array<vec4<f32>>;
 @group(0) @binding(7) var<storage, read_write> out_extra: array<f32>;
 // Each pixel's nearest surfaces, in four parts of `pixels` entries each
@@ -85,12 +110,12 @@ fn tv2(t: u32, k: u32) -> vec2<f32> { return vec2<f32>(tf(t, k), tf(t, k + 1u));
 fn tv3(t: u32, k: u32) -> vec3<f32> { return vec3<f32>(tf(t, k), tf(t, k + 1u), tf(t, k + 2u)); }
 fn ti(t: u32, k: u32) -> i32 { return bitcast<i32>(tris[t * TRI_WORDS + k]); }
 
-fn su(s: u32, k: u32) -> u32 { return surfs[s * SURF_WORDS + k]; }
-fn sf(s: u32, k: u32) -> f32 { return bitcast<f32>(surfs[s * SURF_WORDS + k]); }
+fn su(s: u32, k: u32) -> u32 { return tables[s * SURF_WORDS + k]; }
+fn sf(s: u32, k: u32) -> f32 { return bitcast<f32>(tables[s * SURF_WORDS + k]); }
 fn sv3(s: u32, k: u32) -> vec3<f32> { return vec3<f32>(sf(s, k), sf(s, k + 1u), sf(s, k + 2u)); }
 
-fn lu(l: u32, k: u32) -> u32 { return lights[l * LIGHT_WORDS + k]; }
-fn lf(l: u32, k: u32) -> f32 { return bitcast<f32>(lights[l * LIGHT_WORDS + k]); }
+fn lu(l: u32, k: u32) -> u32 { return tables[P.shadow.x + l * LIGHT_WORDS + k]; }
+fn lf(l: u32, k: u32) -> f32 { return bitcast<f32>(tables[P.shadow.x + l * LIGHT_WORDS + k]); }
 fn lv3(l: u32, k: u32) -> vec3<f32> { return vec3<f32>(lf(l, k), lf(l, k + 1u), lf(l, k + 2u)); }
 fn lv4(l: u32, k: u32) -> vec4<f32> { return vec4<f32>(lf(l, k), lf(l, k + 1u), lf(l, k + 2u), lf(l, k + 3u)); }
 
@@ -226,7 +251,7 @@ fn tint(s: u32, px: vec4<f32>) -> vec4<f32> {
 fn surface_color(s: u32, uv: vec2<f32>, covered: f32) -> vec4<f32> {
     let base = su(s, 13u);
     if (base == NONE) { return vec4<f32>(sf(s, 0u), sf(s, 1u), sf(s, 2u), sf(s, 3u)); }
-    let wrap = (su(s, 12u) & 64u) != 0u;
+    let wrap = (su(s, 12u) & S_WRAP) != 0u;
     let finite = covered == covered && covered < 3.0e38;
     if (covered <= 1.0 + 1e-6 || !finite) { return tint(s, sample_level(base, wrap, uv)); }
     let n = su(s, 14u);
@@ -256,6 +281,8 @@ struct Lit {
     diffuse: vec3<f32>,
     specular: vec3<f32>,
     ambient: vec3<f32>,
+    // What shadows took away (diffuse and specular).
+    lost: vec3<f32>,
 };
 
 struct Surf {
@@ -266,20 +293,176 @@ struct Surf {
     n: vec3<f32>,
     view: vec3<f32>,
     p: vec3<f32>,
+    // Takes shadows.
+    receives: bool,
 };
 
-// Light at strength e (color aside) arriving from direction l.
-fn arrive(acc: ptr<function, Lit>, m: Surf, color: vec3<f32>, l: vec3<f32>, e: f32) {
+// Light at strength e (color aside) arriving from direction l, `seen` of
+// it past the shadows.
+fn arrive(acc: ptr<function, Lit>, m: Surf, color: vec3<f32>, l: vec3<f32>, e: f32, seen: f32) {
     let c = dot(m.n, l);
     if (c <= 0.0) { return; }
     let ee = color * e;
-    (*acc).diffuse += m.albedo * ee * c;
+    var add = m.albedo * ee * c;
+    (*acc).diffuse += add * seen;
     if (m.blinn) {
         let h = unit_or(l + m.view, m.n);
         let d = max(dot(m.n, h), 0.0);
         let k = select(0.0, pow(d, m.exponent), d > 0.0);
-        (*acc).specular += m.specular * ee * k;
+        let sp = m.specular * ee * k;
+        (*acc).specular += sp * seen;
+        add += sp;
     }
+    (*acc).lost += add * (1.0 - seen);
+}
+
+// ---- shadows (shadow.rs) ----------------------------------------------
+
+fn mu(m: u32, k: u32) -> u32 { return tables[P.shadow.w + m * MAP_WORDS + k]; }
+fn mf(m: u32, k: u32) -> f32 { return bitcast<f32>(tables[P.shadow.w + m * MAP_WORDS + k]); }
+fn mv3(m: u32, k: u32) -> vec3<f32> { return vec3<f32>(mf(m, k), mf(m, k + 1u), mf(m, k + 2u)); }
+fn mv4(m: u32, k: u32) -> vec4<f32> { return vec4<f32>(mf(m, k), mf(m, k + 1u), mf(m, k + 2u), mf(m, k + 3u)); }
+
+// How far p is from map m's light, as the map measures it.
+fn map_key(m: u32, p: vec3<f32>) -> f32 {
+    if (mu(m, 16u) != 0u) { return dot(p - mv3(m, 20u), mv3(m, 17u)); }
+    return length(p - mv3(m, 20u));
+}
+
+// A texel's width in the scene at p.
+fn map_texel_at(m: u32, p: vec3<f32>) -> f32 {
+    if (mu(m, 16u) != 0u) { return mf(m, 23u); }
+    return mf(m, 23u) * map_key(m, p);
+}
+
+// Where p falls in map m (texel units), in .xy; .z < 0: not in front.
+fn map_place(m: u32, p: vec3<f32>) -> vec3<f32> {
+    let p4 = vec4<f32>(p, 1.0);
+    let c = vec3<f32>(dot(mv4(m, 0u), p4), dot(mv4(m, 4u), p4), dot(mv4(m, 8u), p4));
+    let depth = -c.z;
+    if (depth < max(mf(m, 15u), 1e-9)) { return vec3<f32>(0.0, 0.0, -1.0); }
+    let half = f32(mu(m, 14u)) / 2.0;
+    let f = mf(m, 13u);
+    if (mu(m, 12u) != 0u) { return vec3<f32>(half + f * c.x, half - f * c.y, 1.0); }
+    return vec3<f32>(half + f * c.x / depth, half - f * c.y / depth, 1.0);
+}
+
+// The nearest caster at texel (x, y) of map m.
+fn map_depth(m: u32, x: i32, y: i32) -> f32 {
+    let res = i32(mu(m, 14u));
+    if (x < 0 || y < 0 || x >= res || y >= res) { return FAR_AWAY; }
+    return maps[mu(m, 24u) + u32(y * res + x)];
+}
+
+// How lit (0 to 1) a point `key` away is at texel position q: the four
+// texels round it compared, weighted bilinearly.
+fn map_lit_at(m: u32, q: vec2<f32>, key: f32) -> f32 {
+    let x = q - vec2<f32>(0.5);
+    let x0 = floor(x);
+    let f = x - x0;
+    let ix = i32(x0.x);
+    let iy = i32(x0.y);
+    let l00 = select(1.0, 0.0, map_depth(m, ix, iy) < key);
+    let l10 = select(1.0, 0.0, map_depth(m, ix + 1, iy) < key);
+    let l01 = select(1.0, 0.0, map_depth(m, ix, iy + 1) < key);
+    let l11 = select(1.0, 0.0, map_depth(m, ix + 1, iy + 1) < key);
+    return (l00 * (1.0 - f.x) + l10 * f.x) * (1.0 - f.y) + (l01 * (1.0 - f.x) + l11 * f.x) * f.y;
+}
+
+// The mean distance of the casters nearer the light than `key` within r
+// texels of q; < 0: none.
+fn map_blockers(m: u32, q: vec2<f32>, key: f32, r: f32) -> f32 {
+    let n = i32(clamp(ceil(r), 1.0, 4.0));
+    let step = r / f32(n);
+    var sum = 0.0;
+    var count = 0;
+    for (var j = -n; j <= n; j++) {
+        for (var i = -n; i <= n; i++) {
+            let d = map_depth(m, i32(floor(q.x + f32(i) * step)), i32(floor(q.y + f32(j) * step)));
+            if (d < key) {
+                sum += d;
+                count++;
+            }
+        }
+    }
+    if (count == 0) { return -1.0; }
+    return sum / f32(count);
+}
+
+// How lit p is in map m, filtered over `soft` texels each way (and, for a
+// light `radius` wide, the penumbra its blockers make).
+fn map_lit(m: u32, p: vec3<f32>, soft: f32, radius: f32) -> f32 {
+    let place = map_place(m, p);
+    if (place.z < 0.0) { return 1.0; }
+    let q = place.xy;
+    let key = map_key(m, p);
+    let texel = map_texel_at(m, p);
+    var r = soft;
+    if (radius > 0.0 && mu(m, 16u) == 0u) {
+        let search = clamp(radius / texel, 1.0, 16.0);
+        let b = map_blockers(m, q, key, search);
+        if (!(b > 0.0)) { return 1.0; }
+        r += radius * (key - b) / b / texel;
+    }
+    r = min(r, 24.0);
+    if (r < 0.5) { return map_lit_at(m, q, key); }
+    let n = i32(min(ceil(r), 4.0));
+    let step = r / f32(n);
+    var sum = 0.0;
+    for (var j = -n; j <= n; j++) {
+        for (var i = -n; i <= n; i++) {
+            sum += map_lit_at(m, q + vec2<f32>(f32(i), f32(j)) * step, key);
+        }
+    }
+    return sum / f32((2 * n + 1) * (2 * n + 1));
+}
+
+fn src_u(src: u32, k: u32) -> u32 { return tables[P.shadow.z + src * SRC_WORDS + k]; }
+fn src_at(src: u32) -> vec3<f32> {
+    let o = P.shadow.z + src * SRC_WORDS;
+    return vec3<f32>(bitcast<f32>(tables[o + 2u]), bitcast<f32>(tables[o + 3u]), bitcast<f32>(tables[o + 4u]));
+}
+
+// Source src's map for p: its one map, or a cube's face toward p.
+fn src_map(src: u32, p: vec3<f32>) -> u32 {
+    let first = src_u(src, 1u);
+    if (src_u(src, 0u) == 0u) { return first; }
+    let v = p - src_at(src);
+    let a = abs(v);
+    var face: u32;
+    if (a.x >= a.y && a.x >= a.z) {
+        face = select(1u, 0u, v.x > 0.0);
+    } else if (a.y >= a.z) {
+        face = select(3u, 2u, v.y > 0.0);
+    } else {
+        face = select(5u, 4u, v.z > 0.0);
+    }
+    return first + face;
+}
+
+fn src_texel_at(src: u32, p: vec3<f32>) -> f32 {
+    let first = src_u(src, 1u);
+    if (src_u(src, 0u) == 0u) { return map_texel_at(first, p); }
+    return mf(first, 23u) * length(p - mv3(first, 20u));
+}
+
+// How much of light li's shadow sample k reaches the surface point (normal
+// n either way), coming from direction l: 1 where it takes no shadows.
+fn visible(li: u32, k: u32, m: Surf, l: vec3<f32>) -> f32 {
+    if (!m.receives) { return 1.0; }
+    let sh = P.shadow.y + li * SHL_WORDS;
+    if (k >= tables[sh + 1u]) { return 1.0; }
+    let src = tables[sh] + k;
+    let soft = bitcast<f32>(tables[sh + 2u]);
+    let radius = bitcast<f32>(tables[sh + 3u]);
+    // Off the surface toward the light, more the more it slants.
+    let n = select(m.n, -m.n, dot(m.n, l) < 0.0);
+    let texel = src_texel_at(src, m.p);
+    let c = dot(n, l);
+    let cc = clamp(c, 0.0, 1.0);
+    let slant = sqrt(1.0 - cc * cc) / max(c, 0.2);
+    let off = m.p + n * texel * (1.5 + soft) + l * texel * (1.0 + slant);
+    return clamp(map_lit(src_map(src, off), off, soft, radius), 0.0, 1.0);
 }
 
 // The light from `src` at the point: direction to it and strength;
@@ -314,12 +497,18 @@ fn disk(q: vec2<f32>) -> vec2<f32> {
 
 // A point or spot light's samples (one, or a disk `radius` wide facing
 // the point), each times `scale`.
+// (Every sample goes through shadow sample 0: looked up once, at the
+// first that faces the surface.)
 fn sampled(acc: ptr<function, Lit>, li: u32, m: Surf, color: vec3<f32>, scale: f32) {
     let at = lv3(li, 8u);
     let radius = lf(li, 15u);
+    var seen = -1.0;
     if (radius <= 0.0) {
         let r = reaching(li, at, m.p);
-        if (r.w >= 0.0) { arrive(acc, m, color, r.xyz, r.w * scale); }
+        if (r.w >= 0.0 && dot(m.n, r.xyz) > 0.0) {
+            seen = visible(li, 0u, m, r.xyz);
+            arrive(acc, m, color, r.xyz, r.w * scale, seen);
+        }
         return;
     }
     let wv = m.p - at;
@@ -331,7 +520,10 @@ fn sampled(acc: ptr<function, Lit>, li: u32, m: Surf, color: vec3<f32>, scale: f
     for (var k = 0u; k < 16u; k++) {
         let d = disk(grid(k, 4u));
         let r = reaching(li, at + (u * d.x + v * d.y) * radius, m.p);
-        if (r.w >= 0.0) { arrive(acc, m, color, r.xyz, r.w * share * scale); }
+        if (r.w >= 0.0 && dot(m.n, r.xyz) > 0.0) {
+            if (seen < 0.0) { seen = visible(li, 0u, m, r.xyz); }
+            arrive(acc, m, color, r.xyz, r.w * share * scale, seen);
+        }
     }
 }
 
@@ -341,6 +533,7 @@ fn light_shade(li: u32, m_in: Surf) -> Lit {
     acc.diffuse = vec3<f32>(0.0);
     acc.specular = vec3<f32>(0.0);
     acc.ambient = vec3<f32>(0.0);
+    acc.lost = vec3<f32>(0.0);
     let kind = lu(li, 0u);
     let enabled = lu(li, 1u) != 0u;
     let color = lv3(li, 4u);
@@ -355,7 +548,7 @@ fn light_shade(li: u32, m_in: Surf) -> Lit {
     let dir = lv3(li, 12u);
     switch kind {
         case K_DIRECTIONAL: {
-            arrive(&acc, m, color, -dir, lf(li, 7u));
+            if (dot(m.n, -dir) > 0.0) { arrive(&acc, m, color, -dir, lf(li, 7u), visible(li, 0u, m, -dir)); }
         }
         case K_POINT: {
             sampled(&acc, li, m, color, 1.0);
@@ -403,7 +596,7 @@ fn light_shade(li: u32, m_in: Surf) -> Lit {
                 if (r.w < 0.0) { continue; }
                 var c = dot(dir, -r.xyz);
                 if (two_sided) { c = abs(c); }
-                if (c > 0.0) { arrive(&acc, m, color, r.xyz, r.w * c * share); }
+                if (c > 0.0 && dot(m.n, r.xyz) > 0.0) { arrive(&acc, m, color, r.xyz, r.w * c * share, visible(li, k, m, r.xyz)); }
             }
         }
         default: {}
@@ -424,6 +617,7 @@ struct Hit {
 struct Sums {
     color: vec4<f32>,
     parts: array<vec3<f32>, 4>,
+    shadow: vec3<f32>,
     lights: array<vec3<f32>, 16>,
     mattes: array<f32, 32>,
 };
@@ -447,11 +641,14 @@ fn see(which: u32, h: Hit) {
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let w = P.size.x;
     let h = P.size.y;
-    if (gid.x >= w || gid.y >= h) { return; }
+    // With a jitter cell, a thread each of the cell's pixels only (every
+    // `side`th each way), packed so no thread of a workgroup sits idle.
     let side = P.cell.x;
-    if (side > 0u && (gid.x % side != P.cell.y || gid.y % side != P.cell.z)) { return; }
-    let px = gid.y * w + gid.x;
-    let tile = (gid.y / TILE) * P.size.w + gid.x / TILE;
+    var g = gid.xy;
+    if (side > 0u) { g = gid.xy * side + P.cell.yz; }
+    if (g.x >= w || g.y >= h) { return; }
+    let px = g.y * w + g.x;
+    let tile = (g.y / TILE) * P.size.w + g.x / TILE;
     let first = bins[P.tables.x + tile];
     let last = bins[P.tables.x + tile + 1u];
     if (first == last) { return; }
@@ -460,8 +657,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let j = P.cell.w;
     let flags = P.slots.y;
     let n_lights = P.counts.x;
-    let x = i32(gid.x);
-    let y = i32(gid.y);
+    let x = i32(g.x);
+    let y = i32(g.y);
     let step = 1.0 / f32(n);
 
     let pixels = w * h;
@@ -515,7 +712,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let p = tri_world(t, b);
             var view: vec3<f32>;
             if (P.cam.z != 0.0) { view = unit_or(P.back.xyz, vec3<f32>(0.0, 0.0, 1.0)); } else { view = unit_or(P.eye.xyz - p, vec3<f32>(0.0, 0.0, 1.0)); }
-            if ((sflags & 16u) != 0u) {
+            if ((sflags & S_HEADLIGHT) != 0u) {
                 // Headlight: lit from the camera.
                 let nn = tri_normal(t, b);
                 var facing = 1.0;
@@ -524,10 +721,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 color = vec4<f32>(color.rgb * kk, color.a);
             }
             let k = 1.0 - acc.a - held;
-            let holdout = (sflags & 8u) != 0u;
+            let holdout = (sflags & S_HOLDOUT) != 0u;
             // The light at the hit, in parts (premultiplied).
             var parts = array<vec3<f32>, 4>(vec3<f32>(0.0), vec3<f32>(0.0), color.rgb, vec3<f32>(0.0));
-            let has_material = (sflags & 1u) != 0u;
+            var lost = vec3<f32>(0.0);
+            let has_material = (sflags & S_MATERIAL) != 0u;
             let shading = (sflags >> 1u) & 3u;
             let emission = sv3(s, 8u);
             let lit = n_lights > 0u && shading != 0u;
@@ -539,10 +737,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 mm.exponent = sf(s, 7u);
                 mm.blinn = shading == 2u;
                 var nrm = unit_or(tri_normal(t, b), vec3<f32>(0.0, 0.0, 1.0));
-                if ((sflags & 32u) != 0u && dot(nrm, view) < 0.0) { nrm = -nrm; }
+                if ((sflags & S_TWO_SIDED) != 0u && dot(nrm, view) < 0.0) { nrm = -nrm; }
                 mm.n = nrm;
                 mm.view = view;
                 mm.p = p;
+                mm.receives = (sflags & S_RECEIVES) != 0u;
                 var em = emission;
                 var dif = vec3<f32>(0.0);
                 var spe = vec3<f32>(0.0);
@@ -555,6 +754,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                         dif += one.diffuse;
                         spe += one.specular;
                         amb += one.ambient;
+                        lost += one.lost;
                         let node = lu(li, 2u);
                         if ((flags & LIGHTS) != 0u && !holdout && node > 0u) {
                             sums.lights[node - 1u] += (one.diffuse + one.specular + one.ambient) * a * k;
@@ -562,6 +762,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     }
                 }
                 parts = array<vec3<f32>, 4>(dif * a, spe * a, em * a, amb * a);
+                lost *= a;
                 color = vec4<f32>(parts[0] + parts[1] + parts[2] + parts[3], a);
             }
             if (color.a > 0.0) { see(select(1u, 0u, color.a >= 0.5), hit); }
@@ -575,6 +776,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 acc += color * k;
                 if ((flags & ANY_PART) != 0u) {
                     for (var c = 0u; c < 4u; c++) { sums.parts[c] += parts[c] * k; }
+                    sums.shadow += lost * k;
                 }
             }
             if (acc.a + held >= 1.0) { break; }
@@ -607,6 +809,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
     }
+    if ((flags & SHADOW) != 0u) {
+        for (var ch = 0u; ch < 3u; ch++) {
+            let at = base + P.counts.w + ch;
+            out_extra[at] = out_extra[at] + sums.shadow[ch];
+        }
+    }
     if ((flags & MATTES) != 0u) {
         for (var o = 0u; o < P.counts.z; o++) {
             let at = base + P.slots.z + o;
@@ -626,4 +834,39 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (overflowed) { depth = 0xffffffffu; }
         out_hits[3u * pixels + px / 4u][px % 4u] = depth;
     }
+}
+
+// ---- shadow maps --------------------------------------------------------
+
+// The map being drawn (P.cell.w is its index; P.size its texels across,
+// P.tables.x where its tiles start in `bins`).
+@group(1) @binding(0) var<storage, read_write> map_out: array<f32>;
+
+// Map P.cell.w's texel: the nearest caster's distance from the light, as
+// shadow.rs's `Map::draw` finds it (casters only, holdouts not; a texel's
+// middle; any texture alpha above 0 casts).
+@compute @workgroup_size(16, 16)
+fn shadow_map(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let res = P.size.x;
+    if (gid.x >= res || gid.y >= res) { return; }
+    let m = P.cell.w;
+    let tile = (gid.y / TILE) * P.size.w + gid.x / TILE;
+    let first = bins[P.tables.x + tile];
+    let last = bins[P.tables.x + tile + 1u];
+    let x = i32(gid.x);
+    let y = i32(gid.y);
+    let q = vec2<f32>(f32(gid.x) + 0.5, f32(gid.y) + 0.5);
+    var d = FAR_AWAY;
+    for (var k = first; k < last; k++) {
+        let t = bins[k];
+        if (x < ti(t, 14u) || x >= ti(t, 16u) || y < ti(t, 15u) || y >= ti(t, 17u)) { continue; }
+        let s = tu(t, 10u);
+        let f = su(s, 12u);
+        if ((f & S_CASTS) == 0u || (f & S_HOLDOUT) != 0u) { continue; }
+        let c = cover(t, q);
+        if (c.x < 0.0) { continue; }
+        if (surface_color(s, tri_uv(t, c.yzw), 0.0).a <= 0.0) { continue; }
+        d = min(d, map_key(m, tri_world(t, c.yzw)));
+    }
+    map_out[mu(m, 24u) + gid.y * res + gid.x] = d;
 }

@@ -1,7 +1,7 @@
 //! The GPU renderer against the CPU one on the same scenes (D8 of
 //! docs/gpu-plan.md): skipped without a GPU.
 
-use super::check::{busy, differences, nearest_pass, scene_of, ORTHO, PERSPECTIVE};
+use super::check::{busy, busy_shadowed, differences, moving, nearest_pass, scene_at, scene_of, ORTHO, PERSPECTIVE};
 use super::*;
 
 thread_local! {
@@ -188,4 +188,74 @@ fn render_passes_goes_through_the_gpu() {
     assert!(differences(&cpu, &through).iter().all(|(_, mean, off)| *mean <= 1e-2 && *off <= 0.01));
     let off = with_gpu(|| crate::gpu::cpu_only(|| super::super::render_passes(&scene, &cam, format, 2, None, passes)));
     assert_eq!(off.pixels, cpu.pixels, "the CPU when the GPU is off");
+}
+
+/// Shadows from every kind of light (a soft point light, a spot with a
+/// wider filter, a sun, an area light's cube maps) match the CPU's, and so
+/// do the shadow and per-light passes.
+#[test]
+fn shadows_match_the_cpu_render() {
+    let Some(gpu) = crate::gpu::test_device() else {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    };
+    let (scene, cam) = scene_of(&busy_shadowed(PERSPECTIVE));
+    let format = Size { width: 320, height: 180 };
+    compare(&gpu, &scene, &cam, format, 2, all_passes(), None);
+    // (There are shadows: a good share of pixels lose light to them.)
+    let surfs = super::super::surfaces(&scene);
+    let passes = Passes::from_names(["shadow"]);
+    let cpu = crate::gpu::cpu_only(|| super::super::draw_passes(&surfs, &scene.lights, &[], &cam, format, 1, passes, None, None, None));
+    let out = draw(&gpu, &surfs, &scene.lights, &[], &cam, format, 1, passes, None, None).unwrap().unwrap();
+    let shadowed = |img: &Image| img.plane("shadow.R").unwrap().data.iter().filter(|v| **v > 0.02).count();
+    assert!(shadowed(&cpu) > 320 * 180 / 10, "{} shadowed pixels", shadowed(&cpu));
+    assert!(shadowed(&cpu).abs_diff(shadowed(&out)) < 320 * 180 / 200, "{} against {}", shadowed(&cpu), shadowed(&out));
+    let (scene, cam) = scene_of(&busy_shadowed(ORTHO));
+    compare(&gpu, &scene, &cam, format, 1, Passes::from_names(["depth", "shadow"]), None);
+}
+
+/// A caster that lets some light through casts a layered shadow: the
+/// CPU's still.
+#[test]
+fn see_through_casters_render_on_the_cpu() {
+    let Some(gpu) = crate::gpu::test_device() else {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    };
+    let (scene, cam) = scene_of(&busy_shadowed(PERSPECTIVE).replace(r#", "casts_shadows": false"#, ""));
+    let surfs = super::super::surfaces(&scene);
+    let format = Size { width: 64, height: 36 };
+    assert!(draw(&gpu, &surfs, &scene.lights, &[], &cam, format, 1, Passes::DEPTH, None, None).unwrap().is_none());
+}
+
+/// Motion blur added up on the GPU (each pixel's times jittered by its
+/// cell, or not; with shadows; the light passes and mattes too) matches
+/// the CPU's render of each time, averaged.
+#[test]
+fn motion_blur_adds_up_on_the_gpu_as_on_the_cpu() {
+    if crate::gpu::test_device().is_none() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let format = Size { width: 160, height: 90 };
+    for (graph, passes, jitter) in [
+        (moving(&busy(PERSPECTIVE)), Passes::from_names(["depth", "mattes", "diffuse", "specular", "lights"]), true),
+        (moving(&busy(PERSPECTIVE)), Passes::DEPTH, false),
+        (moving(&busy_shadowed(PERSPECTIVE)), Passes::from_names(["depth", "shadow"]), true),
+    ] {
+        let ((s0, cam), (s1, _)) = (scene_at(&graph, 4), scene_at(&graph, 5));
+        let blur = super::super::Blur { times: super::super::Blur::times(0.0, 0.5, 6), frames: vec![(0, &*s0, cam.clone()), (1, &*s1, cam.clone())], jitter };
+        let frames: Vec<(i64, &Scene)> = vec![(0, &s0), (1, &s1)];
+        let mixed = Passes { depth: false, ..passes };
+        assert!(with_gpu(|| blurred(&s0, &cam, format, 2, mixed, &blur, &frames)).is_some(), "on the GPU");
+        let cpu = crate::gpu::cpu_only(|| super::super::render_blurred(&s0, &cam, format, 2, None, passes, None, Some(&blur)));
+        let out = with_gpu(|| super::super::render_blurred(&s0, &cam, format, 2, None, passes, None, Some(&blur)));
+        for (name, mean, off) in differences(&cpu, &out) {
+            let (most_mean, most_off) = super::check::allowed(&name);
+            assert!(mean <= most_mean && off <= most_off, "jitter {jitter}, {name}: mean {mean:.2e}, {:.3} % of values off", off * 100.0);
+        }
+        // (It's blurred: the moving sphere smears.)
+        let still = crate::gpu::cpu_only(|| super::super::render_passes(&s0, &cam, format, 2, None, passes));
+        assert!(differences(&still, &out)[0].1 > 1e-3);
+    }
 }

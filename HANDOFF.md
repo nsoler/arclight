@@ -30,6 +30,14 @@ done), `docs/help.md` (the in-app help) and
   "Dropped TexturesDelta with 1 unapplied deltas" (egui 0.37) now end
   `ctx.run_ui(..)` with `.drop_without_applying_deltas()` instead of
   `let _ =`; all GUI tests pass. **Tip:** do the same in new egui tests.
+- **0.12.3, GPU G5 part 1** (Dev2): shadows and motion-blur
+  accumulation on the GPU. `shadow::plan` is the single source of map
+  placement for both renderers; `gpu::blurred` is tried first in
+  `render_blurred` (falls back to the per-time loop). Still CPU: shadow
+  casters that let light through; blur frames with sprites, points,
+  splats or a background with planes. 4K MB8 + shadows 0.87 s (plan
+  goal < 0.3 s; next lever: share shadow maps between nearby times).
+  Particles (G5 part 2) next.
 - **0.12.2, GPU G4** (Dev2): `src/render3d/gpu/` is a compute
   rasterizer copying the CPU's per-sample algorithm (D6 in the plan, as
   rewritten), dispatched at the top of `draw_passes`; `Slots`,

@@ -13,6 +13,9 @@ they come up and strike them (or delete them) when they ship.
       gpu` names the GPU (Metal; "unified memory" on the M4 Pro), `arclight
       gpu --check` passes, and `cargo test --release` there (the GPU tests
       run on Metal)
+- [ ] 0.12.3 (GPU G5 part 1): a Scanline Render with shadows and motion
+      blur renders in about a second at 4K with the GPU on (it took
+      30 s) and looks the same as with it off; on the Macs too
 - [ ] 0.12.2 (GPU G4): a Scanline Render without shadows renders much
       faster with the GPU on, and looks the same as with it off (toggle
       in Preferences); the 3D view orbits more smoothly (Lit and Solid);
