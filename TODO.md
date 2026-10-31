@@ -124,6 +124,26 @@ Phase 10: 0.10.x on branch `wip-ns-splats` (started 0.10.0).
 Ends in a **beta** (About box, release titles, GitHub pre-releases) for
 a public release once tested.
 
+- [ ] **The beta step** (when the user says phase 11 is tested), one
+      version: rename to **ArclightVFX Compositor** (user, 2026-10-30;
+      short name **ArclightVFX**) and switch to beta.
+      - Renamed: window title, About box (with "Beta"), Help window title,
+        the crash dialog's text, the Linux launcher entry (`Name=`, both
+        install.sh files), the macOS app (`ArclightVFX.app`,
+        CFBundleName / DisplayName, the DMG volume name), asset names
+        (`ArclightVFX-<ver>-universal.dmg`,
+        `arclightvfx-<ver>-linux-x86_64.tar.gz`), README / help /
+        CHANGELOG headings, MCP serverInfo's title, release titles
+        ("ArclightVFX 0.11.n (beta)", GitHub releases marked pre-release).
+      - Kept, so nothing breaks for existing users and scripts: the
+        binaries `arclight` / `arclight-gui`, the Python package `arclt`,
+        the settings / state folders (`~/.config/arclight`, …), the MCP
+        server id `arclight`, the macOS bundle id
+        `com.github.nsoler.arclight`, the crate names, the GitHub repo
+        (renaming it later is possible: GitHub redirects).
+      - Mac users delete the old `Arclight.app` once (the release notes
+        say so).
+
 - [x] Crash reporting (0.11.1)
 - [x] Plugin process isolation (0.11.2)
 - [ ] Long node errors (a plugin crash with its report path) are clipped
