@@ -92,7 +92,8 @@ fn main() -> Result<()> {
     if std::env::args_os().nth(1).is_some_and(|a| a == "plugin-host") {
         arclight::crash::install_host("plugin-host");
         let library = std::env::args_os().nth(2).map(PathBuf::from).unwrap_or_default();
-        std::process::exit(arclight::plugin::run_host(&library));
+        // (Out without exit-time teardown: see `gpu::exit_process`.)
+        arclight::gpu::exit_process(arclight::plugin::run_host(&library));
     }
     // Crash reports (kept on this machine, see arclight::crash).
     arclight::crash::install("arclight");

@@ -88,7 +88,10 @@ fn _arclt(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let path: Vec<String> = sys.getattr("path")?.extract().unwrap_or_default();
     if let Some(exe) = exe {
         let path = serde_json::to_string(&path).unwrap_or_else(|_| "[]".into());
-        let code = format!("import sys; sys.path[:0] = {path}; from arclt import _arclt; sys.exit(_arclt._plugin_host(sys.argv[1]))");
+        // A process of its own for the host (never the user's interpreter):
+        // it leaves with os._exit after flushing, without the exit-time
+        // teardown (see arclight::gpu::exit_process).
+        let code = format!("import os, sys; sys.path[:0] = {path}; from arclt import _arclt; code = _arclt._plugin_host(sys.argv[1]); sys.stdout.flush(); sys.stderr.flush(); os._exit(code)");
         arclight::plugin::set_host_command(vec![exe.into(), "-c".into(), code.into()]);
     }
     arclight::plugin::init();

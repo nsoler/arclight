@@ -15,6 +15,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.8 — 2026-10-31
+
+- Plugin helper processes end without the exit-time teardown, as the
+  command line and the GUI do: a crash as they ended, which left core
+  dumps after every session with a crashing plugin, is gone. (The
+  Python plugin host, a process of its own, does the same; the user's
+  own interpreter is never affected.)
+
 ## 0.12.7 — 2026-10-31
 
 - GPU: **motion blur over particle sprites adds up on the GPU too**: at
