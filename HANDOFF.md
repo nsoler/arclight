@@ -1,8 +1,10 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-31, session 12: **phase 12 (GPU acceleration,
-`docs/gpu-plan.md`) on branch `wip-ns-gpu`, 0.12.x; beta release
-v0.12.17**; phase 11 (engine and platform: crash reporting, plugin
+Last updated 2026-10-31, session 12: **phase 13 (procedural geometry,
+GeoNodes-like, `docs/geo-plan.md`) on branch `wip-ns-geo`, 0.13.x, from
+0.13.0 (the plan)**; phase 12 (GPU acceleration, `docs/gpu-plan.md`)
+ended at 0.12.19 (beta v0.12.19, with the macOS DMG) on `wip-ns-gpu`,
+now frozen; phase 11 (engine and platform: crash reporting, plugin
 process isolation, beta v0.11.3) ended at 0.11.5 on `wip-ns-engine`,
 now frozen; phase 10 (Gaussian splats
 and follow-ups) ended at 0.10.37 (v0.10.37) on `wip-ns-splats`, now
@@ -15,6 +17,13 @@ done), `docs/help.md` (the in-app help) and
 
 ## Start here (next session)
 
+- **0.13.0 (2026-10-31): phase 13 begins** on `wip-ns-geo` with
+  `docs/geo-plan.md` (GeoNodes-like geometry: D1 scene wires, D2
+  per-element expressions, D4 instancing; P1–P7; suggested first slice
+  P1 + Scatter + Attribute Set + Instance on Points + Fit Plane). The
+  user's two UI asks of the same day go first: drop a dragged wire on a
+  node's body to connect it (Dev1) and the 3D gizmo starting as Move,
+  switched by G / R / S (Dev2).
 - **In flight (2026-10-31, after 0.12.19):** Dev1 (wD:p9): free, awaiting
   the next task. Dev2: profiling many-sample area-light shadows (20–34 s
   a 4K frame at 16 samples, even on the GPU), proposal before code. Macs:

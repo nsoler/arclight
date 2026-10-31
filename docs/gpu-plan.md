@@ -1,6 +1,6 @@
 # GPU plan: wgpu compute and rendering
 
-Status: **approved** by the user 2026-10-30 (answers to Q1–Q5 at the
+Status: **phase 12 done** (0.12.0–0.12.19, released as v0.12.19, 2026-10-31); area-light shadow speed-ups and Metal checks carried into phase 13. Was **approved** by the user 2026-10-30 (answers to Q1–Q5 at the
 end; the Supervisor's additions marked "(Supervisor)").
 Phase 12: **0.12.x** on branch **`wip-ns-gpu`** (user-approved
 2026-10-30). Written by Dev2 with Dev1's prep notes folded in (where we

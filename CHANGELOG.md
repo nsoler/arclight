@@ -2,9 +2,11 @@
 
 ArclightVFX Compositor (Arclight until 0.11.2) is **beta** software since
 0.11.3 (alpha before): versions are `0.<phase>.<increment>`. The
-middle number is the development phase the project is in (11 now:
-engine and platform (crash reporting, plugin process isolation), on
-branch `wip-ns-engine`, ending in a beta for a public release; phase 10,
+middle number is the development phase the project is in (13 now:
+procedural geometry, on branch `wip-ns-geo`, see `docs/geo-plan.md`;
+phase 12, GPU acceleration, ran 0.12.0–0.12.19 on `wip-ns-gpu`; phase 11,
+engine and platform (crash reporting, plugin process isolation), ran
+0.11.0–0.11.5 on `wip-ns-engine`, ending in the first beta; phase 10,
 Gaussian splats and follow-ups, ran 0.10.0–0.10.37 on `wip-ns-splats`;
 phase 9, the 3D viewport, ran 0.9.0–0.9.68 on `wip-ns-3dwork`), and every feature or change that
 ships bumps the last number (0.9.1, 0.9.2, … 0.9.nn). Phase 9 started
@@ -14,6 +16,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 `plugins/example/Cargo.toml`, kept in step) and shows in the GUI's Help
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
+
+## 0.13.0 — 2026-10-31
+
+- Phase 13 begins: procedural geometry nodes (GeoNodes-like: scatter,
+  attributes, instancing, mesh and curve ops), planned in
+  `docs/geo-plan.md`. No change to the app yet.
 
 ## 0.12.19 — 2026-10-31
 
