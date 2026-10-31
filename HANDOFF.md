@@ -30,6 +30,19 @@ done), `docs/help.md` (the in-app help) and
   "Dropped TexturesDelta with 1 unapplied deltas" (egui 0.37) now end
   `ctx.run_ui(..)` with `.drop_without_applying_deltas()` instead of
   `let _ =`; all GUI tests pass. **Tip:** do the same in new egui tests.
+- **0.12.4, GPU G3 + exit + crash handler** (Dev1): `ops::WarpMap` /
+  `keyer_plan` / `resample_layout` are the single source for CPU and GPU
+  maths; `gpu::ops::eval` takes a `CpuInput` closure for ops needing a
+  CPU view; warp tolerance `check::WARP_SHARE`; `Evaluator::run_all`
+  reads back only what CPU ops need. **Exits go through
+  `gpu::exit_process`** (CLI, GUI: wait for idle, flush, `_exit`; the
+  device is never dropped); Python's atexit hook only waits (never
+  `_exit`). `tests/cli_exit.rs` guards "everything is written before
+  _exit". crash.rs native handler: static buffers (Rust threads' signal
+  stacks are 8 KiB), `alarm(3)`, re-entry guard, report before the
+  backtrace; `crash::tests::crashes_leave_a_report` covers panic /
+  worker / segv / thread / wild jump / stuck. Open: `arclight mcp --http`
+  SIGINT / SIGTERM handler (Dev1, next).
 - **0.12.3, GPU G5 part 1** (Dev2): shadows and motion-blur
   accumulation on the GPU. `shadow::plan` is the single source of map
   placement for both renderers; `gpu::blurred` is tried first in

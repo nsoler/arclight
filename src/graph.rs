@@ -591,6 +591,26 @@ impl Evaluator {
         self.evaluate_order(&index, &order, &order, ctx, &graph.project)
     }
 
+    /// Render every node, reading none back that nothing on the CPU
+    /// needed (results may stay on the GPU): each node's id, frame and
+    /// data window, in evaluation order. For renders that only want the
+    /// writes done (`arclight render`).
+    pub fn run_all(&mut self, graph: &Graph, ctx: &EvalContext) -> Result<Vec<(String, Size, IRect)>, NodeError> {
+        let index = graph.index()?;
+        let order = Graph::order(&index, graph.nodes.iter().map(|n| n.id.clone()))?;
+        self.evaluate_order(&index, &order, &[], ctx, &graph.project)?;
+        Ok(order
+            .into_iter()
+            .map(|id| {
+                let (format, window) = match &self.cache[&id].1 {
+                    Res::Cpu(img) => (img.format, img.window()),
+                    Res::Gpu(r) => r.shape(),
+                };
+                (id, format, window)
+            })
+            .collect())
+    }
+
     /// Run `order` and read back the results of `wanted`. Results never
     /// fail because of the GPU: when one can't be read back, the GPU's
     /// results are dropped and it all runs again on the CPU.
@@ -878,7 +898,7 @@ impl Evaluator {
         }
         let gpu = gpu::get()?;
         let on_gpu = node.inputs.iter().any(|d| matches!(self.cache.get(d), Some((_, Res::Gpu(_)))));
-        match gpu::ops::preference(&node.op) {
+        match gpu::ops::preference(&node.op, params) {
             Prefer::Never => return None,
             Prefer::WithResidentInput if !on_gpu => return None,
             _ => {}
@@ -916,7 +936,9 @@ impl Evaluator {
             inputs.push(Some(r));
         }
         let refs: Vec<Option<&GpuImage>> = inputs.iter().map(|r| r.as_ref().map(|r| &r.image)).collect();
-        match gpu::ops::eval(&gpu, &node.op, params, &refs) {
+        // (A Keyer reads its plate back to estimate the screen color.)
+        let cpu = |i: usize| inputs.get(i).and_then(Option::as_ref).ok_or_else(|| anyhow::anyhow!("input {i} is not connected"))?.cpu();
+        match gpu::ops::eval(&gpu, &node.op, params, &refs, &cpu) {
             Ok(out) => out.map(|out| Res::Gpu(Arc::new(Resident::new(gpu, out)))),
             Err(e) => {
                 failed(e);
@@ -1529,8 +1551,8 @@ mod tests {
         }
         let on_gpu = |ev: &Evaluator, id: &str| matches!(ev.cache[id].1, Res::Gpu(_));
         assert!(on_gpu(&ev, "soft") && on_gpu(&ev, "look") && on_gpu(&ev, "glow") && on_gpu(&ev, "comp") && on_gpu(&ev, "dim"));
-        // Transform (no GPU path yet) and the checkerboard ran on the CPU;
-        // their results were uploaded for the blurs and kept there.
+        // The checkerboard ran on the CPU; its result was uploaded for the
+        // blur and kept there.
         assert!(on_gpu(&ev, "turn") && on_gpu(&ev, "checker"));
         // Keys: GPU ops (and what's below them) apart, others the same.
         let key = |id: &str| Evaluator::key(&g, id, &ctx).unwrap();

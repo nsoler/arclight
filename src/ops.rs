@@ -339,7 +339,7 @@ const CHANNEL_SOURCES: &[&str] = &[
     "A red", "A green", "A blue", "A alpha", "B red", "B green", "B blue", "B alpha", "zero", "one",
 ];
 pub(crate) const SWITCH_PORTS: usize = 5;
-const KEYER_OUTPUTS: &[&str] = &["keyed", "matte", "despill only"];
+pub(crate) const KEYER_OUTPUTS: &[&str] = &["keyed", "matte", "despill only"];
 
 const SIZE: ParamKind = ParamKind::Int { min: 1, max: 16384 };
 /// A source's frame size: 0 takes the project's format.
@@ -2252,37 +2252,106 @@ struct Transform {
 /// window, or of its frame when it holds no data (pixel i spanning i..i+1,
 /// as shapes and the viewer's handles count).
 pub fn transform_pivot(src: &Image) -> [f32; 2] {
-    let w = src.window();
-    let r = if w.is_empty() { src.frame() } else { w };
+    pivot(src.format, src.window())
+}
+
+/// [`transform_pivot`] of an image of frame `format` holding `window`.
+fn pivot(format: Size, w: IRect) -> [f32; 2] {
+    let r = if w.is_empty() { IRect::frame(format) } else { w };
     [(r.x0 + r.x1) as f32 / 2.0, (r.y0 + r.y1) as f32 / 2.0]
 }
 
 /// Affine transform with bilinear resampling. Uses inverse mapping: for each
 /// output pixel we find the source location and sample it.
 fn transform(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
-    let p: Transform = parse(params, "transform")?;
     let src = input(inputs, 0, "transform")?;
+    let (map, window) = transform_map(&parse(params, "transform")?, src.format, src.window());
+    Ok(warped(src, &map, window))
+}
+
+/// A Transform's [`WarpMap`] and output window.
+fn transform_map(p: &Transform, format: Size, src: IRect) -> (WarpMap, IRect) {
     // About the pivot, given like a shape's center (pixel i spans i..i+1);
     // here pixel centers are on integers.
-    let [cx, cy] = p.center.unwrap_or_else(|| transform_pivot(src)).map(|v| v - 0.5);
+    let [cx, cy] = p.center.unwrap_or_else(|| pivot(format, src)).map(|v| v - 0.5);
     let theta = -p.rotate.to_radians(); // inverse rotation
     let (s, c) = theta.sin_cos();
     let sx = if p.scale[0] == 0.0 { 1e-6 } else { p.scale[0] };
     let sy = if p.scale[1] == 0.0 { 1e-6 } else { p.scale[1] };
     // Forward: scale, rotate, then translate.
-    let window = moved_window(src.window(), src.format, |[x, y]| {
+    let window = moved_window(src, format, |[x, y]| {
         let (dx, dy) = ((x - cx) * sx, (y - cy) * sy);
         Some([dx * c + dy * s + cx + p.translate[0], -dx * s + dy * c + cy + p.translate[1]])
     });
-    // Undo translate, then rotate+scale about center (inverse).
-    let inverse = |[ox, oy]: [f32; 2]| {
-        let dx = ox - p.translate[0] - cx;
-        let dy = oy - p.translate[1] - cy;
-        Some([(dx * c - dy * s) / sx + cx, (dx * s + dy * c) / sy + cy])
-    };
-    let mut out = generate(src.format, window, |ox, oy| sample_warped(src, ox, oy, inverse));
+    (WarpMap::Turn { translate: p.translate, center: [cx, cy], sin: s, cos: c, scale: [sx, sy] }, window)
+}
+
+/// Where a warp's output pixels read the source (frame positions, pixel
+/// centers on integers), shared by the CPU ops and their GPU paths.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum WarpMap {
+    /// Transform: undo the translation, then turn (by `sin` / `cos` of the
+    /// inverse angle) and scale back about `center`.
+    Turn { translate: [f32; 2], center: [f32; 2], sin: f32, cos: f32, scale: [f32; 2] },
+    /// Tracker: an affine map in track coordinates (pixel centers at +0.5).
+    Affine(track::Affine),
+    /// Corner Pin: a homography in track coordinates; None behind its
+    /// horizon.
+    Perspective(track::Homography),
+    /// Lens Distort: through the lens to the plate (`to_plate`, undistorting)
+    /// or back; None where the lens folds.
+    Lens { lens: geom::Distortion, to_plate: bool },
+}
+
+impl WarpMap {
+    #[inline]
+    pub(crate) fn inverse(&self, [x, y]: [f32; 2]) -> Option<[f32; 2]> {
+        match self {
+            WarpMap::Turn { translate, center: [cx, cy], sin: s, cos: c, scale: [sx, sy] } => {
+                // Undo translate, then rotate+scale about center (inverse).
+                let dx = x - translate[0] - cx;
+                let dy = y - translate[1] - cy;
+                Some([(dx * c - dy * s) / sx + cx, (dx * s + dy * c) / sy + cy])
+            }
+            WarpMap::Affine(m) => {
+                let [u, v] = track::apply(m, [x + 0.5, y + 0.5]);
+                Some([u - 0.5, v - 0.5])
+            }
+            WarpMap::Perspective(h) => track::project(h, [x + 0.5, y + 0.5]).map(|[u, v]| [u - 0.5, v - 0.5]),
+            WarpMap::Lens { lens, to_plate } => {
+                let q = [x as f64 + 0.5, y as f64 + 0.5];
+                let r = if *to_plate { Some(lens.distort(q)) } else { lens.undistort(q) };
+                r.map(|[u, v]| [(u - 0.5) as f32, (v - 0.5) as f32])
+            }
+        }
+    }
+}
+
+/// `src` through `map` over `window`: [`sample_warped`] for the pixels,
+/// nearest for the planes.
+pub(crate) fn warped(src: &Image, map: &WarpMap, window: IRect) -> Image {
+    let inverse = |p: [f32; 2]| map.inverse(p);
+    let mut out = generate(src.format, window, |x, y| sample_warped(src, x, y, inverse));
     out.carry_planes(src, |x, y| inverse([x as f32, y as f32]));
-    Ok(out)
+    out
+}
+
+/// A warp op's map and output window (`transform`, `corner_pin`,
+/// `tracker`, `lens_distort`); None when it passes its input on as it is
+/// (a Tracker showing its input).
+/// `format` and `window` are the input's frame and data window.
+#[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+pub(crate) fn warp_map(op: &str, params: &Value, format: Size, window: IRect) -> Result<Option<(WarpMap, IRect)>> {
+    Ok(Some(match op {
+        "transform" => transform_map(&parse(params, op)?, format, window),
+        "corner_pin" => corner_pin_map(&parse(params, op)?, format, window)?,
+        "tracker" => match tracker_matrix(params)? {
+            Some(m) => affine_map(format, window, m),
+            None => return Ok(None),
+        },
+        "lens_distort" => lens_map(&parse(params, op)?, format, window)?,
+        other => bail!("'{other}' is not a warp"),
+    }))
 }
 
 /// The most taps a side [`sample_warped`] averages: shrinking by more than
@@ -2333,11 +2402,20 @@ fn sample_warped(src: &Image, ox: i32, oy: i32, inverse: impl Fn([f32; 2]) -> Op
 /// frame: `params` carry each track's position now (`track<i>`) and at the
 /// reference frame (`ref<i>`, added by [`resolve_params`]).
 fn tracker(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
+    let src = input(inputs, 0, "tracker")?;
+    Ok(match tracker_matrix(params)? {
+        Some(m) => warp(src, &m),
+        None => src.clone(),
+    })
+}
+
+/// Where a Tracker's output samples its input (track coordinates); None
+/// when it shows its input as it is.
+fn tracker_matrix(params: &Value) -> Result<Option<track::Affine>> {
     let output = params.get("output").and_then(Value::as_str).unwrap_or("input");
     if output == "input" {
-        return Ok(input(inputs, 0, "tracker")?.clone());
+        return Ok(None);
     }
-    let src = input(inputs, 0, "tracker")?;
     let p = params_with_defaults("tracker", params);
     let now = track::positions(&p, 0);
     let refs: Vec<_> = (1..=now.len())
@@ -2356,12 +2434,11 @@ fn tracker(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     // Reference → now. A match-move moves the image along with the
     // tracks, so each output pixel samples where it came from.
     let m = track::solve_tracks(&refs, &now, &ref_warps, &track::warps(&p, 0), kind).context("no tracks enabled")?;
-    let sample_at = match output {
+    Ok(Some(match output {
         "match-move" => track::invert(&m),
         "stabilize" => m,
         other => bail!("unknown tracker output '{other}'"),
-    };
-    Ok(warp(src, &sample_at))
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -2383,36 +2460,38 @@ struct CornerPin {
 /// Perspective warp taking the `from` quad onto the `to` quad. Output pixels
 /// that map from behind the source's horizon stay transparent.
 fn corner_pin(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
-    let p: CornerPin = parse(params, "corner_pin")?;
     let src = input(inputs, 0, "corner_pin")?;
+    let (map, window) = corner_pin_map(&parse(params, "corner_pin")?, src.format, src.window())?;
+    Ok(warped(src, &map, window))
+}
+
+/// A Corner Pin's [`WarpMap`] and output window.
+fn corner_pin_map(p: &CornerPin, format: Size, src: IRect) -> Result<(WarpMap, IRect)> {
     let to = [p.to1, p.to2, p.to3, p.to4];
     let from = [p.from1, p.from2, p.from3, p.from4];
     // Each output pixel reads where it came from: to → from.
     let h = track::homography(&to, &from).context("corner_pin: three of the corners are in a line")?;
     let forward = track::homography(&from, &to).context("corner_pin: three of the corners are in a line")?;
     // In track coordinates pixel centers sit at +0.5.
-    let window = moved_window(src.window(), src.format, |[x, y]| track::project(&forward, [x + 0.5, y + 0.5]).map(|[u, v]| [u - 0.5, v - 0.5]));
-    let inverse = |[x, y]: [f32; 2]| track::project(&h, [x + 0.5, y + 0.5]).map(|[u, v]| [u - 0.5, v - 0.5]);
-    let mut out = generate(src.format, window, |x, y| sample_warped(src, x, y, inverse));
-    out.carry_planes(src, |x, y| inverse([x as f32, y as f32]));
-    Ok(out)
+    let window = moved_window(src, format, |[x, y]| track::project(&forward, [x + 0.5, y + 0.5]).map(|[u, v]| [u - 0.5, v - 0.5]));
+    Ok((WarpMap::Perspective(h), window))
 }
 
 /// Resample `src`: each output pixel center `o` reads `src` at `m(o)`.
 fn warp(src: &Image, m: &track::Affine) -> Image {
-    let forward = track::invert(m);
-    let window = moved_window(src.window(), src.format, |[x, y]| {
+    let (map, window) = affine_map(src.format, src.window(), *m);
+    warped(src, &map, window)
+}
+
+/// [`warp`]'s map and output window.
+fn affine_map(format: Size, src: IRect, m: track::Affine) -> (WarpMap, IRect) {
+    let forward = track::invert(&m);
+    let window = moved_window(src, format, |[x, y]| {
         let [u, v] = track::apply(&forward, [x + 0.5, y + 0.5]);
         Some([u - 0.5, v - 0.5])
     });
     // Track coordinates put pixel centers at +0.5; `sample_bilinear` on integers.
-    let inverse = |[x, y]: [f32; 2]| {
-        let [u, v] = track::apply(m, [x + 0.5, y + 0.5]);
-        Some([u - 0.5, v - 0.5])
-    };
-    let mut out = generate(src.format, window, |x, y| sample_warped(src, x, y, inverse));
-    out.carry_planes(src, |x, y| inverse([x as f32, y as f32]));
-    out
+    (WarpMap::Affine(m), window)
 }
 
 // ---------------------------------------------------------------------------
@@ -2770,17 +2849,17 @@ fn keymix(inputs: &[Option<&Image>]) -> Result<Image> {
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-struct Keyer {
+pub(crate) struct Keyer {
     /// None: estimate it from the image.
     #[serde(default)]
-    screen: Option<[f32; 4]>,
-    balance: f32,
-    clip_black: f32,
-    clip_white: f32,
-    despill: f32,
-    shrink_grow: f32,
-    softness: f32,
-    output: String,
+    pub(crate) screen: Option<[f32; 4]>,
+    pub(crate) balance: f32,
+    pub(crate) clip_black: f32,
+    pub(crate) clip_white: f32,
+    pub(crate) despill: f32,
+    pub(crate) shrink_grow: f32,
+    pub(crate) softness: f32,
+    pub(crate) output: String,
 }
 
 /// A screen color's dominant channel and the other two.
@@ -2835,8 +2914,9 @@ fn keyer(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let src = input(inputs, 0, "keyer")?;
     let plate = inputs.get(1).copied().flatten();
     let screen = p.screen.unwrap_or_else(|| estimate_screen(src));
-    let output = KEYER_OUTPUTS.iter().position(|o| *o == p.output).ok_or_else(|| anyhow!("unknown output '{}'", p.output))?;
-    let span = (p.clip_white - p.clip_black).max(1e-4);
+    let mut windows = vec![src.window()];
+    windows.extend(plate.map(Image::window));
+    let plan = keyer_plan(&p, src.format, &windows)?;
     // At (x, y): the matte (the keyed image's alpha) and the despilled
     // straight color.
     let key = |x: i32, y: i32| -> (f32, Rgba) {
@@ -2848,48 +2928,79 @@ fn keyer(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
         let ds = s[pc] - others(s, q, r, p.balance);
         let dc = c[pc] - others(c, q, r, p.balance);
         let raw = if ds > 1e-6 { (1.0 - dc / ds).clamp(0.0, 1.0) } else { 1.0 };
-        let alpha = ((raw - p.clip_black) / span).clamp(0.0, 1.0);
+        let alpha = ((raw - p.clip_black) / plan.span).clamp(0.0, 1.0);
         let mut fg = c;
         fg[pc] -= p.despill * (c[pc] - others(c, q, r, p.balance)).max(0.0);
         (alpha * px[3], fg)
     };
-    let shade = |m: f32, fg: Rgba| -> Rgba {
-        match output {
-            0 => [fg[0] * m, fg[1] * m, fg[2] * m, m],
-            1 => [m, m, m, 1.0],
-            _ => color::premultiply(fg),
-        }
+    let shade = |m: f32, fg: Rgba| keyer_shade(plan.output, m, fg);
+    let Some(region) = plan.region else {
+        // Pixel by pixel.
+        return Ok(generate(src.format, plan.window, |x, y| {
+            let (m, fg) = key(x, y);
+            shade(m, fg)
+        }));
     };
-    let mut windows = vec![src.window()];
-    windows.extend(plate.map(Image::window));
-    let data = windows.iter().fold(IRect::default(), |u, w| u.union(w));
+    let mut matte = generate(src.format, region, |x, y| [key(x, y).0; 4]);
+    morph(&mut matte, plan.grow);
+    if plan.soft > 0 {
+        // Three box passes: close to a gaussian.
+        for _ in 0..3 {
+            box_pass_h(&mut matte, plan.soft);
+            box_pass_v(&mut matte, plan.soft);
+        }
+    }
+    Ok(generate(src.format, plan.window, |x, y| shade(matte.at(x, y)[3], key(x, y).1)))
+}
+
+/// A keyed pixel as `output` (an index in [`KEYER_OUTPUTS`]) shows it,
+/// from its matte `m` and despilled straight color.
+pub(crate) fn keyer_shade(output: usize, m: f32, fg: Rgba) -> Rgba {
+    match output {
+        0 => [fg[0] * m, fg[1] * m, fg[2] * m, m],
+        1 => [m, m, m, 1.0],
+        _ => color::premultiply(fg),
+    }
+}
+
+/// How a Keyer runs (shared with its GPU path).
+pub(crate) struct KeyerPlan {
+    /// An index in [`KEYER_OUTPUTS`].
+    pub(crate) output: usize,
+    /// Clip white − clip black (never 0).
+    pub(crate) span: f32,
+    /// Shrink (< 0) or grow, pixels.
+    pub(crate) grow: f32,
+    /// Each of the three box passes' radius (0: no softness).
+    pub(crate) soft: usize,
+    /// Where the matte is made before it is shrunk, grown and softened
+    /// (the data, grown into the space around it up to the frame); None
+    /// when it's pixel by pixel.
+    pub(crate) region: Option<IRect>,
+    /// The output's data window.
+    pub(crate) window: IRect,
+}
+
+/// The plan for a Keyer whose inputs have frame `format` and data
+/// `windows` (the plate's, and the clean plate's if connected).
+pub(crate) fn keyer_plan(p: &Keyer, format: Size, windows: &[IRect]) -> Result<KeyerPlan> {
+    let output = KEYER_OUTPUTS.iter().position(|o| *o == p.output).ok_or_else(|| anyhow!("unknown output '{}'", p.output))?;
+    let span = (p.clip_white - p.clip_black).max(1e-4);
     let grow = p.shrink_grow.clamp(-50.0, 50.0);
     // Softness is how far the soft edge reaches: three box passes of a
     // third of it each (at least one pixel).
     let soft = if p.softness > 0.0 { (p.softness.min(50.0) / 3.0).round().max(1.0) as usize } else { 0 };
     if output == 2 || (grow == 0.0 && soft == 0) {
-        // Pixel by pixel.
-        let window = pointwise_window(src.format, &windows, shade(0.0, color::TRANSPARENT));
-        return Ok(generate(src.format, window, |x, y| {
-            let (m, fg) = key(x, y);
-            shade(m, fg)
-        }));
+        let window = pointwise_window(format, windows, keyer_shade(output, 0.0, color::TRANSPARENT));
+        return Ok(KeyerPlan { output, span, grow, soft, region: None, window });
     }
     // The matte over the data, grown into the space around it (up to the
     // frame), then shrunk or grown and softened.
+    let data = windows.iter().fold(IRect::default(), |u, w| u.union(w));
     let pad = grow.max(0.0).ceil() as i32 + 3 * soft as i32;
-    let region = data.expand(pad).intersect(&data.union(&IRect::frame(src.format)));
-    let mut matte = generate(src.format, region, |x, y| [key(x, y).0; 4]);
-    morph(&mut matte, grow);
-    if soft > 0 {
-        // Three box passes: close to a gaussian.
-        for _ in 0..3 {
-            box_pass_h(&mut matte, soft);
-            box_pass_v(&mut matte, soft);
-        }
-    }
-    let window = if output == 1 { region.union(&IRect::frame(src.format)) } else { region };
-    Ok(generate(src.format, window, |x, y| shade(matte.at(x, y)[3], key(x, y).1)))
+    let region = data.expand(pad).intersect(&data.union(&IRect::frame(format)));
+    let window = if output == 1 { region.union(&IRect::frame(format)) } else { region };
+    Ok(KeyerPlan { output, span, grow, soft, region: Some(region), window })
 }
 
 /// Grow (`by` > 0) or shrink a matte (in every channel) by `by` pixels:
@@ -2979,17 +3090,62 @@ struct Resize {
 /// Resample with a box filter sized to the scale when shrinking (so no
 /// pixels are skipped) and bilinear interpolation when enlarging.
 fn resize(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
-    let p: Resize = parse(params, "resize")?;
     let src = input(inputs, 0, "resize")?;
+    let (format, sx, sy) = resize_target(params, src.format)?;
+    Ok(resample(src, format, sx, sy, false))
+}
+
+/// A Resize's output frame and scale, for an input of frame `from`.
+pub(crate) fn resize_target(params: &Value, from: Size) -> Result<(Size, f32, f32)> {
+    let p: Resize = parse(params, "resize")?;
     let (w, h) = (p.width.max(1), p.height.max(1));
-    let (sx, sy) = (w as f32 / src.format.width.max(1) as f32, h as f32 / src.format.height.max(1) as f32);
+    let (sx, sy) = (w as f32 / from.width.max(1) as f32, h as f32 / from.height.max(1) as f32);
     let (sx, sy) = match p.fit.as_str() {
         "stretch" => (sx, sy),
         "fit" => (sx.min(sy), sx.min(sy)),
         "fill" => (sx.max(sy), sx.max(sy)),
         other => bail!("unknown fit '{other}'"),
     };
-    Ok(resample(src, Size { width: w, height: h }, sx, sy, false))
+    Ok((Size { width: w, height: h }, sx, sy))
+}
+
+/// Where [`resample`] puts things (shared with its GPU path).
+pub(crate) struct Resample {
+    /// The scaled image's offset in the output frame.
+    pub(crate) ox: f32,
+    pub(crate) oy: f32,
+    /// Source pixels per output pixel, and how many taps cover that span.
+    pub(crate) fx: f32,
+    pub(crate) fy: f32,
+    pub(crate) nx: usize,
+    pub(crate) ny: usize,
+    /// Where the scaled data lands (output pixels).
+    pub(crate) px0: f32,
+    pub(crate) px1: f32,
+    pub(crate) py0: f32,
+    pub(crate) py1: f32,
+    /// The output's data window.
+    pub(crate) window: IRect,
+}
+
+/// [`resample`]'s layout for a source of frame `from` holding `sw`.
+pub(crate) fn resample_layout(from: Size, sw: IRect, format: Size, sx: f32, sy: f32, hard_edges: bool) -> Resample {
+    let (w, h) = (format.width, format.height);
+    // Center the scaled image in the output frame.
+    let ox = (w as f32 - from.width as f32 * sx) / 2.0;
+    let oy = (h as f32 - from.height as f32 * sy) / 2.0;
+    // Source pixels per output pixel, and how many taps cover that span.
+    let (fx, fy) = (1.0 / sx, 1.0 / sy);
+    let (nx, ny) = (fx.ceil().max(1.0) as usize, fy.ceil().max(1.0) as usize);
+    // Where the scaled data lands (output pixels).
+    let (px0, px1) = (ox + sw.x0 as f32 * sx, ox + sw.x1 as f32 * sx);
+    let (py0, py1) = (oy + sw.y0 as f32 * sy, oy + sw.y1 as f32 * sy);
+    let window = if hard_edges {
+        IRect::new(px0.floor() as i32, py0.floor() as i32, px1.ceil() as i32, py1.ceil() as i32)
+    } else {
+        moved_window(sw, format, |[x, y]| Some([(x + 0.5) * sx + ox - 0.5, (y + 0.5) * sy + oy - 0.5]))
+    };
+    Resample { ox, oy, fx, fy, nx, ny, px0, px1, py0, py1, window }
 }
 
 /// `src` scaled by `sx` × `sy` into a frame of `format`, centered: a box
@@ -3000,22 +3156,8 @@ fn resize(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
 /// filling the frame keeps a solid border); else they fade to transparent
 /// (Resize).
 fn resample(src: &Image, format: Size, sx: f32, sy: f32, hard_edges: bool) -> Image {
-    let (w, h) = (format.width, format.height);
-    // Center the scaled image in the output frame.
-    let ox = (w as f32 - src.format.width as f32 * sx) / 2.0;
-    let oy = (h as f32 - src.format.height as f32 * sy) / 2.0;
-    // Source pixels per output pixel, and how many taps cover that span.
-    let (fx, fy) = (1.0 / sx, 1.0 / sy);
-    let (nx, ny) = (fx.ceil().max(1.0) as usize, fy.ceil().max(1.0) as usize);
+    let Resample { ox, oy, fx, fy, nx, ny, px0, px1, py0, py1, window } = resample_layout(src.format, src.window(), format, sx, sy, hard_edges);
     let sw = src.window();
-    // Where the scaled data lands (output pixels).
-    let (px0, px1) = (ox + sw.x0 as f32 * sx, ox + sw.x1 as f32 * sx);
-    let (py0, py1) = (oy + sw.y0 as f32 * sy, oy + sw.y1 as f32 * sy);
-    let window = if hard_edges {
-        IRect::new(px0.floor() as i32, py0.floor() as i32, px1.ceil() as i32, py1.ceil() as i32)
-    } else {
-        moved_window(sw, format, |[x, y]| Some([(x + 0.5) * sx + ox - 0.5, (y + 0.5) * sy + oy - 0.5]))
-    };
     let sample = |x: f32, y: f32| {
         if hard_edges && !sw.is_empty() {
             src.sample_bilinear(x.clamp(sw.x0 as f32, (sw.x1 - 1) as f32), y.clamp(sw.y0 as f32, (sw.y1 - 1) as f32))
@@ -3419,9 +3561,13 @@ struct LensDistort {
 }
 
 fn lens_distort(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
-    let p: LensDistort = parse(params, "lens_distort")?;
     let src = input(inputs, 0, "lens_distort")?;
-    let f = src.format;
+    let (map, window) = lens_map(&parse(params, "lens_distort")?, src.format, src.window())?;
+    Ok(warped(src, &map, window))
+}
+
+/// A Lens Distort's [`WarpMap`] and output window.
+fn lens_map(p: &LensDistort, f: Size, src: IRect) -> Result<(WarpMap, IRect)> {
     let center = p.center.unwrap_or([f.width as f64 / 2.0, f.height as f64 / 2.0]);
     let lens = geom::Distortion::new(p.k1, p.k2, center, f);
     let undistort = match p.mode.as_str() {
@@ -3432,16 +3578,9 @@ fn lens_distort(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     // Each output pixel reads where it came from: undistorting reads the
     // plate where the lens put it. `geom` puts pixel centers at +0.5,
     // sampling on integers.
-    let map = |to_plate: bool, [x, y]: [f32; 2]| {
-        let q = [x as f64 + 0.5, y as f64 + 0.5];
-        let r = if to_plate { Some(lens.distort(q)) } else { lens.undistort(q) };
-        r.map(|[u, v]| [(u - 0.5) as f32, (v - 0.5) as f32])
-    };
-    let inverse = |o: [f32; 2]| map(undistort, o);
-    let window = bent_window(src.window(), f, |q| map(!undistort, q));
-    let mut out = generate(f, window, |x, y| sample_warped(src, x, y, inverse));
-    out.carry_planes(src, |x, y| inverse([x as f32, y as f32]));
-    Ok(out)
+    let back = WarpMap::Lens { lens, to_plate: !undistort };
+    let window = bent_window(src, f, |q| back.inverse(q));
+    Ok((WarpMap::Lens { lens, to_plate: undistort }, window))
 }
 
 /// [`moved_window`] for a map that bends straight lines (a lens), whose

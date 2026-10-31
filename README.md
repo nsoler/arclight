@@ -235,23 +235,32 @@ reference: GPU results are tested against it within stated tolerances
 it, never at start-up. Ops move to the GPU milestone by milestone (phase
 12); until an op has a GPU path, it renders on the CPU as before.
 
-On the GPU now: **Blur** (always), and **Grade, Exposure, Saturation,
-Invert, Clamp, Premult, Unpremult, Channel Select, Switch, Dissolve,
-Keymix and Merge** (every operation but zmerge), masks and mix included.
-Those pointwise ops run on the GPU when an input is already there (after a
-Blur, say): alone they run at memory speed on the CPU, about what moving
-the image would cost. Results stay on the GPU from one GPU op to the next
-and come back only when something on the CPU needs them; past
-`gpu.cache_mb` (settings.json, default 2048) of GPU memory the least
-recently used come back to the CPU. Constant and Checkerboard, Shuffle,
-zmerge and everything else still run on the CPU. The CPU Blur costs the
-same whatever its radius (a running sum).
+On the GPU now: **Blur**, **Keyer**, **Lens Distort** and motion-blurred
+**Transform / Corner Pin / Tracker** (always); and **Grade, Exposure,
+Saturation, Invert, Clamp, Premult, Unpremult, Channel Select, Switch,
+Dissolve, Keymix, Merge** (every operation but zmerge), **Resize** and
+unblurred **Transform, Corner Pin, Tracker** when an input is already on
+the GPU: alone those run on the CPU about as fast as moving the image
+would take. Masks and mix included; a Keyer with no Screen set estimates
+it on the CPU. Results stay on the GPU from one GPU op to the next and
+come back only when something on the CPU needs them (`arclight render`
+reads back only what its writes need); past `gpu.cache_mb` (settings.json,
+default 2048) of GPU memory the least recently used come back to the CPU.
+Constant and Checkerboard, Shuffle, zmerge, shapes, Light 2D, Read's fit
+and everything else still run on the CPU. The CPU Blur costs the same
+whatever its radius (a running sum).
+
+**Scanline Render** and the 3D view's shaded preview run on the GPU too (a
+compute rasterizer that follows the CPU renderer sample for sample),
+except scenes with shadow-casting lights or splats so far; results match
+the CPU renderer within the tolerances in `docs/gpu-plan.md` (D8).
 
 ```sh
 arclight gpu                 # in use or not, and why; the adapter, backend, limits, transfer path
 arclight gpu --json          # the same as JSON
 arclight gpu --check         # self-test: every GPU path against the CPU, errors and timings
 arclight gpu --check --json  # for pasting into an issue; exit status 1 if a case fails
+arclight gpu --check --quick # the 2D cases at one small size: seconds
 arclight render graph.json --cpu   # this render on the CPU only (exact, reproducible)
 ```
 
@@ -490,7 +499,8 @@ Tools: `list_ops`, `describe_op`, `get_graph`, `describe_node`, `create_node`,
 see), `render_output`, `probe_media`, `new_graph`, `load_graph`, `save_graph`,
 `undo`, `redo`, `list_plugins`, `list_instances`, `attach_instance`,
 `detach_instance`, `gpu_info` (GPU acceleration in use or why not, the
-adapter and limits), `gpu_check` (the GPU self-test). `render_frame` and
+adapter and limits), `gpu_check` (the GPU self-test; `"quick": true` for
+seconds). `render_frame` and
 `render_output` take `"cpu": true` to render on the CPU only. A few tools only work on an attached GUI: `select_node`
 (selects a node, opens its properties and scrolls the node graph to it),
 `view_node` (shows a node in the viewer, optionally at a frame) and
@@ -530,7 +540,7 @@ arclt.attach()        # from now on, edit the project open in the GUI
 Also: `node`, `nodes`, `delete`, `connect`, `disconnect`, `load`, `new`,
 `pixels`, `ops`, `op_info`, `project`, `undo`, `redo`, `metadata` (media file
 info), `graph`, `plugins`, `instances`, `detach`, `set_positions({node: [x, y]})`, `layout(all=False)`, `backdrops()`, `backdrop(id)`,
-`gpu_info()`, `gpu_check()` (see GPU acceleration; `render(..., cpu=True)`
+`gpu_info()`, `gpu_check(quick=False)` (see GPU acceleration; `render(..., cpu=True)`
 renders on the CPU only),
 `create_backdrop(*nodes, title=, color=, font_size=, pos=, size=)` (a
 `Backdrop` with `title` / `color` / `font_size` / `pos` / `size`, `set`, `fit(*nodes)`,

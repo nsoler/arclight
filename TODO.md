@@ -13,6 +13,10 @@ they come up and strike them (or delete them) when they ship.
       gpu` names the GPU (Metal; "unified memory" on the M4 Pro), `arclight
       gpu --check` passes, and `cargo test --release` there (the GPU tests
       run on Metal)
+- [ ] 0.12.4 (GPU G3): Transform / Corner Pin / Lens Distort / Keyer
+      look the same with the GPU on and off; on the Macs `arclight gpu
+      --check --quick` first (seconds), then the full check; quitting the
+      app and the CLI never leaves a crash report behind
 - [ ] 0.12.3 (GPU G5 part 1): a Scanline Render with shadows and motion
       blur renders in about a second at 4K with the GPU on (it took
       30 s) and looks the same as with it off; on the Macs too

@@ -158,7 +158,7 @@ pub fn wanted() -> bool {
 /// The ops with a GPU path (see `gpu::ops`).
 pub const OPS: &[&str] = &[
     "grade", "exposure", "saturation", "invert", "clamp", "premult", "unpremult", "channel_select", "switch", "dissolve", "keymix", "constant",
-    "checkerboard", "merge", "blur",
+    "checkerboard", "merge", "blur", "transform", "corner_pin", "tracker", "lens_distort", "resize", "keyer",
 ];
 
 /// What a node's cache key mixes in for the backend: 1 when `op` has a
@@ -214,6 +214,11 @@ impl Resident {
     pub fn bytes(&self) -> u64 {
         self.image.bytes()
     }
+
+    /// Its frame and data window (no read-back).
+    pub fn shape(&self) -> (crate::image::Size, crate::image::IRect) {
+        (self.image.format, self.image.window)
+    }
 }
 
 /// Built without GPU support: nothing is ever left on a GPU.
@@ -226,6 +231,9 @@ impl Resident {
         match *self {}
     }
     pub fn bytes(&self) -> u64 {
+        match *self {}
+    }
+    pub fn shape(&self) -> (crate::image::Size, crate::image::IRect) {
         match *self {}
     }
 }
@@ -317,24 +325,61 @@ pub fn info() -> serde_json::Value {
 
 // -- the device -------------------------------------------------------------
 
+/// The device once asked for (or why there is none); taken by [`shutdown`].
 #[cfg(feature = "gpu")]
-static DEVICE: OnceLock<Result<Arc<Gpu>, String>> = OnceLock::new();
+static DEVICE: Mutex<Option<Result<Arc<Gpu>, String>>> = Mutex::new(None);
 
 /// The device, created on first use (or why there is none).
 #[cfg(feature = "gpu")]
 fn device() -> Result<Arc<Gpu>, String> {
-    let mut first = false;
-    let d = DEVICE.get_or_init(|| {
-        first = true;
-        Gpu::create().map(Arc::new)
-    });
-    if first {
-        if let Ok(g) = d {
-            crate::crash::set_gpu(g.describe());
-        }
-        crate::crash::refresh_header();
+    let mut slot = DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(d) = slot.as_ref() {
+        return d.clone();
     }
-    d.clone()
+    let d = Gpu::create().map(Arc::new);
+    *slot = Some(d.clone());
+    drop(slot);
+    if let Ok(g) = &d {
+        crate::crash::set_gpu(g.describe());
+    }
+    crate::crash::refresh_header();
+    d
+}
+
+/// Before the process exits: wait (up to 5 s) for the GPU to finish what
+/// it was given. The device is kept, not torn down: the process's end
+/// does that (see [`exit_process`]). After this the GPU is off ("shut
+/// down").
+pub fn shutdown() {
+    #[cfg(feature = "gpu")]
+    {
+        let taken = DEVICE.lock().unwrap_or_else(|e| e.into_inner()).replace(Err("shut down".into()));
+        if let Some(Ok(gpu)) = taken {
+            let _ = gpu.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(5)) });
+            std::mem::forget(gpu);
+        }
+    }
+}
+
+/// End the process with `code`: [`shutdown`], standard output and error
+/// flushed, then `_exit` (on Unix), which skips the C libraries'
+/// exit-time teardown. NVIDIA's Vulkan driver keeps threads of its own
+/// that crash when its libraries' destructors run under them at `exit`
+/// (a jump to address 0x170 on Linux). For the end of a program's
+/// `main`: nothing else is cleaned up (Rust drops no statics at exit
+/// anyway; files written were closed by then).
+pub fn exit_process(code: i32) -> ! {
+    use std::io::Write;
+    shutdown();
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    // SAFETY: ends the process at once; nothing runs after it.
+    #[cfg(unix)]
+    unsafe {
+        libc::_exit(code)
+    }
+    #[cfg(not(unix))]
+    std::process::exit(code)
 }
 
 #[cfg(not(feature = "gpu"))]
@@ -345,7 +390,7 @@ fn device() -> Result<Arc<Gpu>, String> {
 /// The device if it was already created (or tried).
 #[cfg(feature = "gpu")]
 fn created() -> Option<Result<Arc<Gpu>, String>> {
-    DEVICE.get().cloned()
+    DEVICE.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 #[cfg(not(feature = "gpu"))]
@@ -401,6 +446,8 @@ pub struct Gpu {
     /// storage buffers, e.g. Apple Silicon) instead of staging copies.
     pub unified: bool,
     pipelines: Mutex<std::collections::HashMap<(&'static str, &'static str), Arc<wgpu::ComputePipeline>>>,
+    /// Read-back staging buffers kept for the next read-back.
+    staging: Mutex<Vec<wgpu::Buffer>>,
 }
 
 #[cfg(feature = "gpu")]
@@ -430,7 +477,7 @@ impl Gpu {
             }
         });
         let unified = info.device_type == wgpu::DeviceType::IntegratedGpu && features.contains(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS);
-        Ok(Gpu { device, queue, info, limits, features, unified, pipelines: Mutex::default() })
+        Ok(Gpu { device, queue, info, limits, features, unified, pipelines: Mutex::default(), staging: Mutex::default() })
     }
 
     /// A software adapter (lavapipe, llvmpipe): fine for tests, slower
@@ -502,6 +549,31 @@ impl Gpu {
                 }))
             })
             .clone()
+    }
+
+    /// A staging buffer to read back at least `size` bytes through: a kept
+    /// one when one is big enough (the smallest such), else a new one
+    /// (rounded up to a MiB, so the next frame's fits).
+    pub(crate) fn take_staging(&self, size: u64) -> wgpu::Buffer {
+        let mut pool = self.staging.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(i) = (0..pool.len()).filter(|&i| pool[i].size() >= size).min_by_key(|&i| pool[i].size()) {
+            return pool.swap_remove(i);
+        }
+        drop(pool);
+        let size = size.max(16).next_multiple_of(1 << 20);
+        self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("read back"), size, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false })
+    }
+
+    /// Keep an (unmapped) staging buffer for later: the four biggest, up to
+    /// 512 MiB in all.
+    pub(crate) fn give_staging(&self, buffer: wgpu::Buffer) {
+        let mut pool = self.staging.lock().unwrap_or_else(|e| e.into_inner());
+        pool.push(buffer);
+        pool.sort_by_key(|b| std::cmp::Reverse(b.size()));
+        pool.truncate(4);
+        while pool.iter().map(wgpu::Buffer::size).sum::<u64>() > 512 << 20 && pool.len() > 1 {
+            pool.remove(0);
+        }
     }
 
     /// Wait until the GPU has done everything submitted.

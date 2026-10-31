@@ -45,6 +45,22 @@ fn pixels(py: Python<'_>, node: &str, frame: i64) -> PyResult<(usize, usize, Py<
     Ok((img.width, img.height, PyBytes::new(py, &bytes).unbind()))
 }
 
+/// At interpreter exit (registered with `atexit` by the package): the
+/// module's results let go and the GPU's work waited for (see
+/// arclight::gpu::shutdown), so the driver isn't still at work as the
+/// process ends. The device itself is left to the process's end; never
+/// `_exit` here (other atexit handlers, Python's buffered output and open
+/// files would be cut short).
+#[pyfunction]
+fn _gpu_shutdown(py: Python<'_>) {
+    py.detach(|| {
+        if let Ok(mut server) = SERVER.lock() {
+            *server = Server::new(Session::default());
+        }
+        arclight::gpu::shutdown();
+    });
+}
+
 /// Run a plugin host for `library` (see arclight::plugin_host): what the
 /// interpreter started by this module to host a plugin runs. Returns the
 /// exit code.
@@ -79,6 +95,7 @@ fn _arclt(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(_plugin_host, m)?)?;
     m.add_function(wrap_pyfunction!(call, m)?)?;
     m.add_function(wrap_pyfunction!(pixels, m)?)?;
+    m.add_function(wrap_pyfunction!(_gpu_shutdown, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

@@ -122,7 +122,7 @@ impl GpuImage {
                         .iter()
                         .zip(targets.iter())
                         .map(|(b, t)| {
-                            let s = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some("read back"), size: t.len() as u64, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+                            let s = gpu.take_staging(t.len() as u64);
                             encoder.copy_buffer_to_buffer(b, 0, &s, 0, t.len() as u64);
                             s
                         })
@@ -132,6 +132,9 @@ impl GpuImage {
                     map_all(gpu, &refs, wgpu::MapMode::Read)?;
                     for (b, t) in refs.iter().zip(targets.iter_mut()) {
                         copy_out(b, t)?;
+                    }
+                    for s in staging {
+                        gpu.give_staging(s);
                     }
                 }
             }

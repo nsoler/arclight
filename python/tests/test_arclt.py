@@ -96,7 +96,7 @@ class ArcltTest(unittest.TestCase):
         plate = arclt.create_node("constant", width=8, height=4, color=[0.25, 0.5, 1, 1])
         self.assertEqual(arclt.render(plate, cpu=True), plate.render())
         if info["status"]["state"] == "active":
-            report = arclt.gpu_check()
+            report = arclt.gpu_check(quick=True)
             self.assertTrue(report["passed"], report["summary"])
             self.assertTrue(all(r["pass"] for r in report["rows"]))
 

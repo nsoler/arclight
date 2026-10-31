@@ -72,6 +72,9 @@ enum Command {
         /// Print JSON (for pasting into an issue).
         #[arg(long)]
         json: bool,
+        /// With --check: the 2D cases at one small size only (seconds).
+        #[arg(long, requires = "check")]
+        quick: bool,
     },
     /// List the plugin search path and the plugins found on it.
     Plugins,
@@ -100,14 +103,20 @@ fn main() -> Result<()> {
     }
     arclight::plugin::init();
     arclight::crash::note(format!("command: {}", std::env::args().nth(1).unwrap_or_default()));
-    match cli.command {
+    let result = match cli.command {
         Command::Render { graph, frame, verbose, cpu } => on_cpu_if(cpu, || render(graph, frame, verbose)),
         Command::Demo { dir, cpu } => on_cpu_if(cpu, || demo(dir)),
-        Command::Gpu { check, json } => gpu(check, json),
+        Command::Gpu { check, json, quick } => gpu(check, json, quick),
         Command::Mcp { graph, http, attach } => mcp(graph, http, attach),
         Command::Plugins => plugins(),
         Command::Ops { op } => list_ops(op),
+    };
+    // Out without the C libraries' exit-time teardown (see
+    // `gpu::exit_process`), as `main` returning would end it.
+    if let Err(e) = &result {
+        eprintln!("Error: {e:?}");
     }
+    arclight::gpu::exit_process(i32::from(result.is_err()))
 }
 
 /// Run `f`, on the CPU only when `cpu` (`--cpu`).
@@ -115,17 +124,17 @@ fn on_cpu_if<R>(cpu: bool, f: impl FnOnce() -> R) -> R {
     if cpu { arclight::gpu::cpu_only(f) } else { f() }
 }
 
-fn gpu(check: bool, json: bool) -> Result<()> {
+fn gpu(check: bool, json: bool, quick: bool) -> Result<()> {
     use arclight::gpu;
     if check {
-        let report = gpu::check::run();
+        let report = if quick { gpu::check::run_quick() } else { gpu::check::run() };
         if json {
             println!("{}", serde_json::to_string_pretty(&report)?);
         } else {
             print!("{}", report.table());
         }
         if !report.passed() {
-            std::process::exit(1);
+            gpu::exit_process(1);
         }
         return Ok(());
     }
@@ -221,11 +230,12 @@ fn render(path: PathBuf, frame: i64, verbose: bool) -> Result<()> {
     let has_media_out = g.nodes.iter().any(|n| n.op == "media_out");
     if g.nodes.iter().any(|n| n.op == "write") || !has_media_out {
         let ctx = EvalContext { frame, write_outputs: true };
-        let results = arclight::graph::Evaluator::new().evaluate_all(&g, &ctx)?;
+        // (Results the writes don't need may stay on the GPU.)
+        let results = arclight::graph::Evaluator::new().run_all(&g, &ctx)?;
         if verbose {
             for n in &g.nodes {
-                if let Some(img) = results.get(&n.id) {
-                    eprintln!("  {} ({}) -> {}x{}", n.id, n.op, img.width, img.height);
+                if let Some((_, _, window)) = results.iter().find(|(id, ..)| *id == n.id) {
+                    eprintln!("  {} ({}) -> {}x{}", n.id, n.op, window.width(), window.height());
                 }
             }
         }

@@ -126,7 +126,7 @@ fn main() -> eframe::Result {
             .with_icon(app_icon()),
         ..Default::default()
     };
-    eframe::run_native(
+    let result = eframe::run_native(
         arclight::SHORT_NAME,
         options,
         Box::new(|cc| {
@@ -136,7 +136,14 @@ fn main() -> eframe::Result {
             }
             Ok(Box::new(App::new(cc.egui_ctx.clone(), doc)))
         }),
-    )
+    );
+    // Out without the C libraries' exit-time teardown (see
+    // `gpu::exit_process`): the window's Vulkan driver is loaded here even
+    // with GPU acceleration off.
+    if let Err(e) = &result {
+        eprintln!("Error: {e:?}");
+    }
+    arclight::gpu::exit_process(i32::from(result.is_err()))
 }
 
 /// The window icon (the placeholder in `assets/`).
@@ -621,7 +628,7 @@ impl App {
                 Some(Ok(())) => eprintln!("arclight-gui: screenshot -> {}", path.display()),
                 _ => eprintln!("arclight-gui: failed to save screenshot"),
             }
-            std::process::exit(0);
+            arclight::gpu::exit_process(0);
         })));
     }
 

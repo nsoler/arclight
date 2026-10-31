@@ -15,6 +15,29 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.4 — 2026-10-31
+
+- GPU: **Transform, Corner Pin and Tracker (with motion blur), Lens
+  Distort, Resize and the Keyer run on the GPU**; motion-blurred warps,
+  Lens Distort's distort mode and the Keyer always, the others when their
+  input is already on the GPU.
+- `arclight render` reads back from the GPU only what its writes need: a
+  4K blur / grade / merge chain renders about twice as fast as on the
+  CPU. GPU read-backs reuse their staging buffers.
+- The command line and the GUI end without the C libraries' exit-time
+  teardown, after everything is written: a rare crash (or hang) in
+  NVIDIA's Vulkan driver as the program ended is gone. Python waits for
+  the GPU at exit.
+- **Crash reports:** the crash handler can no longer hang (it gives up
+  after 3 s, ending with the crash's signal), and crashes on worker
+  threads (rendering, the GUI's evaluation) are now reported: their
+  small signal stacks used to overflow, losing the report.
+- `arclight gpu --check --quick` (MCP `"quick": true`, Python
+  `gpu_check(quick=True)`): the 2D checks at one small size, in seconds.
+  The full check also covers warps, Lens Distort, Resize and the Keyer;
+  warps pass by the plan's statistical rule (every value within 1e-4, at
+  most 0.1 % off, as f32 positions differ by a hair).
+
 ## 0.12.3 — 2026-10-31
 
 - GPU: **shadows render on the GPU**: every light kind's shadow maps are

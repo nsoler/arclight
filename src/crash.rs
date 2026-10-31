@@ -511,7 +511,12 @@ mod native {
     //! makes async-signal-safe calls: everything it writes was prepared
     //! beforehand (the file names, the header) or is read from fixed
     //! buffers; then the signal's previous handler is put back and the
-    //! signal raised again, so the process ends as it would have.
+    //! signal raised again, so the process ends as it would have. It never
+    //! holds the process up: the backtrace (which can fault again, or loop,
+    //! unwinding from a wild address) comes last, an alarm ends the process
+    //! with the signal if the handler takes over [`LIMIT`] seconds, and a
+    //! second crash meanwhile (another thread's, or in the handler) goes
+    //! straight to ending it.
     use super::*;
     use std::os::unix::ffi::OsStrExt;
 
@@ -528,9 +533,25 @@ mod native {
     static MARKER_PATH: SigBuf<1024> = SigBuf::new();
     static REPORT_NAME: SigBuf<256> = SigBuf::new();
     static NO_MARKER: AtomicBool = AtomicBool::new(false);
+    /// A crash is being handled; the signal it was.
+    static HANDLING: AtomicBool = AtomicBool::new(false);
+    static SIGNAL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+    /// The most seconds the handler may take.
+    const LIMIT: libc::c_uint = 3;
+    /// For a test: the handler hangs after the report, as a backtrace
+    /// stuck unwinding would.
+    #[cfg(test)]
+    pub(super) static STALL: AtomicBool = AtomicBool::new(false);
     static mut PREVIOUS: [Option<libc::sigaction>; 5] = [None; 5];
     /// The stack the handler runs on (the thread's may be what overflowed).
     static mut ALT_STACK: [u8; 64 * 1024] = [0; 64 * 1024];
+    /// The handler's buffers: static, not on its stack, which on other
+    /// threads is Rust's small signal stack (8 KiB): one crash is handled
+    /// at a time ([`HANDLING`]).
+    static mut PATH: [u8; 1024] = [0; 1024];
+    static mut BUF: [u8; 4096] = [0; 4096];
+    #[cfg(any(target_env = "gnu", target_os = "macos"))]
+    static mut FRAMES: [*mut libc::c_void; 64] = [std::ptr::null_mut(); 64];
 
     pub fn install(dir: &Path, host: bool) {
         std::fs::create_dir_all(dir).ok();
@@ -570,6 +591,29 @@ mod native {
         }
     }
 
+    /// End the process with signal `sig` as its default action does (a
+    /// core dump for these): no handler of ours, the signal unblocked.
+    unsafe fn end_with(sig: libc::c_int) -> ! {
+        libc::signal(sig, libc::SIG_DFL);
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, sig);
+        libc::pthread_sigmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut());
+        libc::raise(sig);
+        libc::_exit(128 + sig)
+    }
+
+    /// The alarm the handler set went off: it got stuck (a backtrace
+    /// looping, say). End with the crash's signal.
+    extern "C" fn too_long(_: libc::c_int) {
+        // SAFETY: async-signal-safe calls only.
+        unsafe {
+            put(2, b"arclight: the crash handler took too long; ending\n");
+            let sig = SIGNAL.load(Ordering::Relaxed);
+            end_with(if sig > 0 { sig } else { libc::SIGSEGV })
+        }
+    }
+
     unsafe fn put(fd: libc::c_int, bytes: &[u8]) {
         let mut done = 0;
         while done < bytes.len() {
@@ -586,44 +630,62 @@ mod native {
         // backtrace_symbols_fd, sigaction, raise) on stack or 'static
         // buffers.
         unsafe {
+            // A crash while one is handled (another thread's, or this one
+            // faulting again): end now.
+            if HANDLING.swap(true, Ordering::SeqCst) {
+                end_with(sig);
+            }
+            SIGNAL.store(sig, Ordering::Relaxed);
+            // (SIGALRM is taken only now, the process ending anyway.)
+            let mut act: libc::sigaction = std::mem::zeroed();
+            act.sa_sigaction = too_long as *const () as libc::sighandler_t;
+            libc::sigemptyset(&mut act.sa_mask);
+            libc::sigaction(libc::SIGALRM, &act, std::ptr::null_mut());
+            libc::alarm(LIMIT);
             let k = SIGNALS.iter().position(|(s, _)| *s == sig);
-            let mut path = [0u8; 1024];
-            let n = if PANIC_REPORTED.load(Ordering::Relaxed) { 0 } else { REPORT_PATH.read(&mut path) };
+            let path = &mut *std::ptr::addr_of_mut!(PATH);
+            let n = if PANIC_REPORTED.load(Ordering::Relaxed) { 0 } else { REPORT_PATH.read(path) };
             if n > 0 {
                 let fd = libc::open(path.as_ptr() as *const libc::c_char, libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC, 0o644);
                 if fd >= 0 {
-                    let mut buf = [0u8; 4096];
+                    let buf = &mut *std::ptr::addr_of_mut!(BUF);
                     put(fd, b"ArclightVFX closed unexpectedly (a native crash)\n\n");
-                    let n = HEADER_SIG.read(&mut buf);
+                    let n = HEADER_SIG.read(buf);
                     put(fd, &buf[..n]);
                     put(fd, b"\nSignal: ");
                     put(fd, k.map_or(b"unknown" as &[u8], |k| SIGNALS[k].1));
                     put(fd, b"\nEvaluating: ");
-                    let n = EVALUATING.read(&mut buf);
+                    let n = EVALUATING.read(buf);
                     put(fd, &buf[..n]);
                     put(fd, b"\n\nLast actions:\n");
-                    let n = NOTES_SIG.read(&mut buf);
+                    let n = NOTES_SIG.read(buf);
                     put(fd, &buf[..n]);
-                    put(fd, b"\nBacktrace (addresses in the binary: addr2line -e <binary> -f <offset> names them):\n");
-                    #[cfg(any(target_env = "gnu", target_os = "macos"))]
-                    {
-                        let mut frames = [std::ptr::null_mut::<libc::c_void>(); 64];
-                        let n = libc::backtrace(frames.as_mut_ptr(), frames.len() as libc::c_int);
-                        libc::backtrace_symbols_fd(frames.as_ptr(), n, fd);
-                    }
-                    libc::close(fd);
+                    // The report is complete enough now: marked pending
+                    // before the backtrace, which may not come back.
                     if !NO_MARKER.load(Ordering::Relaxed) {
-                        let n = MARKER_PATH.read(&mut path);
+                        let n = MARKER_PATH.read(path);
                         if n > 0 {
                             let m = libc::open(path.as_ptr() as *const libc::c_char, libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC, 0o644);
                             if m >= 0 {
-                                let n = REPORT_NAME.read(&mut buf);
+                                let n = REPORT_NAME.read(buf);
                                 put(m, &buf[..n]);
                                 libc::close(m);
                             }
                         }
                     }
                     put(2, b"arclight: native crash; a report was written to the crash reports folder\n");
+                    #[cfg(test)]
+                    while STALL.load(Ordering::Relaxed) {
+                        std::hint::spin_loop();
+                    }
+                    put(fd, b"\nBacktrace (addresses in the binary: addr2line -e <binary> -f <offset> names them):\n");
+                    #[cfg(any(target_env = "gnu", target_os = "macos"))]
+                    {
+                        let frames = &mut *std::ptr::addr_of_mut!(FRAMES);
+                        let n = libc::backtrace(frames.as_mut_ptr(), frames.len() as libc::c_int);
+                        libc::backtrace_symbols_fd(frames.as_ptr(), n, fd);
+                    }
+                    libc::close(fd);
                 }
             }
             // As it would have ended: the handler before ours (Rust's
@@ -744,24 +806,67 @@ mod tests {
                     let _ = std::thread::Builder::new().name("eval".into()).spawn(|| panic!("caught")).unwrap().join();
                     std::process::exit(0);
                 }
+                // A thread jumping to a wild address, as a driver's thread
+                // did at exit: the backtrace starts from garbage.
+                #[cfg(unix)]
+                "wild" => {
+                    let _ = std::thread::spawn(|| {
+                        // SAFETY: none: crashing is the point.
+                        let f: extern "C" fn() = unsafe { std::mem::transmute(0x170usize) };
+                        f();
+                    })
+                    .join();
+                }
+                // On a thread of its own (Rust's small signal stack).
+                #[cfg(unix)]
+                "thread" => {
+                    // SAFETY: none: crashing is the point.
+                    let _ = std::thread::spawn(|| unsafe { std::ptr::null_mut::<u8>().write_volatile(1) }).join();
+                }
+                #[cfg(unix)]
+                "stuck" => {
+                    native::STALL.store(true, Ordering::Relaxed);
+                    crash_test_now();
+                }
                 _ => crash_test_now(),
             }
             return;
         }
         let exe = std::env::current_exe().unwrap();
-        for how in ["panic", "worker", "segv"] {
-            if how == "segv" && !cfg!(unix) {
+        for how in ["panic", "worker", "segv", "thread", "wild", "stuck"] {
+            if matches!(how, "segv" | "thread" | "wild" | "stuck") && !cfg!(unix) {
                 continue;
             }
             let dir = std::env::temp_dir().join(format!("arclight_crash_child_{}_{how}", std::process::id()));
             std::fs::remove_dir_all(&dir).ok();
-            let out = std::process::Command::new(&exe)
+            let mut child = std::process::Command::new(&exe)
                 .args(["--exact", "crash::tests::crashes_leave_a_report", "--nocapture", "--test-threads=1"])
                 .env(CHILD, how)
-                .env("ARCLIGHT_CRASH_TEST", if how == "segv" { "segv" } else { "" })
+                .env("ARCLIGHT_CRASH_TEST", if matches!(how, "segv" | "stuck") { "segv" } else { "" })
                 .env("ARCLIGHT_CRASH_DIR", &dir)
-                .output()
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
                 .unwrap();
+            // The handler never holds the process up: ended by the signal
+            // within its time limit, whatever the backtrace does.
+            let t0 = std::time::Instant::now();
+            while child.try_wait().unwrap().is_none() {
+                if t0.elapsed().as_secs() > 20 {
+                    child.kill().ok();
+                    panic!("{how}: the crashed process didn't end");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            let out = child.wait_with_output().unwrap();
+            #[cfg(unix)]
+            if matches!(how, "segv" | "thread" | "wild" | "stuck") {
+                use std::os::unix::process::ExitStatusExt;
+                assert_eq!(out.status.signal(), Some(libc::SIGSEGV), "{how}: {:?}\n{}", out.status, String::from_utf8_lossy(&out.stderr));
+            }
+            if how == "stuck" {
+                assert!(String::from_utf8_lossy(&out.stderr).contains("crash handler took too long"));
+            }
             let all = reports_in(&dir);
             assert_eq!(all.len(), 1, "{how}: {all:?}\n{}", String::from_utf8_lossy(&out.stderr));
             let text = std::fs::read_to_string(&all[0]).unwrap();
@@ -779,7 +884,7 @@ mod tests {
                 _ => {
                     assert!(!out.status.success());
                     assert!(name.ends_with("-native.txt") && text.contains("Signal: SIGSEGV"), "{name}: {text}");
-                    if cfg!(any(target_env = "gnu", target_os = "macos")) {
+                    if how == "segv" && cfg!(any(target_env = "gnu", target_os = "macos")) {
                         assert!(text.lines().skip_while(|l| !l.starts_with("Backtrace")).count() > 3, "frames: {text}");
                     }
                     assert_eq!(pending_in(&dir).as_deref(), Some(all[0].as_path()));

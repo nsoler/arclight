@@ -176,8 +176,8 @@ static TOOLS: &[Tool] = &[
         }, "required": ["node"]}),
     tool!("gpu_info", "Whether GPU acceleration is in use: status line, adapter, backend, limits and transfer path, or why rendering is on the CPU.",
         {"type": "object", "properties": {}}),
-    tool!("gpu_check", "Run the GPU self-test: every GPU path against the CPU on generated images, with errors, tolerances and timings. Takes seconds.",
-        {"type": "object", "properties": {}}),
+    tool!("gpu_check", "Run the GPU self-test: every GPU path against the CPU on generated images, with errors, tolerances and timings. Takes up to a minute; 'quick' runs the 2D cases at one small size (seconds).",
+        {"type": "object", "properties": {"quick": {"type": "boolean"}}}),
     tool!("probe_media", "Metadata of an image, image sequence (####) or video file: size, frame range, fps, and a video's sound (sample rate, channels, duration; null without).",
         {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}),
     tool!("new_graph", "Start an empty graph (undoable).", {"type": "object", "properties": {}}),
@@ -476,7 +476,8 @@ fn run_tool(s: &mut Session, tool: &str, args: &Value, progress: &Progress) -> R
         "probe_media" => probe_media(Path::new(str_arg(args, "path")?))?,
         "gpu_info" => crate::gpu::info(),
         "gpu_check" => {
-            let report = crate::gpu::check::run();
+            let quick = args.get("quick").and_then(Value::as_bool).unwrap_or(false);
+            let report = if quick { crate::gpu::check::run_quick() } else { crate::gpu::check::run() };
             let mut out = serde_json::to_value(&report)?;
             out["passed"] = json!(report.passed());
             out["summary"] = json!(report.summary());

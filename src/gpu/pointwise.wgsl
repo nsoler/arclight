@@ -17,6 +17,7 @@ const DISSOLVE: u32 = 9u;
 const CONSTANT: u32 = 10u;
 const CHECKERBOARD: u32 = 11u;
 const MASK_MIX: u32 = 12u;
+const ACCUMULATE: u32 = 13u;
 
 const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);
 
@@ -239,6 +240,8 @@ fn pixel(q: vec2<i32>) -> vec4<f32> {
             let b = at_a(q);
             return b + (at_b(q) - b) * t;
         }
+        // A running sum (A) plus B weighted (`ops::average`).
+        case ACCUMULATE: { return at_a(q) + at_b(q) * p.v0.x; }
         default: { return vec4<f32>(0.0); }
     }
 }

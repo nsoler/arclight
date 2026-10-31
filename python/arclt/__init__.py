@@ -19,12 +19,17 @@ and can be undone there.
 
 from __future__ import annotations
 
+import atexit as _atexit
 import json as _json
 from typing import Any, Iterable
 
 from . import _arclt
 
 __version__ = _arclt.__version__
+
+# The GPU let go before the interpreter exits (a driver still at work as a
+# process ends can crash it then).
+_atexit.register(_arclt._gpu_shutdown)
 
 __all__ = [
     "ArcltError", "Node", "create_node", "node", "nodes", "delete", "connect", "disconnect",
@@ -517,10 +522,11 @@ def gpu_info() -> dict:
     return _call("gpu_info")
 
 
-def gpu_check() -> dict:
-    """Run the GPU self-test (seconds): ``rows`` (case, size, max_abs,
-    max_rel, tolerances, pass, CPU / GPU ms), ``passed`` and ``summary``."""
-    return _call("gpu_check")
+def gpu_check(quick: bool = False) -> dict:
+    """Run the GPU self-test (up to a minute; ``quick``: the 2D cases at one
+    small size, seconds): ``rows`` (case, size, max_abs, max_rel,
+    tolerances, pass, CPU / GPU ms), ``passed`` and ``summary``."""
+    return _call("gpu_check", quick=quick or None)
 
 
 def plugins() -> list[dict]:
