@@ -131,7 +131,8 @@ pub(super) fn preview(scene: &Scene, cam: &Camera, format: Size, look: super::Pr
             Vec::new()
         }
     };
-    let splats = splats::prepare_upto(&scene.splats, cam, format, super::PREVIEW_SH);
+    let all = super::all_splats(scene);
+    let splats = splats::prepare_upto(&all, cam, format, super::PREVIEW_SH);
     if splats.as_ref().is_some_and(|sp| sp.gpu().is_none()) || (surfs.is_empty() && splats.is_none()) {
         return None;
     }
@@ -176,6 +177,8 @@ fn preview_on(gpu: &Arc<Gpu>, surfs: &[Surface], lights: &[Light], cam: &Camera,
 struct Layout {
     nodes: Vec<String>,
     object: Vec<Option<usize>>,
+    /// Each surface's id in the id pass (see `render3d::surface_ids`).
+    ids: Vec<f32>,
     light_names: Vec<String>,
     light_of: Vec<Option<usize>>,
     slots: Slots,
@@ -191,11 +194,12 @@ impl Layout {
                 nodes.push(n.clone());
             }
         }
-        let object = surfs.iter().map(|s| nodes.iter().position(|n| *n == s.node)).collect();
+        let object: Vec<Option<usize>> = surfs.iter().map(|s| nodes.iter().position(|n| *n == s.node)).collect();
+        let ids = super::surface_ids(surfs, &object, nodes.len());
         let (names, light_of) = super::light_nodes(lights);
         let light_names: Vec<String> = names.into_iter().map(String::from).collect();
         let slots = Slots::new(passes, nodes.len(), light_names.len());
-        Layout { nodes, object, light_names, light_of, slots }
+        Layout { nodes, object, ids, light_names, light_of, slots }
     }
 }
 
@@ -357,7 +361,7 @@ fn blur_on(gpu: &Gpu, scene: &Scene, cam: &Camera, format: Size, samples: usize,
                 }
                 // The splats at this time, seen from this time's camera,
                 // prepared on the GPU (their data stays up there).
-                let now_splats = splats::prepare(&now.splats, &c, format);
+                let now_splats = splats::prepare(&super::all_splats(now), &c, format);
                 if now_splats.as_ref().is_some_and(|sp| sp.gpu().is_none()) {
                     return Ok(None);
                 }
@@ -1248,7 +1252,7 @@ fn finish(tris: &[Tri], points: &[Vec3], cam: &Camera, next_cam: &Camera, format
             }
         }
         if passes.id {
-            px[s.id_at] = layout.object[t.surf].map_or(0.0, |o| (o + 1) as f32);
+            px[s.id_at] = layout.ids[t.surf];
         }
     });
     super::draw_points(points, cam, format, &mut color, &mut depth);

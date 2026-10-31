@@ -811,6 +811,147 @@ pub fn attribute_set(params: &Value, mut scene: Scene, frame: f64) -> Result<Sce
     Ok(scene)
 }
 
+/// The turn putting +Z along `z` with +Y toward `up` (as near as it can:
+/// up made square to z); None when z is no direction.
+fn aim(z: Vec3, up: Vec3) -> Option<nalgebra::Matrix3<f64>> {
+    let z = z.try_normalize(1e-12)?;
+    let x = up.cross(&z).try_normalize(1e-12).or_else(|| Vec3::x().cross(&z).try_normalize(1e-12)).or_else(|| Vec3::y().cross(&z).try_normalize(1e-12))?;
+    let y = z.cross(&x);
+    Some(nalgebra::Matrix3::from_columns(&[x, y, z]))
+}
+
+fn vec3_at(v: &[[f32; 3]], i: usize) -> Vec3 {
+    Vec3::new(v[i][0] as f64, v[i][1] as f64, v[i][2] as f64)
+}
+
+/// An Instance on Points: a copy of one of `protos`' meshes, cards and
+/// splat captures at each point of the scene's point sets (in Group),
+/// picked, turned, sized and tinted by the point's attributes (see the
+/// node's help in ops.rs); the points' attributes carried along.
+pub fn instance_on_points(params: &Value, mut scene: Scene, protos: Option<&Scene>, camera: Option<&Scene>) -> Result<Scene> {
+    let protos = protos.ok_or_else(|| anyhow::anyhow!("Instance on Points: connect what to copy (a scene with meshes, cards or splats) to its prototypes input"))?;
+    let prototypes: Vec<geo::Prototype> = protos
+        .meshes
+        .iter()
+        .cloned()
+        .map(geo::Prototype::Model)
+        .chain(protos.cards.iter().cloned().map(geo::Prototype::Card))
+        .chain(protos.splats.iter().cloned().map(geo::Prototype::Splats))
+        .collect();
+    if prototypes.is_empty() {
+        bail!("Instance on Points: its prototypes scene has no meshes, cards or splats to copy");
+    }
+    let group = params["group"].as_str().unwrap_or("").trim();
+    let take = |node: &str| group.is_empty() || geo::glob(group, node);
+    let seed = params["seed"].as_i64().unwrap_or(0) as u64;
+    let pick = params["pick"].as_str().unwrap_or("random");
+    let orient = params["orient"].as_str().unwrap_or("auto");
+    let up_param = Vec3::from(crate::scene::numbers::<3>(&params["up"], 0.0)).try_normalize(1e-12).unwrap_or_else(Vec3::y);
+    let scale = crate::scene::numbers::<3>(&params["scale"], 1.0);
+    let eye = camera.and_then(|s| s.cameras.first()).map(|c| geom::transform_point(&c.world, &Vec3::zeros()));
+    if orient == "face camera" && eye.is_none() {
+        bail!("Instance on Points: Orient is 'face camera', but nothing with a camera is connected to its camera input");
+    }
+    let n = prototypes.len();
+    let mut made = Vec::new();
+    for g in scene.point_sets.iter().filter(|g| take(&g.node)) {
+        let a = &g.attrs;
+        let linear = g.world.fixed_view::<3, 3>(0, 0).into_owned();
+        let normal = linear.try_inverse().map(|i| i.transpose()).unwrap_or(linear);
+        let turn = nalgebra::Rotation3::from_matrix_eps(&linear, 1e-12, 100, nalgebra::Rotation3::identity());
+        let (variant, ids) = (a.get(geo::VARIANT), a.int(geo::ID));
+        let (normals, ups, orients) = (a.vec3(geo::N), a.vec3(geo::UP), a.vec4(geo::ORIENT));
+        let (pscale, scales) = (a.float(geo::PSCALE), a.vec3(geo::SCALE));
+        let placed: Vec<(u32, Mat4)> = (0..g.len())
+            .into_par_iter()
+            .map(|i| {
+                let which = match pick {
+                    "variant" => match variant {
+                        Some(Attr::Int(v)) => v[i].rem_euclid(n as i32) as usize,
+                        Some(Attr::Float(v)) => (v[i].floor() as i64).rem_euclid(n as i64) as usize,
+                        _ => 0,
+                    },
+                    "in order" => i % n,
+                    _ => {
+                        let id = ids.map_or(i as u64, |v| v[i] as u32 as u64);
+                        ((stable_unit(&[seed, 9, id]) * n as f64) as usize).min(n - 1)
+                    }
+                };
+                let p = g.placed(i);
+                let up = ups.map_or(up_param, |u| (linear * vec3_at(u, i)).try_normalize(1e-12).unwrap_or(up_param));
+                let r = match orient {
+                    "none" => None,
+                    "face camera" => eye.and_then(|e| aim(e - p, Vec3::y())),
+                    _ => match (orients, normals) {
+                        (Some(q), _) => {
+                            let q = nalgebra::UnitQuaternion::new_normalize(nalgebra::Quaternion::new(q[i][3] as f64, q[i][0] as f64, q[i][1] as f64, q[i][2] as f64));
+                            Some(turn.matrix() * q.to_rotation_matrix().matrix())
+                        }
+                        (None, Some(nv)) => aim(normal * vec3_at(nv, i), up),
+                        (None, None) => None,
+                    },
+                }
+                .unwrap_or_else(nalgebra::Matrix3::identity);
+                let k = pscale.map_or(1.0, |v| v[i] as f64);
+                let s = scales.map_or(Vec3::new(1.0, 1.0, 1.0), |v| vec3_at(v, i));
+                let size = nalgebra::Matrix3::from_diagonal(&Vec3::new(k * s.x * scale[0], k * s.y * scale[1], k * s.z * scale[2]));
+                let mut w = Mat4::identity();
+                w.fixed_view_mut::<3, 3>(0, 0).copy_from(&(r * size));
+                w.fixed_view_mut::<3, 1>(0, 3).copy_from(&p);
+                (which as u32, w)
+            })
+            .collect();
+        made.push(geo::Instances { prototypes: prototypes.clone(), which: placed.iter().map(|p| p.0).collect(), worlds: placed.into_iter().map(|p| p.1).collect(), attrs: a.clone(), node: String::new() });
+    }
+    if !params["keep_points"].as_bool().unwrap_or(false) {
+        scene.point_sets.retain(|g| !take(&g.node));
+    }
+    scene.instances.extend(made);
+    Ok(scene)
+}
+
+/// Instance `i` of `g`'s tint: its Cd (linear RGBA), else none.
+pub fn tint(g: &geo::Instances, i: usize) -> Option<[f32; 4]> {
+    g.attrs.vec4(geo::CD).map(|c| c[i])
+}
+
+/// A Realize Instances: each instance (of Group's) as a mesh, card or
+/// splat capture of its own (meshes and splats still shared), placed and
+/// tinted as drawn.
+pub fn realize_instances(params: &Value, mut scene: Scene) -> Result<Scene> {
+    let group = params["group"].as_str().unwrap_or("").trim();
+    let take = |node: &str| group.is_empty() || geo::glob(group, node);
+    let (gone, kept): (Vec<geo::Instances>, Vec<geo::Instances>) = std::mem::take(&mut scene.instances).into_iter().partition(|g| take(&g.node));
+    scene.instances = kept;
+    for g in gone {
+        for i in 0..g.len() {
+            let w = g.worlds[i];
+            match &g.prototypes[g.which[i] as usize] {
+                geo::Prototype::Model(m) => {
+                    let mut m = crate::scene::Model { world: w * m.world, node: g.node.clone(), ..m.clone() };
+                    if let Some(c) = tint(&g, i) {
+                        m.material.color = std::array::from_fn(|k| m.material.color[k] * c[k]);
+                        m.material.opacity *= c[3];
+                    }
+                    scene.meshes.push(m);
+                }
+                geo::Prototype::Card(c) => {
+                    let mut c = crate::scene::Card { world: w * c.world, node: g.node.clone(), ..c.clone() };
+                    if let Some(t) = tint(&g, i) {
+                        c.opacity *= t[3];
+                        if let Some(m) = &mut c.material {
+                            m.color = std::array::from_fn(|k| m.color[k] * t[k]);
+                        }
+                    }
+                    scene.cards.push(c);
+                }
+                geo::Prototype::Splats(s) => scene.splats.push(Arc::new(crate::splat::Splats { world: w * s.world, node: g.node.clone(), ..(**s).clone() })),
+            }
+        }
+    }
+    Ok(scene)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1006,5 +1147,60 @@ mod tests {
         let inst = Scene { instances: vec![Instances { worlds: vec![at(1.0), at(2.0)], which: vec![0, 0], node: "i".into(), ..Instances::default() }], ..Scene::default() };
         let out = set(json!({ "elements": "instances", "attr1_name": "P", "attr1_kind": "vec3", "attr1_expr": "@P * [1, 0, 0] + [0, @index, 0]" }), inst).unwrap();
         assert_eq!(out.instances[0].worlds[1], geom::trs([2.0, 1.0, 0.0], [0.0, 90.0, 0.0], [1.0; 3]), "moved, still turned");
+    }
+
+    /// Instance on Points: a prototype a point, picked, turned (+Z along
+    /// N, +Y toward up), sized and carrying the point's attributes; Realize
+    /// makes them real (meshes shared, tinted).
+    #[test]
+    fn instances_on_points_and_realized() {
+        use crate::scene::Model;
+        let cube = |c: f32| Model { node: format!("proto{c}"), material: crate::mesh::Material { color: [c; 3], ..crate::mesh::Material::default() }, ..Model::new(Arc::new(crate::mesh::cube([1.0; 3], [1; 3])), Mat4::identity(), crate::mesh::Material::default()) };
+        let protos = Scene { meshes: vec![cube(1.0), cube(0.5)], cards: vec![Card { node: "leaf".into(), ..Card::new(Arc::new(Image::new(2, 2)), Mat4::identity(), [1.0, 1.0]) }], ..Scene::default() };
+        let mut pts = PointSet { positions: vec![Vec3::zeros(), Vec3::new(5.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 5.0)], node: "pts".into(), ..PointSet::default() };
+        let a = &mut pts.attrs;
+        a.set(geo::N, Attr::Vec3(vec![[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]]), 3).unwrap();
+        a.set(geo::PSCALE, Attr::Float(vec![2.0, 1.0, 1.0]), 3).unwrap();
+        a.set(geo::VARIANT, Attr::Int(vec![0, 1, 5]), 3).unwrap();
+        a.set(geo::CD, Attr::Vec4(vec![[1.0, 0.0, 0.0, 1.0]; 3]), 3).unwrap();
+        a.set(geo::ID, Attr::Int(vec![10, 11, 12]), 3).unwrap();
+        let scene = Scene { point_sets: vec![pts], ..Scene::default() };
+        let run = |p: Value| instance_on_points(&p, scene.clone(), Some(&protos), None);
+        let out = run(json!({ "pick": "variant" })).unwrap();
+        assert!(out.point_sets.is_empty(), "the points are used up");
+        let g = &out.instances[0];
+        assert!(g.validate().is_ok());
+        assert_eq!(g.which, vec![0, 1, 2], "variant 5 of 3 is the third");
+        assert_eq!(g.attrs.int(geo::ID), Some(&[10, 11, 12][..]), "attributes carried");
+        // The first: 2 big, its +Z along +X, up still +Y.
+        let w = g.worlds[0];
+        let dir = |v: Vec3| (w.fixed_view::<3, 3>(0, 0) * v).normalize();
+        assert!((dir(Vec3::z()) - Vec3::x()).norm() < 1e-9 && (dir(Vec3::y()) - Vec3::y()).norm() < 1e-9);
+        assert!(((w.fixed_view::<3, 3>(0, 0) * Vec3::z()).norm() - 2.0).abs() < 1e-9);
+        assert_eq!(geom::transform_point(&g.worlds[1], &Vec3::zeros()), Vec3::new(5.0, 0.0, 0.0));
+        // N straight up: +Y can't point up too, so it's turned square.
+        assert!((g.worlds[2].fixed_view::<3, 3>(0, 0) * Vec3::z() - Vec3::y()).norm() < 1e-9);
+        // Picks: in order; random by id, the same each time.
+        assert_eq!(run(json!({ "pick": "in order" })).unwrap().instances[0].which, vec![0, 1, 2]);
+        let r = run(json!({ "pick": "random", "seed": 4 })).unwrap().instances[0].which.clone();
+        assert_eq!(run(json!({ "pick": "random", "seed": 4 })).unwrap().instances[0].which, r);
+        assert_eq!(run(json!({ "keep_points": true, "orient": "none" })).unwrap().point_sets.len(), 1);
+        // Facing a camera at +Z: +Z points at it.
+        let cam = Scene { cameras: vec![crate::geom::Camera { world: geom::trs([0.0, 0.0, 20.0], [0.0; 3], [1.0; 3]), ..crate::geom::Camera::default() }], ..Scene::default() };
+        let faced = instance_on_points(&json!({ "orient": "face camera" }), scene.clone(), Some(&protos), Some(&cam)).unwrap();
+        let w = faced.instances[0].worlds[1];
+        let to = (Vec3::new(0.0, 0.0, 20.0) - Vec3::new(5.0, 0.0, 0.0)).normalize();
+        assert!(((w.fixed_view::<3, 3>(0, 0) * Vec3::z()).normalize() - to).norm() < 1e-9);
+        assert!(instance_on_points(&json!({ "orient": "face camera" }), scene.clone(), Some(&protos), None).is_err());
+        assert!(instance_on_points(&json!({}), scene.clone(), None, None).is_err());
+        assert!(instance_on_points(&json!({}), scene.clone(), Some(&Scene::default()), None).is_err());
+        // Realized: two meshes sharing the prototypes', red, and a card.
+        let placed = out.instances[0].worlds[1];
+        let real = realize_instances(&json!({}), out).unwrap();
+        assert!(real.instances.is_empty() && real.meshes.len() == 2 && real.cards.len() == 1);
+        assert!(Arc::ptr_eq(&real.meshes[0].mesh, &protos.meshes[0].mesh));
+        assert_eq!(real.meshes[1].material.color, [0.5, 0.0, 0.0]);
+        assert_eq!(real.meshes[1].world, placed * protos.meshes[1].world);
+        assert_eq!(real.meshes[1].node, "", "the Instances' node (tagged by the graph)");
     }
 }

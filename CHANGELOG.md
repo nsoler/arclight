@@ -17,6 +17,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.13 — 2026-10-31
+
+- New **Instance on Points** node: puts copies of meshes, cards or splat
+  captures at a point set's points, picked at random (by id), by a variant
+  attribute or in order, turned by N and up, orient or toward a camera,
+  sized by pscale and scale, and tinted by Cd; Scanline Render, the GPU
+  and the 3D view draw them with shadows and motion blur, and the id pass
+  gives each copy its own id (100k cards at 1080p: 168 ms on the GPU).
+- New **Realize Instances** node makes them ordinary objects.
+- A lit card's material color now tints it.
+
 ## 0.13.12 — 2026-10-31
 
 - Geometry: a **Fit Plane** node: a plane fitted to a camera tracker's

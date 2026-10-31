@@ -94,7 +94,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_set" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_set" | "instance_on_points" | "realize_instances" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1154,6 +1154,42 @@ pub static OPS: &[OpInfo] = &[
                points is an error.",
     },
     OpInfo {
+        name: "instance_on_points",
+        label: "Instance on Points",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN, Port { label: "prototypes", optional: false, kind: Kind::Scene }, scene_in("camera")],
+        params: &[
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("pick", "Pick", ParamKind::Choice(&["random", "variant", "in order"]), "random"),
+            fixed!("seed", "Seed", ParamKind::Int { min: 0, max: 1_000_000 }, 0),
+            fixed!("orient", "Orient", ParamKind::Choice(&["auto", "face camera", "none"]), "auto"),
+            p!("up", "Up", ParamKind::Vec3, [0.0, 1.0, 0.0]),
+            p!("scale", "Scale", ParamKind::Vec3, [1.0, 1.0, 1.0]),
+            fixed!("keep_points", "Keep points", ParamKind::Bool, false),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Puts a copy of one of the prototypes (the second input's meshes, cards and splat captures) at every point \
+               of the scene's point sets (Group's, or all), kept as copies so thousands cost little. Pick chooses which: \
+               random (by the point's id, the same every frame), by its variant attribute, or in order. Orient turns each: \
+               auto by its orient attribute, else with +Z along its N and +Y toward its up (or Up), else not at all; face \
+               camera turns +Z to the camera input's camera (for cards). Each is sized by its pscale, its scale and Scale, \
+               and tinted by its Cd (a mesh's or lit card's color; an unlit card only fades by Cd's alpha). The points' \
+               attributes come along; the point sets go unless Keep points is on. Scanline Render and the 3D view draw the \
+               copies, with shadows and motion blur; the id pass gives each copy its own id.",
+    },
+    OpInfo {
+        name: "realize_instances",
+        label: "Realize Instances",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN],
+        params: &[fixed!("group", "Group", ParamKind::Text, "")],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Makes each instance (of Group's node, or all) a mesh, card or splat capture of its own, placed and tinted \
+               as it was drawn (a mesh still shares its points with the others), for nodes that work on meshes.",
+    },
+    OpInfo {
         name: "attribute_set",
         label: "Attribute Set",
         category: Category::Scene,
@@ -2081,8 +2117,14 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "read_splat" => read_splat(params),
         "splat_crop" => splat_crop(params, inputs),
         "delete_geo" => Ok(scene_output(DEFAULT_FORMAT, geo_ops::delete(params, input_scene(inputs), ctx.frame as f64)?)),
-        "fit_plane" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_fit::fit_plane(params, input_scene(inputs), inputs.get(1).copied().flatten())?)),
+        "instance_on_points" => {
+            let protos = inputs.get(1).copied().flatten().and_then(|i| i.scene.as_deref());
+            let camera = inputs.get(2).copied().flatten().and_then(|i| i.scene.as_deref());
+            Ok(scene_output(DEFAULT_FORMAT, geo_ops::instance_on_points(params, input_scene(inputs), protos, camera)?))
+        }
+        "realize_instances" => Ok(scene_output(DEFAULT_FORMAT, geo_ops::realize_instances(params, input_scene(inputs))?)),
         "attribute_set" => Ok(scene_output(DEFAULT_FORMAT, geo_ops::attribute_set(params, input_scene(inputs), ctx.frame as f64)?)),
+        "fit_plane" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_fit::fit_plane(params, input_scene(inputs), inputs.get(1).copied().flatten())?)),
         "scatter" => {
             let image = inputs.get(1).copied().flatten().filter(|i| i.scene.is_none());
             let camera = inputs.get(2).copied().flatten().and_then(|i| i.scene.as_deref());

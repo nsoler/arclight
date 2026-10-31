@@ -2209,7 +2209,7 @@ impl Viewport3d {
             _ => None,
         };
         if let (Some(id), Some(r)) = (shown, self.texture_rect) {
-            if self.scene.as_ref().is_some_and(|s| !s.cards.is_empty() || (!self.view.wireframe && !s.meshes.is_empty()) || (self.splats_shown && !s.splats.is_empty())) {
+            if self.scene.as_ref().is_some_and(|s| !s.cards.is_empty() || (!self.view.wireframe && (!s.meshes.is_empty() || !s.instances.is_empty())) || (self.splats_shown && !s.splats.is_empty())) {
                 painter.image(id, r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
             }
         }

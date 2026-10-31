@@ -405,7 +405,17 @@ selected object.
   noise3(@P * 2) * 0.3, 0]` lifts a scatter into dunes). Formulas read the
   element with @ names and other nodes' params by name, so a locator can
   push points away from it (`dist(@P, locator1.translate)`). Up to four
-  rows, in order.
+  rows, in order. **Instance on Points** puts a copy of a prototype (the
+  meshes, cards or splats wired to its second input) at every scattered
+  point: rocks on a ground, a crowd of cards, trees. Each point picks one
+  at random (the same every frame), by its variant attribute, or in turn,
+  and is turned by its N (or orient), sized by pscale and tinted by Cd: a
+  mesh or lit card takes the color; an unlit card's picture isn't tinted,
+  only faded by Cd's alpha. Face camera turns cards toward the camera
+  wired to its third input. The copies render with shadows and motion
+  blur, and each gets its own number in the id pass. **Realize
+  Instances** makes them ordinary objects when a later node needs to edit
+  them.
 - **Read Geo** reads an OBJ file (with its MTL colors and textures), a
   glTF file (.gltf, .glb) or an Alembic cache (.abc): its meshes move and
   deform frame by frame. **Frame rate** (set to the project's when you

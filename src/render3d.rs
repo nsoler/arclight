@@ -79,20 +79,25 @@ pub(crate) struct Surface<'a> {
     pub receives: bool,
     /// Lit from either side (a card): its normal turned to the viewer.
     pub two_sided: bool,
+    /// Which instance it is, counting every Instances' in the scene from
+    /// 0 (None: not an instance): instances get ids of their own.
+    pub instance: Option<u32>,
 }
 
 /// Card `card` as two triangles (top left, top right, bottom right; top
 /// left, bottom right, bottom left), its image (premultiplied) times its
-/// opacity.
+/// opacity, and lit, its material's color.
 fn card_surface(card: &crate::scene::Card) -> Surface<'_> {
     let [w, h] = card.size.map(|v| v / 2.0);
+    let [r, g, b] = card.material.as_ref().map_or([1.0; 3], |m| m.color);
+    let a = card.opacity;
     Surface {
         world: card.world,
         positions: Cow::Owned(vec![Vec3::new(-w, h, 0.0), Vec3::new(w, h, 0.0), Vec3::new(w, -h, 0.0), Vec3::new(-w, -h, 0.0)]),
         normals: Cow::Owned(vec![Vec3::z(); 4]),
         uvs: Cow::Owned(vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]),
         triangles: Cow::Owned(vec![[0, 1, 2], [0, 2, 3]]),
-        color: [card.opacity; 4],
+        color: [r * a, g * a, b * a, a],
         texture: Some(&card.image),
         wrap: false,
         v_up: false,
@@ -103,6 +108,7 @@ fn card_surface(card: &crate::scene::Card) -> Surface<'_> {
         casts: card.casts_shadows,
         receives: card.receives_shadows,
         two_sided: true,
+        instance: None,
     }
 }
 
@@ -128,12 +134,65 @@ fn model_surface(m: &crate::scene::Model) -> Surface<'_> {
         casts: m.casts_shadows,
         receives: m.receives_shadows,
         two_sided: false,
+        instance: None,
     }
 }
 
-/// Everything in `scene` to draw, in order: cards, then meshes.
+/// Everything in `scene` to draw, in order: cards, then meshes, then
+/// each instance of a mesh or card (sharing its prototype's data).
 pub(crate) fn surfaces(scene: &Scene) -> Vec<Surface<'_>> {
-    scene.cards.iter().map(card_surface).chain(scene.meshes.iter().map(model_surface)).collect()
+    let mut out: Vec<Surface> = scene.cards.iter().map(card_surface).chain(scene.meshes.iter().map(model_surface)).collect();
+    let mut k = 0u32;
+    for g in &scene.instances {
+        for i in 0..g.len() {
+            let tint = crate::ops::geo_ops::tint(g, i);
+            let s = match &g.prototypes[g.which[i] as usize] {
+                crate::geo::Prototype::Model(m) => Some((model_surface(m), m.world, true)),
+                // (An unlit card's image isn't tinted: only faded.)
+                crate::geo::Prototype::Card(c) => Some((card_surface(c), c.world, c.material.is_some())),
+                crate::geo::Prototype::Splats(_) => None,
+            };
+            if let Some((mut s, own, lit)) = s {
+                s.world = g.worlds[i] * own;
+                s.node = &g.node;
+                s.instance = Some(k);
+                if let Some(t) = tint {
+                    let rgb = if lit { [t[0], t[1], t[2]] } else { [1.0; 3] };
+                    s.color = [s.color[0] * rgb[0] * t[3], s.color[1] * rgb[1] * t[3], s.color[2] * rgb[2] * t[3], s.color[3] * t[3]];
+                }
+                out.push(s);
+            }
+            k += 1;
+        }
+    }
+    out
+}
+
+/// The scene's splat captures to draw: its own, then each instance of
+/// one (its placement put before the capture's own; the splats shared).
+pub(crate) fn all_splats(scene: &Scene) -> Cow<'_, [Arc<crate::splat::Splats>]> {
+    if !scene.instances.iter().any(|g| g.prototypes.iter().any(|p| matches!(p, crate::geo::Prototype::Splats(_)))) {
+        return Cow::Borrowed(&scene.splats);
+    }
+    let mut all = scene.splats.clone();
+    for g in &scene.instances {
+        for i in 0..g.len() {
+            if let crate::geo::Prototype::Splats(s) = &g.prototypes[g.which[i] as usize] {
+                all.push(Arc::new(crate::splat::Splats { world: g.worlds[i] * s.world, node: g.node.clone(), ..(**s).clone() }));
+            }
+        }
+    }
+    Cow::Owned(all)
+}
+
+/// Each surface's id in the id pass: its object's (1 + its index in
+/// `object`, 0 for none), or an instance's own, after the `objects`
+/// object ids.
+pub(crate) fn surface_ids(surfs: &[Surface], object: &[Option<usize>], objects: usize) -> Vec<f32> {
+    surfs.iter().zip(object).map(|(s, o)| match s.instance {
+        Some(k) => (objects + 1) as f32 + k as f32,
+        None => o.map_or(0.0, |o| (o + 1) as f32),
+    }).collect()
 }
 
 /// A triangle corner: in camera space and in the scene, with its texture
@@ -521,13 +580,15 @@ fn render_cell(scene: &Scene, cam: &Camera, format: Size, samples: usize, backgr
     // their velocities (the next frame's own may be others).
     let next_objects = next.filter(|_| objects.is_some() && passes.motion).and_then(|(n, _)| particles::with_objects(&Scene { particles: scene.particles.iter().map(|s| s.shifted(1.0)).collect(), ..n.clone() }));
     let next = next.map(|(n, c)| (next_objects.as_ref().unwrap_or(n), c));
-    let mut splats = splats::prepare(&scene.splats, cam, format);
+    let all = all_splats(scene);
+    let next_all = next.map(|(n, c)| (all_splats(n), c));
+    let mut splats = splats::prepare(&all, cam, format);
     if let Some(sp) = &mut splats {
         if passes.normal {
-            sp.add_normals(&scene.splats, cam);
+            sp.add_normals(&all, cam);
         }
         if passes.motion {
-            sp.add_motion(&scene.splats, next.map(|(n, c)| (&n.splats[..], c)), cam, format);
+            sp.add_motion(&all, next_all.as_ref().map(|(n, c)| (&n[..], *c)), cam, format);
         }
     }
     let out = draw_passes(&surfaces(scene), &scene.lights, &scene.points, cam, format, samples, passes, next, cell, splats.as_ref());
@@ -714,7 +775,7 @@ const PREVIEW_SH: u8 = 1;
 /// nothing goes black), the splats' color from SH up to [`PREVIEW_SH`]:
 /// what the 3D viewport shows under its outlines.
 pub fn render_preview(scene: &Scene, cam: &Camera, format: Size, preview: Preview) -> Image {
-    preview_cell(scene, cam, format, preview, None, splats::prepare_upto(&scene.splats, cam, format, PREVIEW_SH).as_ref())
+    preview_cell(scene, cam, format, preview, None, splats::prepare_upto(&all_splats(scene), cam, format, PREVIEW_SH).as_ref())
 }
 
 /// [`render_preview`] with motion blur: the mean of previews at each of
@@ -727,11 +788,13 @@ pub fn render_preview_blurred(scene: &Scene, cam: &Camera, format: Size, preview
     let frames: Vec<(i64, &Scene)> = blur.frames.iter().map(|f| (f.0, f.1)).collect();
     // The splats projected once, for the times where neither they nor the
     // camera move.
-    let still = splats::prepare_upto(&scene.splats, cam, format, PREVIEW_SH);
+    let here = all_splats(scene);
+    let still = splats::prepare_upto(&here, cam, format, PREVIEW_SH);
     let sum = blur_sum(&blur.times, blur.jitter, |t, cell| {
         let (now, c) = (scene.at_time(&frames, t), blur.camera(cam, t));
-        let moved = c != *cam || now.splats.iter().zip(&scene.splats).any(|(a, b)| a.world != b.world);
-        let own = moved.then(|| splats::prepare_upto(&now.splats, &c, format, PREVIEW_SH)).flatten();
+        let then = all_splats(&now);
+        let moved = c != *cam || then.iter().zip(here.iter()).any(|(a, b)| a.world != b.world);
+        let own = moved.then(|| splats::prepare_upto(&then, &c, format, PREVIEW_SH)).flatten();
         let mut img = preview_cell(&now, &c, format, preview, cell, if moved { own.as_ref() } else { still.as_ref() });
         img.planes.clear();
         img
@@ -1010,6 +1073,7 @@ fn draw_cpu(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camera, 
         }
     }
     let object: Vec<Option<usize>> = surfs.iter().map(|s| nodes.iter().position(|n| *n == s.node)).collect();
+    let ids = surface_ids(surfs, &object, nodes.len());
     let splat_object: Vec<Option<usize>> = splats.map_or(&[][..], |sp| sp.nodes()).iter().map(|s| nodes.iter().position(|n| n == s)).collect();
     let (light_names, light_of) = light_nodes(lights);
     // Per pixel, the extra channels, as asked for (see [`Slots`]).
@@ -1287,7 +1351,7 @@ fn draw_cpu(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camera, 
                     }
                 }
                 if passes.id {
-                    px[id_at] = object[t.surf].map_or(0.0, |o| (o + 1) as f32);
+                    px[id_at] = ids[t.surf];
                 }
             }
         });
@@ -1404,8 +1468,55 @@ mod tests {
 
     const FMT: Size = Size { width: 64, height: 32 };
 
+    /// A scene of instances (two cubes and a lit card, tinted, on three
+    /// points, lit by a sun casting shadows on a floor), and the same
+    /// realized.
+    pub(super) fn instanced() -> (Scene, Scene) {
+        use crate::geo::{Attr, PointSet};
+        use crate::mesh::{Material, Shading};
+        let lambert = Material { shading: Shading::Lambert, ..Material::default() };
+        let cube = crate::scene::Model { node: "rock".into(), ..crate::scene::Model::new(Arc::new(crate::mesh::cube([1.0; 3], [1; 3])), Mat4::identity(), lambert.clone()) };
+        let leaf = Card { node: "leaf".into(), material: Some(lambert.clone()), ..Card::new(Arc::new(checker()), Mat4::identity(), [1.5, 1.0]) };
+        let protos = Scene { meshes: vec![cube], cards: vec![leaf], ..Scene::default() };
+        let mut pts = PointSet { positions: vec![Vec3::new(-2.5, 0.0, -8.0), Vec3::new(0.0, 0.5, -8.0), Vec3::new(2.5, 0.0, -8.0)], node: "pts".into(), ..PointSet::default() };
+        pts.attrs.set(crate::geo::VARIANT, Attr::Int(vec![0, 1, 0]), 3).unwrap();
+        pts.attrs.set(crate::geo::CD, Attr::Vec4(vec![[1.0, 0.2, 0.2, 1.0], [0.2, 1.0, 0.2, 1.0], [0.2, 0.2, 1.0, 0.8]]), 3).unwrap();
+        let floor = crate::scene::Model { node: "floor".into(), ..crate::scene::Model::new(Arc::new(crate::mesh::plane([20.0, 20.0], [1, 1])), geom::trs([0.0, -1.0, -8.0], [-90.0, 0.0, 0.0], [1.0; 3]), lambert) };
+        let mut sun = crate::shade::Light::new(crate::shade::LightKind::Directional, geom::trs([0.0; 3], [-60.0, 30.0, 0.0], [1.0; 3]));
+        sun.shadows = true;
+        sun.node = "sun".into();
+        let scene = Scene { point_sets: vec![pts], meshes: vec![floor], lights: vec![sun], ..Scene::default() };
+        let mut copies = crate::ops::geo_ops::instance_on_points(&serde_json::json!({ "pick": "variant", "orient": "none" }), scene, Some(&protos), None).unwrap();
+        copies.instances[0].node = "copies".into();
+        let real = crate::ops::geo_ops::realize_instances(&serde_json::json!({}), copies.clone()).unwrap();
+        (copies, real)
+    }
+
+    /// Instances draw as the same objects realized would, shadows and
+    /// all; the id pass gives each its own id.
+    #[test]
+    fn instances_render_as_realized_with_ids_of_their_own() {
+        let (copies, real) = instanced();
+        let passes = Passes::from_names(["depth", "id", "shadow"]);
+        let (a, b) = crate::gpu::cpu_only(|| (render_passes(&copies, &camera(), FMT, 2, None, passes), render_passes(&real, &camera(), FMT, 2, None, passes)));
+        let worst = a.pixels.iter().zip(&b.pixels).flat_map(|(p, q)| (0..4).map(move |c| (p[c] - q[c]).abs())).fold(0.0, f32::max);
+        assert!(worst < 1e-5, "{worst}");
+        assert!(a.pixels.iter().any(|p| p[0] > 2.0 * p[1] + 0.05), "a red-tinted copy");
+        assert_eq!(a.plane("shadow.R").unwrap().data, b.plane("shadow.R").unwrap().data, "the copies cast the same shadows");
+        // Realized, the copies share one id (their node's); instanced,
+        // each has its own.
+        let ids = |img: &Image| {
+            let mut v: Vec<u32> = img.plane("id").unwrap().data.iter().map(|x| *x as u32).filter(|x| *x > 0).collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        assert_eq!(ids(&b).len(), 2, "the floor and the copies: {:?}", ids(&b));
+        assert_eq!(ids(&a).len(), 4, "the floor and each copy: {:?}", ids(&a));
+    }
+
     /// A 90° camera at the origin: at distance d it sees 2d across.
-    fn camera() -> Camera {
+    pub(super) fn camera() -> Camera {
         Camera { focal: 18.0, ..Camera::default() }
     }
 
@@ -1479,7 +1590,7 @@ mod tests {
 
     /// A mesh from its corners and triangles, flat-shaded, in one color.
     fn mesh(positions: Vec<Vec3>, triangles: Vec<[u32; 3]>, world: Mat4, color: Rgba) -> Surface<'static> {
-        Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: Cow::Owned(Vec::new()), triangles: triangles.into(), color, texture: None, wrap: false, v_up: false, headlight: false, holdout: false, node: "", material: None, casts: true, receives: true, two_sided: false }
+        Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: Cow::Owned(Vec::new()), triangles: triangles.into(), color, texture: None, wrap: false, v_up: false, headlight: false, holdout: false, node: "", material: None, casts: true, receives: true, two_sided: false, instance: None }
     }
 
     /// A cube `s` across, centered on the origin, its faces wound
@@ -1536,7 +1647,7 @@ mod tests {
         let at = |i: usize, j: usize| (j * (n + 1) + i) as u32;
         let triangles: Vec<[u32; 3]> = (0..n).flat_map(|j| (0..n).flat_map(move |i| [[at(i, j), at(i, j + 1), at(i + 1, j + 1)], [at(i, j), at(i + 1, j + 1), at(i + 1, j)]])).collect();
         let world = geom::trs([0.0, 0.0, -5.0], [0.0; 3], [1.0; 3]);
-        let plane = Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: uvs.clone().into(), triangles: triangles.clone().into(), color: [1.0; 4], texture: Some(&img), wrap: false, v_up: false, headlight: false, holdout: false, node: "", material: None, casts: true, receives: true, two_sided: false };
+        let plane = Surface { world, positions: positions.into(), normals: Cow::Owned(Vec::new()), uvs: uvs.clone().into(), triangles: triangles.clone().into(), color: [1.0; 4], texture: Some(&img), wrap: false, v_up: false, headlight: false, holdout: false, node: "", material: None, casts: true, receives: true, two_sided: false, instance: None };
         let card = card_surface_of(&img, world);
         for samples in [1, 3] {
             let (a, b) = (draw(&[plane_ref(&plane)], &[], &camera(), FMT, samples), draw(&[card_surface(&card)], &[], &camera(), FMT, samples));
@@ -1545,7 +1656,7 @@ mod tests {
         }
         // Twice the coordinates, repeating: the checker twice over.
         let doubled: Vec<[f64; 2]> = uvs.iter().map(|uv| [uv[0] * 2.0, uv[1] * 2.0]).collect();
-        let tiled = Surface { world, positions: plane.positions.clone(), normals: Cow::Owned(Vec::new()), uvs: doubled.into(), triangles: triangles.into(), color: [1.0; 4], texture: Some(&img), wrap: true, v_up: false, headlight: false, holdout: false, node: "", material: None, casts: true, receives: true, two_sided: false };
+        let tiled = Surface { world, positions: plane.positions.clone(), normals: Cow::Owned(Vec::new()), uvs: doubled.into(), triangles: triangles.into(), color: [1.0; 4], texture: Some(&img), wrap: true, v_up: false, headlight: false, holdout: false, node: "", material: None, casts: true, receives: true, two_sided: false, instance: None };
         let out = draw(&[tiled], &[], &camera(), FMT, 1);
         assert!((0..32).all(|y| (0..32).all(|x| out.at(x, y) == out.at(x + 32, y))), "repeats across");
     }
@@ -1557,7 +1668,7 @@ mod tests {
 
     /// A borrowed copy of `s`.
     fn plane_ref<'a>(s: &'a Surface) -> Surface<'a> {
-        Surface { world: s.world, positions: Cow::Borrowed(&s.positions), normals: Cow::Borrowed(&s.normals), uvs: Cow::Borrowed(&s.uvs), triangles: Cow::Borrowed(&s.triangles), color: s.color, texture: s.texture, wrap: s.wrap, v_up: s.v_up, headlight: s.headlight, holdout: s.holdout, node: s.node, material: s.material, casts: s.casts, receives: s.receives, two_sided: s.two_sided }
+        Surface { world: s.world, positions: Cow::Borrowed(&s.positions), normals: Cow::Borrowed(&s.normals), uvs: Cow::Borrowed(&s.uvs), triangles: Cow::Borrowed(&s.triangles), color: s.color, texture: s.texture, wrap: s.wrap, v_up: s.v_up, headlight: s.headlight, holdout: s.holdout, node: s.node, material: s.material, casts: s.casts, receives: s.receives, two_sided: s.two_sided, instance: s.instance }
     }
 
     /// Primitives and Read Geo through the graph, each at 5 in front of the
@@ -2519,6 +2630,7 @@ mod tests {
             casts: true,
             receives: true,
             two_sided: false,
+            instance: None,
         };
         let out = draw(&[plane], &[], &camera(), FMT, 1);
         let worst = out.pixels.iter().map(|p| (0..3).map(|c| (p[c] - mean[c]).abs()).fold(0.0, f32::max)).fold(0.0, f32::max);

@@ -304,6 +304,18 @@ fn layers_shrink_to_fit_or_leave_the_frame_to_the_cpu() {
     assert!(differences(&cpu, &out).iter().all(|(_, mean, _)| *mean == 0.0));
 }
 
+/// Instances (copies of a cube and a lit card, tinted, casting shadows)
+/// render on the GPU as on the CPU, each copy's id its own.
+#[test]
+fn instances_match_the_cpu_render() {
+    let Some(gpu) = crate::gpu::test_device() else {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    };
+    let (copies, _) = super::super::tests::instanced();
+    compare(&gpu, &copies, &super::super::tests::camera(), Size { width: 160, height: 80 }, 2, Passes::from_names(["depth", "id", "shadow", "mattes"]), None);
+}
+
 /// Motion blur added up on the GPU (each pixel's times jittered by its
 /// cell, or not; with shadows; the light passes and mattes too) matches
 /// the CPU's render of each time, averaged.

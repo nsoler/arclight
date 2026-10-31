@@ -332,17 +332,28 @@ impl SceneWorker {
                         let blur_times = if req.blur { view_blur_times(&req.graph, &viewed, req.frame) } else { Vec::new() };
                         // Only cards, solid meshes and (settled) splats are
                         // rendered; the viewport draws the rest.
-                        let splats = req.splats && matches!(&scene, Ok(Some(s)) if !s.splats.is_empty());
+                        let splats = req.splats && matches!(&scene, Ok(Some(s)) if !s.splats.is_empty() || s.instances.iter().any(|g| g.prototypes.iter().any(|p| matches!(p, arclight::geo::Prototype::Splats(_)))));
                         #[allow(unused_mut)]
                         let mut gpu_render = None;
                         let render = match (&scene, &req.render) {
-                            (Ok(Some(s)), Some((cam, format))) if !s.cards.is_empty() || (req.solid && !s.meshes.is_empty()) || splats => {
+                            (Ok(Some(s)), Some((cam, format))) if !s.cards.is_empty() || (req.solid && (!s.meshes.is_empty() || !s.instances.is_empty())) || splats => {
                                 let lit = matches!(req.preview, arclight::render3d::Preview::Lit { .. });
                                 let shown = |s: &arclight::scene::Scene| {
                                     let meshes = if req.solid { s.meshes.clone() } else { Vec::new() };
                                     let lights = if lit { s.lights.clone() } else { Vec::new() };
+                                    let splats_on = splats;
                                     let splats = if splats { s.splats.clone() } else { Vec::new() };
-                                    arclight::scene::Scene { cards: s.cards.clone(), meshes, lights, splats, ..Default::default() }
+                                    // Copies as their prototypes are: of
+                                    // meshes when solid, of splats when
+                                    // they're shown, of cards always.
+                                    use arclight::geo::Prototype;
+                                    let shows = |p: &Prototype| match p {
+                                        Prototype::Model(_) => req.solid,
+                                        Prototype::Card(_) => true,
+                                        Prototype::Splats(_) => splats_on,
+                                    };
+                                    let instances = s.instances.iter().filter(|g| g.prototypes.iter().all(shows)).cloned().collect();
+                                    arclight::scene::Scene { cards: s.cards.clone(), meshes, lights, splats, instances, ..Default::default() }
                                 };
                                 let now = shown(s);
                                 let (times, then) = if blur_times.is_empty() { Default::default() } else { blurred(&mut eval, &req.graph, &viewed, req.frame) };

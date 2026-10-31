@@ -37,6 +37,17 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.13, P4: Instance on Points + Realize** (Dev2): instances drawn
+  by expanding them in `render3d::surfaces()` (a Surface per instance
+  borrowing its prototype; `Surface.instance`; splats via `all_splats`),
+  so CPU, GPU and the preview draw them with shadows, blur by id, mattes
+  per Instances node, an id per instance (GPU ids worked out on the CPU in
+  `finish()`, no shader change). Lit cards' material color now tints.
+  Bench 1080p AA2: 100k cards CPU 1965 / GPU 168 ms; 1k spheres 260 /
+  257 ms. Memory: 568 B per card instance + GPU tri table: **P4b (real
+  GPU instancing) needed past ~1M instanced triangles** (10k+ mesh copies,
+  500k+ cards). First slice of the plan (P1 + Scatter + Attribute Set +
+  Instance on Points + Fit Plane) done.
 - **0.13.12, P5: Fit Plane** (Dev1): `src/geo_fit.rs` (`fit` via
   `camtrack::fit_plane`; align world / spread; size fit = extent +
   margin, centered on the extent; faces the camera else up); node gathers
