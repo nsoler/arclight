@@ -20,6 +20,15 @@
 //!   `at(x, f)`: `x` worked out at frame `f` (`at(t.track1, frame - 2)`).
 //!
 //! Angles are in radians (`sin(rad(45))`); rotation params are degrees.
+//!
+//! In a geometry node (Delete's expression; see [`Expr::eval_elem`]), a
+//! formula runs once per element (a point, a face, an instance) and reads
+//! it by `@` names: `@P` (where it is, in the scene: `[x, y, z]`; `@P.y`
+//! one component), `@N` (its normal, where it has one), `@id`, `@index`
+//! (its number, from 0), `@count` (how many there are), and any of its
+//! attributes as `@name` (a number, or a list for a vector or a color).
+//! `random(@id)` gives each its own number that stays with it. Other
+//! nodes' params (`node.param`) can't be read there yet.
 
 use serde_json::{json, Value};
 use std::fmt;
@@ -35,6 +44,8 @@ enum Node {
     Time,
     Fps,
     Ref { node: String, param: String },
+    /// An element's `@name` (in a geometry node).
+    Attr(String),
     List(Vec<Node>),
     Index(Box<Node>, Box<Node>),
     Unary(char, Box<Node>),
@@ -154,6 +165,8 @@ enum Tok {
     Num(f64),
     Ident(String),
     Str(String),
+    /// `@name`.
+    Attr(String),
     Sym(&'static str),
 }
 
@@ -197,6 +210,15 @@ fn lex(src: &str) -> Result<Vec<(Tok, std::ops::Range<usize>)>, String> {
                 i += 1;
             }
             out.push((Tok::Ident(src[start..i].to_string()), start..i));
+        } else if c == '@' {
+            i += 1;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+                i += 1;
+            }
+            if i == start + 1 {
+                return Err("expected a name after '@' (@P, @id, an attribute's name)".into());
+            }
+            out.push((Tok::Attr(src[start + 1..i].to_string()), start..i));
         } else if c == '"' {
             let end = src[i + 1..].find('"').ok_or("a quoted name isn't closed")?;
             out.push((Tok::Str(src[i + 1..i + 1 + end].to_string()), start..i + end + 2));
@@ -315,6 +337,13 @@ impl Parser {
                 Ok(v)
             }
             Tok::Sym("[") => Ok(Node::List(self.list("]")?)),
+            Tok::Attr(name) => {
+                let a = Node::Attr(name);
+                if self.eat(".") {
+                    return self.component(a);
+                }
+                Ok(a)
+            }
             Tok::Str(node) => {
                 if !matches!(self.peek(), Some(Tok::Sym("."))) {
                     return Err(format!("\"{node}\" needs a param: \"{node}\".param"));
@@ -356,18 +385,23 @@ impl Parser {
         self.pos += 1;
         let r = Node::Ref { node, param };
         if self.eat(".") {
-            let Some(Tok::Ident(c)) = self.peek().cloned() else { return Err("expected a component (x, y, z, w or r, g, b, a)".into()) };
-            self.pos += 1;
-            let i = match c.as_str() {
-                "x" | "r" => 0,
-                "y" | "g" => 1,
-                "z" | "b" => 2,
-                "w" | "a" => 3,
-                _ => return Err(format!("unknown component '{c}' (x, y, z, w or r, g, b, a)")),
-            };
-            return Ok(Node::Index(Box::new(r), Box::new(Node::Num(i as f64))));
+            return self.component(r);
         }
         Ok(r)
+    }
+
+    /// The `x`-style component after a '.' of `v`.
+    fn component(&mut self, v: Node) -> Result<Node, String> {
+        let Some(Tok::Ident(c)) = self.peek().cloned() else { return Err("expected a component (x, y, z, w or r, g, b, a)".into()) };
+        self.pos += 1;
+        let i = match c.as_str() {
+            "x" | "r" => 0,
+            "y" | "g" => 1,
+            "z" | "b" => 2,
+            "w" | "a" => 3,
+            _ => return Err(format!("unknown component '{c}' (x, y, z, w or r, g, b, a)")),
+        };
+        Ok(Node::Index(Box::new(v), Box::new(Node::Num(i as f64))))
     }
 
     /// Comma-separated expressions up to `close`.
@@ -391,6 +425,7 @@ fn show(t: &Tok) -> String {
         Tok::Num(x) => format!("{x}"),
         Tok::Ident(s) => format!("'{s}'"),
         Tok::Str(s) => format!("\"{s}\""),
+        Tok::Attr(s) => format!("'@{s}'"),
         Tok::Sym(s) => format!("'{s}'"),
     }
 }
@@ -443,6 +478,10 @@ impl Clock {
 /// is gone, links loop).
 pub type Lookup<'a> = &'a dyn Fn(&str, &str, f64) -> Result<Value, String>;
 
+/// What a geometry node's formula reads its element through: an `@`
+/// name to its value there (None: the element hasn't it).
+pub type Elem<'a> = &'a dyn Fn(&str) -> Option<Val>;
+
 impl Expr {
     /// The nodes and params it reads, in order (repeats included).
     pub fn refs(&self) -> Vec<(&str, &str)> {
@@ -455,7 +494,26 @@ impl Expr {
                     walk(b, out);
                 }
                 Node::Unary(_, a) => walk(a, out),
-                Node::Num(_) | Node::Frame | Node::Time | Node::Fps => {}
+                Node::Num(_) | Node::Frame | Node::Time | Node::Fps | Node::Attr(_) => {}
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.0, &mut out);
+        out
+    }
+
+    /// The `@` names it reads, in order (repeats included).
+    pub fn attrs(&self) -> Vec<&str> {
+        fn walk<'a>(n: &'a Node, out: &mut Vec<&'a str>) {
+            match n {
+                Node::Attr(name) => out.push(name),
+                Node::List(v) | Node::Call(_, v) => v.iter().for_each(|x| walk(x, out)),
+                Node::Index(a, b) | Node::Binary(_, a, b) => {
+                    walk(a, out);
+                    walk(b, out);
+                }
+                Node::Unary(_, a) => walk(a, out),
+                Node::Num(_) | Node::Frame | Node::Time | Node::Fps | Node::Ref { .. } => {}
             }
         }
         let mut out = Vec::new();
@@ -465,12 +523,21 @@ impl Expr {
 
     /// Its value at frame `t` (fractional between frames).
     pub fn eval(&self, lookup: Lookup, clock: Clock, t: f64) -> Result<Val, String> {
-        eval(&self.0, lookup, clock, t)
+        eval(&self.0, lookup, clock, t, None)
+    }
+
+    /// Its value for one element of a geometry node's (see the module's
+    /// notes), at frame `t`: `elem` gives the element's `@` names (None
+    /// for one it hasn't). Parse once, then run this per element (it's
+    /// safe from many threads at once).
+    pub fn eval_elem(&self, clock: Clock, t: f64, elem: Elem) -> Result<Val, String> {
+        let no_params: Lookup = &|node, param, _| Err(format!("{node}.{param}: other nodes' params can't be read in a geometry node's expression yet"));
+        eval(&self.0, no_params, clock, t, Some(elem))
     }
 }
 
-fn eval(n: &Node, lookup: Lookup, clock: Clock, t: f64) -> Result<Val, String> {
-    let ev = |n: &Node| eval(n, lookup, clock, t);
+fn eval(n: &Node, lookup: Lookup, clock: Clock, t: f64, elem: Option<Elem>) -> Result<Val, String> {
+    let ev = |n: &Node| eval(n, lookup, clock, t, elem);
     Ok(match n {
         Node::Num(x) => Val::Num(*x),
         Node::Frame => Val::Num(t),
@@ -479,6 +546,10 @@ fn eval(n: &Node, lookup: Lookup, clock: Clock, t: f64) -> Result<Val, String> {
         Node::Ref { node, param } => {
             let v = lookup(node, param, t)?;
             Val::from_json(&v).ok_or_else(|| format!("{node}.{param} isn't a number or a list of numbers"))?
+        }
+        Node::Attr(name) => {
+            let elem = elem.ok_or_else(|| format!("@{name} only means something in a geometry node (per point, face or instance)"))?;
+            elem(name).ok_or_else(|| format!("no attribute @{name} here"))?
         }
         Node::List(items) => {
             Val::List(items.iter().map(|x| ev(x)?.num().map_err(|e| format!("in a list: {e}"))).collect::<Result<_, _>>()?)
@@ -521,7 +592,7 @@ fn eval(n: &Node, lookup: Lookup, clock: Clock, t: f64) -> Result<Val, String> {
         }
         Node::Call(Func::At, args) => {
             let f = ev(&args[1])?.num()?;
-            eval(&args[0], lookup, clock, f)?
+            eval(&args[0], lookup, clock, f, elem)?
         }
         Node::Call(f, args) => {
             let a = args.iter().map(ev).collect::<Result<Vec<_>, _>>()?;
@@ -652,6 +723,28 @@ pub fn rename(src: &str, old: &str, new: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A geometry node's formula reads its element by @ names, components
+    /// too; outside one, or for a name it hasn't, it says so.
+    #[test]
+    fn at_names_read_the_element() {
+        let elem = |name: &str| match name {
+            "P" => Some(Val::List(vec![1.0, 2.0, 3.0])),
+            "id" => Some(Val::Num(7.0)),
+            _ => None,
+        };
+        let run = |src: &str| parse(src).unwrap().eval_elem(Clock::default(), 1.0, &elem);
+        assert_eq!(run("@P.y * 2 + @id"), Ok(Val::Num(11.0)));
+        assert_eq!(run("@P + [1, 1, 1]"), Ok(Val::List(vec![2.0, 3.0, 4.0])));
+        assert_eq!(run("random(@id)"), run("random(7)"));
+        assert_eq!(run("@P.y > 1 && @id == 7"), Ok(Val::Num(1.0)));
+        assert!(run("@Cd").unwrap_err().contains("@Cd"));
+        assert!(run("cam.focal + @id").unwrap_err().contains("can't be read"));
+        assert_eq!(parse("@P.x + @id").unwrap().attrs(), vec!["P", "id"]);
+        let none: Lookup = &|_, _, _| Err("none".into());
+        assert!(parse("@id").unwrap().eval(none, Clock::default(), 1.0).unwrap_err().contains("geometry node"));
+        assert!(parse("@ + 1").is_err());
+    }
 
     fn run(src: &str, t: f64) -> Result<Val, String> {
         let lookup = |node: &str, param: &str, t: f64| match (node, param) {

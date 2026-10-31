@@ -94,7 +94,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1115,6 +1115,30 @@ pub static OPS: &[OpInfo] = &[
                points is an error.",
     },
     OpInfo {
+        name: "delete_geo",
+        label: "Delete Geo",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN],
+        params: &[
+            fixed!("elements", "Elements", ParamKind::Choice(&["points", "faces", "instances"]), "points"),
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("mode", "Delete", ParamKind::Choice(&["inside", "outside", "expression"]), "inside"),
+            fixed!("shape", "Shape", ParamKind::Choice(&["box", "sphere"]), "box"),
+            p!("center", "Center", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+            p!("size", "Size", ParamKind::Vec3, [1.0, 1.0, 1.0]),
+            p!("rotate", "Rotate", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+            fixed!("expression", "Expression", ParamKind::Text, ""),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Deletes points (of point sets and curves; a curve left with fewer than two goes), faces (of meshes, by their \
+               middles; the vertices no face uses go too, and a mesh with no faces left) or instances (by their middles) \
+               inside or outside a box or sphere (Center, Size across each way, turned by Rotate; shown and moved in the 3D \
+               view), or where Expression is true for them: a formula per element reading @P (its place, @P.y one part), \
+               @N, @id, @index, @count and any attribute as @name (`@P.y < 0`, `random(@id) < 0.3`). Group narrows it to \
+               one node's (a name, or a pattern with *). The rest of the scene passes through.",
+    },
+    OpInfo {
         name: "splat_color",
         label: "Splat Color",
         category: Category::Scene,
@@ -1945,6 +1969,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "read_geo" => read_geo(params, ctx.frame),
         "read_splat" => read_splat(params),
         "splat_crop" => splat_crop(params, inputs),
+        "delete_geo" => Ok(scene_output(DEFAULT_FORMAT, geo_ops::delete(params, input_scene(inputs), ctx.frame as f64)?)),
         "scatter" => {
             let image = inputs.get(1).copied().flatten().filter(|i| i.scene.is_none());
             let camera = inputs.get(2).copied().flatten().and_then(|i| i.scene.as_deref());

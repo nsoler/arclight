@@ -37,6 +37,13 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.10, P2: Delete Geo + @ names** (Dev2): `expr.rs` `@name`
+  tokens (`.x/.y/.z/.w`), `Node::Attr`, `Expr::attrs()`,
+  `Expr::eval_elem` (Sync, rayon); `node.param` refs inside geometry
+  expressions error for now (param lookup not thread-safe, ops lack the
+  graph: P3 plumbing). `delete_geo`: points / faces (compacted) /
+  instances, by region (a scene Region; gizmo G/S via `param_for` arms)
+  or expression.
 - **0.13.9, P2: Scatter** (Dev2): `src/geo_ops.rs` (a module of
   ops.rs via `#[path]`), stable ids per D5: per-triangle hashed
   candidates (floor(area × density) + 1 by hash), thinning by hash <

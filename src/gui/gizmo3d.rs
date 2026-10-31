@@ -518,7 +518,7 @@ pub fn param_of(mode: Mode) -> &'static str {
 /// The param `mode` changes on a node of `op`: its translate, rotate or
 /// scale, a particle force's point (an Attractor's position, a Vortex's
 /// center, a Bounce plane's point), which only moves, or a Splat Crop's
-/// center and size.
+/// or Delete Geo's center and size.
 pub fn param_for(op: &str, mode: Mode) -> &'static str {
     match (op, mode) {
         ("particle_attractor", Mode::Move) => "position",
@@ -526,6 +526,8 @@ pub fn param_for(op: &str, mode: Mode) -> &'static str {
         ("particle_bounce", Mode::Move) => "point",
         ("splat_crop", Mode::Move) => "center",
         ("splat_crop", Mode::Scale) => "size",
+        ("delete_geo", Mode::Move) => "center",
+        ("delete_geo", Mode::Scale) => "size",
         _ => param_of(mode),
     }
 }
@@ -1168,6 +1170,15 @@ pub fn ray_plane(r0: &Vec3, d: &Vec3, p0: &Vec3, n: &Vec3) -> Option<Vec3> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    /// A region node's gizmo moves its center and sizes its size: Splat
+    /// Crop's and Delete Geo's.
+    #[test]
+    fn regions_move_their_center_and_size() {
+        for op in ["splat_crop", "delete_geo"] {
+            assert_eq!([Mode::Move, Mode::Rotate, Mode::Scale].map(|m| param_for(op, m)), ["center", "rotate", "size"], "{op}");
+        }
+    }
     use arclight::geom::Camera;
     use arclight::image::Size;
 

@@ -8,6 +8,7 @@
 //! mask) keeps most points where they were, with their ids.
 
 use crate::geo::{self, stable_hash, stable_unit, Attr, Attrs, PointSet};
+use crate::expr::{Elem, Val};
 use crate::geom::{self, Mat4, Vec3};
 use crate::image::Image;
 use crate::mesh::Mesh;
@@ -438,6 +439,169 @@ fn interpolated(attrs: &Attrs, mesh: &Mesh, points: &[Candidate]) -> Attrs {
     out
 }
 
+/// Where a Delete deletes: inside or outside a region (scene space taken
+/// into the unit cube or ball), or where a formula is true.
+enum Doomed {
+    Region { to_region: Mat4, sphere: bool, inside: bool },
+    Formula { expr: crate::expr::Expr, frame: f64 },
+}
+
+impl Doomed {
+    /// Whether the element at `p` (`elem` its @ names) goes.
+    fn judge(&self, p: &Vec3, elem: Elem) -> Result<bool, String> {
+        match self {
+            Doomed::Region { to_region, sphere, inside } => {
+                let q = geom::transform_point(to_region, p);
+                let within = if *sphere { q.norm_squared() <= 1.0 } else { q.x.abs() <= 1.0 && q.y.abs() <= 1.0 && q.z.abs() <= 1.0 };
+                Ok(within == *inside)
+            }
+            Doomed::Formula { expr, frame } => match expr.eval_elem(crate::expr::Clock::default(), *frame, elem)? {
+                Val::Num(x) => Ok(x != 0.0),
+                Val::List(v) => Err(format!("the expression gives a list of {} (a condition is one number)", v.len())),
+            },
+        }
+    }
+
+    /// Which of `count` elements go: element i at `at(i)`, with
+    /// attributes `attrs`, and `extra` @ names of its own (by name and i).
+    fn which(&self, count: usize, at: &(dyn Fn(usize) -> Vec3 + Sync), attrs: &Attrs, extra: &(dyn Fn(&str, usize) -> Option<Val> + Sync)) -> Result<Vec<bool>> {
+        (0..count)
+            .into_par_iter()
+            .map(|i| {
+                let p = at(i);
+                let elem = |name: &str| match name {
+                    "P" => Some(Val::List(vec![p.x, p.y, p.z])),
+                    "index" => Some(Val::Num(i as f64)),
+                    "count" => Some(Val::Num(count as f64)),
+                    _ => attr_value(attrs, name, i).or_else(|| extra(name, i)),
+                };
+                self.judge(&p, &elem)
+            })
+            .collect::<Result<Vec<bool>, String>>()
+            .map_err(|e| anyhow::anyhow!("Delete: {e}"))
+    }
+}
+
+/// Attribute `name`'s value at element `i`, as a formula reads it.
+fn attr_value(attrs: &Attrs, name: &str, i: usize) -> Option<Val> {
+    Some(match attrs.get(name)? {
+        Attr::Float(v) => Val::Num(v[i] as f64),
+        Attr::Int(v) => Val::Num(v[i] as f64),
+        Attr::Vec3(v) => Val::List(v[i].iter().map(|&x| x as f64).collect()),
+        Attr::Vec4(v) => Val::List(v[i].iter().map(|&x| x as f64).collect()),
+    })
+}
+
+/// The indices of `gone`'s false entries: what stays.
+fn staying(gone: &[bool]) -> Vec<u32> {
+    gone.iter().enumerate().filter(|(_, g)| !**g).map(|(i, _)| i as u32).collect()
+}
+
+/// A Delete: `scene` without the points, faces or instances (of its
+/// group) inside or outside its region, or where its formula is true;
+/// the region kept for the 3D view to show.
+pub fn delete(params: &Value, mut scene: Scene, frame: f64) -> Result<Scene> {
+    let group = params["group"].as_str().unwrap_or("").trim();
+    let take = |node: &str| group.is_empty() || geo::glob(group, node);
+    let doomed = match params["mode"].as_str() {
+        Some("expression") => {
+            let src = params["expression"].as_str().unwrap_or("").trim();
+            if src.is_empty() {
+                return Ok(scene);
+            }
+            Doomed::Formula { expr: crate::expr::parse(src).map_err(|e| anyhow::anyhow!("Delete: {e}"))?, frame }
+        }
+        mode => {
+            let size = crate::scene::numbers::<3>(&params["size"], 1.0).map(|v| (v.abs() / 2.0).max(1e-12));
+            let region = geom::trs(crate::scene::numbers(&params["center"], 0.0), crate::scene::numbers(&params["rotate"], 0.0), size);
+            let sphere = params["shape"].as_str() == Some("sphere");
+            scene.regions.push(crate::scene::Region { node: String::new(), world: region, sphere });
+            Doomed::Region { to_region: region.try_inverse().unwrap_or_else(Mat4::identity), sphere, inside: mode != Some("outside") }
+        }
+    };
+    let none = |_: &str, _: usize| None;
+    match params["elements"].as_str() {
+        Some("faces") => {
+            for m in scene.meshes.iter_mut().filter(|m| take(&m.node)) {
+                let s = Surf::new(m.mesh.clone(), &m.world);
+                let center = |t: usize| s.corners(t).iter().sum::<Vec3>() / 3.0;
+                let normal = |name: &str, t: usize| (name == geo::N).then(|| {
+                    let [a, b, c] = s.corners(t);
+                    let n = (b - a).cross(&(c - a)).try_normalize(1e-300).unwrap_or_else(Vec3::y);
+                    Val::List(vec![n.x, n.y, n.z])
+                });
+                let gone = doomed.which(s.mesh.triangles.len(), &center, &s.mesh.face_attrs, &normal)?;
+                if gone.contains(&true) {
+                    m.mesh = Arc::new(without_faces(&s.mesh, &staying(&gone)));
+                }
+            }
+            scene.meshes.retain(|m| !take(&m.node) || !m.mesh.triangles.is_empty());
+        }
+        Some("instances") => {
+            for g in scene.instances.iter_mut().filter(|g| take(&g.node)) {
+                let gone = doomed.which(g.len(), &|i| g.center(i), &g.attrs, &none)?;
+                let keep = staying(&gone);
+                g.worlds = keep.iter().map(|&i| g.worlds[i as usize]).collect();
+                g.which = keep.iter().map(|&i| g.which[i as usize]).collect();
+                g.attrs = g.attrs.gathered(&keep);
+            }
+        }
+        _ => {
+            for g in scene.point_sets.iter_mut().filter(|g| take(&g.node)) {
+                let gone = doomed.which(g.len(), &|i| g.placed(i), &g.attrs, &none)?;
+                let keep = staying(&gone);
+                g.positions = keep.iter().map(|&i| g.positions[i as usize]).collect();
+                g.attrs = g.attrs.gathered(&keep);
+            }
+            for c in scene.curves.iter_mut().filter(|c| take(&c.node)) {
+                let gone = doomed.which(c.positions.len(), &|i| geom::transform_point(&c.world, &c.positions[i]), &c.attrs, &none)?;
+                // Each curve's points that stay; one left with fewer than
+                // two goes.
+                let mut out = geo::Curves { world: c.world, node: c.node.clone(), ..geo::Curves::default() };
+                let mut kept = Vec::new();
+                for k in 0..c.len() {
+                    let pts: Vec<u32> = (c.starts[k]..c.starts[k + 1]).filter(|&i| !gone[i as usize]).collect();
+                    if pts.len() >= 2 {
+                        out.push(&pts.iter().map(|&i| c.positions[i as usize]).collect::<Vec<_>>(), c.closed[k]);
+                        kept.extend(pts);
+                    }
+                }
+                out.attrs = c.attrs.gathered(&kept);
+                *c = out;
+            }
+        }
+    }
+    Ok(scene)
+}
+
+/// `mesh` with only the triangles `keep`, and only the vertices they use
+/// (their attributes with them).
+fn without_faces(mesh: &Mesh, keep: &[u32]) -> Mesh {
+    let mut index = vec![u32::MAX; mesh.positions.len()];
+    let mut used = Vec::new();
+    let triangles = keep
+        .iter()
+        .map(|&t| {
+            mesh.triangles[t as usize].map(|v| {
+                if index[v as usize] == u32::MAX {
+                    index[v as usize] = used.len() as u32;
+                    used.push(v);
+                }
+                index[v as usize]
+            })
+        })
+        .collect();
+    let pick = |n: usize| n == mesh.positions.len();
+    Mesh {
+        positions: used.iter().map(|&v| mesh.positions[v as usize]).collect(),
+        normals: if pick(mesh.normals.len()) { used.iter().map(|&v| mesh.normals[v as usize]).collect() } else { Vec::new() },
+        uvs: if pick(mesh.uvs.len()) { used.iter().map(|&v| mesh.uvs[v as usize]).collect() } else { Vec::new() },
+        triangles,
+        point_attrs: mesh.point_attrs.gathered(&used),
+        face_attrs: mesh.face_attrs.gathered(keep),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,5 +696,60 @@ mod tests {
         let card = Card { node: "c".into(), ..Card::new(Arc::new(Image::new(4, 4)), Mat4::identity(), [2.0, 2.0]) };
         let on = run(json!({ "density": 25.0 }), Scene { cards: vec![card], ..Scene::default() });
         assert!((70..130).contains(&on.len()) && on.positions.iter().all(|p| p.z.abs() < 1e-9));
+    }
+
+    /// Delete takes points inside or outside a region, or where a formula
+    /// is true; faces with their unused vertices; instances; short curves.
+    #[test]
+    fn delete_by_region_and_by_formula() {
+        use crate::geo::{Curves, Instances};
+        let pts = run(json!({ "density": 10.0, "seed": 3 }), ground(10.0));
+        let n = pts.len();
+        let mut scene = Scene { point_sets: vec![PointSet { node: "scatter".into(), ..pts }], ..Scene::default() };
+        let del = |p: Value, s: &Scene| delete(&p, s.clone(), 1.0).unwrap();
+        // A 4-wide box round the middle: those points go, and its region shows.
+        let out = del(json!({ "center": [0, 0, 0], "size": [4, 4, 4] }), &scene);
+        let ps = &out.point_sets[0];
+        assert!(ps.positions.iter().all(|p| p.x.abs() > 2.0 || p.z.abs() > 2.0) && ps.len() < n && ps.validate().is_ok());
+        assert_eq!(out.regions.len(), 1);
+        let outside = del(json!({ "mode": "outside", "center": [0, 0, 0], "size": [4, 4, 4] }), &scene);
+        assert_eq!(outside.point_sets[0].len() + ps.len(), n, "inside and outside split them");
+        // A formula: those right of the middle, then a random third by id.
+        let right = del(json!({ "mode": "expression", "expression": "@P.x > 0" }), &scene);
+        assert!(right.point_sets[0].positions.iter().all(|p| p.x <= 0.0) && right.regions.is_empty());
+        let third = del(json!({ "mode": "expression", "expression": "random(@id) < 0.3" }), &scene);
+        let k = third.point_sets[0].len() as f64 / n as f64;
+        assert!((0.6..0.8).contains(&k), "{k}");
+        let again = del(json!({ "mode": "expression", "expression": "random(@id) < 0.3" }), &scene);
+        assert_eq!(again.point_sets[0].attrs, third.point_sets[0].attrs, "the same every time");
+        assert!(delete(&json!({ "mode": "expression", "expression": "@P" }), scene.clone(), 1.0).is_err(), "a list isn't a condition");
+        assert!(delete(&json!({ "mode": "expression", "expression": "@nope > 1" }), scene.clone(), 1.0).is_err());
+        assert_eq!(del(json!({ "group": "other", "mode": "expression", "expression": "1" }), &scene).point_sets[0].len(), n, "not its group");
+        // Faces: the plane's left half; the vertices only they used go, and
+        // their attributes in step.
+        scene = ground(10.0);
+        let mesh = Arc::make_mut(&mut scene.meshes[0].mesh);
+        let (np, nf) = (mesh.positions.len(), mesh.triangles.len());
+        mesh.point_attrs.set("w", Attr::Float((0..np).map(|i| i as f32).collect()), np).unwrap();
+        mesh.face_attrs.set("f", Attr::Int((0..nf as i32).collect()), nf).unwrap();
+        let out = del(json!({ "elements": "faces", "mode": "expression", "expression": "@P.x < 0 && @N.y > 0.5" }), &scene);
+        let m = &out.meshes[0].mesh;
+        assert_eq!(m.triangles.len(), nf / 2);
+        assert!(m.positions.len() < np && m.point_attrs.check(m.positions.len()).is_ok() && m.face_attrs.check(nf / 2).is_ok());
+        assert!(m.positions.iter().all(|p| p.x >= 0.0), "only the right half's vertices");
+        assert!(del(json!({ "elements": "faces", "mode": "expression", "expression": "1" }), &scene).meshes.is_empty(), "no faces left: no mesh");
+        // Instances by their middles; curves losing points.
+        let at = |x: f64| geom::trs([x, 0.0, 0.0], [0.0; 3], [1.0; 3]);
+        let inst = Instances { worlds: vec![at(-1.0), at(1.0)], which: vec![0, 0], node: "i".into(), ..Instances::default() };
+        let mut c = Curves { node: "c".into(), ..Curves::default() };
+        c.push(&[Vec3::new(-2.0, 0.0, 0.0), Vec3::new(-1.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)], false);
+        c.push(&[Vec3::new(1.0, 1.0, 0.0), Vec3::new(2.0, 1.0, 0.0)], true);
+        scene = Scene { instances: vec![inst], curves: vec![c], ..Scene::default() };
+        let out = del(json!({ "elements": "instances", "mode": "expression", "expression": "@P.x > 0" }), &scene);
+        assert_eq!(out.instances[0].worlds, vec![at(-1.0)]);
+        let out = del(json!({ "mode": "expression", "expression": "@P.x > 0" }), &scene);
+        let c = &out.curves[0];
+        assert!(c.validate().is_ok());
+        assert_eq!((c.len(), c.positions.len()), (1, 2), "the first keeps two points; the second, none left, goes");
     }
 }

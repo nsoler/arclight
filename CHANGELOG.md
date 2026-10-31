@@ -17,6 +17,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.10 — 2026-10-31
+
+- New **Delete Geo** node: deletes points, mesh faces or instances inside
+  or outside a box or sphere (shown and moved in the 3D view), or where an
+  expression is true for them.
+- Expressions in geometry nodes read each element by @ names: `@P`
+  (`@P.y`), `@N`, `@id`, `@index`, `@count` and any attribute as `@name`
+  (e.g. `random(@id) < 0.3`).
+
 ## 0.13.9 — 2026-10-31
 
 - New **Scatter** node: scatters points over a scene's meshes and cards

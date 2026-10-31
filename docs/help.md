@@ -390,6 +390,11 @@ selected object.
   it's dark. Raising the density or painting the mask keeps the points
   already there where they are, so what's placed on them doesn't jump.
   Min distance spreads them evenly; Seed gives another arrangement.
+  **Delete Geo** removes points, faces or instances inside or outside a
+  box or sphere you place in the 3D view (G moves it, S sizes it), or
+  where an expression is true: `@P.y < 0` drops everything below the
+  ground, `random(@id) < 0.3` thins a scatter by a third, the same third
+  every time.
 - **Read Geo** reads an OBJ file (with its MTL colors and textures), a
   glTF file (.gltf, .glb) or an Alembic cache (.abc): its meshes move and
   deform frame by frame. **Frame rate** (set to the project's when you
