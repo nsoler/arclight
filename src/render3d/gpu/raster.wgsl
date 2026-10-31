@@ -825,13 +825,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
     let in_frame = g.x < w && g.y < h;
     let pq = vec2<f32>(f32(g.x) + 0.5, f32(g.y) + 0.5);
     let flags = P.slots.y;
-    // The splats alone, first (before any thread leaves: the workgroup
-    // loads them together, a tile being a workgroup without a cell).
+    // The splats alone (the same for every sample of the pixel that meets
+    // no surface): worked out once, in the last row's dispatch, and added
+    // for each such sample of every row. First, before any thread leaves:
+    // the workgroup loads them together (a tile being a workgroup without
+    // a cell).
+    let last_row = P.cell.w + 1u == P.size.z;
     var alone: Alone;
     alone.dominant = NONE;
     alone.share = -1.0;
     alone.through = 1.0;
-    if (P.splat.x != 0u && side == 0u) {
+    if (P.splat.x != 0u && side == 0u && last_row) {
         alone_batched(&alone, wid.y * P.size.w + wid.x, li, in_frame, pq, (flags & MATTES) != 0u);
     }
     if (!in_frame) { return; }
@@ -857,9 +861,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
     // Where the samples' blends first got half opaque, nearest (kept from
     // row to row): 1 if any, depth bits, the splat there or NONE.
     var median = out_hits[3u * pixels + px];
+    // How many samples so far met no surface (kept in the median's last
+    // word from row to row).
+    var lone = median.w;
 
     // (With a jitter cell: each pixel through the list on its own.)
-    if (P.splat.x != 0u && side != 0u) {
+    if (P.splat.x != 0u && side != 0u && last_row) {
         var st = splat_tile;
         loop {
             let f = next_frag(&st, pq);
@@ -868,9 +875,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
         }
     }
     let any_splat = alone.any;
-    let alone_acc = alone.acc;
-    let alone_emission = alone.emission;
-    let alone_half = alone.half;
     let dominant = alone.dominant;
 
     for (var i = 0u; i < n; i++) {
@@ -901,13 +905,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
             count++;
         }
         if (count == 0u) {
-            // No surface: the splats alone.
-            if (any_splat) {
-                sums.color += alone_acc;
-                median = nearer(median, alone_half);
-                for (var o = 0u; o < 32u; o++) { sums.mattes[o] += alone.mattes[o]; }
-                if ((flags & ANY_PART) != 0u) { sums.parts[2] += alone_emission; }
-            }
+            // No surface: the splats alone (added in the last row).
+            if (P.splat.x != 0u) { lone += 1u; }
             continue;
         }
 
@@ -1026,6 +1025,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
         if (dropped && 1.0 - acc.a - held > OVERFLOW_LEFT) { overflowed = true; }
         sums.color += acc;
     }
+    // Every row's samples that met no surface: the splats alone, each.
+    if (last_row && any_splat && lone > 0u) {
+        let c = f32(lone);
+        sums.color += alone.acc * c;
+        median = nearer(median, alone.half);
+        for (var o = 0u; o < 32u; o++) { sums.mattes[o] += alone.mattes[o] * c; }
+        if ((flags & ANY_PART) != 0u) { sums.parts[2] += alone.emission * c; }
+    }
+    median.w = lone;
 
     // Add this row's to the rows before.
     out_color[px] += sums.color;

@@ -599,9 +599,10 @@ switch, the status and the tests' skip work end to end.
   splats after its crop), the 3D view orbiting: 720p 10.7 ms a frame
   against 60 ms, 1080p 17 ms against 82 ms. Scanline Render: 1080p 21 ms
   against 61 ms (the capture kept); a capture new at every render (Splat
-  Crop re-evaluated) pays its upload (~150 MB) each time. Follow-ups:
-  keep the splats-alone blend between sample rows (AA renders redo it
-  each row), splats in the GPU's motion-blur sum.
+  Crop re-evaluated) pays its upload (~150 MB) each time. The
+  splats-alone blend is worked out once a render (the last sample row's
+  dispatch adds it for every row's samples that met no surface): 4K AA
+  3 × 3 143 → 128 ms. Follow-up: splats in the GPU's motion-blur sum.
 
 ### G7: Zero-copy viewing [Dev1]
 

@@ -15,6 +15,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.12 — 2026-10-31
+
+- GPU: anti-aliased renders of Gaussian splats blend the splats once a
+  pixel instead of once per row of samples (4K: 143 to 128 ms for the
+  lizard sample).
+
 ## 0.12.11 — 2026-10-31
 
 - GPU: **Shuffle and Merge's zmerge run on the GPU too**, so a 2D chain
