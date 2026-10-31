@@ -3,8 +3,8 @@
 //! Inputs sit on a node's left edge, its output on the right. Drag from an
 //! output to an input (or the reverse) to connect, or drop the wire anywhere
 //! on a node: from an output it goes into the node's first free input that
-//! takes it (else its first that does), from an input it takes the node's
-//! output. Drag a connected input away to reroute or disconnect. Drop a
+//! takes it (else its first that does; a mask only on its own port), from an
+//! input it takes the node's output. Drag a connected input away to reroute or disconnect. Drop a
 //! wire dragged from an output onto another wire to join the two with a new
 //! Merge (the dragged node into A, over the wire's source in B). Inputs are
 //! yellow squares, outputs green circles.
@@ -272,15 +272,15 @@ fn fits_between(doc: &Doc, node: &str, src: &str, dst: &str, port: usize) -> boo
 
 /// The input of `dst` a wire from `src`'s output dropped on `dst`'s body
 /// goes into: its first free input that takes it, else its first that
-/// takes it (that one's wire replaced). None when it would close a cycle
-/// (`src` itself included: a node is upstream of itself), or no input
-/// takes it.
+/// takes it (that one's wire replaced); never the mask (only on its own
+/// port). None when it would close a cycle (`src` itself included: a node
+/// is upstream of itself), or no input takes it.
 fn body_input(doc: &Doc, src: &str, dst: &str) -> Option<usize> {
     if doc.is_upstream(dst, src) {
         return None;
     }
     let n = doc.node(dst)?;
-    let takes: Vec<usize> = (0..n.inputs.len()).filter(|&i| fits(doc, src, dst, i)).collect();
+    let takes: Vec<usize> = (0..n.inputs.len()).filter(|&i| !is_mask_port(&n.op, i) && fits(doc, src, dst, i)).collect();
     takes.iter().find(|&&i| n.inputs[i].is_empty()).or(takes.first()).copied()
 }
 
@@ -1639,7 +1639,9 @@ mod tests {
         let inputs = |doc: &Doc| doc.node(&merge).unwrap().inputs.clone();
         let body = |h: &Harness, doc: &Doc| h.rect(doc, &merge).center();
         let title = |h: &Harness, doc: &Doc| h.rect(doc, &merge).center_top() + Vec2::new(0.0, 6.0);
-        // Free inputs in port order: A, B, then the mask; on the body or the title.
+        // Free inputs in port order, A then B (the mask never); on the body
+        // or the title.
+        assert!(is_mask_port("merge", 2));
         let (from, to) = (NodeEditor::out_port(h.rect(&doc, &c[0])), body(&h, &doc));
         h.drag(&mut doc, from, to);
         assert_eq!(inputs(&doc), [c[0].as_str(), "", ""]);
@@ -1649,19 +1651,26 @@ mod tests {
         h.frame(&mut doc, vec![]);
         let (from, to) = (NodeEditor::out_port(h.rect(&doc, &c[1])), title(&h, &doc));
         h.drag(&mut doc, from, to);
+        assert_eq!(inputs(&doc), [c[0].as_str(), &c[1], ""]);
+        // A and B taken: A, its wire replaced, though the mask is free.
         let (from, to) = (NodeEditor::out_port(h.rect(&doc, &c[2])), body(&h, &doc));
         h.drag(&mut doc, from, to);
-        assert_eq!(inputs(&doc), [c[0].as_str(), &c[1], &c[2]]);
-        // All taken: the first, its wire replaced.
-        let (from, to) = (NodeEditor::out_port(h.rect(&doc, &c[3])), body(&h, &doc));
+        assert_eq!(inputs(&doc), [c[2].as_str(), &c[1], ""]);
+        // On a port: that port (the mask's too), though A is free.
+        let (from, to) = (NodeEditor::out_port(h.rect(&doc, &c[3])), NodeEditor::in_port(h.rect(&doc, &merge), 2, 3));
         h.drag(&mut doc, from, to);
-        assert_eq!(inputs(&doc), [c[3].as_str(), &c[1], &c[2]]);
-        // On a port: that port, though A is free.
         doc.disconnect(&merge, 0);
         h.frame(&mut doc, vec![]);
         let (from, to) = (NodeEditor::out_port(h.rect(&doc, &c[0])), NodeEditor::in_port(h.rect(&doc, &merge), 1, 3));
         h.drag(&mut doc, from, to);
-        assert_eq!(inputs(&doc), ["", c[0].as_str(), &c[2]]);
+        assert_eq!(inputs(&doc), ["", c[0].as_str(), &c[3]]);
+        // A Blur with its input wired: a second image replaces it, not the mask.
+        let blur = doc.add_node("blur", [700.0, 200.0]);
+        doc.connect(&c[1], &blur, 0);
+        h.frame(&mut doc, vec![]);
+        let (from, to) = (NodeEditor::out_port(h.rect(&doc, &c[3])), h.rect(&doc, &blur).center());
+        h.drag(&mut doc, from, to);
+        assert_eq!(doc.node(&blur).unwrap().inputs, [c[3].as_str(), ""]);
     }
 
     /// No input takes it (a scene into a 2D node), it's the node itself, or

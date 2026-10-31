@@ -54,9 +54,9 @@ done), `docs/help.md` (the in-app help) and
   `body_input` (first free input whose kind fits, in port order, else the
   first that fits; none on a cycle via `doc.is_upstream`) and
   `body_output` (the reverse drag; not a Viewer); ports within reach win;
-  the drop-on-a-wire Merge doesn't fire under a node. Open question to
-  the user: a second image wire on a Blur/Grade goes into its mask (the
-  first free input that fits); maybe leave masks out of the free pass.
+  the drop-on-a-wire Merge doesn't fire under a node. 0.13.6 (user's
+  call): mask ports are left out of the body drop (`is_mask_port`); a
+  mask takes a wire only on its own port.
 - **0.13.1, gizmo starts as Move** (Dev2): `gizmo3d::Tool` defaults to
   `Move` (was `All` since 0.11.4); a plain G / R / S that starts its
   transform sets the tool (from Select or All too) and it stays after

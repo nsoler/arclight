@@ -17,6 +17,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.6 — 2026-10-31
+
+- Node graph: a wire dropped on a node's body no longer goes into its mask
+  input: on a node whose main input is wired it replaces that input
+  instead. A mask takes a wire only when it's dropped on the mask's own
+  port.
+
 ## 0.13.5 — 2026-10-31
 
 - Geometry (phase 13, P1): scenes can now carry point sets, instances and
