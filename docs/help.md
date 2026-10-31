@@ -413,7 +413,9 @@ selected object.
   delete them by distance. **Attribute from Image** reads an image at
   each point: through a camera (color scattered rocks by the plate they
   sit on) or at its uv (a painted map); then use @Cd or the luminance in
-  formulas.
+  formulas. **Attribute Transfer** carries attributes from another
+  geometry's nearest points: set colors on a few points and spread them
+  to many, or give scattered points the nearest tracker point's values.
   **Instance on Points** puts a copy of a prototype (the
   meshes, cards or splats wired to its second input) at every scattered
   point: rocks on a ground, a crowd of cards, trees. Each point picks one

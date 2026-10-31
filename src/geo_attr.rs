@@ -9,6 +9,8 @@
 //!   tracker's) or a region, as MoGraph's effectors.
 //! - Attribute from Image: an image sampled at each element, where a
 //!   camera sees it or at its uv.
+//! - Attribute Transfer: attributes from the nearest elements of another
+//!   input (within a radius, with a falloff), through a k-d tree.
 
 use crate::geo::{self, Attr, Attrs};
 use crate::geom::{self, Mat4, Vec3};
@@ -495,6 +497,137 @@ pub fn attribute_from_image(params: &Value, mut scene: Scene, image: Option<&cra
     Ok(scene)
 }
 
+/// The elements of `scene` (`elements`, of objects in `group`), read only:
+/// each object's placed positions and attributes.
+fn sources<'a>(scene: &'a Scene, elements: Elements, group: &str) -> Vec<(Vec<Vec3>, &'a Attrs)> {
+    let take = |node: &str| group.is_empty() || geo::glob(group, node);
+    match elements {
+        Elements::Points => scene
+            .point_sets
+            .iter()
+            .filter(|g| take(&g.node))
+            .map(|g| ((0..g.len()).map(|i| g.placed(i)).collect(), &g.attrs))
+            .chain(scene.curves.iter().filter(|c| take(&c.node)).map(|c| (c.positions.iter().map(|p| geom::transform_point(&c.world, p)).collect(), &c.attrs)))
+            .collect(),
+        Elements::MeshPoints => scene.meshes.iter().filter(|m| take(&m.node)).map(|m| (m.mesh.positions.iter().map(|p| geom::transform_point(&m.world, p)).collect(), &m.mesh.point_attrs)).collect(),
+        Elements::Instances => scene.instances.iter().filter(|g| take(&g.node)).map(|g| (g.worlds.iter().map(|w| Vec3::new(w[(0, 3)], w[(1, 3)], w[(2, 3)])).collect(), &g.attrs)).collect(),
+    }
+}
+
+/// One attribute gathered from every source element: its kind and each
+/// element's components (None where its object hasn't it).
+struct Gathered {
+    name: String,
+    kind: &'static str,
+    values: Vec<Option<Vec<f64>>>,
+}
+
+/// An Attribute Transfer: Attributes ("*" for all) of the Source
+/// elements of the second input copied onto the elements of the first,
+/// from the nearest (Mode nearest) or the inverse-distance mean of those
+/// within Radius (average); faded by Falloff across the radius toward
+/// what was there. Elements with nothing within Radius (0: no limit) keep
+/// their value, or get 0 (Missing zero).
+pub fn attribute_transfer(params: &Value, mut scene: Scene, source: Option<&Scene>) -> Result<Scene> {
+    let source = source.ok_or_else(|| anyhow::anyhow!("Attribute Transfer: connect the scene to take attributes from to its source input"))?;
+    let src_elements = match params["source_elements"].as_str() {
+        Some("mesh points") => Elements::MeshPoints,
+        Some("instances") => Elements::Instances,
+        _ => Elements::Points,
+    };
+    let objects = sources(source, src_elements, params["source_group"].as_str().unwrap_or("").trim());
+    let wanted = params["attributes"].as_str().unwrap_or("*").trim();
+    let mut names: Vec<(String, &'static str)> = Vec::new();
+    for (_, attrs) in &objects {
+        for (n, a) in attrs.iter() {
+            let asked = wanted == "*" || wanted.split([' ', ',']).any(|w| w == n);
+            if asked && n != "P" && !names.iter().any(|(m, _)| m == n) {
+                names.push((n.to_string(), a.kind()));
+            }
+        }
+    }
+    if names.is_empty() {
+        bail!("Attribute Transfer: the source has no attributes {} to take", if wanted == "*" { String::new() } else { format!("named {wanted}") });
+    }
+    let mut positions = Vec::new();
+    let mut gathered: Vec<Gathered> = names.iter().map(|(n, k)| Gathered { name: n.clone(), kind: k, values: Vec::new() }).collect();
+    for (placed, attrs) in &objects {
+        for g in &mut gathered {
+            let attr = attrs.get(&g.name).filter(|a| a.kind() == g.kind);
+            g.values.extend((0..placed.len()).map(|i| attr.map(|a| components(a, i, width(g.kind), 0.0))));
+        }
+        positions.extend(placed.iter().copied());
+    }
+    let tree = KdTree::new(positions);
+    let num = |k: &str, d: f64| params[k].as_f64().filter(|v| v.is_finite()).unwrap_or(d);
+    let radius = num("radius", 0.0).max(0.0);
+    let average = params["mode"].as_str() == Some("average");
+    if average && radius <= 0.0 {
+        bail!("Attribute Transfer: Mode average needs a Radius above 0");
+    }
+    let falloff = params["falloff"].as_str().unwrap_or("none");
+    let zero = params["missing"].as_str() == Some("zero");
+    // How much of the source a neighbor `d` away gives.
+    let fade = |d: f64| -> f64 {
+        if radius <= 0.0 {
+            return 1.0;
+        }
+        let t = (1.0 - d / radius).clamp(0.0, 1.0);
+        match falloff {
+            "linear" => t,
+            "smooth" => smooth(t),
+            _ => 1.0,
+        }
+    };
+    let group = params["group"].as_str().unwrap_or("").trim();
+    each_target(&mut scene, Elements::from(params), group, |t| {
+        let n = t.placed.len();
+        // Each element's neighbors: (source index, distance); empty: none.
+        let near: Vec<Vec<(usize, f64)>> = t
+            .placed
+            .par_iter()
+            .map(|p| {
+                if average {
+                    tree.within(p, radius)
+                } else {
+                    tree.nearest(p).filter(|(_, d)| radius <= 0.0 || *d <= radius).map(|(j, d)| vec![(j, d)]).unwrap_or_default()
+                }
+            })
+            .collect();
+        for g in &gathered {
+            let w = width(g.kind);
+            let old = t.attrs.get(&g.name).filter(|a| width(a.kind()) == w);
+            let values: Vec<f64> = (0..n)
+                .flat_map(|i| {
+                    let before = match old {
+                        Some(a) if !zero => components(a, i, w, 0.0),
+                        _ => vec![0.0; w],
+                    };
+                    let have: Vec<(&Vec<f64>, f64, f64)> = near[i]
+                        .iter()
+                        .filter_map(|&(j, d)| g.values[j].as_ref().map(|v| (v, if average { 1.0 / (d + 1e-9) } else { 1.0 }, d)))
+                        .collect();
+                    if have.is_empty() {
+                        return before;
+                    }
+                    // Ints come from the nearest only.
+                    let have = if g.kind == "int" { vec![*have.iter().min_by(|a, b| a.2.total_cmp(&b.2)).unwrap()] } else { have };
+                    let total: f64 = have.iter().map(|h| h.1).sum();
+                    let nearest = have.iter().map(|h| h.2).fold(f64::INFINITY, f64::min);
+                    let k = fade(nearest);
+                    (0..w).map(|c| {
+                        let v = have.iter().map(|h| h.0[c] * h.1).sum::<f64>() / total;
+                        before[c] + (v - before[c]) * k
+                    }).collect()
+                })
+                .collect();
+            t.attrs.set(&g.name, attr_of(g.kind, w, &values), n)?;
+        }
+        Ok(())
+    })?;
+    Ok(scene)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -781,5 +914,73 @@ mod tests {
         assert_eq!(c[1], [-1.0; 3], "behind the camera");
         assert!(attribute_from_image(&json!({"via": "camera"}), pts.clone(), Some(&ramp()), None).is_err(), "no camera");
         assert!(attribute_from_image(&json!({}), pts, None, None).is_err(), "no image");
+    }
+
+    /// Two source points (x = 0 with k 1 and Cd red, x = 10 with k 3 and an
+    /// id), and targets along x.
+    fn transfer_scenes() -> (Scene, Scene) {
+        let mut src = PointSet { positions: vec![Vec3::zeros(), Vec3::new(10.0, 0.0, 0.0)], node: "src".into(), ..PointSet::default() };
+        src.attrs.set("k", Attr::Float(vec![1.0, 3.0]), 2).unwrap();
+        src.attrs.set("Cd", Attr::Vec4(vec![[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]]), 2).unwrap();
+        src.attrs.set("id", Attr::Int(vec![5, 9]), 2).unwrap();
+        let mut dst = PointSet { positions: [1.0, 4.0, 6.0, 20.0].iter().map(|x| Vec3::new(*x, 0.0, 0.0)).collect(), node: "dst".into(), ..PointSet::default() };
+        dst.attrs.set("k", Attr::Float(vec![-1.0; 4]), 4).unwrap();
+        (Scene { point_sets: vec![dst], ..Scene::default() }, Scene { point_sets: vec![src], ..Scene::default() })
+    }
+
+    #[test]
+    fn transfer_takes_the_nearest_within_a_radius() {
+        let (dst, src) = transfer_scenes();
+        let out = attribute_transfer(&json!({}), dst.clone(), Some(&src)).unwrap();
+        let a = &out.point_sets[0].attrs;
+        assert_eq!(a.float("k").unwrap(), [1.0, 1.0, 3.0, 3.0], "nearest, no limit");
+        assert_eq!(a.int("id").unwrap(), [5, 5, 9, 9]);
+        assert_eq!(a.vec4("Cd").unwrap()[2], [0.0, 0.0, 1.0, 1.0], "all attributes by default");
+        // Within 5: the far one keeps its value, or gets 0.
+        let near = attribute_transfer(&json!({"radius": 5.0, "attributes": "k"}), dst.clone(), Some(&src)).unwrap();
+        assert_eq!(near.point_sets[0].attrs.float("k").unwrap(), [1.0, 1.0, 3.0, -1.0]);
+        assert!(near.point_sets[0].attrs.get("Cd").is_none(), "only those named");
+        let zero = attribute_transfer(&json!({"radius": 5.0, "attributes": "k", "missing": "zero"}), dst.clone(), Some(&src)).unwrap();
+        assert_eq!(zero.point_sets[0].attrs.float("k").unwrap(), [1.0, 1.0, 3.0, 0.0]);
+        // A linear falloff over the radius fades toward what was there.
+        let faded = attribute_transfer(&json!({"radius": 5.0, "attributes": "k", "falloff": "linear"}), dst.clone(), Some(&src)).unwrap();
+        let k = faded.point_sets[0].attrs.float("k").unwrap();
+        assert!((k[0] - (-1.0 + 2.0 * 0.8)).abs() < 1e-6 && (k[1] - (-1.0 + 2.0 * 0.2)).abs() < 1e-6, "{k:?}");
+        assert!(attribute_transfer(&json!({"attributes": "nope"}), dst.clone(), Some(&src)).is_err());
+        assert!(attribute_transfer(&json!({}), dst, None).is_err());
+    }
+
+    /// As a node: one Scatter's normals and ids carried to another's points.
+    #[test]
+    fn transfer_in_a_graph() {
+        let graph: crate::graph::Graph = serde_json::from_value(json!({"nodes": [
+            {"id": "ground", "op": "plane", "params": {"size": [4, 4]}},
+            {"id": "coarse", "op": "scatter", "inputs": ["ground", "", ""], "params": {"density": 4, "seed": 1}},
+            {"id": "dense", "op": "scatter", "inputs": ["ground", "", ""], "params": {"density": 30, "seed": 2}},
+            {"id": "carry", "op": "attribute_transfer", "inputs": ["dense", "coarse"], "params": {"attributes": "N id"}},
+        ]})).unwrap();
+        let ctx = crate::ops::EvalContext { frame: 1, write_outputs: false };
+        let mut ev = crate::graph::Evaluator::new();
+        let src = ev.evaluate(&graph, "coarse", &ctx).unwrap().scene.clone().unwrap();
+        let out = ev.evaluate(&graph, "carry", &ctx).unwrap();
+        let (dst, src) = (&out.scene.as_ref().unwrap().point_sets[0], &src.point_sets[0]);
+        let (ids, src_ids) = (dst.attrs.int("id").unwrap(), src.attrs.int("id").unwrap());
+        let tree = KdTree::new((0..src.len()).map(|i| src.placed(i)).collect());
+        for (i, id) in ids.iter().enumerate() {
+            let (j, _) = tree.nearest(&dst.placed(i)).unwrap();
+            assert_eq!(*id, src_ids[j], "{i}: the nearest's id");
+        }
+        assert!(dst.attrs.vec3("N").unwrap().iter().all(|n| (n[2] - 1.0).abs() < 1e-6), "the plane's normal");
+    }
+
+    #[test]
+    fn transfer_averages_by_inverse_distance() {
+        let (dst, src) = transfer_scenes();
+        let out = attribute_transfer(&json!({"mode": "average", "radius": 12.0, "attributes": "k id"}), dst.clone(), Some(&src)).unwrap();
+        let a = &out.point_sets[0].attrs;
+        // At x = 4: 4 from k 1 and 6 from k 3: (1/4 + 3/6) / (1/4 + 1/6) = 1.8.
+        assert!((a.float("k").unwrap()[1] - 1.8).abs() < 1e-4, "{:?}", a.float("k"));
+        assert_eq!(a.int("id").unwrap()[..3], [5, 5, 9], "ints from the nearest");
+        assert!(attribute_transfer(&json!({"mode": "average"}), dst, Some(&src)).is_err(), "needs a radius");
     }
 }

@@ -37,6 +37,10 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.24, P3: Attribute Transfer** (Dev1): nearest / inverse-distance
+  average within Radius through `geo_attr::KdTree`, ids from the nearest,
+  falloff, missing keep / zero; source read without cloning. **P3 done.**
+  Released as **v0.13.24** (with Help ▸ Examples and P4b).
 - **0.13.23, P4b B4: shared card corners** (Dev2): `geo::CardMeshes`
   (a OnceLock per card prototype, made by the renderer; Clone gives an
   empty one); `instance_surface` borrows it. 100k cards' CPU expansion

@@ -17,6 +17,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.24 — 2026-10-31
+
+- Geometry: an **Attribute Transfer** node copies attributes (all, or
+  those named) from another geometry's nearest points, mesh points or
+  instances, or blends those within a radius by nearness, faded across
+  the radius; what has nothing near keeps its value or gets 0. With it,
+  the attribute nodes are complete: Attribute Set, Attribute Noise,
+  Falloff, Attribute from Image and Attribute Transfer.
+
 ## 0.13.23 — 2026-10-31
 
 - Instanced cards share their corners when drawn on the CPU, halving the

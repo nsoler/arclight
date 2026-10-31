@@ -94,7 +94,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_set" | "instance_on_points" | "realize_instances" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "attribute_set" | "instance_on_points" | "realize_instances" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1175,6 +1175,33 @@ pub static OPS: &[OpInfo] = &[
     },
     // Fit Plane (geo_fit.rs; Dev1).
     OpInfo {
+        name: "attribute_transfer",
+        label: "Attribute Transfer",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN, Port { label: "source", optional: false, kind: Kind::Scene }],
+        params: &[
+            fixed!("elements", "Elements", ParamKind::Choice(&["points", "mesh points", "instances"]), "points"),
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("source_elements", "Source elements", ParamKind::Choice(&["points", "mesh points", "instances"]), "points"),
+            fixed!("source_group", "Source group", ParamKind::Text, ""),
+            fixed!("attributes", "Attributes", ParamKind::Text, "*"),
+            fixed!("mode", "Mode", ParamKind::Choice(&["nearest", "average"]), "nearest"),
+            p!("radius", "Radius", ParamKind::Float { min: 0.0, max: 100000.0 }, 0.0),
+            fixed!("falloff", "Falloff", ParamKind::Choice(&["none", "linear", "smooth"]), "none"),
+            fixed!("missing", "Missing", ParamKind::Choice(&["keep", "zero"]), "keep"),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Copies attributes (Attributes: names, or * for all) from the source input's points, mesh points or \
+               instances (Source elements, of Source group's node, or all) onto the first input's (Elements, of Group's): \
+               each takes the nearest one's (Mode nearest), or the mean of those within Radius weighted by nearness \
+               (average; whole numbers like id still come from the nearest). With a Radius, those farther keep what they \
+               had (Missing keep) or get 0, and Falloff linear or smooth fades the copy toward what was there across the \
+               radius. Paint colors on a coarse set and carry them to a dense one, or give scattered points the nearest \
+               tracker point's attributes.",
+    },
+    // Fit Plane (geo_fit.rs; Dev1).
+    OpInfo {
         name: "fit_plane",
         label: "Fit Plane",
         category: Category::Scene,
@@ -2214,6 +2241,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
             let camera = inputs.get(2).copied().flatten().and_then(|i| i.scene.as_deref());
             Ok(scene_output(DEFAULT_FORMAT, crate::geo_attr::attribute_from_image(params, input_scene(inputs), image, camera)?))
         }
+        "attribute_transfer" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_attr::attribute_transfer(params, input_scene(inputs), inputs.get(1).copied().flatten().and_then(|i| i.scene.as_deref()))?)),
         "falloff" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_attr::falloff(params, input_scene(inputs), inputs.get(1).copied().flatten().and_then(|i| i.scene.as_deref()))?)),
         "attribute_noise" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_attr::attribute_noise(params, input_scene(inputs))?)),
         "fit_plane" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_fit::fit_plane(params, input_scene(inputs), inputs.get(1).copied().flatten())?)),
