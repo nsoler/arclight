@@ -117,7 +117,7 @@ Phase 10: 0.10.x on branch `wip-ns-splats` (started 0.10.0).
 Ends in a **beta** (About box, release titles, GitHub pre-releases) for
 a public release once tested.
 
-- [ ] Crash reporting
+- [x] Crash reporting (0.11.1)
 - [ ] Plugin process isolation (a crashing native plugin kills the app)
 
 ## Later: 0.12.0
@@ -129,6 +129,11 @@ a public release once tested.
       builds (no right-click → Open; needs the Apple Developer Program)
 - [ ] USD / Hydra
 - [ ] RLE / 1-bit DPX (needs a sample file first)
+- [ ] Windows release (on hold, user 2026-10-30): the lib and GUI already
+      cross-compile here (`cargo zigbuild --target x86_64-pc-windows-gnu`);
+      left: MCP + GUI bridge without Unix sockets (named pipe / localhost),
+      %APPDATA% folders, .dll plugins (in-process), a zip asset; needs a
+      real Windows PC for GUI testing; unsigned → SmartScreen warning
 
 ## Before going public
 

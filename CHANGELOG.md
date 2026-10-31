@@ -14,6 +14,22 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.11.1 — 2026-10-30
+
+- **Crash reports**: if Arclight crashes (a panic, or a native crash in a
+  decoder or plugin), a report of what it was doing (version, system,
+  the backtrace, the last actions, the node being evaluated) is saved on
+  this computer, in `~/.local/state/arclight/crashes` (macOS:
+  `~/Library/Logs/Arclight`). Nothing is sent. File paths are hidden
+  unless you choose to include them.
+- After a crash, the open project's unsaved changes are saved to its
+  autosave, and the next start asks: view or copy the report, or open a
+  prefilled GitHub issue to review and submit (Don't ask again turns this
+  off). **Help ▸ Report a problem** does the same any time.
+- An internal error while rendering a frame, the 3D view, sound or a
+  script's call no longer stops that part of Arclight: it shows as that
+  frame's error, and a report is saved.
+
 ## 0.11.0 — 2026-10-30
 
 - **Phase 11 begins: engine and platform**, on branch `wip-ns-engine`:

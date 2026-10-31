@@ -681,6 +681,7 @@ impl Evaluator {
             if self.cache.get(id).is_some_and(|(k, _)| *k == key) {
                 continue;
             }
+            crate::crash::evaluating(&node.op, id);
             let mut kept = elsewhen.as_ref().map(|_| self.elsewhen.entry(id.clone()).or_default());
             // A texture sequence's frames, those not kept rendered now.
             let sequence: Option<Vec<Arc<Image>>> = match (&elsewhen, kept.as_deref_mut()) {

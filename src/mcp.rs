@@ -248,6 +248,7 @@ pub fn call_tool(s: &mut Session, tool: &str, args: &Value) -> Result<Value> {
 /// [`call_tool`], reporting `render_output`'s progress through `progress`
 /// (which can also cancel it).
 pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progress: &Progress) -> Result<Value> {
+    crate::crash::note(format!("tool {tool}"));
     let ok = || json!({"ok": true});
     Ok(match tool {
         "list_ops" => {

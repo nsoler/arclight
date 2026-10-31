@@ -80,6 +80,9 @@ pub struct Settings {
     pub new_project: NewProjectPrefs,
     pub files: FilePrefs,
     pub view3d: View3dPrefs,
+    /// Ask at the next start after a crash ("Arclight closed
+    /// unexpectedly"); off with its "Don't ask again".
+    pub crash_dialog: bool,
     /// Keys this version doesn't know, kept as they are.
     #[serde(flatten)]
     pub other: serde_json::Map<String, serde_json::Value>,
@@ -95,6 +98,7 @@ impl Default for Settings {
             new_project: NewProjectPrefs::default(),
             files: FilePrefs::default(),
             view3d: View3dPrefs::default(),
+            crash_dialog: true,
             other: serde_json::Map::new(),
         }
     }

@@ -73,7 +73,7 @@ fn run(eval: &Arc<Mutex<Evaluator>>, call: Call) -> Done {
     session.path = call.path;
     session.dirty = call.dirty;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| mcp::call_tool(&mut session, &call.tool, &call.args).map_err(|e| format!("{e:#}"))))
-        .unwrap_or_else(|_| Err(format!("{} panicked", call.tool)));
+        .unwrap_or_else(|p| Err(format!("{}: {}", call.tool, arclight::crash::caught(&*p))));
     let changed = session.graph != before;
     Done { result, graph: session.graph, changed, path: session.path }
 }

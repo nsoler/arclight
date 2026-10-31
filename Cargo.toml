@@ -1,6 +1,6 @@
 [package]
 name = "arclight"
-version = "0.11.0"
+version = "0.11.1"
 edition = "2021"
 description = "Arclight — an original node-graph image compositor"
 license = "MIT OR Apache-2.0"
@@ -43,6 +43,9 @@ gltf = { version = "1.4", default-features = false, features = ["import", "utils
 egui_commonmark = { version = "0.26", default-features = false, features = ["pulldown_cmark"], optional = true }
 # Sound in the GUI's playback (ALSA on Linux: libasound.so.2 at run time).
 cpal = { version = "0.18", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [profile.release]
 opt-level = 3

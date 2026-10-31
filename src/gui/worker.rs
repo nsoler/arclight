@@ -99,6 +99,19 @@ fn size_of_image(img: &Image) -> usize {
     img.bytes()
 }
 
+/// Whether to panic in this evaluation (of `target`) on purpose:
+/// `ARCLIGHT_CRASH_TEST` "worker" makes the first one panic (and tests,
+/// one of a node they name).
+fn crash_test_worker(target: &str) -> bool {
+    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    #[cfg(test)]
+    if tests::PANIC_ON.lock().unwrap().take_if(|n| n == target).is_some() {
+        return true;
+    }
+    let _ = target;
+    arclight::crash::crash_test().as_deref() == Some("worker") && !DONE.swap(true, std::sync::atomic::Ordering::Relaxed)
+}
+
 fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Context, eval: Arc<Mutex<Evaluator>>) {
     let evaluate = |graph: &Graph, target: &str, ctx: &EvalContext| eval.lock().unwrap_or_else(|e| e.into_inner()).evaluate(graph, target, ctx);
     let mut frames = FrameCache { entries: VecDeque::new(), bytes: 0 };
@@ -110,41 +123,59 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
         while let Ok(newer) = rx.try_recv() {
             req = newer;
         }
-        let start = Instant::now();
-        let ctx = EvalContext { frame: req.frame, write_outputs: false };
-        let result = match Evaluator::key(&req.graph, &req.target, &ctx) {
-            Err(e) => Err(e),
-            Ok(key) => match frames.get(key) {
-                Some(img) => Ok(img),
-                None => {
-                    let r = evaluate(&req.graph, &req.target, &ctx);
-                    if let Ok(img) = &r {
-                        frames.insert(key, img.clone());
-                    }
-                    r
-                }
-            },
-        };
-        let millis = start.elapsed().as_secs_f32() * 1000.0;
-        let probe = req.probe.and_then(|(node, input)| {
-            let key = Evaluator::key(&req.graph, &input, &ctx).ok()?;
-            if !probed.contains_key(&key) {
-                let img = evaluate(&req.graph, &input, &ctx).ok()?;
-                if probed.len() >= 8 {
-                    probed.clear();
-                }
-                probed.insert(key, img);
+        // A panic in an evaluation is that frame's error: the evaluator
+        // and caches start afresh (they may be half-updated), and a report
+        // is saved (see crash.rs).
+        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if crash_test_worker(&req.target) {
+                panic!("ARCLIGHT_CRASH_TEST=worker: a deliberate panic in an evaluation");
             }
-            Some((node, probed[&key].clone()))
-        });
+            let start = Instant::now();
+            let ctx = EvalContext { frame: req.frame, write_outputs: false };
+            let result = match Evaluator::key(&req.graph, &req.target, &ctx) {
+                Err(e) => Err(e),
+                Ok(key) => match frames.get(key) {
+                    Some(img) => Ok(img),
+                    None => {
+                        let r = evaluate(&req.graph, &req.target, &ctx);
+                        if let Ok(img) = &r {
+                            frames.insert(key, img.clone());
+                        }
+                        r
+                    }
+                },
+            };
+            let millis = start.elapsed().as_secs_f32() * 1000.0;
+            let probe = req.probe.take().and_then(|(node, input)| {
+                let key = Evaluator::key(&req.graph, &input, &ctx).ok()?;
+                if !probed.contains_key(&key) {
+                    let img = evaluate(&req.graph, &input, &ctx).ok()?;
+                    if probed.len() >= 8 {
+                        probed.clear();
+                    }
+                    probed.insert(key, img);
+                }
+                Some((node, probed[&key].clone()))
+            });
 
-        let p = &req.graph.project;
-        let cached_frames = (p.first_frame..=p.last_frame.max(p.first_frame))
-            .filter(|&f| {
-                let c = EvalContext { frame: f, write_outputs: false };
-                Evaluator::key(&req.graph, &req.target, &c).is_ok_and(|k| frames.contains(k))
-            })
-            .collect();
+            let p = &req.graph.project;
+            let cached_frames = (p.first_frame..=p.last_frame.max(p.first_frame))
+                .filter(|&f| {
+                    let c = EvalContext { frame: f, write_outputs: false };
+                    Evaluator::key(&req.graph, &req.target, &c).is_ok_and(|k| frames.contains(k))
+                })
+                .collect();
+            (result, millis, probe, cached_frames)
+        }));
+        let (result, millis, probe, cached_frames) = match done {
+            Ok(done) => done,
+            Err(payload) => {
+                *eval.lock().unwrap_or_else(|e| e.into_inner()) = Evaluator::new();
+                frames = FrameCache { entries: VecDeque::new(), bytes: 0 };
+                probed.clear();
+                (Err(NodeError { node: None, message: arclight::crash::caught(&*payload) }), 0.0, None, Vec::new())
+            }
+        };
 
         let resp = Response {
             target: req.target,
@@ -229,35 +260,44 @@ impl SceneWorker {
                         req = newer;
                     }
                     let t0 = Instant::now();
-                    // (A 2D node after a render shows the render's scene.)
-                    let viewed = scene_source(&req.graph, &req.node).unwrap_or_else(|| req.node.clone());
-                    let scene = scene_of(&mut eval, &req.graph, &viewed, req.frame);
-                    let blur_times = if req.blur { view_blur_times(&req.graph, &viewed, req.frame) } else { Vec::new() };
-                    // Only cards, solid meshes and (settled) splats are
-                    // rendered; the viewport draws the rest.
-                    let splats = req.splats && matches!(&scene, Ok(Some(s)) if !s.splats.is_empty());
-                    let render = match (&scene, &req.render) {
-                        (Ok(Some(s)), Some((cam, format))) if !s.cards.is_empty() || (req.solid && !s.meshes.is_empty()) || splats => {
-                            let lit = matches!(req.preview, arclight::render3d::Preview::Lit { .. });
-                            let shown = |s: &arclight::scene::Scene| {
-                                let meshes = if req.solid { s.meshes.clone() } else { Vec::new() };
-                                let lights = if lit { s.lights.clone() } else { Vec::new() };
-                                let splats = if splats { s.splats.clone() } else { Vec::new() };
-                                arclight::scene::Scene { cards: s.cards.clone(), meshes, lights, splats, ..Default::default() }
-                            };
-                            let now = shown(s);
-                            let (times, then) = if blur_times.is_empty() { Default::default() } else { blurred(&mut eval, &req.graph, &viewed, req.frame) };
-                            let then: Vec<(i64, arclight::scene::Scene, arclight::geom::Camera)> = then.iter().map(|(k, s)| (*k, shown(s), frame_camera(cam, s, req.through.as_ref()))).collect();
-                            // Jittered as the render is (Jitter shutter).
-                            let jitter = req.graph.node(&viewed).is_none_or(|n| arclight::ops::blur_jitter(&n.params));
-                            let blur = arclight::render3d::Blur { times, frames: std::iter::once((0, &now, cam.clone())).chain(then.iter().map(|(k, s, c)| (*k, s, c.clone()))).collect(), jitter };
-                            Some(Arc::new(arclight::render3d::render_preview_blurred(&now, cam, *format, req.preview, Some(&blur))))
-                        }
-                        _ => None,
-                    };
-                    let splats = splats && render.is_some();
-                    let in_scene = scene.as_ref().ok().cloned().flatten();
-                    let (ghosts, ghost_errors) = ghosts_of(&mut eval, &req.graph, in_scene.as_deref(), &req.ghosts, req.frame);
+                    // A panic is this request's error, with a fresh
+                    // evaluator after it (see the 2D worker's).
+                    let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        // (A 2D node after a render shows the render's scene.)
+                        let viewed = scene_source(&req.graph, &req.node).unwrap_or_else(|| req.node.clone());
+                        let scene = scene_of(&mut eval, &req.graph, &viewed, req.frame);
+                        let blur_times = if req.blur { view_blur_times(&req.graph, &viewed, req.frame) } else { Vec::new() };
+                        // Only cards, solid meshes and (settled) splats are
+                        // rendered; the viewport draws the rest.
+                        let splats = req.splats && matches!(&scene, Ok(Some(s)) if !s.splats.is_empty());
+                        let render = match (&scene, &req.render) {
+                            (Ok(Some(s)), Some((cam, format))) if !s.cards.is_empty() || (req.solid && !s.meshes.is_empty()) || splats => {
+                                let lit = matches!(req.preview, arclight::render3d::Preview::Lit { .. });
+                                let shown = |s: &arclight::scene::Scene| {
+                                    let meshes = if req.solid { s.meshes.clone() } else { Vec::new() };
+                                    let lights = if lit { s.lights.clone() } else { Vec::new() };
+                                    let splats = if splats { s.splats.clone() } else { Vec::new() };
+                                    arclight::scene::Scene { cards: s.cards.clone(), meshes, lights, splats, ..Default::default() }
+                                };
+                                let now = shown(s);
+                                let (times, then) = if blur_times.is_empty() { Default::default() } else { blurred(&mut eval, &req.graph, &viewed, req.frame) };
+                                let then: Vec<(i64, arclight::scene::Scene, arclight::geom::Camera)> = then.iter().map(|(k, s)| (*k, shown(s), frame_camera(cam, s, req.through.as_ref()))).collect();
+                                // Jittered as the render is (Jitter shutter).
+                                let jitter = req.graph.node(&viewed).is_none_or(|n| arclight::ops::blur_jitter(&n.params));
+                                let blur = arclight::render3d::Blur { times, frames: std::iter::once((0, &now, cam.clone())).chain(then.iter().map(|(k, s, c)| (*k, s, c.clone()))).collect(), jitter };
+                                Some(Arc::new(arclight::render3d::render_preview_blurred(&now, cam, *format, req.preview, Some(&blur))))
+                            }
+                            _ => None,
+                        };
+                        let splats = splats && render.is_some();
+                        let in_scene = scene.as_ref().ok().cloned().flatten();
+                        let (ghosts, ghost_errors) = ghosts_of(&mut eval, &req.graph, in_scene.as_deref(), &req.ghosts, req.frame);
+                        (scene, render, splats, blur_times, ghosts, ghost_errors)
+                    }));
+                    let (scene, render, splats, blur_times, ghosts, ghost_errors) = done.unwrap_or_else(|payload| {
+                        eval = Evaluator::new();
+                        (Err(arclight::crash::caught(&*payload)), None, false, Vec::new(), None, Vec::new())
+                    });
                     let resp = SceneResponse { node: req.node, scene, render, splats, rect: req.rect, millis: t0.elapsed().as_secs_f32() * 1000.0, blur_times, ghosts, ghost_errors };
                     if resp_tx.send(resp).is_err() {
                         break;
@@ -426,6 +466,33 @@ pub fn scene_of(eval: &mut Evaluator, graph: &Graph, id: &str, frame: i64) -> Re
 mod tests {
     use super::*;
     use crate::doc::Doc;
+
+    /// A node whose next evaluation panics (see `crash_test_worker`).
+    pub static PANIC_ON: Mutex<Option<String>> = Mutex::new(None);
+
+    /// A panic in an evaluation is that frame's error (naming the node
+    /// being evaluated), and the next request is served as usual.
+    #[test]
+    fn a_panicking_evaluation_is_an_error_and_the_worker_goes_on() {
+        let graph = Arc::new(serde_json::from_value::<Graph>(serde_json::json!({ "nodes": [{ "id": "panicky_c", "op": "constant", "params": { "width": 8, "height": 8 } }] })).unwrap());
+        let eval = Arc::new(Mutex::new(Evaluator::new()));
+        let worker = Worker::spawn(eframe::egui::Context::default(), eval);
+        let ask = |w: &Worker| {
+            w.request(Request { graph: graph.clone(), target: "panicky_c".into(), frame: 1, probe: None });
+            let t0 = Instant::now();
+            loop {
+                if let Some(r) = w.poll() {
+                    break r;
+                }
+                assert!(t0.elapsed().as_secs() < 30, "no answer");
+                std::thread::yield_now();
+            }
+        };
+        *PANIC_ON.lock().unwrap() = Some("panicky_c".into());
+        let err = ask(&worker).result.err().expect("an error").to_string();
+        assert!(err.starts_with("internal error") && err.contains("a crash report was saved"), "{err}");
+        assert!(ask(&worker).result.is_ok(), "served again");
+    }
 
     /// A 3D setup with lights on the render's extra inputs, a render on a
     /// Merge's B with a roto on its A, and 3D nodes outside it.

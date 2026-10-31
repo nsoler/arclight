@@ -652,6 +652,19 @@ defaults**.
   ⌃ + middle-drag); **Shading** for projects without their own 3D view:
   Automatic (as last chosen, else Lit with lights), Solid or Lit.
 
+## If Arclight crashes
+
+Arclight saves a crash report on your computer
+(`~/.local/state/arclight/crashes`; on macOS `~/Library/Logs/Arclight`)
+and saves your unsaved changes to the project's autosave. **Nothing is
+sent anywhere.** At the next start it asks: **View report**, **Copy** it,
+or **Report on GitHub** to open a new issue filled in with it, for you to
+read and submit. File names in the report read `<path>` unless you tick
+**Include file names**. **Help ▸ Report a problem** opens the latest
+report any time. An internal error while rendering a frame, in the 3D
+view, sound or a script's call no longer stops that part of Arclight: it
+shows as that frame's error, and a report is saved.
+
 ## Undo
 
 **⌘Z** undoes, **⇧⌘Z** redoes.

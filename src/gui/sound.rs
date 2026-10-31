@@ -321,9 +321,14 @@ fn decode_jobs(rx: Receiver<Job>, shared: Arc<Mutex<Shared>>, source: Arc<Mutex<
             continue;
         }
         let frames = window_frames(job.rate);
-        let samples = audio::decode(&job.path, job.k as f64 * WINDOW, frames as f64 / job.rate as f64, job.rate, channels)
+        // (A panic decoding is reported, see crash.rs, and taken as
+        // undecodable rather than ending the thread.)
+        let decoded = std::panic::catch_unwind(|| audio::decode(&job.path, job.k as f64 * WINDOW, frames as f64 / job.rate as f64, job.rate, channels));
+        let samples = decoded
+            .ok()
+            .and_then(Result::ok)
             // Undecodable: a window of silence (rather than asking again).
-            .unwrap_or_else(|_| vec![0.0; frames as usize * channels as usize].into());
+            .unwrap_or_else(|| vec![0.0; frames as usize * channels as usize].into());
         let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
         if job.source == current() {
             s.windows.insert(job.k, samples);

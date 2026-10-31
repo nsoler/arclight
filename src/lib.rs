@@ -12,6 +12,7 @@ pub mod camtrack;
 pub mod bridge;
 pub mod color;
 pub mod config;
+pub mod crash;
 pub mod dpx;
 pub mod expr;
 pub mod features;

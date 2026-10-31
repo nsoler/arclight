@@ -160,6 +160,7 @@ impl Properties {
     /// of its own (the viewer isn't held) that goes on from the viewer's
     /// particles where they stand for `graph`.
     fn start_render(&mut self, graph: arclight::graph::Graph, id: &str) {
+        arclight::crash::note(format!("Media Out render: {id}"));
         let progress = Arc::new(Progress::default());
         let (pg, node, viewer) = (progress.clone(), id.to_string(), self.viewer.clone());
         let handle = std::thread::spawn(move || {
@@ -980,7 +981,7 @@ impl Properties {
                 job.result = Some(match outcome {
                     Ok(Ok(n)) => (true, format!("Rendered {n} frame(s).")),
                     Ok(Err(e)) => (false, format!("{e:#}")),
-                    Err(_) => (false, "render thread panicked".into()),
+                    Err(p) => (false, arclight::crash::caught(&*p)),
                 });
             }
         }
@@ -1041,7 +1042,7 @@ impl Properties {
                         (true, msg)
                     }
                     Ok(Err(e)) => (false, format!("{e:#}")),
-                    Err(_) => (false, "tracking thread panicked".into()),
+                    Err(p) => (false, arclight::crash::caught(&*p)),
                 });
             }
         }

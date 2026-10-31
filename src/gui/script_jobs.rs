@@ -59,7 +59,7 @@ impl ScriptJobs {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 mcp::call_tool_with_progress(&mut session, &tool, &args, &pg).map_err(|e| format!("{e:#}"))
             }))
-            .unwrap_or_else(|_| Err("render thread panicked".into()));
+            .unwrap_or_else(|p| Err(arclight::crash::caught(&*p)));
             reply(result);
             done.store(true, Ordering::Release);
             wake();

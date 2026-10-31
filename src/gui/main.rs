@@ -5,6 +5,7 @@
 //! properties on the right.
 
 mod camera_tracker;
+mod crash_dialog;
 mod bridge_calls;
 mod curve_editor;
 mod dialogs;
@@ -82,6 +83,10 @@ fn consume_plain(i: &mut egui::InputState, key: Key) -> bool {
 }
 
 fn main() -> eframe::Result {
+    // Crash reports (kept on this machine, see arclight::crash), and the
+    // open project saved to its autosave on a crash.
+    arclight::crash::install("arclight-gui");
+    arclight::crash::set_rescue(rescue);
     arclight::plugin::init();
     let doc = match std::env::args_os().nth(1).map(PathBuf::from) {
         Some(path) => match Graph::from_file(&path) {
@@ -112,7 +117,13 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Arclight",
         options,
-        Box::new(|cc| Ok(Box::new(App::new(cc.egui_ctx.clone(), doc)))),
+        Box::new(|cc| {
+            if let Some(rs) = &cc.wgpu_render_state {
+                let i = rs.adapter.get_info();
+                arclight::crash::set_gpu(format!("{} ({:?}, {:?}, driver {} {})", i.name, i.backend, i.device_type, i.driver, i.driver_info));
+            }
+            Ok(Box::new(App::new(cc.egui_ctx.clone(), doc)))
+        }),
     )
 }
 
@@ -251,6 +262,13 @@ struct App {
     close_after_save: bool,
     /// Help > About is open.
     about: bool,
+    /// "Arclight closed unexpectedly" (at start after a crash) or Help ▸
+    /// Report a problem.
+    crash: crash_dialog::CrashDialog,
+    /// The project as last registered for a crash's rescue (its revision).
+    rescue_revision: Option<u64>,
+    /// ARCLIGHT_CRASH_TEST's crash has had its chance (after a first frame).
+    crash_tested: bool,
     /// Help > Arclight Help (F1).
     help: help::Help,
     /// File ▸ Project Settings…
@@ -289,6 +307,7 @@ impl App {
         // Until a project's own is restored (so the first frames don't
         // read as a change and save the defaults over them).
         viewer.viewport3d.view = viewer.viewport3d.fresh_view();
+        let crash = crash_dialog::CrashDialog::at_start(settings.crash_dialog && !screenshot_run);
         let mut app = App {
             doc,
             editor: NodeEditor::default(),
@@ -331,6 +350,9 @@ impl App {
             file: None,
             close_after_save: false,
             about: false,
+            crash,
+            rescue_revision: None,
+            crash_tested: false,
             help: help::Help::default(),
             project_settings: Default::default(),
             logo: None,
@@ -386,6 +408,18 @@ impl App {
                 eprintln!("arclight-gui: can't save {}: {e}", path.display());
             }
         }
+    }
+
+    /// Keep the project where a crash's rescue finds it (see [`RESCUE`]):
+    /// the graph as of each edit while there are unsaved changes.
+    fn register_rescue(&mut self) {
+        let revision = self.doc.dirty.then_some(self.doc.revision);
+        if revision == self.rescue_revision {
+            return;
+        }
+        self.rescue_revision = revision;
+        let project = revision.map(|_| (self.doc.path.clone(), Arc::new(self.doc.graph.clone())));
+        *RESCUE.lock().unwrap_or_else(|e| e.into_inner()) = project;
     }
 
     /// Every Files ▸ Autosave minutes, copy unsaved changes aside (see
@@ -566,6 +600,7 @@ impl App {
     }
 
     fn load(&mut self, doc: Doc) {
+        arclight::crash::note(format!("project loaded ({} nodes)", doc.graph.nodes.len()));
         if let Some(path) = doc.path.clone() {
             self.remember(&path);
         }
@@ -775,6 +810,7 @@ impl App {
         // Files in the project's folder relative to it (see Graph::save).
         match self.doc.graph.save(&path) {
             Ok(()) => {
+                arclight::crash::note("project saved");
                 // Its autosave is behind it now.
                 let _ = std::fs::remove_file(autosave_path(Some(&path)));
                 self.remember(&path);
@@ -1338,6 +1374,10 @@ impl App {
                     self.help.open = true;
                     ui.close();
                 }
+                if ui.button("Report a problem…").on_hover_text("The latest crash report, to copy or put in a GitHub issue (nothing is sent by Arclight)").clicked() {
+                    self.crash = crash_dialog::CrashDialog::for_help();
+                    ui.close();
+                }
                 if ui.button("About Arclight Compositor…").clicked() {
                     self.about = true;
                     ui.close();
@@ -1382,6 +1422,19 @@ impl App {
             }
         });
     }
+}
+
+/// The open project with unsaved changes (its file, if saved before, and
+/// its graph), for [`rescue`].
+static RESCUE: std::sync::Mutex<Option<(Option<PathBuf>, Arc<Graph>)>> = std::sync::Mutex::new(None);
+
+/// On a crash (in the panic hook, see arclight::crash): write the open
+/// project's unsaved changes to its autosave, where the next start's
+/// autosave recovery finds them. Never waits for the project's lock.
+fn rescue() -> Result<PathBuf, String> {
+    let slot = RESCUE.try_lock().map_err(|_| "it was being changed when Arclight closed".to_string())?;
+    let (path, graph) = slot.as_ref().ok_or("there were no unsaved changes")?;
+    write_autosave(path.as_deref(), &graph.to_json_at(path.as_deref())).map_err(|e| e.to_string())
 }
 
 /// Where the autosave of the project saved at `project` goes: beside it
@@ -1513,6 +1566,11 @@ impl eframe::App for App {
         self.maybe_screenshot(&ctx);
         self.save_prefs();
         self.autosave(&ctx);
+        self.register_rescue();
+        if !std::mem::replace(&mut self.crash_tested, true) {
+            // (ARCLIGHT_CRASH_TEST: crash here on purpose, see crash.rs.)
+            arclight::crash::crash_test_now();
+        }
         if self.rescale.is_some_and(|before| before != ctx.pixels_per_point()) {
             self.rescale = None;
             self.editor.fit();
@@ -1521,6 +1579,11 @@ impl eframe::App for App {
 
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         self.about_dialog(&ctx);
+        if self.crash.ui(&ctx) == Some(crash_dialog::Choice::DontAskAgain) {
+            let mut settings = self.settings.clone();
+            settings.crash_dialog = false;
+            self.set_settings(&ctx, settings);
+        }
         self.help.ui(&ctx);
         self.project_settings.ui(&ctx, &mut self.doc);
         if let Some(project) = self.project_settings.take_defaults() {
@@ -1676,6 +1739,30 @@ fn starter_graph() -> Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// On a crash the open project's unsaved changes go to its autosave
+    /// (beside it), where the autosave recovery finds them; with none, or
+    /// with the project being changed, nothing is written and the report
+    /// says why.
+    #[test]
+    fn a_crash_saves_the_project_to_its_autosave() {
+        let dir = std::env::temp_dir().join(format!("arclight_rescue_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let project = dir.join("shot.json");
+        let graph: Graph = serde_json::from_value(json!({ "nodes": [{ "id": "c", "op": "constant", "params": {} }] })).unwrap();
+        *RESCUE.lock().unwrap() = None;
+        assert_eq!(rescue(), Err("there were no unsaved changes".to_string()));
+        *RESCUE.lock().unwrap() = Some((Some(project.clone()), Arc::new(graph)));
+        let held = RESCUE.lock().unwrap();
+        assert!(rescue().unwrap_err().contains("being changed"), "never waits");
+        drop(held);
+        let saved = rescue().unwrap();
+        assert_eq!(saved, dir.join("shot.json.autosave"));
+        let back = Graph::from_file(&saved).unwrap();
+        assert_eq!(back.nodes[0].id, "c");
+        *RESCUE.lock().unwrap() = None;
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// The player and edit keys need no modifier (⇧Space isn't Space), but
     /// ⌥ with an arrow; Home and F over the 3D view are left to it.

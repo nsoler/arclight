@@ -65,8 +65,12 @@ enum Command {
 }
 
 fn main() -> Result<()> {
+    // Crash reports (kept on this machine, see arclight::crash).
+    arclight::crash::install("arclight");
+    arclight::crash::crash_test_now();
     let cli = Cli::parse();
     arclight::plugin::init();
+    arclight::crash::note(format!("command: {}", std::env::args().nth(1).unwrap_or_default()));
     match cli.command {
         Command::Render { graph, frame, verbose } => render(graph, frame, verbose),
         Command::Demo { dir } => demo(dir),

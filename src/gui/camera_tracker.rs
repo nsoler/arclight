@@ -84,7 +84,7 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, id: &str, jobs: &mut std::collect
                 (true, msg)
             }
             Ok(Err(e)) => (false, format!("{e:#}")),
-            Err(_) => (false, "the solve panicked".into()),
+            Err(p) => (false, arclight::crash::caught(&*p)),
         });
     }
     if let Some(job) = jobs.get(id).filter(|j| j.handle.is_some()) {
