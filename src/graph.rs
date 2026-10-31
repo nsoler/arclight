@@ -591,6 +591,18 @@ impl Evaluator {
         self.evaluate_order(&index, &order, &order, ctx, &graph.project)
     }
 
+    /// [`evaluate`](Self::evaluate), and the result still on the GPU when
+    /// it was made there (for a viewer drawing it without a conversion on
+    /// the CPU; see `gpu::display`).
+    pub fn evaluate_resident(&mut self, graph: &Graph, target: &str, ctx: &EvalContext) -> Result<(Arc<Image>, Option<Arc<crate::gpu::Resident>>), NodeError> {
+        let img = self.evaluate(graph, target, ctx)?;
+        let resident = match self.cache.get(target).map(|(_, r)| r) {
+            Some(Res::Gpu(r)) => Some(r.clone()),
+            _ => None,
+        };
+        Ok((img, resident))
+    }
+
     /// Render every node, reading none back that nothing on the CPU
     /// needed (results may stay on the GPU): each node's id, frame and
     /// data window, in evaluation order. For renders that only want the
@@ -748,6 +760,15 @@ impl Evaluator {
                 continue;
             }
             crate::crash::evaluating(&node.op, id);
+            // A Viewer or Media Out passes its input on as it is: the same
+            // result, not a copy (and still on the GPU when it's there).
+            if matches!(node.op.as_str(), "viewer" | "media_out") {
+                if let Some(dep) = node.inputs.first().filter(|d| !d.is_empty()) {
+                    let res = self.cache[dep.as_str()].1.clone();
+                    self.cache.insert(id.clone(), (key, res));
+                    continue;
+                }
+            }
             // On the GPU when it has this op and it pays (see `gpu::ops`).
             if particle_nodes::info(&node.op).is_none() && others.is_empty() && elsewhen.is_none() {
                 if let Some(out) = self.try_gpu(node, &params, &empty) {

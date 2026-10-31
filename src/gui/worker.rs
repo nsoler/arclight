@@ -30,6 +30,9 @@ pub struct Response {
     pub target: String,
     pub frame: i64,
     pub result: Result<Arc<Image>, NodeError>,
+    /// The result as it is on the GPU, when it was made there just now
+    /// (not from the frame cache): the viewer draws it from there.
+    pub gpu: Option<Arc<arclight::gpu::Resident>>,
     pub millis: f32,
     /// Frames of the project range already in the frame cache for this target.
     pub cached_frames: Vec<i64>,
@@ -114,6 +117,7 @@ fn crash_test_worker(target: &str) -> bool {
 
 fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Context, eval: Arc<Mutex<Evaluator>>) {
     let evaluate = |graph: &Graph, target: &str, ctx: &EvalContext| eval.lock().unwrap_or_else(|e| e.into_inner()).evaluate(graph, target, ctx);
+    let evaluate_resident = |graph: &Graph, target: &str, ctx: &EvalContext| eval.lock().unwrap_or_else(|e| e.into_inner()).evaluate_resident(graph, target, ctx);
     let mut frames = FrameCache { entries: VecDeque::new(), bytes: 0 };
     // Probed inputs by cache key, so frames served from the frame cache
     // needn't render the input again. Kept small: they're whole images.
@@ -132,17 +136,19 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
             }
             let start = Instant::now();
             let ctx = EvalContext { frame: req.frame, write_outputs: false };
+            let mut gpu = None;
             let result = match Evaluator::key(&req.graph, &req.target, &ctx) {
                 Err(e) => Err(e),
                 Ok(key) => match frames.get(key) {
                     Some(img) => Ok(img),
-                    None => {
-                        let r = evaluate(&req.graph, &req.target, &ctx);
-                        if let Ok(img) = &r {
+                    None => match evaluate_resident(&req.graph, &req.target, &ctx) {
+                        Ok((img, resident)) => {
                             frames.insert(key, img.clone());
+                            gpu = resident;
+                            Ok(img)
                         }
-                        r
-                    }
+                        Err(e) => Err(e),
+                    },
                 },
             };
             let millis = start.elapsed().as_secs_f32() * 1000.0;
@@ -165,15 +171,15 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
                     Evaluator::key(&req.graph, &req.target, &c).is_ok_and(|k| frames.contains(k))
                 })
                 .collect();
-            (result, millis, probe, cached_frames)
+            (result, gpu, millis, probe, cached_frames)
         }));
-        let (result, millis, probe, cached_frames) = match done {
+        let (result, gpu, millis, probe, cached_frames) = match done {
             Ok(done) => done,
             Err(payload) => {
                 *eval.lock().unwrap_or_else(|e| e.into_inner()) = Evaluator::new();
                 frames = FrameCache { entries: VecDeque::new(), bytes: 0 };
                 probed.clear();
-                (Err(NodeError { node: None, message: arclight::crash::caught(&*payload) }), 0.0, None, Vec::new())
+                (Err(NodeError { node: None, message: arclight::crash::caught(&*payload) }), None, 0.0, None, Vec::new())
             }
         };
 
@@ -181,6 +187,7 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
             target: req.target,
             frame: req.frame,
             result,
+            gpu,
             millis,
             cached_frames,
             probe,

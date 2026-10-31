@@ -13,6 +13,10 @@ they come up and strike them (or delete them) when they ship.
       gpu` names the GPU (Metal; "unified memory" on the M4 Pro), `arclight
       gpu --check` passes, and `cargo test --release` there (the GPU tests
       run on Metal)
+- [ ] 0.12.9 (GPU G7): view a 4K GPU chain (blurs, grade): it looks the
+      same as with `ARCLIGHT_GPU=0`, and scrubbing is smooth; pixel
+      readout values unchanged. On the M4 Pro and the Intel Mac too
+      (eframe on Metal sharing the engine's device)
 - [ ] 0.12.4 (GPU G3): Transform / Corner Pin / Lens Distort / Keyer
       look the same with the GPU on and off; on the Macs `arclight gpu
       --check --quick` first (seconds), then the full check; quitting the

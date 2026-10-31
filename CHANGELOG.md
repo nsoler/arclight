@@ -15,6 +15,20 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.9 — 2026-10-31
+
+- GPU: **the viewer shows results made on the GPU straight from the
+  GPU**: the window shares the GPU device and the 8-bit display is made
+  there, not on the interface thread (4K: about 20 ms less per new frame
+  on the interface thread, 25–50 ms less from request to screen;
+  scrubbing a GPU chain keeps up with the display, 60 fps instead of
+  30–40). The pixel readout and pickers read exact values as before;
+  with GPU acceleration off everything is as it was.
+- Viewer and Media Out nodes pass their input on without copying it (a
+  4K frame copy less per frame).
+- GPU errors are printed to the terminal as well as kept for crash
+  reports.
+
 ## 0.12.8 — 2026-10-31
 
 - Plugin helper processes end without the exit-time teardown, as the

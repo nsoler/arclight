@@ -56,6 +56,13 @@ const FRAME_SIZE_ROOM: f32 = FRAME_SIZE_FONT + 2.0 * FRAME_SIZE_GAP;
 
 pub struct Viewer {
     texture: Option<TextureHandle>,
+    /// The window's wgpu (eframe's), to draw results still on the GPU when
+    /// it is the engine's device (see `gpu::for_window`).
+    pub wgpu: Option<eframe::egui_wgpu::RenderState>,
+    /// The texture a GPU result was displayed into, and whether the frame
+    /// shown now is in it (else in `texture`).
+    native: Option<Native>,
+    native_shown: bool,
     /// The image currently uploaded, and the display settings it used.
     shown: Option<(Arc<Image>, Channel, f32, String)>,
     /// What the texture covers, in frame pixels: the frame and the data window.
@@ -109,6 +116,15 @@ pub struct Viewer {
     pub rect: Rect,
 }
 
+
+/// A texture a GPU result is displayed into (see `gpu::display`).
+#[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+struct Native {
+    id: egui::TextureId,
+    texture: eframe::wgpu::Texture,
+    nearest: bool,
+}
+
 #[derive(Clone, Copy)]
 struct Picked {
     x: i32,
@@ -121,6 +137,9 @@ impl Default for Viewer {
     fn default() -> Self {
         Viewer {
             texture: None,
+            wgpu: None,
+            native: None,
+            native_shown: false,
             shown: None,
             region: IRect::default(),
             nearest: false,
@@ -153,6 +172,9 @@ impl Default for Viewer {
 /// What the viewer should display this frame.
 pub struct Display<'a> {
     pub image: Option<&'a Arc<Image>>,
+    /// The same image still on the GPU, when it was made there: displayed
+    /// from there (the readout reads `image`).
+    pub gpu: Option<&'a Arc<arclight::gpu::Resident>>,
     pub error: Option<&'a str>,
     pub target: Option<&'a str>,
     /// The Viewer node, while another node is shown in its place.
@@ -400,7 +422,7 @@ impl Viewer {
             painter.text(rect.center(), Align2::CENTER_CENTER, msg, FontId::proportional(14.0), Color32::GRAY);
             return;
         };
-        self.upload(ui.ctx(), img);
+        self.upload(ui.ctx(), img, d.gpu);
         let size = Vec2::new(img.format.width as f32, img.format.height as f32);
 
         if self.fit_pending {
@@ -441,7 +463,7 @@ impl Viewer {
         if nearest != self.nearest {
             self.nearest = nearest;
             self.shown = None;
-            self.upload(ui.ctx(), img);
+            self.upload(ui.ctx(), img, d.gpu);
         }
         // Frame pixels → screen.
         let on_screen = |r: IRect| {
@@ -450,8 +472,13 @@ impl Viewer {
                 img_rect.min + Vec2::new(r.x1 as f32, r.y1 as f32) * self.zoom,
             )
         };
-        if let Some(tex) = &self.texture {
-            painter.image(tex.id(), on_screen(self.region), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+        let shown = match (&self.native, &self.texture) {
+            (Some(n), _) if self.native_shown => Some(n.id),
+            (_, Some(t)) => Some(t.id()),
+            _ => None,
+        };
+        if let Some(id) = shown {
+            painter.image(id, on_screen(self.region), Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
         }
         painter.rect_stroke(img_rect, 0.0, (1.0, Color32::from_gray(70)), egui::StrokeKind::Outside);
         let window = img.window();
@@ -717,7 +744,7 @@ impl Viewer {
         img.layer(&self.plane).iter().filter_map(|n| img.plane(n)).collect()
     }
 
-    fn upload(&mut self, ctx: &egui::Context, img: &Arc<Image>) {
+    fn upload(&mut self, ctx: &egui::Context, img: &Arc<Image>, gpu: Option<&Arc<arclight::gpu::Resident>>) {
         let up_to_date = self.shown.as_ref().is_some_and(|(shown, ch, ex, plane)| {
             Arc::ptr_eq(shown, img) && *ch == self.channel && *ex == self.exposure && *plane == self.plane
         });
@@ -734,6 +761,12 @@ impl Viewer {
         let max_side = ctx.input(|i| i.max_texture_side).max(1);
         let step = self.region.width().max(self.region.height()).div_ceil(max_side).max(1);
         let planes = self.shown_planes(img);
+        // Still on the GPU, on the window's own device: displayed there.
+        self.native_shown = planes.is_empty() && gpu.is_some_and(|r| self.display_on_gpu(r, step));
+        if self.native_shown {
+            self.shown = Some((img.clone(), self.channel, self.exposure, self.plane.clone()));
+            return;
+        }
         let ci = match planes[..] {
             [] => to_color_image(img, self.region, self.channel, self.exposure, step),
             [plane] => plane_image(img, plane, self.region, step),
@@ -745,6 +778,65 @@ impl Viewer {
             None => self.texture = Some(ctx.load_texture("viewer", ci, filter)),
         }
         self.shown = Some((img.clone(), self.channel, self.exposure, self.plane.clone()));
+    }
+}
+
+impl Viewer {
+    /// Display `r` (the frame shown) into the native texture with
+    /// `gpu::display`, over [`Viewer::region`] every `step` pixels; false
+    /// (shown the CPU's way instead) when the window's device isn't the
+    /// one it lives on, or on a GPU error.
+    #[cfg(feature = "gpu")]
+    fn display_on_gpu(&mut self, r: &Arc<arclight::gpu::Resident>, step: usize) -> bool {
+        use arclight::gpu::display;
+        let Some(rs) = &self.wgpu else { return false };
+        let gpu = r.gpu();
+        if rs.device != gpu.device {
+            return false;
+        }
+        let channel = match self.channel {
+            Channel::Rgb => display::Channel::Rgb,
+            Channel::Red => display::Channel::Red,
+            Channel::Green => display::Channel::Green,
+            Channel::Blue => display::Channel::Blue,
+            Channel::Alpha | Channel::Plane => display::Channel::Alpha,
+        };
+        let (tw, th) = (self.region.width().div_ceil(step).max(1) as u32, self.region.height().div_ceil(step).max(1) as u32);
+        let filter = if self.nearest { eframe::wgpu::FilterMode::Nearest } else { eframe::wgpu::FilterMode::Linear };
+        let fits = self.native.as_ref().is_some_and(|n| n.texture.width() == tw && n.texture.height() == th);
+        if !fits {
+            let texture = display::texture(gpu, tw, th);
+            let view = display::view(&texture);
+            let mut renderer = rs.renderer.write();
+            let id = match self.native.take() {
+                Some(old) => {
+                    renderer.update_egui_texture_from_wgpu_texture(&rs.device, &view, filter, old.id);
+                    old.id
+                }
+                None => renderer.register_native_texture(&rs.device, &view, filter),
+            };
+            self.native = Some(Native { id, texture, nearest: self.nearest });
+        }
+        let Some(native) = self.native.as_mut() else { return false };
+        if native.nearest != self.nearest {
+            rs.renderer.write().update_egui_texture_from_wgpu_texture(&rs.device, &display::view(&native.texture), filter, native.id);
+            native.nearest = self.nearest;
+        }
+        match display::draw(gpu, &r.image, self.region, channel, self.exposure, step, &native.texture) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("arclight-gui: GPU display: {e:#}");
+                false
+            }
+        }
+    }
+}
+
+/// Built without GPU support: always the CPU's way.
+#[cfg(not(feature = "gpu"))]
+impl Viewer {
+    fn display_on_gpu(&mut self, _r: &Arc<arclight::gpu::Resident>, _step: usize) -> bool {
+        false
     }
 }
 
@@ -1018,6 +1110,45 @@ mod tests {
                 }).drop_without_applying_deltas();
             }
             assert_eq!(focused, !call_off, "call_off {call_off}");
+        }
+    }
+
+    /// A result on the GPU displays as the CPU's `to_color_image` would
+    /// show it: every channel, exposure, overscan dimmed, and blocks
+    /// averaged past the texture size; a byte apart at most, where the
+    /// GPU's `pow` rounds the other way.
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn a_gpu_result_displays_as_on_the_cpu() {
+        use arclight::gpu::display;
+        let Some(gpu) = arclight::gpu::test_device() else { return eprintln!("skipped: no GPU adapter") };
+        // HDR noise over a window spilling past the frame (overscan).
+        let img = arclight::gpu::check::noise(Size { width: 160, height: 90 }, IRect::new(-12, -5, 171, 97), false, 3);
+        let up = arclight::gpu::GpuImage::upload(&gpu, &img).unwrap();
+        let region = img.frame().union(&img.window());
+        let cases = [
+            (Channel::Rgb, display::Channel::Rgb, 0.0, 1),
+            (Channel::Rgb, display::Channel::Rgb, -1.5, 1),
+            (Channel::Red, display::Channel::Red, 2.0, 1),
+            (Channel::Green, display::Channel::Green, 0.0, 1),
+            (Channel::Blue, display::Channel::Blue, 0.0, 1),
+            (Channel::Alpha, display::Channel::Alpha, 3.0, 1),
+            (Channel::Rgb, display::Channel::Rgb, 0.5, 3),
+        ];
+        for (cpu_channel, channel, exposure, step) in cases {
+            let want = to_color_image(&img, region, cpu_channel, exposure, step);
+            let texture = display::texture(&gpu, want.size[0] as u32, want.size[1] as u32);
+            // As egui draws it: Rgba8Unorm (its shader takes the bytes as
+            // they are), through a valid view (a GPU error otherwise).
+            assert_eq!(texture.format(), eframe::wgpu::TextureFormat::Rgba8Unorm);
+            gpu.scoped(|| Ok(display::view(&texture))).unwrap();
+            display::draw(&gpu, &up, region, channel, exposure, step, &texture).unwrap();
+            let got = display::read_texture(&gpu, &texture).unwrap();
+            let want: Vec<u8> = want.pixels.iter().flat_map(|c| c.to_array()).collect();
+            assert_eq!(got.len(), want.len());
+            let off = got.iter().zip(&want).filter(|(g, w)| g != w).count();
+            let worst = got.iter().zip(&want).map(|(g, w)| g.abs_diff(*w)).max().unwrap();
+            assert!(worst <= 1 && off * 1000 <= want.len(), "{channel:?} {exposure} step {step}: {off} bytes off, by up to {worst}");
         }
     }
 }

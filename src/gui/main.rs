@@ -117,7 +117,22 @@ fn main() -> eframe::Result {
             p => Doc::blank(new_project(&p)),
         },
     };
+    // The window draws with the engine's GPU device when there is one, so
+    // results still on the GPU are shown from there (see gpu::display);
+    // else eframe makes its own and the viewer converts on the CPU.
+    #[allow(unused_mut)]
+    let mut wgpu_options = eframe::egui_wgpu::WgpuConfiguration::default();
+    #[cfg(feature = "gpu")]
+    if let Some(gpu) = arclight::gpu::for_window() {
+        wgpu_options.wgpu_setup = eframe::egui_wgpu::WgpuSetup::Existing(eframe::egui_wgpu::WgpuSetupExisting {
+            instance: gpu.instance.clone(),
+            adapter: gpu.adapter.clone(),
+            device: gpu.device.clone(),
+            queue: gpu.queue.clone(),
+        });
+    }
     let options = eframe::NativeOptions {
+        wgpu_options,
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1600.0, 1000.0])
             .with_min_inner_size([900.0, 600.0])
@@ -136,7 +151,9 @@ fn main() -> eframe::Result {
                 let i = rs.adapter.get_info();
                 arclight::crash::set_gpu(format!("{} ({:?}, {:?}, driver {} {})", i.name, i.backend, i.device_type, i.driver, i.driver_info));
             }
-            Ok(Box::new(App::new(cc.egui_ctx.clone(), doc)))
+            let mut app = App::new(cc.egui_ctx.clone(), doc);
+            app.viewer.wgpu = cc.wgpu_render_state.clone();
+            Ok(Box::new(app))
         }),
     );
     // Out without the C libraries' exit-time teardown (see
@@ -232,6 +249,8 @@ struct App {
     /// The last request sent to the worker.
     requested: Option<RequestKey>,
     image: Option<Arc<Image>>,
+    /// The same, still on the GPU when it was made there (see worker).
+    image_gpu: Option<Arc<arclight::gpu::Resident>>,
     /// The selected Transform and its input's data window, for its overlay.
     probe: Option<(String, Arc<Image>)>,
     error: Option<NodeError>,
@@ -345,6 +364,7 @@ impl App {
             worker: Worker::spawn(ctx.clone(), eval.clone()),
             requested: None,
             image: None,
+            image_gpu: None,
             probe: None,
             error: None,
             shown_frame: 0,
@@ -1141,6 +1161,7 @@ impl App {
             }
             None => {
                 self.image = None;
+                self.image_gpu = None;
                 self.error = None;
                 self.requested = None;
                 self.cached.clear();
@@ -1152,6 +1173,7 @@ impl App {
                     Ok(img) => {
                         let new_frame = self.image.as_ref().is_none_or(|old| !Arc::ptr_eq(old, &img));
                         self.image = Some(img);
+                        self.image_gpu = resp.gpu;
                         self.error = None;
                         if new_frame {
                             self.transport.frame_shown();
@@ -1159,6 +1181,7 @@ impl App {
                     }
                     Err(e) => {
                         self.image = None;
+                        self.image_gpu = None;
                         self.error = Some(e);
                     }
                 }
@@ -1587,6 +1610,7 @@ enum Answer {
     Cancel,
 }
 
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -1721,6 +1745,7 @@ impl eframe::App for App {
                     ui,
                     Display {
                         image: self.image.as_ref(),
+                        gpu: self.image_gpu.as_ref(),
                         error: error.as_deref(),
                         target: target.as_deref(),
                         returns_to: returns_to.as_deref(),

@@ -250,6 +250,14 @@ Constant and Checkerboard, Shuffle, zmerge, shapes, Light 2D, Read's fit
 and everything else still run on the CPU. The CPU Blur costs the same
 whatever its radius (a running sum).
 
+In the GUI the window draws with the same GPU device, so the viewer shows
+a result made on the GPU straight from there: its 8-bit display (exposure,
+channel, overscan) is made by the GPU, not on the UI thread (4K: ~20 ms
+less per new frame; scrubbing keeps up with the display). Results are still
+read back on the viewer's worker thread, so the pixel readout and pickers
+read the exact values. Frames from the frame cache, the planes view (depth
+and the like), and GPU acceleration off take the CPU's way, as before.
+
 **Scanline Render** and the 3D view's shaded preview run on the GPU too (a
 compute rasterizer that follows the CPU renderer sample for sample),
 except scenes with shadow-casting lights or splats so far; results match

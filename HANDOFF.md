@@ -30,6 +30,17 @@ done), `docs/help.md` (the in-app help) and
   "Dropped TexturesDelta with 1 unapplied deltas" (egui 0.37) now end
   `ctx.run_ui(..)` with `.drop_without_applying_deltas()` instead of
   `let _ =`; all GUI tests pass. **Tip:** do the same in new egui tests.
+- **0.12.9, GPU G7** (Dev1): `gpu::for_window` hands the engine's
+  device to eframe (`WgpuSetup::Existing`; None with ARCLIGHT_GPU=0, no /
+  software adapter, GL, or without the gpu feature: eframe makes its
+  own). `gpu::display` (+ display.wgsl) writes an **Rgba8Unorm** texture
+  (egui's shader takes the sRGB-encoded bytes as they are; an sRGB view
+  decodes twice), registered as a native egui texture, only when the
+  result lives on the window's own device. `Evaluator::evaluate_resident`,
+  worker `Response.gpu`; the read-back stays (readout, pickers). Viewer
+  and Media Out pass their input on as an Arc. Follow-ups: 3D view
+  zero-copy (Dev2's renderer output on the GPU), a GPU frame cache for
+  playback, single-pixel readout from the GPU (no read-back at all).
 - **0.12.7, GPU G5 done** (Dev2): `render_blurred`'s GPU sum takes
   sprites: each (cell, time) renders into a scratch frame, `blur.wgsl`
   resolves it to picture + depth, that time's sprites go over it on the

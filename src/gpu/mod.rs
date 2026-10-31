@@ -15,6 +15,8 @@
 
 pub mod check;
 #[cfg(feature = "gpu")]
+pub mod display;
+#[cfg(feature = "gpu")]
 pub mod image;
 #[cfg(feature = "gpu")]
 pub mod ops;
@@ -219,6 +221,11 @@ impl Resident {
     pub fn shape(&self) -> (crate::image::Size, crate::image::IRect) {
         (self.image.format, self.image.window)
     }
+
+    /// The device it lives on.
+    pub fn gpu(&self) -> &Arc<Gpu> {
+        &self.gpu
+    }
 }
 
 /// Built without GPU support: nothing is ever left on a GPU.
@@ -236,6 +243,20 @@ impl Resident {
     pub fn shape(&self) -> (crate::image::Size, crate::image::IRect) {
         match *self {}
     }
+}
+
+/// The device for a window to draw with (the GUI hands it to eframe), so
+/// the viewer can show results that stay on the GPU without reading them
+/// back: whatever Preferences say, so turning GPU acceleration on later
+/// still shares it. None with `ARCLIGHT_GPU=0`, without a hardware
+/// adapter, on GL (`WGPU_BACKEND=gl`: a GL window needs a display handle
+/// this headless device was made without), or not built with the
+/// feature: the window then makes its own.
+pub fn for_window() -> Option<Arc<Gpu>> {
+    if !cfg!(feature = "gpu") || forced_off() || lost().is_some() {
+        return None;
+    }
+    device().ok().filter(|g| !g.software() && !g.gl())
 }
 
 /// The device for GPU work, or None: off, forced off, no hardware
@@ -276,6 +297,7 @@ pub fn cpu_only<R>(f: impl FnOnce() -> R) -> R {
 /// process, which [`status`] then says.
 pub fn report_error(msg: impl std::fmt::Display, device_lost: bool) {
     let msg = msg.to_string();
+    eprintln!("arclight: GPU error{}: {msg}", if device_lost { " (device lost)" } else { "" });
     crate::crash::note(format!("GPU error{}: {msg}", if device_lost { " (device lost)" } else { "" }));
     *LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = Some(msg.clone());
     if device_lost {
@@ -407,6 +429,9 @@ impl Gpu {
     fn software(&self) -> bool {
         match *self {}
     }
+    fn gl(&self) -> bool {
+        match *self {}
+    }
     fn transfer(&self) -> &'static str {
         match *self {}
     }
@@ -436,6 +461,10 @@ fn device_status(g: &Gpu) -> Status {
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    /// What the device came from, for a window to share it (see
+    /// [`for_window`]).
+    pub instance: wgpu::Instance,
+    pub adapter: wgpu::Adapter,
     pub info: wgpu::AdapterInfo,
     /// The limits the device was created with: the adapter's own.
     pub limits: wgpu::Limits,
@@ -477,13 +506,18 @@ impl Gpu {
             }
         });
         let unified = info.device_type == wgpu::DeviceType::IntegratedGpu && features.contains(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS);
-        Ok(Gpu { device, queue, info, limits, features, unified, pipelines: Mutex::default(), staging: Mutex::default() })
+        Ok(Gpu { device, queue, instance, adapter, info, limits, features, unified, pipelines: Mutex::default(), staging: Mutex::default() })
     }
 
     /// A software adapter (lavapipe, llvmpipe): fine for tests, slower
     /// than the CPU renderer for work.
     fn software(&self) -> bool {
         self.info.device_type == wgpu::DeviceType::Cpu
+    }
+
+    /// On OpenGL (only when asked for with `WGPU_BACKEND`).
+    fn gl(&self) -> bool {
+        self.info.backend == wgpu::Backend::Gl
     }
 
     /// "Vulkan", "Metal", ...
