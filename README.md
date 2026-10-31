@@ -410,7 +410,7 @@ applies everywhere and `mask_invert` does nothing.
 | `point_cloud` | 0 | points (x, y, z) | 3D: points drawn as dots |
 | `locator` | 0 | `translate` [3] | 3D: a point to wire into a Scene or link params to |
 
-`examples/geo-scatter.json` puts the geometry nodes together: open it and select a node to see its part.
+`examples/geo-scatter.json` puts the geometry nodes together: open it (**Help ▸ Examples** in the app, which ships it) and select a node to see its part.
 
 In the 3D view, emitters (shape and direction), attractors, vortices and bounce planes are drawn, picked and moved with G / R / S and the gizmos (forces move only); in 2D, an emitter feeding a viewed Particles 2D shows box or point handles in the viewer.
 

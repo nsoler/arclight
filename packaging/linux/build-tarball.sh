@@ -4,6 +4,7 @@
 # containing
 #   bin/arclight-gui, bin/arclight            the GUI and the CLI / MCP server
 #   share/arclight/examples/media/testsrc.mp4 the starter project's clip
+#   share/arclight/examples/*.json            Help ▸ Examples
 #   share/arclight/icons/                     the icons
 #   install.sh, uninstall.sh                  per-user install under ~/.local
 #
@@ -29,6 +30,8 @@ rm -rf "$stage" && mkdir -p "$stage/bin" "$stage/share/arclight/examples/media" 
 install -m755 "$repo/target/release/arclight-gui" "$repo/target/release/arclight" "$stage/bin/"
 strip "$stage/bin/"* 2>/dev/null || true
 install -m644 "$repo/examples/media/testsrc.mp4" "$stage/share/arclight/examples/media/"
+# Help ▸ Examples (the list is EXAMPLES in src/gui/main.rs).
+install -m644 "$repo/examples/geo-scatter.json" "$stage/share/arclight/examples/"
 install -m644 "$repo/assets/arclight.svg" "$repo/assets/arclight-icon.svg" "$repo/assets/arclight.png" "$stage/share/arclight/icons/"
 install -m755 "$repo/packaging/linux/install.sh" "$repo/packaging/linux/uninstall.sh" "$stage/"
 install -m644 "$repo/CHANGELOG.md" "$stage/"

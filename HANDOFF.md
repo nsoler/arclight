@@ -37,6 +37,16 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.21, Help ▸ Examples** (Supervisor, user request): `EXAMPLES`
+  in `src/gui/main.rs` (label, file) and `bundled(rel)` (Resources /
+  share/arclight / checkout, also used for the starter clip);
+  `open_example` loads it untitled (`Then::Example` after the discard
+  question). Packaging copies `examples/geo-scatter.json` into the
+  tarball's share/arclight/examples and the app's Resources/examples:
+  add a file to both scripts and `EXAMPLES` together. Queue for the rest
+  of phase 13 (user-approved): Dev1 P2 rest + P5 mesh ops, then Curve to
+  Mesh / Points on Curve, P6 with Dev2; Dev2 B3, B4, curves (Curve node,
+  Resample, 3D-view editing), then P8 Project 3D.
 - **0.13.20, P3: Attribute from Image** (Dev1): `attribute_from_image`,
   via camera (`Camera::project` at the image's format) or uv (mesh uvs,
   or Scatter's `uv` attr); bilinear `sample()` honoring the data window,

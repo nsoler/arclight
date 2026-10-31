@@ -38,7 +38,7 @@ use properties::Properties;
 use bridge_calls::{BridgeCalls, Call};
 use script_jobs::ScriptJobs;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use transport::{Play, Transport};
 use viewer::{Display, Viewer};
@@ -794,6 +794,24 @@ impl App {
         }
     }
 
+    /// Help ▸ Examples: open the example at `path` as a new, unsaved
+    /// project (Save asks where, so the shipped file stays as it is),
+    /// asking about unsaved changes first.
+    fn open_example(&mut self, path: PathBuf) {
+        if self.doc.dirty {
+            self.ask = Some(Ask::Discard(Then::Example(path)));
+        } else {
+            self.load_example(&path);
+        }
+    }
+
+    fn load_example(&mut self, path: &Path) {
+        match Graph::from_file(path) {
+            Ok(g) => self.load(Doc::new(g, None)),
+            Err(e) => self.status = Some(format!("{e:#}")),
+        }
+    }
+
     fn open(&mut self) {
         if self.doc.dirty {
             self.ask = Some(Ask::Discard(Then::Open));
@@ -938,6 +956,7 @@ impl App {
                 Ok(g) => self.load(Doc::new(g, Some(path))),
                 Err(e) => self.status = Some(format!("{e:#}")),
             },
+            (Ask::Discard(Then::Example(path)), _) => self.load_example(&path),
         }
     }
 
@@ -1448,6 +1467,14 @@ impl App {
                     self.help.open = true;
                     ui.close();
                 }
+                ui.menu_button("Examples", |ui| {
+                    for (label, file) in EXAMPLES {
+                        if ui.button(*label).on_hover_text(format!("Open examples/{file} as a new project (Save asks where)")).clicked() {
+                            self.open_example(bundled(&format!("examples/{file}")));
+                            ui.close();
+                        }
+                    }
+                });
                 if ui.button("Report a problem…").on_hover_text("The latest crash report, to copy or put in a GitHub issue (nothing is sent by ArclightVFX)").clicked() {
                     self.crash = crash_dialog::CrashDialog::for_help();
                     ui.close();
@@ -1613,6 +1640,8 @@ enum Then {
     Open,
     /// Open this project (dropped on the window).
     Load(PathBuf),
+    /// Open this example as a new, unsaved project (Help ▸ Examples).
+    Example(PathBuf),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1783,19 +1812,27 @@ impl eframe::App for App {
     }
 }
 
+/// A file shipped with the app, `rel` from its data folder: in the app
+/// bundle's Resources on macOS, in share/arclight beside bin/ in a Linux
+/// release, else the source checkout this was built from.
+fn bundled(rel: &str) -> PathBuf {
+    let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from));
+    exe_dir
+        .into_iter()
+        .flat_map(|d| ["../Resources", "../share/arclight"].map(|r| d.join(r).join(rel)))
+        .find(|p| p.exists())
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel))
+}
+
+/// Help ▸ Examples: the example projects shipped with the app (menu
+/// label, file under examples/). Packaging copies the same files.
+const EXAMPLES: &[(&str, &str)] = &[("Geometry nodes: rocks and bushes scattered", "geo-scatter.json")];
+
 /// The project shown on a fresh launch: the bundled test clip, transformed
 /// over a checkerboard, graded, viewed, and ready to render.
 fn starter_graph() -> Graph {
-    // The example clip: in the app bundle's Resources on macOS, in
-    // share/arclight beside bin/ in a Linux release, else the source
-    // checkout this was built from.
-    let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from));
     let checkout = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let clip = exe_dir
-        .into_iter()
-        .flat_map(|d| ["../Resources", "../share/arclight"].map(|r| d.join(r).join("examples/media/testsrc.mp4")))
-        .find(|p| p.exists())
-        .unwrap_or_else(|| checkout.join("examples/media/testsrc.mp4"));
+    let clip = bundled("examples/media/testsrc.mp4");
     // Renders go to the checkout's out/, or, installed, to ~/Movies/Arclight.
     let render = if checkout.is_dir() {
         checkout.join("out/render/starter.####.png")
@@ -1903,6 +1940,32 @@ mod tests {
     /// Tests that make an App set XDG_RUNTIME_DIR (for its bridge) and
     /// remove that folder after: one at a time.
     static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Help ▸ Examples opens each shipped example as a new, unsaved project
+    /// (no path, so Save asks where), after asking about unsaved changes.
+    #[test]
+    fn examples_open_as_new_unsaved_projects() {
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("arclight-gui-examples-test-{}", std::process::id()));
+        std::env::set_var("XDG_RUNTIME_DIR", &dir);
+        let ctx = egui::Context::default();
+        let mut app = App::new(ctx.clone(), Doc::new(Graph::default(), None));
+        for (_, file) in EXAMPLES {
+            let path = bundled(&format!("examples/{file}"));
+            assert!(path.exists(), "{} is shipped", path.display());
+            app.doc.dirty = false;
+            app.open_example(path);
+            assert!(app.status.is_none(), "{file}: {:?}", app.status);
+            assert!(app.doc.path.is_none() && !app.doc.dirty, "{file} opens untitled and clean");
+            assert!(!app.doc.graph.nodes.is_empty(), "{file} has nodes");
+        }
+        // Unsaved changes are asked about first.
+        app.doc.dirty = true;
+        app.open_example(bundled("examples/geo-scatter.json"));
+        assert!(matches!(app.ask, Some(Ask::Discard(Then::Example(_)))));
+        drop(app);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// A plain Tab switches the viewer between 2D and 3D wherever the
     /// pointer is (over the node graph too, or outside the window), but not

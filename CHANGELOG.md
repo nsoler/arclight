@@ -17,6 +17,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.21 — 2026-10-31
+
+- **Help ▸ Examples**: example projects ship with the app (the Linux
+  tarball and the macOS app) and open from the Help menu as a new,
+  unsaved project, so saving asks where and the shipped file stays as it
+  is. The first is **Geometry nodes: rocks and bushes scattered**
+  (geo-scatter).
+
 ## 0.13.20 — 2026-10-31
 
 - Geometry: an **Attribute from Image** node samples an image at each
