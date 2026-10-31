@@ -382,7 +382,14 @@ selected object.
   **geometry** (`node.geometry(frame, domain)`). **Transform Geo** moves, turns and scales
   what's in a scene about a pivot, everything or one node's (Group: a name
   or a pattern like rock*); cameras and lights stay put unless you tick
-  Cameras and lights.
+  Cameras and lights. **Scatter** puts points over the meshes and cards
+  of the scene it's given (or inside closed meshes, or at the camera
+  tracker's points). Density sets how many a unit of area; a mesh
+  attribute named in Density attribute, or a mask image (painted or
+  keyed, read at the surface's uvs or through a camera), thins them where
+  it's dark. Raising the density or painting the mask keeps the points
+  already there where they are, so what's placed on them doesn't jump.
+  Min distance spreads them evenly; Seed gives another arrangement.
 - **Read Geo** reads an OBJ file (with its MTL colors and textures), a
   glTF file (.gltf, .glb) or an Alembic cache (.abc): its meshes move and
   deform frame by frame. **Frame rate** (set to the project's when you

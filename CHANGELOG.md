@@ -17,6 +17,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.9 — 2026-10-31
+
+- New **Scatter** node: scatters points over a scene's meshes and cards
+  (evenly by area), inside closed meshes, or at the camera tracker's
+  points, with a density that a mesh attribute or a mask image (by uv or
+  through a camera) thins, an optional minimum distance, and a seed; each
+  point keeps its place and id when the density or mask changes (a
+  million points in about 0.15 s).
+
 ## 0.13.8 — 2026-10-31
 
 - Geometry: **Geo Info**, the viewer's **Sheet** toggle: the viewed

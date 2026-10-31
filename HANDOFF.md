@@ -37,6 +37,13 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.9, P2: Scatter** (Dev2): `src/geo_ops.rs` (a module of
+  ops.rs via `#[path]`), stable ids per D5: per-triangle hashed
+  candidates (floor(area × density) + 1 by hash), thinning by hash <
+  density attr × mask (uv or through a camera), volume on a power-of-two
+  grid, Poisson min distance in hashed order, unique 31-bit ids. Glob
+  moved to `geo.rs`. 1 M points on a plane in 142 ms. Next: expr.rs
+  @-names + Delete.
 - **0.13.8, P1c: Geo Info** (Dev1): `src/geo_table.rs` (lib, read-only:
   `Domain`, `Filter`, `Table` with row → (object, element) by prefix sums,
   `page()` JSON) shared by the GUI sheet (`src/gui/spreadsheet.rs`, the

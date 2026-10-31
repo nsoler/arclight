@@ -449,6 +449,46 @@ pub fn matched(a: (&Attrs, usize), b: (&Attrs, usize)) -> Option<Vec<Option<usiz
     (a.1 == b.1).then(|| (0..a.1).map(Some).collect())
 }
 
+/// Whether `name` matches `pattern`, where each * stands for any run of
+/// characters (none too).
+pub fn glob(pattern: &str, name: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return pattern == name;
+    }
+    let (first, last) = (parts[0], parts[parts.len() - 1]);
+    if !name.starts_with(first) || !name[first.len()..].ends_with(last) || name.len() < first.len() + last.len() {
+        return false;
+    }
+    let mut rest = &name[first.len()..name.len() - last.len()];
+    for part in &parts[1..parts.len() - 1] {
+        match rest.find(part) {
+            Some(k) => rest = &rest[k + part.len()..],
+            None => return false,
+        }
+    }
+    true
+}
+
+/// A number from `parts` that's the same every run (on every machine)
+/// and changes completely with any of them: what makes geometry nodes'
+/// random choices stable (see docs/geo-plan.md, D5).
+pub fn stable_hash(parts: &[u64]) -> u64 {
+    parts.iter().fold(0x9e37_79b9_7f4a_7c15u64, |h, &p| mix(h ^ mix(p.wrapping_add(0x632b_e59b_d9b4_e019))))
+}
+
+/// A stable number in 0..1 from `parts` (see [`stable_hash`]).
+pub fn stable_unit(parts: &[u64]) -> f64 {
+    (stable_hash(parts) >> 11) as f64 / (1u64 << 53) as f64
+}
+
+/// SplitMix64's finalizer: every bit of `z` into every bit out.
+pub fn mix(mut z: u64) -> u64 {
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

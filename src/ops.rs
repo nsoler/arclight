@@ -9,6 +9,9 @@
 
 use crate::anim;
 use crate::color::{self, Rgba};
+use crate::geo::glob;
+#[path = "geo_ops.rs"]
+pub mod geo_ops;
 use crate::geom;
 use crate::render3d;
 use crate::scene::{self, Scene};
@@ -91,7 +94,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1084,6 +1087,34 @@ pub static OPS: &[OpInfo] = &[
                doesn't move the shot.",
     },
     OpInfo {
+        name: "scatter",
+        label: "Scatter",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN, opt("density image"), scene_in("camera")],
+        params: &[
+            fixed!("source", "Source", ParamKind::Choice(&["surface", "volume", "tracker points"]), "surface"),
+            fixed!("group", "Group", ParamKind::Text, ""),
+            p!("density", "Density", ParamKind::Float { min: 0.0, max: 10000.0 }, 10.0),
+            fixed!("density_attr", "Density attribute", ParamKind::Text, ""),
+            fixed!("image_via", "Image via", ParamKind::Choice(&["uv", "camera"]), "uv"),
+            fixed!("channel", "Image channel", ParamKind::Choice(&["alpha", "luminance"]), "alpha"),
+            p!("min_distance", "Min distance", ParamKind::Float { min: 0.0, max: 100.0 }, 0.0),
+            fixed!("seed", "Seed", ParamKind::Int { min: 0, max: 1_000_000 }, 0),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Scatters points (a point set, added to the scene it's given) over the scene's meshes and cards, evenly by \
+               area (Source surface: Density points a unit of area), inside its closed meshes (volume: a unit of volume), or \
+               at its tracker points (Density the share of them kept). Group narrows the surfaces or points to one node's \
+               (a name, or a pattern with *). A point's chance of staying is multiplied by its surface's Density attribute \
+               (a float point attribute, blended across the triangle; 0 where the surface hasn't it) and by the density \
+               image's channel, read at the point's texture coordinates (Image via uv) or where the camera input's camera \
+               sees it (via camera; nothing outside its frame). Min distance drops points nearer than it to another. Each \
+               point gets an id that stays put when the density or the mask changes (the points made before stay where they \
+               were), its surface's normal (N), uv and point attributes; Seed gives another scatter. More than 5,000,000 \
+               points is an error.",
+    },
+    OpInfo {
         name: "splat_color",
         label: "Splat Color",
         category: Category::Scene,
@@ -1914,6 +1945,11 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "read_geo" => read_geo(params, ctx.frame),
         "read_splat" => read_splat(params),
         "splat_crop" => splat_crop(params, inputs),
+        "scatter" => {
+            let image = inputs.get(1).copied().flatten().filter(|i| i.scene.is_none());
+            let camera = inputs.get(2).copied().flatten().and_then(|i| i.scene.as_deref());
+            Ok(scene_output(DEFAULT_FORMAT, geo_ops::scatter(params, input_scene(inputs), image, camera)?))
+        }
         "transform_geo" => Ok(scene_output(DEFAULT_FORMAT, transform_geo(params, input_scene(inputs)))),
         "splat_color" => splat_color(params, inputs),
         "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => {
@@ -3523,27 +3559,6 @@ fn transform_geo(params: &Value, mut scene: Scene) -> Scene {
         scene.lights.iter_mut().filter(|o| take(&o.node)).for_each(|o| moved(&mut o.world));
     }
     scene
-}
-
-/// Whether `name` matches `pattern`, where each * stands for any run of
-/// characters (none too).
-fn glob(pattern: &str, name: &str) -> bool {
-    let parts: Vec<&str> = pattern.split('*').collect();
-    if parts.len() == 1 {
-        return pattern == name;
-    }
-    let (first, last) = (parts[0], parts[parts.len() - 1]);
-    if !name.starts_with(first) || !name[first.len()..].ends_with(last) || name.len() < first.len() + last.len() {
-        return false;
-    }
-    let mut rest = &name[first.len()..name.len() - last.len()];
-    for part in &parts[1..parts.len() - 1] {
-        match rest.find(part) {
-            Some(k) => rest = &rest[k + part.len()..],
-            None => return false,
-        }
-    }
-    true
 }
 
 /// The linear color transform a Splat Color's params describe: gain and
