@@ -26,9 +26,14 @@ done), `docs/help.md` (the in-app help) and
   (`View3dPrefs.orbit_selection`, default on); Linux fine scroll steps
   within `WHEEL_SPELL` (1 s) of a line step count as the wheel
   (`Navigation::scroll`'s `wheel_recent`). Not tried by hand yet (TODO).
-  Note: 20 GUI tests (node_editor, help, …) fail on HEAD too with
-  epaint's "Dropped TexturesDelta with 1 unapplied deltas" panic (egui
-  0.37 test harness); not caused by this change, still to fix.
+- **0.11.5 (Dev1):** the 20 GUI tests that panicked with epaint's
+  "Dropped TexturesDelta with 1 unapplied deltas" (egui 0.37) now end
+  `ctx.run_ui(..)` with `.drop_without_applying_deltas()` instead of
+  `let _ =`; all GUI tests pass. **Tip:** do the same in new egui tests.
+- **Phase 12 (user, 2026-10-30): GPU acceleration (wgpu), 0.12.x on
+  branch `wip-ns-gpu`** (from `wip-ns-engine` at 0.11.5, now frozen;
+  `main` follows it). Plan: `docs/gpu-plan.md` (Dev2). The user wants a
+  Preferences entry to turn GPU acceleration on / off.
 
 - **`TODO.md`** (repo root, added 2026-10-29 at the user's request) is
   the running list of what's still wanted: hand checks, follow-ups,

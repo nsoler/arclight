@@ -1,6 +1,6 @@
 [package]
 name = "arclight"
-version = "0.11.4"
+version = "0.11.5"
 edition = "2021"
 description = "ArclightVFX Compositor — an original node-graph image compositor"
 license = "MIT OR Apache-2.0"
