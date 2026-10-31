@@ -1607,7 +1607,7 @@ mod tests {
 
     fn doc(op: &str, params: Value) -> Doc {
         let g = Graph { nodes: vec![arclight::graph::NodeSpec {
-            id: "n".into(), op: op.into(), inputs: vec![], params, pos: None,
+            id: "n".into(), op: op.into(), inputs: vec![], params, pos: None, disabled: false,
         }], ..Default::default() };
         let mut d = Doc::new(g, None);
         d.selected = Some("n".into());
@@ -1639,7 +1639,7 @@ mod tests {
 
     #[test]
     fn an_emitter_has_handles_when_its_particles_2d_is_viewed() {
-        let node = |id: &str, op: &str, inputs: &[&str], params: Value| arclight::graph::NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None };
+        let node = |id: &str, op: &str, inputs: &[&str], params: Value| arclight::graph::NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None, disabled: false };
         let g = Graph {
             nodes: vec![
                 node("n", "particle_emitter", &["", ""], json!({ "shape": "rectangle", "translate": [100, 50, 7], "dimensions": [40, 20, 3], "rotate": [0, 0, 0] })),
@@ -1763,7 +1763,7 @@ mod tests {
             "track1": { "keys": [[1, [50, 50]], [2, [70, 50]]], "interp": "linear" },
             "output": "match-move", "pattern": 20, "search": 40,
         }));
-        d.graph.nodes.push(arclight::graph::NodeSpec { id: "v".into(), op: "viewer".into(), inputs: vec!["n".into()], params: json!({}), pos: None });
+        d.graph.nodes.push(arclight::graph::NodeSpec { id: "v".into(), op: "viewer".into(), inputs: vec!["n".into()], params: json!({}), pos: None, disabled: false });
         let xf = XF.for_node(&d, "n", 2);
         assert_eq!(xf.screen(Vec2::new(70.0, 50.0)), Pos2::new(90.0, 50.0));
         // Dragging it there moves the track by the pointer's motion in input pixels.

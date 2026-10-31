@@ -69,6 +69,12 @@ static TOOLS: &[Tool] = &[
             "pos": {"type": "array", "items": {"type": "number"}},
             "positions": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "number"}}}
         }}),
+    tool!("set_disabled", "Turn nodes off (bypassed: 'disabled' true) or on again, as one undo step: 'node', or several in 'nodes'. A node turned off passes its main input on unchanged (an image op its input, a merge its B, a Scanline Render its background, a particle modifier its stream), or outputs nothing (a source: a transparent frame or an empty scene); a Write or Media Out turned off writes nothing. describe_node says whether a node is.",
+        {"type": "object", "properties": {
+            "node": {"type": "string"},
+            "nodes": {"type": "array", "items": {"type": "string"}},
+            "disabled": {"type": "boolean"}
+        }, "required": ["disabled"]}),
     tool!("layout_nodes", "Lay out the nodes with no position, or with 'all' every node, as the node editor does a graph without positions: a column per depth from the sources, left to right (one undo step).",
         {"type": "object", "properties": {"all": {"type": "boolean"}}}),
     tool!("delete_node", "Remove a node; nodes it fed are reconnected to its first input.",
@@ -287,6 +293,19 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
                 bail!("give 'node' and 'pos', or 'positions'");
             }
             s.set_node_positions(&moves)?;
+            ok()
+        }
+        "set_disabled" => {
+            let mut ids: Vec<String> = match args.get("nodes") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(v) => serde_json::from_value(v.clone()).context("'nodes' must be a list of node names")?,
+            };
+            ids.extend(opt_str(args, "node").map(str::to_string));
+            if ids.is_empty() {
+                bail!("give 'node' or 'nodes'");
+            }
+            let disabled = args.get("disabled").and_then(Value::as_bool).ok_or_else(|| anyhow!("missing boolean argument 'disabled'"))?;
+            s.set_disabled(&ids, disabled)?;
             ok()
         }
         "layout_nodes" => {
@@ -849,6 +868,27 @@ mod tests {
             (json!({"positions": {"nope": [0, 0]}}), "nope"),
         ] {
             let r = call(&mut s, "set_node_position", args);
+            assert!(r["isError"] == true && r["content"][0]["text"].as_str().unwrap().contains(says), "{r}");
+        }
+    }
+
+    /// Turning nodes off through MCP: one or several, seen in describe_node.
+    #[test]
+    fn nodes_turn_off_through_mcp() {
+        let mut s = Server::new(Session::default());
+        let ok = |r: Value| {
+            assert_eq!(r["isError"], false, "{r}");
+            r["structuredContent"].clone()
+        };
+        ok(call(&mut s, "create_node", json!({"op": "constant", "name": "plate"})));
+        ok(call(&mut s, "create_node", json!({"op": "grade", "name": "look", "inputs": ["plate"]})));
+        ok(call(&mut s, "create_node", json!({"op": "blur", "name": "soft", "inputs": ["look"]})));
+        ok(call(&mut s, "set_disabled", json!({"node": "look", "disabled": true})));
+        assert_eq!(ok(call(&mut s, "describe_node", json!({"node": "look"})))["disabled"], true);
+        ok(call(&mut s, "set_disabled", json!({"nodes": ["look", "soft"], "disabled": false})));
+        assert_eq!(ok(call(&mut s, "describe_node", json!({"node": "look"})))["disabled"], false);
+        for (args, says) in [(json!({"disabled": true}), "'node'"), (json!({"node": "look"}), "'disabled'"), (json!({"node": "nope", "disabled": true}), "nope")] {
+            let r = call(&mut s, "set_disabled", args);
             assert!(r["isError"] == true && r["content"][0]["text"].as_str().unwrap().contains(says), "{r}");
         }
     }

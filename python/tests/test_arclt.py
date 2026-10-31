@@ -136,6 +136,17 @@ class ArcltTest(unittest.TestCase):
         with self.assertRaisesRegex(arclt.ArcltError, "nope"):
             arclt.set_positions({"nope": [0, 0]})
 
+    def test_disabled_nodes(self):
+        plate = arclt.create_node("constant", width=4, height=4, color=[1, 0, 0, 1])
+        look = arclt.create_node("grade", plate, multiply=[0.5, 0.5, 0.5])
+        self.assertFalse(look.disabled)
+        self.assertAlmostEqual(mean_rgba(look)[0], 0.5, places=5)
+        look.disabled = True
+        self.assertTrue(look.disabled)
+        self.assertAlmostEqual(mean_rgba(look)[0], 1.0, places=5)
+        self.assertTrue(arclt.undo())
+        self.assertFalse(look.disabled)
+
     def test_errors_raise_arclt_error(self):
         c = arclt.create_node("constant")
         with self.assertRaisesRegex(arclt.ArcltError, "no param"):

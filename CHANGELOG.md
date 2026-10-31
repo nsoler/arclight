@@ -12,6 +12,21 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.36 — 2026-10-30
+
+- **Turn nodes off** to troubleshoot: a switch on each node in the graph
+  (or **D** for the selected nodes, or Enabled in Properties) bypasses a
+  node, as one undo step. A node that's off passes on its input (a Merge
+  its B background, a Scanline Render its background, a particle
+  modifier its stream, a Scene its first input); a source that's off
+  (Read, Constant, Camera, lights, emitters) outputs nothing: a
+  transparent frame or an empty scene. A Write or Media Out that's off
+  writes nothing (rendering a Media Out that's off says so; the CLI skips
+  it). Nodes that are off are drawn dimmed and struck through, and are
+  saved with the project; older projects load unchanged. Sound follows
+  what's passed on. Scripts: MCP `set_disabled` and `describe_node`'s
+  `disabled`, Python `Node.disabled`.
+
 ## 0.10.35 — 2026-10-30
 
 - **Sound in playback**: playing forward plays the viewed node's audio

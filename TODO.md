@@ -7,7 +7,7 @@ they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
-- [ ] 0.10.34–0.10.35: sound. Open a clip with sound in a Media In and
+- [X] 0.10.34–0.10.35: sound. Open a clip with sound in a Media In and
       view it; L plays it in step (lips / claps against the picture);
       K / Space / J / arrows / scrubbing are silent; a short loop restarts
       it at the in point; a heavy node makes it drop out, then return in
@@ -19,18 +19,18 @@ they come up and strike them (or delete them) when they ship.
       Scanline Render, and the 3D view's 5 / axis views; a far-off
       textured card no longer shimmers; Read Geo an .abc from Blender /
       Maya / Houdini (animated, deforming, motion blur)
-- [ ] 0.10.15–0.10.19: Camera Tracker on real footage: a Roto mask over
+- [X] 0.10.15–0.10.19: Camera Tracker on real footage: a Roto mask over
       something moving through the shot; Export Linked (re-solve or Set
       origin and the Camera follows; Bake / Unlink in Properties); pick
       points over the exported Scanline Render; Solve lens distortion on
       a wide-lens shot with camera movement (K1/K2 in the panel, the
       Lens Distort under the render)
-- [ ] 0.10.2–0.10.14: Splat Crop (drag its box in 3D), Splat Color, .splat /
+- [X] 0.10.2–0.10.14: Splat Crop (drag its box in 3D), Splat Color, .splat /
       .spz files; Read Splat a real capture (.ply from Postshot /
       Polycam / Luma…; Up axis now defaults to -y (0.10.14)), render it
       with a card in front / behind, the 3D view's dots then full render,
       F, click to select
-- [ ] 0.9.65–0.9.68: Edit ▸ Preferences (scale, theme, snap, straight
+- [X] 0.9.65–0.9.68: Edit ▸ Preferences (scale, theme, snap, straight
       wires, autosave, Open Recent, undo levels, New project defaults,
       3D view mouse / trackpad / shading); File ▸ New's project folder;
       media dialogs start there; move a saved project folder (or copy it

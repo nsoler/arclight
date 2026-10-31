@@ -95,6 +95,16 @@ class Node:
     def pos(self, value: list[float]) -> None:
         _call("set_node_position", node=self._name, pos=value)
 
+    @property
+    def disabled(self) -> bool:
+        """Turned off (bypassed): it passes its main input on unchanged, or
+        outputs nothing; a Write or Media Out writes nothing."""
+        return self.info()["disabled"]
+
+    @disabled.setter
+    def disabled(self, value: bool) -> None:
+        _call("set_disabled", node=self._name, disabled=bool(value))
+
     def set(self, **params: Any) -> "Node":
         """Set several params as one undo step."""
         _call("set_params", node=self._name, params=params)

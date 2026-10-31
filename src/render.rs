@@ -50,6 +50,9 @@ pub fn render_media_out_with(graph: &Graph, out_id: &str, progress: &Progress, m
     if node.op != "media_out" {
         bail!("'{out_id}' is a '{}' node, not media_out", node.op);
     }
+    if node.disabled {
+        bail!("'{out_id}' is turned off: turn it on to render");
+    }
     let p: MediaOut = ops::parse(&node.params, "media_out")?;
     if p.path.is_empty() {
         bail!("{out_id}: no output file set");
@@ -381,6 +384,23 @@ mod tests {
         let err = render_media_out(&checker_out(&dir, "small.mov", "DNxHR HQX 10-bit", [64, 64], 24.0), "out", &Progress::default()).unwrap_err();
         assert!(format!("{err:#}").contains("DNxHR HQX 10-bit needs frames at least 256x120 (these are 64x64)"), "{err:#}");
         assert!(!dir.join("small.mov").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A Media Out turned off renders nothing and says why.
+    #[test]
+    fn a_disabled_media_out_writes_nothing() {
+        let dir = std::env::temp_dir().join(format!("arclight_media_out_off_{}", std::process::id()));
+        let file = dir.join("off.####.png");
+        let graph: Graph = serde_json::from_value(serde_json::json!({ "nodes": [
+            { "id": "c", "op": "constant", "params": { "width": 4, "height": 4 } },
+            { "id": "out", "op": "media_out", "inputs": ["c"], "disabled": true, "params": {
+                "path": file.to_string_lossy(), "first_frame": 1, "last_frame": 2 } },
+        ]}))
+        .unwrap();
+        let err = render_media_out(&graph, "out", &Progress::default()).unwrap_err().to_string();
+        assert!(err.contains("turned off"), "{err}");
+        assert!(!dir.exists() || std::fs::read_dir(&dir).unwrap().next().is_none(), "nothing written");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

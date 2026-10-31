@@ -2525,6 +2525,7 @@ mod tests {
             inputs: vec![],
             params: serde_json::json!({}),
             pos: None,
+            disabled: false,
         });
         let doc = Doc::new(Graph { nodes: nodes.collect(), ..Default::default() }, None);
         let p = ViewCam { center: [0.0, 0.0, -8.0], yaw: 0.0, pitch: 0.0, distance: 8.0, ortho: false, auto_ortho: false, wireframe: false, shading: None, shadows: false }.projector(rect());
@@ -2673,7 +2674,7 @@ mod tests {
     /// given), and the scene they make, tagged.
     fn light_doc(spot: serde_json::Value, panel: serde_json::Value) -> (Doc, Scene) {
         use arclight::graph::{Graph, NodeSpec};
-        let node = |id: &str, op: &str, params: serde_json::Value| NodeSpec { id: id.into(), op: op.into(), inputs: vec![], params, pos: None };
+        let node = |id: &str, op: &str, params: serde_json::Value| NodeSpec { id: id.into(), op: op.into(), inputs: vec![], params, pos: None, disabled: false };
         let doc = Doc::new(Graph { nodes: vec![node("spot", "light_spot", spot.clone()), node("panel", "light_area", panel.clone())], ..Default::default() }, None);
         let light = |n: &str, op: &str, p: &serde_json::Value| Light { node: n.into(), ..arclight::scene::light(op, p, None).unwrap() };
         let scene = Scene { lights: vec![light("spot", "light_spot", &spot), light("panel", "light_area", &panel)], ..Scene::default() };
@@ -2912,7 +2913,7 @@ mod tests {
     #[test]
     fn particle_streaks_follow_the_render_s_shutter() {
         use arclight::graph::{Evaluator, Graph, NodeSpec};
-        let node = |id: &str, op: &str, input: &str, params: serde_json::Value| NodeSpec { id: id.into(), op: op.into(), inputs: vec![input.into()], params, pos: None };
+        let node = |id: &str, op: &str, input: &str, params: serde_json::Value| NodeSpec { id: id.into(), op: op.into(), inputs: vec![input.into()], params, pos: None, disabled: false };
         let graph = Graph {
             nodes: vec![
                 node("emit", "particle_emitter", "", json!({ "speed": 4, "translate": [0, 0, -8] })),
@@ -2941,7 +2942,7 @@ mod tests {
         use crate::gizmo3d::{tests::front, GestureKey, Input, Mode, Outcome, Transforming};
         use arclight::graph::{Evaluator, Graph, NodeSpec};
         let file = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/geo/splats.ply");
-        let node = |id: &str, op: &str, input: &str, params: serde_json::Value| NodeSpec { id: id.into(), op: op.into(), inputs: vec![input.into()], params, pos: None };
+        let node = |id: &str, op: &str, input: &str, params: serde_json::Value| NodeSpec { id: id.into(), op: op.into(), inputs: vec![input.into()], params, pos: None, disabled: false };
         let graph = Graph {
             nodes: vec![
                 node("cap", "read_splat", "", json!({ "file": file, "translate": [0, 0, -12] })),
@@ -2996,7 +2997,7 @@ mod tests {
     fn particle_emitters_and_forces_are_drawn_picked_and_moved() {
         use crate::gizmo3d::{tests::front, GestureKey, Input, Mode, Outcome, Transforming};
         use arclight::graph::{Evaluator, Graph, NodeSpec};
-        let node = |id: &str, op: &str, input: &str, params: serde_json::Value| NodeSpec { id: id.into(), op: op.into(), inputs: vec![input.into()], params, pos: None };
+        let node = |id: &str, op: &str, input: &str, params: serde_json::Value| NodeSpec { id: id.into(), op: op.into(), inputs: vec![input.into()], params, pos: None, disabled: false };
         let graph = Graph {
             nodes: vec![
                 node("emit", "particle_emitter", "", json!({ "shape": "box", "dimensions": [1, 1, 1], "translate": [0, 0, -8] })),

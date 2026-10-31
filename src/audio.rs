@@ -133,7 +133,8 @@ pub struct AudioSource {
 
 /// The audio node `node` plays at `frame`: a Media In's or Read's clip
 /// with sound (its frames mapped to source time as its video is), or, for
-/// any other node, what its first input plays. None where there's none,
+/// any other node, what its first input plays (a node turned off, what it
+/// passes on). None where there's none,
 /// or where the clip holds a frame (outside a Media In's range, past a
 /// clip's end).
 ///
@@ -143,6 +144,11 @@ pub fn source_at(graph: &Graph, node: &str, frame: i64) -> Option<AudioSource> {
     let mut id = node;
     for _ in 0..=graph.nodes.len() {
         let n = graph.node(id)?;
+        // Turned off: what it passes on plays (nothing, for a source).
+        if n.disabled {
+            id = n.inputs.get(ops::bypass_port(&n.op)?).filter(|i| !i.is_empty())?;
+            continue;
+        }
         let first = match n.op.as_str() {
             "media_in" => {
                 let p = ops::params_with_defaults("media_in", &n.params);
@@ -279,6 +285,30 @@ pub(crate) mod tests {
         assert_eq!((at("clip", 149), at("moved", 149), at("read", 49), at("over", 49)), (Some(48), Some(48), Some(48), Some(48)));
         assert_eq!((at("clip", 100), at("clip", 197), at("read", 0), at("read", 97)), (None, None, None, None), "where the picture holds");
         assert_eq!((at("mute", 10), at("bg", 10), at("nope", 10)), (None, None, None));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A node turned off plays what it passes on (a merge its B); a source
+    /// turned off, nothing.
+    #[test]
+    fn a_disabled_node_plays_what_it_passes_on() {
+        let dir = std::env::temp_dir().join(format!("arclight_audio_off_{}", std::process::id()));
+        let Some(path) = clip(&dir, "tone.mov", false) else {
+            eprintln!("skipping: no ffmpeg");
+            return;
+        };
+        let mut graph: Graph = serde_json::from_value(json!({ "nodes": [
+            { "id": "clip", "op": "media_in", "params": { "path": path, "first_frame": 101, "last_frame": 196 } },
+            { "id": "read", "op": "read", "params": { "path": path } },
+            { "id": "over", "op": "merge", "inputs": ["read", "clip"], "params": {}, "disabled": true },
+            { "id": "graded", "op": "grade", "inputs": ["clip"], "params": {}, "disabled": true },
+        ] }))
+        .unwrap();
+        let at = |g: &Graph, n: &str, f: i64| source_at(g, n, f).map(|s| (s.secs * 24.0).round() as i64);
+        // At 149 the merge's A (the Read) is at 148, its B (the clip) at 48.
+        assert_eq!((at(&graph, "over", 149), at(&graph, "graded", 149)), (Some(48), Some(48)));
+        graph.nodes[0].disabled = true;
+        assert_eq!((at(&graph, "clip", 149), at(&graph, "over", 149), at(&graph, "graded", 149)), (None, None, None));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

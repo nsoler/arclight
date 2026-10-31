@@ -302,6 +302,11 @@ impl Properties {
                     if op != "viewer" && ui.small_button("View").on_hover_text("Show in the viewer (V)").clicked() {
                         doc.view_node(id);
                     }
+                    let mut on = !doc.node(id).is_some_and(|n| n.disabled);
+                    let tip = "Off (bypassed): the node passes its input on unchanged, or outputs nothing; a Write or Media Out writes nothing (D over the node graph)";
+                    if ui.checkbox(&mut on, "Enabled").on_hover_text(tip).changed() {
+                        doc.set_disabled(&[id.to_string()], !on);
+                    }
                 });
             });
             ui.label(RichText::new(info.help).small().weak());
@@ -1909,7 +1914,7 @@ mod tests {
     fn clearing_keys_after_a_frame_spares_tracks_that_are_off() {
         let curve = json!({ "keys": [[1, [0, 0]], [2, [1, 0]], [3, [2, 0]]], "interp": "linear" });
         let params = json!({ "track1": curve, "track1_score": { "keys": [[2, 0.9], [3, 0.8]] }, "track2": curve });
-        let g = Graph { nodes: vec![NodeSpec { id: "t".into(), op: "tracker".into(), inputs: vec![String::new()], params, pos: None }], ..Default::default() };
+        let g = Graph { nodes: vec![NodeSpec { id: "t".into(), op: "tracker".into(), inputs: vec![String::new()], params, pos: None, disabled: false }], ..Default::default() };
         let mut doc = Doc::new(g, None);
         clear_track_keys(&mut doc, "t", 2, true);
         assert_eq!(anim::key_frames(&doc.param("t", "track1")), [1, 2]);

@@ -23,6 +23,14 @@ selected node in **Properties** on the right. On macOS, ⌘ stands for Ctrl.
 
 Over the Node Graph: **Shift+Tab** opens the node browser at the pointer (like right-click); **Shift+R**, **Shift+T**, **Shift+M** add a Media In, Transform or Merge there, into the wire under the pointer (or the selected wire), else after the selected node.
 
+Each node's **switch** (the dot at its top-right) turns it off: it's
+bypassed, passing its input on unchanged (a Merge its background, a
+Scanline Render its background plate, a Scene its first input), or
+outputting nothing if it has none (a Read, Constant, Camera or light). A
+node that's off is dimmed and struck through; **D** turns the selected
+nodes off or on, and Properties has an **Enabled** checkbox. A Write or
+Media Out that's off writes nothing. Handy for troubleshooting a chain.
+
 A node's inputs are yellow squares (hollow when optional); a **mask**
 input is violet and labelled **mask**.
 

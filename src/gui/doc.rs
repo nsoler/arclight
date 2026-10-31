@@ -264,6 +264,32 @@ impl Doc {
 
     /// Delete the selected nodes, or else the selected backdrop. False when
     /// nothing was selected.
+    /// Turn nodes off (bypassed) or on again.
+    pub fn set_disabled(&mut self, ids: &[String], disabled: bool) {
+        let mut any = false;
+        for id in ids {
+            if let Some(n) = self.node_mut(id).filter(|n| n.disabled != disabled) {
+                n.disabled = disabled;
+                any = true;
+            }
+        }
+        if any {
+            self.changed();
+        }
+    }
+
+    /// Turn the selected nodes off, or on if all are off already (D). False
+    /// with none selected.
+    pub fn toggle_disabled_selection(&mut self) -> bool {
+        let sel = self.selection();
+        if sel.is_empty() {
+            return false;
+        }
+        let all_off = sel.iter().all(|id| self.node(id).is_some_and(|n| n.disabled));
+        self.set_disabled(&sel, !all_off);
+        true
+    }
+
     pub fn delete_selection(&mut self) -> bool {
         let sel = self.selection();
         if !sel.is_empty() {
@@ -395,6 +421,7 @@ impl Doc {
             inputs: vec![String::new(); info.inputs.len()],
             params,
             pos: Some(pos),
+            disabled: false,
         });
         self.changed();
         id
@@ -1281,7 +1308,7 @@ mod tests {
         let mut d = Doc::new(Graph::default(), None);
         let a = d.add_node("constant", [0.0, 0.0]);
         d.add_node("constant", [NODE_W + 50.0, 0.0]);
-        let new = |id: &str, op: &str, inputs: Vec<String>| NodeSpec { id: id.into(), op: op.into(), inputs, params: json!({}), pos: None };
+        let new = |id: &str, op: &str, inputs: Vec<String>| NodeSpec { id: id.into(), op: op.into(), inputs, params: json!({}), pos: None, disabled: false };
         d.graph.nodes.push(new("src", "constant", vec![]));
         d.graph.nodes.push(new("b", "blur", vec![a.clone()]));
         d.place_new_nodes();

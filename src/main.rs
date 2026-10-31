@@ -153,6 +153,10 @@ fn render(path: PathBuf, frame: i64, verbose: bool) -> Result<()> {
     }
 
     for n in g.nodes.iter().filter(|n| n.op == "media_out") {
+        if n.disabled {
+            println!("arclight: {} is turned off, skipped", n.id);
+            continue;
+        }
         let progress = Progress::default();
         let frames = render::render_media_out(&g, &n.id, &progress)?;
         println!("arclight: {} wrote {frames} frame(s)", n.id);

@@ -96,6 +96,25 @@ pub fn output_kind(op: &str) -> Kind {
     }
 }
 
+/// The input a disabled (bypassed) `op` node passes on, if any: its main
+/// input of the kind it outputs (an image op's input, a merge's B, a
+/// Scanline Render's background, a particle modifier's stream). None: it
+/// outputs nothing (a source, or a light or emitter whose only scene input
+/// is a reference).
+pub fn bypass_port(op: &str) -> Option<usize> {
+    match op {
+        "merge" | "keymix" | "dissolve" => return Some(1),
+        "particle_emitter" | "particle_render" => return None,
+        _ if op.starts_with("light_") => return None,
+        _ => {}
+    }
+    let out = output_kind(op);
+    info(op)?.inputs.iter().position(|p| {
+        let kind = if p.kind == Kind::Particles { Kind::Scene } else { p.kind };
+        p.label != MASK.label && kind == out
+    })
+}
+
 /// Why the output of an `from_op` node can't go into port `port` of a
 /// `to_op` node, if it can't: a scene into an image port or the other way,
 /// or anything but a particle node's stream into a particles port.

@@ -32,6 +32,14 @@ pub struct NodeSpec {
     /// Position in the node editor (ignored by the engine).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pos: Option<[f32; 2]>,
+    /// Turned off (bypassed): it passes its main input on unchanged (see
+    /// [`ops::bypass_port`]), or outputs nothing; an output writes nothing.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub disabled: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// A node's size in the node editor.
@@ -579,6 +587,10 @@ impl Evaluator {
         let mut keys = HashMap::new();
         for id in order {
             let node = index[id.as_str()];
+            if node.disabled {
+                keys.insert(id.as_str(), bypass_key(node, &keys, &graph.project));
+                continue;
+            }
             let mut params = linked_params(index, node, ctx.frame, &graph.project)?;
             ops::apply_format(&node.op, &mut params, graph.project.format);
             let mut k = node_key(node, &params, &keys, ctx);
@@ -615,6 +627,19 @@ impl Evaluator {
         let mut snapshot: Option<Arc<Vec<NodeSpec>>> = None;
         for id in order {
             let node = index[id.as_str()];
+            // Turned off: its input passed on (the same image), or nothing.
+            if node.disabled {
+                let key = bypass_key(node, &keys, project);
+                keys.insert(id.as_str(), key);
+                if !self.cache.get(id).is_some_and(|(k, _)| *k == key) {
+                    let out = match bypass_input(node) {
+                        Some(dep) => self.cache[dep].1.clone(),
+                        None => Arc::new(nothing(&node.op, graph_format)),
+                    };
+                    self.cache.insert(id.clone(), (key, out));
+                }
+                continue;
+            }
             // Keyframes and links are resolved first and the resolved values
             // hashed, so a curve that holds between frames still hits the
             // cache, and a changed link source re-renders.
@@ -801,6 +826,32 @@ fn mix(key: u64, more: &[u64]) -> u64 {
     h.finish()
 }
 
+/// What disabled `node` passes on: the node at its bypass port, if one's
+/// connected there.
+fn bypass_input(node: &NodeSpec) -> Option<&str> {
+    ops::bypass_port(&node.op).and_then(|p| node.inputs.get(p)).map(String::as_str).filter(|d| !d.is_empty())
+}
+
+/// What a disabled node with nothing to pass on outputs: a transparent
+/// image of the project's format, or an empty scene.
+fn nothing(op: &str, format: Size) -> Image {
+    let mut img = Image::blank(format, IRect::default());
+    if ops::output_kind(op) == ops::Kind::Scene {
+        img.scene = Some(Arc::new(crate::scene::Scene::default()));
+    }
+    img
+}
+
+/// A disabled node's key: its input's, or (nothing to pass) the empty
+/// output's format and kind; marked so it differs from the input's own.
+fn bypass_key(node: &NodeSpec, keys: &HashMap<&str, u64>, project: &Project) -> u64 {
+    const BYPASS: u64 = 0xb1a5_5ed0_0ff0_0ff0;
+    match bypass_input(node) {
+        Some(dep) => mix(BYPASS, &[keys.get(dep).copied().unwrap_or(0)]),
+        None => mix(BYPASS, &[project.format.width as u64, project.format.height as u64, (ops::output_kind(&node.op) == ops::Kind::Scene) as u64]),
+    }
+}
+
 fn node_key(node: &NodeSpec, params: &Value, keys: &HashMap<&str, u64>, ctx: &EvalContext) -> u64 {
     let mut h = DefaultHasher::new();
     node.op.hash(&mut h);
@@ -841,7 +892,7 @@ mod tests {
         let outside = tmp.join("library/logo.png");
         std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
         Image::filled(2, 2, [1.0; 4]).write(&outside).unwrap();
-        let node = |id: &str, op: &str, inputs: &[&str], params: Value| NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None };
+        let node = |id: &str, op: &str, inputs: &[&str], params: Value| NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None, disabled: false };
         let at = |dir: &Path, rel: &str| dir.join(rel).to_string_lossy().into_owned();
         let mut g = Graph::default();
         g.project.folder = Some(before.clone());
@@ -969,7 +1020,7 @@ mod tests {
     #[test]
     fn particle_nodes_flow_through_the_graph_with_keyed_params() {
         use serde_json::json;
-        let node = |id: &str, op: &str, inputs: &[&str], params: Value| NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None };
+        let node = |id: &str, op: &str, inputs: &[&str], params: Value| NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None, disabled: false };
         let mut g = Graph::default();
         g.project.format = Size { width: 64, height: 48 };
         g.nodes = vec![
@@ -1020,7 +1071,7 @@ mod tests {
     #[test]
     fn sprites_play_a_texture_sequence_by_age() {
         use serde_json::json;
-        let node = |id: &str, op: &str, inputs: &[&str], params: Value| NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None };
+        let node = |id: &str, op: &str, inputs: &[&str], params: Value| NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None, disabled: false };
         let mut g = Graph::default();
         g.project.format = Size { width: 64, height: 48 };
         // Red is the frame number.
@@ -1069,7 +1120,7 @@ mod tests {
     #[test]
     fn emitters_on_animated_geometry_step_on_frame_by_frame() {
         use serde_json::json;
-        let node = |id: &str, op: &str, inputs: &[&str], params: Value| NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None };
+        let node = |id: &str, op: &str, inputs: &[&str], params: Value| NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None, disabled: false };
         let mut g = Graph::default();
         // A card 1 across sliding from x −4 (frame 1) to 4 (frame 17), 0.5 a frame.
         let slide = |keys: Value| json!({ "translate": { "keys": keys, "interp": "linear" }, "size": [1, 1] });
@@ -1115,7 +1166,7 @@ mod tests {
     #[test]
     fn a_borrowed_simulation_is_gone_on_from_never_changed() {
         use serde_json::json;
-        let node = |id: &str, op: &str, inputs: &[&str], params: Value| NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None };
+        let node = |id: &str, op: &str, inputs: &[&str], params: Value| NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None, disabled: false };
         let slide = |keys: Value| json!({ "translate": { "keys": keys, "interp": "linear" }, "size": [1, 1] });
         let graph = |slide_keys: Value, fall: f64| {
             let nodes = vec![
@@ -1183,5 +1234,94 @@ mod tests {
         let (a, b) = (ev.evaluate(&g, "sharp", &ctx).unwrap(), ev.evaluate(&g, "blurred", &ctx).unwrap());
         let diff = a.pixels.iter().zip(&b.pixels).flat_map(|(p, q)| (0..4).map(move |c| (p[c] - q[c]).abs())).fold(0.0, f32::max);
         assert!(diff > 0.05, "{diff}");
+    }
+
+    /// A node turned off passes on its main input (the same image) or, with
+    /// none to pass, nothing: per op family, as ops::bypass_port says.
+    #[test]
+    fn a_disabled_node_passes_its_input_on_or_outputs_nothing() {
+        use serde_json::json;
+        let node = |id: &str, op: &str, inputs: &[&str], params: Value| NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None, disabled: false };
+        let splats = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/geo/splats.ply");
+        let mut g = Graph::default();
+        g.project.format = Size { width: 16, height: 8 };
+        g.nodes = vec![
+            node("red", "constant", &[], json!({"width": 4, "height": 4, "color": [1, 0, 0, 1]})),
+            node("blue", "constant", &[], json!({"width": 4, "height": 4, "color": [0, 0, 1, 1]})),
+            node("grade", "grade", &["red"], json!({"multiply": [2, 2, 2]})),
+            node("merge", "merge", &["red", "blue"], json!({})),
+            node("cam", "camera", &[], json!({})),
+            node("card", "card", &["red"], json!({})),
+            node("scene", "scene", &["card", "cam"], json!({})),
+            node("render", "scanline_render", &["scene", "cam", "blue"], json!({})),
+            node("emit", "particle_emitter", &[], json!({"burst": 5, "rate": 0})),
+            node("gravity", "particle_gravity", &["emit"], json!({})),
+            node("cloud", "read_splat", &[], json!({"file": splats})),
+            node("crop", "splat_crop", &["cloud"], json!({})),
+            node("light", "light_point", &["card"], json!({})),
+            // A broken link: an error on, no matter off.
+            node("broken", "grade", &["red"], json!({"multiply": {"link": {"node": "gone", "param": "multiply"}}})),
+        ];
+        let ctx = EvalContext { frame: 1, write_outputs: false };
+        let mut on = Evaluator::new();
+        assert!(on.evaluate(&g, "broken", &ctx).is_err());
+        let before: HashMap<String, u64> = g.nodes.iter().filter(|n| n.id != "broken").map(|n| (n.id.clone(), Evaluator::key(&g, &n.id, &ctx).unwrap())).collect();
+        for n in &mut g.nodes {
+            n.disabled = !matches!(n.id.as_str(), "red" | "blue" | "cloud" | "emit" | "card");
+        }
+        let mut off = Evaluator::new();
+        let out = off.evaluate_all(&g, &ctx).unwrap();
+        let same = |a: &str, b: &str| Arc::ptr_eq(&out[a], &out[b]);
+        assert!(same("grade", "red"), "an image op: its input");
+        assert!(same("merge", "blue"), "a merge: its B");
+        assert!(same("render", "blue"), "a Scanline Render: its background");
+        assert!(same("gravity", "emit"), "a particle modifier: its stream");
+        assert!(same("crop", "cloud"), "a splat op: its scene");
+        assert!(same("broken", "red"), "off, its broken link doesn't matter");
+        assert!(same("scene", "card"), "a Scene: its first input");
+        // Nothing to pass: a transparent frame of the project's format, or
+        // an empty scene.
+        for id in ["cam", "light"] {
+            let s = out[id].scene.as_ref().unwrap_or_else(|| panic!("{id}: a scene"));
+            assert!(s.cameras.is_empty() && s.cards.is_empty() && s.lights.is_empty(), "{id}: empty");
+        }
+        let mut g2 = g.clone();
+        g2.nodes.iter_mut().find(|n| n.id == "red").unwrap().disabled = true;
+        let red = Evaluator::new().evaluate(&g2, "red", &ctx).unwrap();
+        assert_eq!((red.format, red.pixels.len(), red.scene.is_none()), (Size { width: 16, height: 8 }, 0, true));
+        // Keys change with the switch (so caches and the 3D view follow), and
+        // match what a render keys on.
+        for (id, k) in &before {
+            if g.node(id).unwrap().disabled {
+                assert_ne!(Evaluator::key(&g, id, &ctx).unwrap(), *k, "{id}");
+            }
+        }
+        assert_eq!(off.cache["merge"].0, Evaluator::key(&g, "merge", &ctx).unwrap());
+        // Saved: only when off; old files load on.
+        let text = g.to_json();
+        assert!(text.contains("\"disabled\": true"));
+        assert_eq!(Graph::from_str(&text).unwrap().nodes, g.nodes);
+        assert!(!Graph::from_str(r#"{"nodes": [{"id": "a", "op": "blur"}]}"#).unwrap().to_json().contains("disabled"));
+    }
+
+    /// A Write turned off writes nothing, even when outputs are written.
+    #[test]
+    fn a_disabled_write_writes_nothing() {
+        use serde_json::json;
+        let dir = std::env::temp_dir().join(format!("arclight_disabled_write_{}", std::process::id()));
+        let file = dir.join("out.png");
+        let g = |disabled| Graph {
+            nodes: vec![
+                NodeSpec { id: "c".into(), op: "constant".into(), inputs: vec![], params: json!({"width": 2, "height": 2}), pos: None, disabled: false },
+                NodeSpec { id: "w".into(), op: "write".into(), inputs: vec!["c".into()], params: json!({"path": file.to_string_lossy()}), pos: None, disabled },
+            ],
+            ..Graph::default()
+        };
+        let ctx = EvalContext { frame: 1, write_outputs: true };
+        Evaluator::new().evaluate(&g(true), "w", &ctx).unwrap();
+        assert!(!file.exists());
+        Evaluator::new().evaluate(&g(false), "w", &ctx).unwrap();
+        assert!(file.exists(), "on, it writes");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

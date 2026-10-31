@@ -178,6 +178,7 @@ impl Session {
             "outputs": outputs,
             "params": ops::params_with_defaults(&n.op, &n.params),
             "pos": n.pos,
+            "disabled": n.disabled,
         }))
     }
 
@@ -236,7 +237,7 @@ impl Session {
         let mut node_inputs = inputs.to_vec();
         node_inputs.resize(info.inputs.len(), String::new());
         self.checkpoint();
-        self.graph.nodes.push(NodeSpec { id: id.clone(), op: op.to_string(), inputs: node_inputs, params: values, pos });
+        self.graph.nodes.push(NodeSpec { id: id.clone(), op: op.to_string(), inputs: node_inputs, params: values, pos, disabled: false });
         Ok(id)
     }
 
@@ -638,6 +639,19 @@ impl Session {
                 bail!("'font_size' must be {} to {}", Backdrop::FONT_RANGE.start(), Backdrop::FONT_RANGE.end());
             }
             b.font_size = f;
+        }
+        Ok(())
+    }
+
+    /// Turn nodes off (bypassed: see [`NodeSpec::disabled`]) or on again,
+    /// as one undo step.
+    pub fn set_disabled(&mut self, ids: &[String], disabled: bool) -> Result<()> {
+        let at = ids.iter().map(|id| self.node_index(id)).collect::<Result<Vec<_>>>()?;
+        if at.iter().any(|&i| self.graph.nodes[i].disabled != disabled) {
+            self.checkpoint();
+            for i in at {
+                self.graph.nodes[i].disabled = disabled;
+            }
         }
         Ok(())
     }
@@ -1381,5 +1395,26 @@ mod tests {
         // Bad names say what they name.
         assert!(s.create_node("constant", Some("a b"), &Map::new(), &[]).unwrap_err().to_string().contains("node name"));
         assert!(s.create_backdrop(Some("a b"), &BackdropEdit { around: Some(vec![a]), ..Default::default() }).unwrap_err().to_string().contains("backdrop name"));
+    }
+
+    #[test]
+    fn nodes_turn_off_and_on_in_one_undo_step() {
+        let mut s = Session::default();
+        let c = s.create_node("constant", None, &map(json!({"width": 2, "height": 2, "color": [1.0, 0.0, 0.0, 1.0]})), &[]).unwrap();
+        let g = s.create_node("grade", None, &map(json!({"multiply": [0.5, 0.5, 0.5]})), std::slice::from_ref(&c)).unwrap();
+        let b = s.create_node("blur", None, &Map::new(), std::slice::from_ref(&g)).unwrap();
+        assert_eq!(s.describe_node(&g).unwrap()["disabled"], false);
+        assert!((s.render(&b, 1).unwrap().get(0, 0)[0] - 0.5).abs() < 1e-6);
+        let depth = s.undo.len();
+        s.set_disabled(&[g.clone(), b.clone()], true).unwrap();
+        assert_eq!((s.undo.len(), s.describe_node(&b).unwrap()["disabled"].clone()), (depth + 1, json!(true)));
+        assert!((s.render(&b, 1).unwrap().get(0, 0)[0] - 1.0).abs() < 1e-6, "the grade bypassed");
+        s.set_disabled(std::slice::from_ref(&g), true).unwrap();
+        assert_eq!(s.undo.len(), depth + 1, "no change, no step");
+        assert!(s.set_disabled(&[g.clone(), "nope".into()], false).is_err());
+        assert!(s.node(&g).unwrap().disabled, "a bad name changes none");
+        assert!(s.undo());
+        assert!(!s.node(&g).unwrap().disabled && !s.node(&b).unwrap().disabled);
+        assert!((s.render(&b, 1).unwrap().get(0, 0)[0] - 0.5).abs() < 1e-6);
     }
 }

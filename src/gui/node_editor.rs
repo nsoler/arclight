@@ -371,7 +371,8 @@ impl NodeEditor {
         doc.selected = Some(id);
     }
 
-    /// Keys over the graph (not while typing): Shift+Tab opens the node
+    /// Keys over the graph (not while typing): D turns the selected nodes
+    /// off or on; Shift+Tab opens the node
     /// browser at the pointer, as a right-click does (plain Tab does
     /// nothing here: over the viewer it switches 2D / 3D); Shift+R, Shift+T and Shift+M
     /// add a Media In, a Transform and a Merge there, placed as the browser
@@ -399,6 +400,11 @@ impl NodeEditor {
                     m.surrender_focus(id);
                 }
             });
+            return;
+        }
+        // D: the selected nodes off (bypassed), or on again.
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::D)) {
+            doc.toggle_disabled_selection();
             return;
         }
         let keys = [(Key::R, "media_in"), (Key::T, "transform"), (Key::M, "merge")];
@@ -667,6 +673,13 @@ impl NodeEditor {
             }
             if resp.double_clicked() {
                 doc.view_node(id);
+            }
+            // Its on/off switch (over the node, so it takes the click).
+            let off = doc.node(id).is_some_and(|n| n.disabled);
+            let switch = ui.interact(self.switch_rect(*r).expand(2.0), Id::unique(("node-switch", id)), Sense::click());
+            let tip = if off { "Turned off: passes its input on unchanged (click or D to turn on)" } else { "On (click or D to turn off: bypass it)" };
+            if switch.on_hover_text(tip).clicked() {
+                doc.set_disabled(std::slice::from_ref(id), !off);
             }
             let selected = doc.is_selected(id);
             self.draw_node(&painter, doc, id, op, *r, selected, error_node == Some(id.as_str()));
@@ -1139,10 +1152,25 @@ impl NodeEditor {
     #[allow(clippy::too_many_arguments)]
     fn draw_node(&self, painter: &egui::Painter, doc: &Doc, id: &str, op: &str, r: Rect, selected: bool, error: bool) {
         let info = ops::info(op);
+        let off = doc.node(id).is_some_and(|n| n.disabled);
         let base = info.map_or(Color32::from_gray(80), |i| category_color(i.category));
+        // Turned off: dimmed toward the background, struck through.
+        let base = if off { base.lerp_to_gamma(Color32::from_gray(40), 0.6) } else { base };
         let z = self.zoom;
         painter.rect_filled(r.translate(Vec2::splat(3.0 * z)), 6.0 * z, Color32::from_black_alpha(90));
         painter.rect_filled(r, 6.0 * z, base);
+        if off {
+            painter.line_segment([r.left_bottom() + Vec2::new(6.0, -6.0) * z, r.right_top() + Vec2::new(-22.0, 6.0) * z], Stroke::new(2.0 * z.sqrt(), Color32::from_rgb(235, 90, 70)));
+        }
+        // The on/off switch (unlike the ports): a light dot in a dark ring
+        // when on, the empty ring when off.
+        let sw = self.switch_rect(r);
+        let ring = Stroke::new(1.3, Color32::from_black_alpha(150));
+        if off {
+            painter.circle_stroke(sw.center(), sw.width() / 2.0, Stroke::new(1.3, Color32::from_gray(150)));
+        } else {
+            painter.circle(sw.center(), sw.width() / 2.0, Color32::from_white_alpha(210), ring);
+        }
         let outline = if error {
             Stroke::new(2.5, Color32::from_rgb(235, 80, 70))
         } else if selected {
@@ -1158,7 +1186,7 @@ impl NodeEditor {
             id,
             // Scaled with the zoom, but kept readable.
             FontId::proportional((13.0 * z).max(10.0)),
-            Color32::WHITE,
+            if off { Color32::from_white_alpha(120) } else { Color32::WHITE },
         );
         // With several Viewers, which one the viewer shows.
         let several = op == "viewer" && doc.graph.nodes.iter().filter(|n| n.op == "viewer").count() > 1;
@@ -1179,8 +1207,8 @@ impl NodeEditor {
             painter.circle_filled(c, 1.8 * z, eye);
         }
         if doc.is_node_animated(id) {
-            // Keyframed params: a small diamond in the top-right corner.
-            let c = Pos2::new(r.right() - 10.0 * z, r.top() + 10.0 * z);
+            // Keyframed params: a small diamond by the switch.
+            let c = Pos2::new(r.right() - 24.0 * z, r.top() + 10.0 * z);
             let s = 4.0 * z;
             painter.add(egui::Shape::convex_polygon(
                 vec![c + Vec2::new(0.0, -s), c + Vec2::new(s, 0.0), c + Vec2::new(0.0, s), c + Vec2::new(-s, 0.0)],
@@ -1208,9 +1236,16 @@ impl NodeEditor {
                 Align2::CENTER_CENTER,
                 sub,
                 FontId::proportional((10.5 * z).max(8.5)),
-                Color32::from_white_alpha(170),
+                Color32::from_white_alpha(if off { 90 } else { 170 }),
             );
         }
+    }
+
+    /// Where node box `r`'s on/off switch is: its top-right corner (away
+    /// from the ports).
+    fn switch_rect(&self, r: Rect) -> Rect {
+        let z = self.zoom;
+        Rect::from_center_size(Pos2::new(r.right() - 10.0 * z, r.top() + 10.0 * z), Vec2::splat(8.0 * z.max(0.5)))
     }
 }
 
@@ -1992,5 +2027,40 @@ mod tests {
         assert!(fits(&doc, &gravity, &render, 3), "and a stream goes where scenes go");
         assert_eq!(ops::wire_error("scene", "particle_gravity", 0).as_deref(), Some("input 'particles' takes particles, not a scene"));
         assert!(ops::wire_error("particle_gravity", "merge", 0).is_some());
+    }
+
+    /// A node's switch turns it off and on; D does it for the selection,
+    /// each one undo step.
+    #[test]
+    fn the_switch_and_d_turn_nodes_off_and_on() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let a = doc.add_node("constant", [0.0, 0.0]);
+        let b = doc.add_node("grade", [300.0, 0.0]);
+        doc.commit(false);
+        let mut h = Harness::new();
+        h.frame(&mut doc, vec![]);
+        let off = |doc: &Doc, id: &str| doc.node(id).unwrap().disabled;
+        // The switch: just that node, without selecting it.
+        let at = h.ed.switch_rect(h.rect(&doc, &a)).center();
+        h.click(&mut doc, at);
+        doc.commit(false);
+        assert!(off(&doc, &a) && !off(&doc, &b));
+        assert!(doc.selection().is_empty(), "the switch doesn't select");
+        // D over the graph: the selection off (one on still), then on.
+        doc.select_nodes(&[a.clone(), b.clone()], false);
+        let over = h.rect(&doc, &b).center() + Vec2::new(0.0, 120.0);
+        h.frame(&mut doc, vec![egui::Event::PointerMoved(over), key(Key::D, Modifiers::NONE)]);
+        doc.commit(false);
+        assert!(off(&doc, &a) && off(&doc, &b));
+        h.frame(&mut doc, vec![key(Key::D, Modifiers::NONE)]);
+        doc.commit(false);
+        assert!(!off(&doc, &a) && !off(&doc, &b));
+        // Undo: one step each.
+        doc.undo();
+        assert!(off(&doc, &a) && off(&doc, &b));
+        doc.undo();
+        assert!(off(&doc, &a) && !off(&doc, &b));
+        doc.undo();
+        assert!(!off(&doc, &a));
     }
 }
