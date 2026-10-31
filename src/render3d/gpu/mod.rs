@@ -305,7 +305,7 @@ pub(super) fn blurred(scene: &Scene, cam: &Camera, format: Size, samples: usize,
     if !tests::GPU_ON.with(|on| on.get()) {
         return None;
     }
-    if format.width == 0 || format.height == 0 || !scene.splats.is_empty() || !scene.points.is_empty() {
+    if format.width == 0 || format.height == 0 || !scene.points.is_empty() {
         return None;
     }
     let gpu = crate::gpu::get()?;
@@ -345,7 +345,13 @@ fn blur_on(gpu: &Gpu, scene: &Scene, cam: &Camera, format: Size, samples: usize,
                 let (now, c) = (scene.at_time(frames, t + shift), blur.camera(cam, t + shift));
                 let objects = super::particles::with_objects(&now);
                 let now = objects.as_ref().unwrap_or(&now);
-                if !now.splats.is_empty() || !now.points.is_empty() {
+                if !now.points.is_empty() {
+                    return Ok(None);
+                }
+                // The splats at this time, seen from this time's camera,
+                // prepared on the GPU (their data stays up there).
+                let now_splats = splats::prepare(&now.splats, &c, format);
+                if now_splats.as_ref().is_some_and(|sp| sp.gpu().is_none()) {
                     return Ok(None);
                 }
                 // Points and sprites go over each time's render (as
@@ -357,10 +363,10 @@ fn blur_on(gpu: &Gpu, scene: &Scene, cam: &Camera, format: Size, samples: usize,
                     return Ok(None);
                 }
                 let surfs = super::surfaces(now);
-                if surfs.is_empty() && streams.is_empty() {
+                if surfs.is_empty() && streams.is_empty() && now_splats.is_none() {
                     continue;
                 }
-                let Some(prep) = prepare(gpu, &surfs, &now.lights, &c, format, passes, None, None) else { return Ok(None) };
+                let Some(prep) = prepare(gpu, &surfs, &now.lights, &c, format, passes, None, now_splats.as_ref()) else { return Ok(None) };
                 // Every time's passes in the same channels.
                 let same = layout.as_ref().is_none_or(|l| l.nodes == prep.layout.nodes && l.light_names == prep.layout.light_names);
                 if !same {
@@ -374,7 +380,7 @@ fn blur_on(gpu: &Gpu, scene: &Scene, cam: &Camera, format: Size, samples: usize,
                 if streams.is_empty() {
                     gpu.scoped(|| {
                         let maps = draw_maps(gpu, &prep.tables, &prep.textures);
-                        dispatch(gpu, &prep, &maps, f, &c, format, n, cell, false, None);
+                        dispatch(gpu, &prep, &maps, f, &c, format, n, cell, false, now_splats.as_ref());
                         Ok(())
                     })?;
                 } else {
@@ -385,9 +391,9 @@ fn blur_on(gpu: &Gpu, scene: &Scene, cam: &Camera, format: Size, samples: usize,
                     });
                     gpu.scoped(|| {
                         x.frame.clear(gpu);
-                        if !surfs.is_empty() {
+                        if !surfs.is_empty() || now_splats.is_some() {
                             let maps = draw_maps(gpu, &prep.tables, &prep.textures);
-                            dispatch(gpu, &prep, &maps, &x.frame, &c, format, n, cell, false, None);
+                            dispatch(gpu, &prep, &maps, &x.frame, &c, format, n, cell, false, now_splats.as_ref());
                         }
                         let mut encoder = gpu.device.create_command_encoder(&Default::default());
                         let params = [format.width as u32, format.height as u32, prep.layout.slots.stride as u32, (n * n) as u32, cell.map_or(0, |c| c.side as u32), cell.map_or(0, |c| c.x as u32), cell.map_or(0, |c| c.y as u32), 0];

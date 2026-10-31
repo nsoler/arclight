@@ -602,7 +602,10 @@ switch, the status and the tests' skip work end to end.
   Crop re-evaluated) pays its upload (~150 MB) each time. The
   splats-alone blend is worked out once a render (the last sample row's
   dispatch adds it for every row's samples that met no surface): 4K AA
-  3 × 3 143 → 128 ms. Follow-up: splats in the GPU's motion-blur sum.
+  3 × 3 143 → 128 ms. Splats are in the GPU's motion-blur sum too (each
+  time's view prepared on the GPU, the capture uploaded once): the lizard
+  moving, motion blur 8, AA 3 × 3, 1080p 2149 → 458 ms, 4K 4214 → 559 ms
+  against the CPU.
 
 ### G7: Zero-copy viewing [Dev1]
 

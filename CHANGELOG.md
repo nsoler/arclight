@@ -15,6 +15,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.14 — 2026-10-31
+
+- GPU: **motion blur over Gaussian splats adds up on the GPU too**, each
+  time's view prepared there: a moving capture with 8 times at 4K in
+  0.56 s instead of 4.2 s (1080p: 0.46 s instead of 2.1 s).
+- The GPU motion-blur tests say, when they fail, whether the picture came
+  from the GPU sum or another way, and the last GPU error.
+
 ## 0.12.13 — 2026-10-31
 
 - GPU: **the 3D view draws its shaded picture straight from the GPU**:

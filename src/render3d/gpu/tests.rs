@@ -9,6 +9,14 @@ thread_local! {
     pub(super) static GPU_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// For a motion-blur test's failure message: whether `out` (a blurred
+/// render) is the GPU's own sum of the times (`direct`, from
+/// [`blurred`]), or came another way, and the GPU's last error.
+fn blur_path(direct: Option<&Image>, out: &Image) -> String {
+    let path = if direct.is_some_and(|d| d.pixels == out.pixels) { "the GPU sum" } else { "not the GPU sum (time by time, or the CPU)" };
+    format!("rendered by {path}; the GPU's last error: {:?}", crate::gpu::last_error())
+}
+
 /// `f` with [`super::draw_passes`] taking the GPU.
 fn with_gpu<R>(f: impl FnOnce() -> R) -> R {
     GPU_ON.with(|on| on.set(true));
@@ -247,12 +255,13 @@ fn motion_blur_adds_up_on_the_gpu_as_on_the_cpu() {
         let blur = super::super::Blur { times: super::super::Blur::times(0.0, 0.5, 6), frames: vec![(0, &*s0, cam.clone()), (1, &*s1, cam.clone())], jitter };
         let frames: Vec<(i64, &Scene)> = vec![(0, &s0), (1, &s1)];
         let mixed = Passes { depth: false, ..passes };
-        assert!(with_gpu(|| blurred(&s0, &cam, format, 2, mixed, &blur, &frames, false)).is_some(), "on the GPU");
+        let direct = with_gpu(|| blurred(&s0, &cam, format, 2, mixed, &blur, &frames, false));
+        assert!(direct.is_some(), "on the GPU: {:?}", crate::gpu::last_error());
         let cpu = crate::gpu::cpu_only(|| super::super::render_blurred(&s0, &cam, format, 2, None, passes, None, Some(&blur)));
         let out = with_gpu(|| super::super::render_blurred(&s0, &cam, format, 2, None, passes, None, Some(&blur)));
         for (name, mean, off) in differences(&cpu, &out) {
             let (most_mean, most_off) = super::check::allowed(&name);
-            assert!(mean <= most_mean && off <= most_off, "jitter {jitter}, {name}: mean {mean:.2e}, {:.3} % of values off", off * 100.0);
+            assert!(mean <= most_mean && off <= most_off, "jitter {jitter}, {name}: mean {mean:.2e}, {:.3} % of values off; {}", off * 100.0, blur_path(direct.as_ref(), &out));
         }
         // (It's blurred: the moving sphere smears.)
         let still = crate::gpu::cpu_only(|| super::super::render_passes(&s0, &cam, format, 2, None, passes));
@@ -326,12 +335,13 @@ fn motion_blur_with_sprites_adds_up_on_the_gpu() {
         let frames: Vec<(i64, &Scene)> = vec![(0, &s0), (1, &s1)];
         let passes = Passes::from_names(["depth", "mattes"]);
         let mixed = Passes { depth: false, ..passes };
-        assert!(with_gpu(|| blurred(&s0, &cam, format, 2, mixed, &blur, &frames, false)).is_some(), "{blend}: on the GPU");
+        let direct = with_gpu(|| blurred(&s0, &cam, format, 2, mixed, &blur, &frames, false));
+        assert!(direct.is_some(), "{blend}: on the GPU: {:?}", crate::gpu::last_error());
         let cpu = crate::gpu::cpu_only(|| super::super::render_blurred(&s0, &cam, format, 2, None, passes, None, Some(&blur)));
         let out = with_gpu(|| super::super::render_blurred(&s0, &cam, format, 2, None, passes, None, Some(&blur)));
         for (name, mean, off) in differences(&cpu, &out) {
             let (most_mean, most_off) = super::check::allowed(&name);
-            assert!(mean <= most_mean && off <= most_off, "{blend}, {name}: mean {mean:.2e}, {:.3} % of values off", off * 100.0);
+            assert!(mean <= most_mean && off <= most_off, "{blend}, {name}: mean {mean:.2e}, {:.3} % of values off; {}", off * 100.0, blur_path(direct.as_ref(), &out));
         }
         // Added up over a background: time by time.
         assert_eq!(with_gpu(|| blurred(&s0, &cam, format, 2, mixed, &blur, &frames, true)).is_some(), blend == "over");
@@ -433,4 +443,44 @@ fn the_3d_view_stays_on_the_gpu_and_matches() {
     }
     let blur = super::super::Blur { times: vec![0.0, 0.5], frames: vec![(0, &*busy_scene, cam.clone())], jitter: false };
     assert!(with_gpu(|| render_preview_gpu(&busy_scene, &cam, format, Preview::Solid, Some(&blur))).is_none(), "motion blur: the other path");
+}
+
+/// Motion blur over moving splats (and a camera that moves) adds up on
+/// the GPU, each time's view prepared there, as the CPU renders it time
+/// by time; mixed with surfaces too.
+#[test]
+fn motion_blur_over_splats_adds_up_on_the_gpu() {
+    if crate::gpu::test_device().is_none() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    // (A small generated capture: the CPU renders every time of the
+    // reference anew.)
+    let lizard = Arc::new(Scene { splats: vec![super::check::cloud(30_000)], ..Scene::default() });
+    let (busy_scene, cam) = scene_of(&busy(PERSPECTIVE));
+    let format = Size { width: 160, height: 90 };
+    // The capture a frame later: moved and turned a little.
+    let later_of = |scene: &Scene| {
+        let mut s = scene.clone();
+        s.splats = s.splats.iter().map(|sp| Arc::new(crate::splat::Splats { world: crate::geom::trs([0.15, 0.05, 0.0], [0.0, 4.0, 0.0], [1.0; 3]) * sp.world, ..(**sp).clone() })).collect();
+        s
+    };
+    let mut mixed = (*lizard).clone();
+    mixed.extend(&busy_scene);
+    for (s0, samples) in [((*lizard).clone(), 1), (mixed, 2)] {
+        let s1 = later_of(&s0);
+        let later_cam = Camera { world: crate::geom::trs([0.05, 0.0, 0.0], [0.0; 3], [1.0; 3]) * cam.world, ..cam.clone() };
+        let blur = super::super::Blur { times: super::super::Blur::times(0.0, 0.5, 6), frames: vec![(0, &s0, cam.clone()), (1, &s1, later_cam)], jitter: true };
+        let frames: Vec<(i64, &Scene)> = vec![(0, &s0), (1, &s1)];
+        let passes = Passes::from_names(["depth", "mattes"]);
+        let mixed_passes = Passes { depth: false, ..passes };
+        let direct = with_gpu(|| blurred(&s0, &cam, format, samples, mixed_passes, &blur, &frames, false));
+        assert!(direct.is_some(), "on the GPU: {:?}", crate::gpu::last_error());
+        let cpu = crate::gpu::cpu_only(|| super::super::render_blurred(&s0, &cam, format, samples, None, passes, None, Some(&blur)));
+        let out = with_gpu(|| super::super::render_blurred(&s0, &cam, format, samples, None, passes, None, Some(&blur)));
+        for (name, mean, off) in differences(&cpu, &out) {
+            let (most_mean, most_off) = super::check::allowed(&name);
+            assert!(mean <= most_mean && off <= most_off, "{} cards, {name}: mean {mean:.2e}, {:.3} % of values off; {}", s0.cards.len(), off * 100.0, blur_path(direct.as_ref(), &out));
+        }
+    }
 }

@@ -861,9 +861,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
     // Where the samples' blends first got half opaque, nearest (kept from
     // row to row): 1 if any, depth bits, the splat there or NONE.
     var median = out_hits[3u * pixels + px];
-    // How many samples so far met no surface (kept in the median's last
-    // word from row to row).
-    var lone = median.w;
+    // How many of this render's samples so far met no surface (kept in
+    // the median's last word from row to row; from 0 at a render's first
+    // row: motion blur adds many renders into one frame).
+    var lone = select(median.w, 0u, P.cell.w == 0u);
 
     // (With a jitter cell: each pixel through the list on its own.)
     if (P.splat.x != 0u && side != 0u && last_row) {
