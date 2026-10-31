@@ -201,9 +201,9 @@ a public release once tested.
       (pointwise ops, Blur, warps, Keyer, Shuffle, zmerge, Scanline
       Render with shadows and motion blur, see-through shadows, particle
       sprites, splats, zero-copy viewer and 3D view)
-- [ ] GPU frame cache for playback (Dev1, design approved 2026-10-31):
-      cached frames keep their color GPU-resident and play through the
-      zero-copy display; separate budget `gpu.frame_cache_mb` (1024)
+- [x] GPU frame cache for playback (Dev1, 0.12.18): cached frames keep
+      their color GPU-resident and play through the zero-copy display;
+      separate budget `gpu.frame_cache_mb` (1024)
 - [ ] Area-light shadows stay slow on the GPU too (16 samples: 20–34 s
       a 4K frame): Dev2 profiling, proposal first
 - [ ] The transport bar's Out field is cut off at the default window

@@ -197,11 +197,18 @@ impl Default for View3dPrefs {
 pub struct GpuPrefs {
     /// Render on the GPU where it can (else everything on the CPU).
     pub enabled: bool,
+    /// GPU memory for an evaluator's cached results, in MiB (see
+    /// `gpu::cache_budget`).
+    pub cache_mb: u64,
+    /// GPU memory for the GUI's played frames, in MiB, apart from
+    /// `cache_mb`: frames kept there play straight from the GPU (see
+    /// `gpu::frame_cache_budget`).
+    pub frame_cache_mb: u64,
 }
 
 impl Default for GpuPrefs {
     fn default() -> Self {
-        GpuPrefs { enabled: true }
+        GpuPrefs { enabled: true, cache_mb: 2048, frame_cache_mb: 1024 }
     }
 }
 
@@ -360,7 +367,13 @@ mod tests {
         assert_eq!((d.view3d.trackpad.as_str(), d.view3d.zoom_to_pointer, d.view3d.default_shading.as_str()), ("orbit", true, "auto"));
         assert!(d.gpu.enabled, "GPU acceleration on by default");
         let off: Settings = serde_json::from_str(r#"{"gpu": {"enabled": false}}"#).unwrap();
-        assert_eq!(off, Settings { gpu: GpuPrefs { enabled: false }, ..Settings::default() });
+        assert_eq!(off, Settings { gpu: GpuPrefs { enabled: false, ..GpuPrefs::default() }, ..Settings::default() });
+        // The budgets, set by hand, survive a save from Preferences.
+        let set: Settings = serde_json::from_str(r#"{"gpu": {"cache_mb": 4096, "frame_cache_mb": 512}}"#).unwrap();
+        assert_eq!((set.gpu.cache_mb, set.gpu.frame_cache_mb), (4096, 512));
+        let again: Settings = serde_json::from_str(&serde_json::to_string(&set).unwrap()).unwrap();
+        assert_eq!(again, set);
+        assert_eq!((d.gpu.cache_mb, d.gpu.frame_cache_mb), (2048, 1024));
         let part: Settings = serde_json::from_str(r#"{"interface": {"theme": "light"}, "files": {"project_dir": "/shows"}, "from_the_future": {"x": 1}}"#).unwrap();
         assert_eq!(part.interface, InterfacePrefs { theme: "light".into(), ..InterfacePrefs::default() });
         assert_eq!(part.files.project_dir, Some(PathBuf::from("/shows")));

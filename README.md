@@ -255,8 +255,12 @@ a result made on the GPU straight from there: its 8-bit display (exposure,
 channel, overscan) is made by the GPU, not on the UI thread (4K: ~20 ms
 less per new frame; scrubbing keeps up with the display). Results are still
 read back on the viewer's worker thread, so the pixel readout and pickers
-read the exact values. Frames from the frame cache, the planes view (depth
-and the like), and GPU acceleration off take the CPU's way, as before.
+read the exact values. Played frames made on the GPU keep their color
+there too (`gpu.frame_cache_mb`, default 1024, apart from `gpu.cache_mb`;
+past it the least recently played go), so cached playback draws straight
+from the GPU: 24 fps held at 1080p and 4K where the CPU's way managed
+~20 and ~10. The planes view (depth and the like), frames past that
+budget, and GPU acceleration off take the CPU's way, as before.
 
 **Scanline Render** and the 3D view's shaded preview run on the GPU too (a
 compute rasterizer that follows the CPU renderer sample for sample):
@@ -604,7 +608,7 @@ when its plugin can't start.
 
 | What | Where |
 |------|-------|
-| Settings | `$XDG_CONFIG_HOME/arclight/settings.json`, edited in **Edit ▸ Preferences** (Ctrl/⌘+,) or by hand (unknown keys are kept): `plugin_paths`, `frame_cache_mb` (GUI frame cache, default 1536), `mcp_http_addr`, `interface` (`ui_scale`, `theme` system / dark / light, `snap_to_grid`, `wire_style` curved / straight), `new_project` (`width`, `height`, `fps`, `first_frame`, `last_frame`: what File ▸ New starts with; Project Settings ▸ Save as defaults), `files` (`autosave_minutes` (0 off; writes `<project>.autosave` beside the project, never over it), `recent_count`, `undo_levels`, `project_dir`: the Projects folder, where File ▸ New makes projects' folders and Open starts), `view3d` (`emulate_three_button`, `trackpad` orbit / pan, `zoom_to_pointer`, `invert_zoom`, `default_shading` auto / solid / lit), `gpu` (`enabled`: GPU acceleration, default on; `ARCLIGHT_GPU=0` overrides; `cache_mb`: GPU memory for results kept there, default 2048) |
+| Settings | `$XDG_CONFIG_HOME/arclight/settings.json`, edited in **Edit ▸ Preferences** (Ctrl/⌘+,) or by hand (unknown keys are kept): `plugin_paths`, `frame_cache_mb` (GUI frame cache, default 1536), `mcp_http_addr`, `interface` (`ui_scale`, `theme` system / dark / light, `snap_to_grid`, `wire_style` curved / straight), `new_project` (`width`, `height`, `fps`, `first_frame`, `last_frame`: what File ▸ New starts with; Project Settings ▸ Save as defaults), `files` (`autosave_minutes` (0 off; writes `<project>.autosave` beside the project, never over it), `recent_count`, `undo_levels`, `project_dir`: the Projects folder, where File ▸ New makes projects' folders and Open starts), `view3d` (`emulate_three_button`, `trackpad` orbit / pan, `zoom_to_pointer`, `invert_zoom`, `default_shading` auto / solid / lit), `gpu` (`enabled`: GPU acceleration, default on; `ARCLIGHT_GPU=0` overrides; `cache_mb`: GPU memory for results kept there, default 2048; `frame_cache_mb`: GPU memory for played frames, default 1024, takes effect at the next start) |
 | Crash reports | `$XDG_STATE_HOME/arclight/crashes/` (macOS `~/Library/Logs/Arclight/`), kept on this machine (see Help ▸ Report a problem) |
 | Plugin ops cache | `$XDG_STATE_HOME/arclight/plugin-ops.json` |
 | Recent projects | `$XDG_STATE_HOME/arclight/recent.json` (File ▸ Open Recent) |

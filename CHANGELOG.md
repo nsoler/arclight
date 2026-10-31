@@ -15,6 +15,18 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.18 — 2026-10-31
+
+- GPU: played frames rendered on the GPU keep their color there, so cached
+  playback draws straight from the GPU instead of converting and uploading
+  every frame: 24 fps held at 1080p and 4K where it managed ~20 and ~10
+  (4K at 60 fps: ~54 instead of ~10). Its own budget, `gpu.frame_cache_mb`
+  (default 1024, Preferences ▸ Performance ▸ GPU frame cache), apart from
+  `gpu.cache_mb`; past it the least recently played frames play from the
+  CPU as before, and turning GPU acceleration off lets them all go.
+- Hand-set GPU budgets in settings.json are no longer lost when
+  Preferences are saved.
+
 ## 0.12.17 — 2026-10-31
 
 - The viewer's toolbar wraps onto a second row when the view is narrow,

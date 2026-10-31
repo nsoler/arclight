@@ -15,24 +15,35 @@ done), `docs/help.md` (the in-app help) and
 
 ## Start here (next session)
 
-- **In flight (2026-10-31, after v0.12.17):** Dev1 (wD:p9): the
+- **In flight (2026-10-31, after 0.12.18):** Dev1 (wD:p9): the
   transport bar's Out field cut off at the default window size
-  (`src/gui/transport.rs`), then the **GPU frame cache for playback**
-  (design approved: each `FrameCache` entry in `src/gui/worker.rs` keeps
-  an optional `Arc<gpu::Resident>` of the color only, so cache hits set
-  `Response.gpu` and draw zero-copy; its own LRU under
-  `gpu.frame_cache_mb`, default 1024, separate from `gpu.cache_mb`;
-  evicting drops the resident, the CPU image always stays; residents
-  dropped when the GPU is turned off; no-gpu builds unchanged). Dev2:
-  profiling many-sample area-light shadows (20–34 s a 4K frame at 16
-  samples, even on the GPU), proposal before code. Macs: `arclight gpu
-  --check` / `cargo test --release` on Metal not yet run (TODO).
+  (`src/gui/transport.rs`: In/Out/FPS labels kept with their fields when
+  the row wraps). Dev2: profiling many-sample area-light shadows (20–34 s
+  a 4K frame at 16 samples, even on the GPU), proposal before code. Macs:
+  `arclight gpu --check` / `cargo test --release` on Metal not yet run
+  (TODO). v0.12.17's macOS DMG: the user builds it on the Mac.
+- **0.12.18, GPU frame cache** (Dev1): `FrameCache` entries in
+  `src/gui/worker.rs` keep, beside the CPU image, the color of frames
+  rendered on the GPU (`gpu::Resident::color`: the render's own rgba
+  buffer shared, no planes, no copy); a hit returns it as `Response.gpu`
+  and draws through `gpu::display`. Its own LRU under
+  `gpu.frame_cache_mb` (`gpu::frame_cache_budget`, default 1024, read
+  once): past it frames lose only their GPU color; CPU eviction takes it
+  along; GPU off drops all on the next request. `GpuPrefs` gains
+  `cache_mb` / `frame_cache_mb` (saving Preferences used to drop a
+  hand-set `gpu.cache_mb`). Measured: 1080p and 4K hold 24 fps (were
+  ~20 / ~10), 4K@60 ~54 (was ~10); 1024 MB holds ~30 frames at 1080p,
+  ~7 at 4K. Note: the cached color shares the evaluator's buffer for the
+  frame just rendered, so GPU use is up to `cache_mb + frame_cache_mb`.
+  Later: skip the target read-back during playback (lazy, for the
+  readout).
 - **0.12.17, toolbars wrap** (Dev1): `Viewer::toolbar` and `toolbar_3d`
   use `horizontal_wrapped`; an overflowing row also widened everything
   under it (status row, canvas). Test `the_toolbars_wrap_in_a_narrow_view`.
   README's Scanline Render paragraph updated for see-through shadows.
-  Released as the beta **v0.12.17** (Linux tarball + wheel + sdist;
-  macOS DMG built by the user while Actions is billing-blocked).
+  Released as the beta **v0.12.17** (the first phase-12 release; Linux
+  tarball + wheel + sdist, notes "macOS DMG to follow"; the DMG is built
+  by the user while Actions is billing-blocked).
 - **Session 12, 0.11.4 (Supervisor, wD:p1, alone):** the user found the
   3D view hard to use in 0.11.3 (no rotate / scale gizmos; rotating
   "swung wildly back and forth and up and down"; mouse: Razer DeathAdder

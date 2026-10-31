@@ -176,11 +176,22 @@ pub fn backend_tag(op: &str) -> u8 {
 /// least recently used go back to the CPU.
 pub fn cache_budget() -> u64 {
     static MB: OnceLock<u64> = OnceLock::new();
-    let mb = *MB.get_or_init(|| {
-        let text = std::fs::read_to_string(crate::config::Settings::path()).unwrap_or_default();
-        serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v["gpu"]["cache_mb"].as_u64()).unwrap_or(2048)
-    });
-    mb << 20
+    *MB.get_or_init(|| setting_mb("cache_mb", 2048)) << 20
+}
+
+/// How much of the GPU's memory the GUI's played frames may hold, apart
+/// from [`cache_budget`] (settings.json `"gpu": {"frame_cache_mb": ...}`,
+/// default 1024); past it the least recently played are shown the CPU's
+/// way.
+pub fn frame_cache_budget() -> u64 {
+    static MB: OnceLock<u64> = OnceLock::new();
+    *MB.get_or_init(|| setting_mb("frame_cache_mb", 1024)) << 20
+}
+
+/// `"gpu": {key: ...}` in settings.json, in MiB.
+fn setting_mb(key: &str, default: u64) -> u64 {
+    let text = std::fs::read_to_string(crate::config::Settings::path()).unwrap_or_default();
+    serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v["gpu"][key].as_u64()).unwrap_or(default)
 }
 
 /// A cached result left on the GPU, read back on the first CPU need and
@@ -226,6 +237,13 @@ impl Resident {
     pub fn gpu(&self) -> &Arc<Gpu> {
         &self.gpu
     }
+
+    /// Its color alone, sharing the buffer, for display: no planes or
+    /// scene (a read-back of it has none either).
+    pub fn color(&self) -> Resident {
+        let image = GpuImage { planes: Vec::new(), scene: None, rgba: self.image.rgba.clone(), ..self.image };
+        Resident::new(self.gpu.clone(), image)
+    }
 }
 
 /// Built without GPU support: nothing is ever left on a GPU.
@@ -241,6 +259,9 @@ impl Resident {
         match *self {}
     }
     pub fn shape(&self) -> (crate::image::Size, crate::image::IRect) {
+        match *self {}
+    }
+    pub fn color(&self) -> Resident {
         match *self {}
     }
 }

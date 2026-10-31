@@ -374,6 +374,12 @@ fn performance(ui: &mut egui::Ui, p: &mut GpuPrefs, status: &str) {
         ui.weak(if forced { "Using the CPU: ARCLIGHT_GPU=0 is set in the environment" } else { status });
     });
     ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.label("GPU frame cache");
+        ui.add(egui::DragValue::new(&mut p.frame_cache_mb).range(0..=1_048_576).speed(16).suffix(" MB"))
+            .on_hover_text("Graphics memory for played frames rendered on the GPU, so playing them back draws straight from there (0: none; frames past it play from the CPU's frame cache). Apart from the GPU's own cache. Takes effect next time ArclightVFX starts.");
+    });
+    ui.add_space(8.0);
     ui.weak("Help ▸ GPU self-test compares the GPU with the CPU on this computer.");
 }
 

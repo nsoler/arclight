@@ -3,6 +3,8 @@
 //! Requests are coalesced: if several arrive while a frame is rendering, only
 //! the newest is evaluated. Finished frames are kept in a byte-budgeted LRU
 //! keyed by the graph's cache key, so scrubbing back over a frame is instant.
+//! Those rendered on the GPU keep their color there too, within their own
+//! budget, so playing them back draws straight from the GPU.
 
 use arclight::graph::{Evaluator, Graph, NodeError};
 use arclight::image::Image;
@@ -30,8 +32,8 @@ pub struct Response {
     pub target: String,
     pub frame: i64,
     pub result: Result<Arc<Image>, NodeError>,
-    /// The result as it is on the GPU, when it was made there just now
-    /// (not from the frame cache): the viewer draws it from there.
+    /// The result as it is on the GPU, when it was made there (just now,
+    /// or its color from the frame cache): the viewer draws it from there.
     pub gpu: Option<Arc<arclight::gpu::Resident>>,
     pub millis: f32,
     /// Frames of the project range already in the frame cache for this target.
@@ -69,32 +71,69 @@ impl Worker {
     }
 }
 
+/// A frame's image by key, least recently used first, and the color of
+/// those rendered on the GPU still there (a second budget, apart from the
+/// Evaluator's: a frame kept here keeps its GPU buffer).
 struct FrameCache {
-    entries: VecDeque<(u64, Arc<Image>)>,
+    entries: VecDeque<(u64, Arc<Image>, Option<Arc<arclight::gpu::Resident>>)>,
     bytes: usize,
+    gpu_bytes: u64,
+    budget: usize,
+    gpu_budget: u64,
 }
 
 impl FrameCache {
-    fn get(&mut self, key: u64) -> Option<Arc<Image>> {
-        let i = self.entries.iter().position(|(k, _)| *k == key)?;
+    fn new() -> FrameCache {
+        FrameCache::with_budgets(*FRAME_CACHE_BYTES, arclight::gpu::frame_cache_budget())
+    }
+
+    fn with_budgets(budget: usize, gpu_budget: u64) -> FrameCache {
+        FrameCache { entries: VecDeque::new(), bytes: 0, gpu_bytes: 0, budget, gpu_budget }
+    }
+
+    fn get(&mut self, key: u64) -> Option<(Arc<Image>, Option<Arc<arclight::gpu::Resident>>)> {
+        let i = self.entries.iter().position(|(k, ..)| *k == key)?;
         let entry = self.entries.remove(i)?;
-        let img = entry.1.clone();
+        let found = (entry.1.clone(), entry.2.clone());
         self.entries.push_back(entry);
-        Some(img)
+        Some(found)
     }
 
     fn contains(&self, key: u64) -> bool {
-        self.entries.iter().any(|(k, _)| *k == key)
+        self.entries.iter().any(|(k, ..)| *k == key)
     }
 
-    fn insert(&mut self, key: u64, img: Arc<Image>) {
+    /// `img`, and `gpu`'s color (not its planes: the planes view shows
+    /// the CPU's way anyway).
+    fn insert(&mut self, key: u64, img: Arc<Image>, gpu: Option<&arclight::gpu::Resident>) {
+        let gpu = gpu.map(|r| Arc::new(r.color()));
         self.bytes += size_of_image(&img);
-        self.entries.push_back((key, img));
-        while self.bytes > *FRAME_CACHE_BYTES && self.entries.len() > 1 {
-            if let Some((_, old)) = self.entries.pop_front() {
+        self.gpu_bytes += gpu.as_ref().map_or(0, |r| r.bytes());
+        self.entries.push_back((key, img, gpu));
+        while self.bytes > self.budget && self.entries.len() > 1 {
+            if let Some((_, old, gpu)) = self.entries.pop_front() {
                 self.bytes -= size_of_image(&old);
+                self.gpu_bytes -= gpu.map_or(0, |r| r.bytes());
             }
         }
+        // Past the GPU's budget, the least recently used are kept on the
+        // CPU only.
+        for (_, _, gpu) in self.entries.iter_mut() {
+            if self.gpu_bytes <= self.gpu_budget {
+                break;
+            }
+            if let Some(r) = gpu.take() {
+                self.gpu_bytes -= r.bytes();
+            }
+        }
+    }
+
+    /// Every frame's GPU copy let go (GPU acceleration turned off).
+    fn drop_gpu(&mut self) {
+        for (_, _, gpu) in self.entries.iter_mut() {
+            *gpu = None;
+        }
+        self.gpu_bytes = 0;
     }
 }
 
@@ -118,7 +157,7 @@ fn crash_test_worker(target: &str) -> bool {
 fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Context, eval: Arc<Mutex<Evaluator>>) {
     let evaluate = |graph: &Graph, target: &str, ctx: &EvalContext| eval.lock().unwrap_or_else(|e| e.into_inner()).evaluate(graph, target, ctx);
     let evaluate_resident = |graph: &Graph, target: &str, ctx: &EvalContext| eval.lock().unwrap_or_else(|e| e.into_inner()).evaluate_resident(graph, target, ctx);
-    let mut frames = FrameCache { entries: VecDeque::new(), bytes: 0 };
+    let mut frames = FrameCache::new();
     // Probed inputs by cache key, so frames served from the frame cache
     // needn't render the input again. Kept small: they're whole images.
     let mut probed: HashMap<u64, Arc<Image>> = HashMap::new();
@@ -126,6 +165,9 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
     while let Ok(mut req) = rx.recv() {
         while let Ok(newer) = rx.try_recv() {
             req = newer;
+        }
+        if !arclight::gpu::enabled() && frames.gpu_bytes > 0 {
+            frames.drop_gpu();
         }
         // A panic in an evaluation is that frame's error: the evaluator
         // and caches start afresh (they may be half-updated), and a report
@@ -140,10 +182,13 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
             let result = match Evaluator::key(&req.graph, &req.target, &ctx) {
                 Err(e) => Err(e),
                 Ok(key) => match frames.get(key) {
-                    Some(img) => Ok(img),
+                    Some((img, resident)) => {
+                        gpu = resident;
+                        Ok(img)
+                    }
                     None => match evaluate_resident(&req.graph, &req.target, &ctx) {
                         Ok((img, resident)) => {
-                            frames.insert(key, img.clone());
+                            frames.insert(key, img.clone(), resident.as_deref());
                             gpu = resident;
                             Ok(img)
                         }
@@ -177,7 +222,7 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
             Ok(done) => done,
             Err(payload) => {
                 *eval.lock().unwrap_or_else(|e| e.into_inner()) = Evaluator::new();
-                frames = FrameCache { entries: VecDeque::new(), bytes: 0 };
+                frames = FrameCache::new();
                 probed.clear();
                 (Err(NodeError { node: None, message: arclight::crash::caught(&*payload) }), None, 0.0, None, Vec::new())
             }
@@ -517,6 +562,88 @@ mod tests {
         let err = ask(&worker).result.err().expect("an error").to_string();
         assert!(err.starts_with("internal error") && err.contains("a crash report was saved"), "{err}");
         assert!(ask(&worker).result.is_ok(), "served again");
+    }
+
+    /// Played frames rendered on the GPU keep their color there, within
+    /// its own budget, least recently used going first; the CPU's frames
+    /// and budget are as before, and a frame leaving the CPU takes its GPU
+    /// copy with it.
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn played_frames_keep_their_color_on_the_gpu_within_its_budget() {
+        use arclight::gpu::{GpuImage, Resident};
+        use arclight::image::{IRect, Plane, Size};
+        let Some(gpu) = arclight::gpu::get() else { return eprintln!("skipped: no GPU adapter") };
+        let frame = |v: f32| {
+            let mut img = Image::blank(Size { width: 16, height: 16 }, IRect::new(0, 0, 16, 16));
+            img.pixels.iter_mut().for_each(|p| *p = [v, v, v, 1.0]);
+            img.planes.push(Plane { name: "depth".into(), data: vec![v; 256] });
+            let img = Arc::new(img);
+            let r = Resident::new(gpu.clone(), GpuImage::upload(&gpu, &img).unwrap());
+            (img, r)
+        };
+        let color = 256 * 16;
+        let on_gpu = |c: &mut FrameCache, k: u64| c.get(k).expect("cached").1;
+        // Room on the GPU for two frames' color.
+        let mut c = FrameCache::with_budgets(usize::MAX, 2 * color);
+        let frames: Vec<_> = (0..3).map(|k| frame(k as f32)).collect();
+        for k in 0..2 {
+            c.insert(k, frames[k as usize].0.clone(), Some(&frames[k as usize].1));
+        }
+        let r = on_gpu(&mut c, 0).expect("on the GPU");
+        assert!(r.image.planes.is_empty() && r.bytes() == color, "its color alone");
+        assert!(r.image.rgba == frames[0].1.image.rgba, "the render's own buffer, not a copy");
+        // Frame 0 used last: the third pushes frame 1 off the GPU.
+        c.insert(2, frames[2].0.clone(), Some(&frames[2].1));
+        assert!(on_gpu(&mut c, 1).is_none() && on_gpu(&mut c, 0).is_some() && on_gpu(&mut c, 2).is_some());
+        assert!(Arc::ptr_eq(&c.get(1).unwrap().0, &frames[1].0), "still on the CPU");
+        assert_eq!(c.gpu_bytes, 2 * color);
+        // Rendered on the CPU: nothing on the GPU.
+        c.insert(3, frames[0].0.clone(), None);
+        assert!(on_gpu(&mut c, 3).is_none());
+        // GPU off: all let go.
+        c.drop_gpu();
+        assert!((0..4).all(|k| on_gpu(&mut c, k).is_none()) && c.gpu_bytes == 0);
+        // Room on the CPU for one frame: the one leaving takes its GPU color.
+        let one = frames[0].0.bytes();
+        let mut c = FrameCache::with_budgets(one, u64::MAX);
+        c.insert(0, frames[0].0.clone(), Some(&frames[0].1));
+        c.insert(1, frames[1].0.clone(), Some(&frames[1].1));
+        assert!(!c.contains(0) && c.gpu_bytes == color, "{}", c.gpu_bytes);
+    }
+
+    /// A frame the worker rendered on the GPU comes back from the frame
+    /// cache still on the GPU, so the viewer draws it from there.
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn a_cached_frame_rendered_on_the_gpu_is_served_from_it() {
+        if arclight::gpu::get().is_none() {
+            return eprintln!("skipped: no GPU adapter");
+        }
+        let graph = Arc::new(serde_json::from_value::<Graph>(serde_json::json!({ "nodes": [
+            { "id": "c", "op": "constant", "params": { "width": 64, "height": 32, "color": [0.2, 0.4, 0.6, 1.0] } },
+            { "id": "b", "op": "blur", "inputs": ["c"], "params": { "radius": 2.0 } },
+            { "id": "g", "op": "grade", "inputs": ["b"], "params": { "gain": [2.0, 2.0, 2.0, 1.0] } },
+        ] })).unwrap());
+        let worker = Worker::spawn(eframe::egui::Context::default(), Arc::new(Mutex::new(Evaluator::new())));
+        let ask = |target: &str| {
+            worker.request(Request { graph: graph.clone(), target: target.into(), frame: 1, probe: None });
+            let t0 = Instant::now();
+            loop {
+                if let Some(r) = worker.poll() {
+                    break r;
+                }
+                assert!(t0.elapsed().as_secs() < 30, "no answer");
+                std::thread::yield_now();
+            }
+        };
+        let first = ask("g");
+        let fresh = first.gpu.expect("rendered on the GPU (a blur always is)");
+        ask("c");
+        let again = ask("g");
+        assert!(Arc::ptr_eq(again.result.as_ref().unwrap(), first.result.as_ref().unwrap()), "from the frame cache");
+        let cached = again.gpu.expect("served on the GPU");
+        assert!(cached.image.rgba == fresh.image.rgba && cached.image.planes.is_empty());
     }
 
     /// A 3D setup with lights on the render's extra inputs, a render on a
