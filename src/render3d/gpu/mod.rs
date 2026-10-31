@@ -55,6 +55,7 @@ fn deep_raster() -> &'static str {
     DEEP.get_or_init(|| RASTER.replace("const MAX_HITS: u32 = 16u;", &format!("const MAX_HITS: u32 = {DEEP_HITS}u;")))
 }
 const MIP: &str = include_str!("mip.wgsl");
+const BLUR: &str = include_str!("blur.wgsl");
 
 // As in raster.wgsl.
 const MAX_OBJECTS: usize = 32;
@@ -209,16 +210,17 @@ fn draw(gpu: &Gpu, surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &C
 /// and read back once; the mean, with the passes in `passes` (the
 /// picture's: mattes and the light passes), before any background. None
 /// where the GPU can't take it: then each time renders as before.
-pub(super) fn blurred(scene: &Scene, cam: &Camera, format: Size, samples: usize, passes: Passes, blur: &super::Blur, frames: &[(i64, &Scene)]) -> Option<Image> {
+#[allow(clippy::too_many_arguments)]
+pub(super) fn blurred(scene: &Scene, cam: &Camera, format: Size, samples: usize, passes: Passes, blur: &super::Blur, frames: &[(i64, &Scene)], background: bool) -> Option<Image> {
     #[cfg(test)]
     if !tests::GPU_ON.with(|on| on.get()) {
         return None;
     }
-    if format.width == 0 || format.height == 0 || !scene.splats.is_empty() || !scene.points.is_empty() || sprites(scene) {
+    if format.width == 0 || format.height == 0 || !scene.splats.is_empty() || !scene.points.is_empty() {
         return None;
     }
     let gpu = crate::gpu::get()?;
-    match blur_on(&gpu, scene, cam, format, samples, passes, blur, frames) {
+    match blur_on(&gpu, scene, cam, format, samples, passes, blur, frames, background) {
         Ok(img) => img,
         Err(e) => {
             crate::gpu::report_error(format!("Scanline Render motion blur: {e:#}"), false);
@@ -227,19 +229,24 @@ pub(super) fn blurred(scene: &Scene, cam: &Camera, format: Size, samples: usize,
     }
 }
 
-/// Whether `scene` has particles drawn as points or sprites (drawn over
-/// each render on the CPU).
-fn sprites(scene: &Scene) -> bool {
-    scene.particles.iter().any(|p| !matches!(p.look, crate::particle_nodes::Look::Objects { .. }))
+/// A time's render where sprites go over it before it joins the sum: the
+/// render, and it as a picture and depth.
+struct Scratch {
+    frame: Frame,
+    picture: wgpu::Buffer,
+    depth: wgpu::Buffer,
 }
 
 #[allow(clippy::too_many_arguments)]
-fn blur_on(gpu: &Gpu, scene: &Scene, cam: &Camera, format: Size, samples: usize, passes: Passes, blur: &super::Blur, frames: &[(i64, &Scene)]) -> Result<Option<Image>> {
+fn blur_on(gpu: &Gpu, scene: &Scene, cam: &Camera, format: Size, samples: usize, passes: Passes, blur: &super::Blur, frames: &[(i64, &Scene)], background: bool) -> Result<Option<Image>> {
+    use crate::particle_nodes::Look;
+    use crate::particles_render::Blend;
     let n = samples.clamp(1, 16);
     let times = &blur.times;
     let side = if blur.jitter { super::jitter_side(times.len()) } else { 1 };
     let share = if times.len() > 1 { times[1] - times[0] } else { 0.0 };
     let mut frame: Option<Frame> = None;
+    let mut scratch: Option<Scratch> = None;
     let mut layout: Option<Layout> = None;
     for cy in 0..side {
         for cx in 0..side {
@@ -249,11 +256,19 @@ fn blur_on(gpu: &Gpu, scene: &Scene, cam: &Camera, format: Size, samples: usize,
                 let (now, c) = (scene.at_time(frames, t + shift), blur.camera(cam, t + shift));
                 let objects = super::particles::with_objects(&now);
                 let now = objects.as_ref().unwrap_or(&now);
-                if sprites(now) || !now.splats.is_empty() || !now.points.is_empty() {
+                if !now.splats.is_empty() || !now.points.is_empty() {
+                    return Ok(None);
+                }
+                // Points and sprites go over each time's render (as
+                // `particles::draw` lays them on the CPU). Added up over a
+                // background they'd be the same as over each time, but for
+                // added-up sprites: those render time by time.
+                let streams: Vec<_> = now.particles.iter().filter(|s| !matches!(s.look, Look::Objects { .. })).collect();
+                if background && streams.iter().any(|s| s.sprites().blend == Blend::Additive) {
                     return Ok(None);
                 }
                 let surfs = super::surfaces(now);
-                if surfs.is_empty() {
+                if surfs.is_empty() && streams.is_empty() {
                     continue;
                 }
                 let Some(prep) = prepare(gpu, &surfs, &now.lights, &c, format, passes, None) else { return Ok(None) };
@@ -267,14 +282,46 @@ fn blur_on(gpu: &Gpu, scene: &Scene, cam: &Camera, format: Size, samples: usize,
                     f.clear(gpu);
                     f
                 });
-                gpu.scoped(|| {
-                    let maps = draw_maps(gpu, &prep.tables, &prep.textures);
-                    dispatch(gpu, &prep, &maps, f, &c, format, n, cell, false);
-                    Ok(())
-                })?;
+                if streams.is_empty() {
+                    gpu.scoped(|| {
+                        let maps = draw_maps(gpu, &prep.tables, &prep.textures);
+                        dispatch(gpu, &prep, &maps, f, &c, format, n, cell, false);
+                        Ok(())
+                    })?;
+                } else {
+                    let px = (format.width * format.height) as u64;
+                    let x = scratch.get_or_insert_with(|| {
+                        let buffer = |bytes: u64, label: &str| gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: bytes.max(16), usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false });
+                        Scratch { frame: Frame::take(gpu, format.width, format.height, prep.layout.slots.stride), picture: buffer(px * 16, "render3d blur picture"), depth: buffer(px * 4, "render3d blur depth") }
+                    });
+                    gpu.scoped(|| {
+                        x.frame.clear(gpu);
+                        if !surfs.is_empty() {
+                            let maps = draw_maps(gpu, &prep.tables, &prep.textures);
+                            dispatch(gpu, &prep, &maps, &x.frame, &c, format, n, cell, false);
+                        }
+                        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+                        let params = [format.width as u32, format.height as u32, prep.layout.slots.stride as u32, (n * n) as u32, cell.map_or(0, |c| c.side as u32), cell.map_or(0, |c| c.x as u32), cell.map_or(0, |c| c.y as u32), 0];
+                        blur_pass(gpu, &mut encoder, "resolve", &params, &x.frame, &x.picture, &x.depth, f);
+                        for stream in &streams {
+                            let sprites = stream.sprites();
+                            let mut splats = crate::particles_render::splats_through(&stream.particles(), &sprites, &c, format);
+                            crate::particles_render::sort_for(&mut splats, &sprites);
+                            if !splats.is_empty() {
+                                sprites::Job::new(&splats, &sprites, format, true).encode(gpu, &mut encoder, format, &x.picture, &x.depth);
+                            }
+                        }
+                        blur_pass(gpu, &mut encoder, "add", &params, &x.frame, &x.picture, &x.depth, f);
+                        gpu.queue.submit([encoder.finish()]);
+                        Ok(())
+                    })?;
+                }
                 layout.get_or_insert(prep.layout);
             }
         }
+    }
+    if let Some(x) = scratch {
+        x.frame.give_back();
     }
     let (Some(frame), Some(layout)) = (frame, layout) else { return Ok(None) };
     let out = gpu.scoped(|| frame.read(gpu, false));
@@ -297,6 +344,23 @@ fn blur_on(gpu: &Gpu, scene: &Scene, cam: &Camera, format: Size, samples: usize,
     img.pixels = color;
     super::add_planes(&mut img, Vec::new(), &extra, stride, passes, &layout.slots, &nodes, &light_names);
     Ok(Some(img))
+}
+
+/// Entry `entry` of blur.wgsl over a frame: a time's render `time` (and
+/// its `picture` and `depth`) and the frame `sum` adding the times up.
+#[allow(clippy::too_many_arguments)]
+fn blur_pass(gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, entry: &'static str, params: &[u32; 8], time: &Frame, picture: &wgpu::Buffer, depth: &wgpu::Buffer, sum: &Frame) {
+    let pipeline = gpu.compute_pipeline("render3d/blur", BLUR, entry);
+    let uniform = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("render3d blur params"), contents: bytemuck::cast_slice(params), usage: wgpu::BufferUsages::UNIFORM });
+    // Each entry takes only the buffers it uses (see blur.wgsl).
+    let all: [(u32, &wgpu::Buffer); 9] = [(0, &uniform), (1, &time.color), (2, &time.extra), (3, &time.hits), (4, picture), (5, depth), (6, &sum.color), (7, &sum.extra), (8, &sum.hits)];
+    let used: &[u32] = if entry == "resolve" { &[0, 1, 3, 4, 5] } else { &[0, 2, 3, 4, 6, 7, 8] };
+    let entries: Vec<wgpu::BindGroupEntry> = all.iter().filter(|(b, _)| used.contains(b)).map(|(b, buf)| wgpu::BindGroupEntry { binding: *b, resource: buf.as_entire_binding() }).collect();
+    let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("render3d blur"), layout: &pipeline.get_bind_group_layout(0), entries: &entries });
+    let mut pass = encoder.begin_compute_pass(&Default::default());
+    pass.set_pipeline(&pipeline);
+    pass.set_bind_group(0, &group, &[]);
+    pass.dispatch_workgroups((params[0] as usize).div_ceil(16) as u32, (params[1] as usize).div_ceil(16) as u32, 1);
 }
 
 /// The tables the shader reads, as u32 words (see raster.wgsl).

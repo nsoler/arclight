@@ -30,6 +30,13 @@ done), `docs/help.md` (the in-app help) and
   "Dropped TexturesDelta with 1 unapplied deltas" (egui 0.37) now end
   `ctx.run_ui(..)` with `.drop_without_applying_deltas()` instead of
   `let _ =`; all GUI tests pass. **Tip:** do the same in new egui tests.
+- **0.12.7, GPU G5 done** (Dev2): `render_blurred`'s GPU sum takes
+  sprites: each (cell, time) renders into a scratch frame, `blur.wgsl`
+  resolves it to picture + depth, that time's sprites go over it on the
+  GPU (`sprites::Job`), then it's added; one read-back. Additive sprites
+  over a background go time by time. For 500k sprites ~75 ms a time is
+  CPU work (sort ~22, binning ~12…): moving sort + binning to the GPU is
+  the next lever if dense particle blur matters.
 - **0.12.6, GPU G5 part 2** (Dev2): `src/render3d/gpu/sprites.rs`:
   sprites sorted and binned on the CPU, one GPU thread a pixel lays its
   tile's sprites as the CPU does; used only when the sprites' boxes

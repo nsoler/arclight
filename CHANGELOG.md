@@ -15,6 +15,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.7 — 2026-10-31
+
+- GPU: **motion blur over particle sprites adds up on the GPU too**: at
+  4K, 8 times, 50 000 sprites in 0.33 s instead of 6.7 s, 500 000 in
+  2.7 s instead of 10.4 s. Additive sprites over a background still
+  render time by time. This completes G5 (shadows, motion blur,
+  particles).
+
 ## 0.12.6 — 2026-10-31
 
 - GPU: **particle sprites render on the GPU** where they cover much of

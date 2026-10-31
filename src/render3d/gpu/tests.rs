@@ -247,7 +247,7 @@ fn motion_blur_adds_up_on_the_gpu_as_on_the_cpu() {
         let blur = super::super::Blur { times: super::super::Blur::times(0.0, 0.5, 6), frames: vec![(0, &*s0, cam.clone()), (1, &*s1, cam.clone())], jitter };
         let frames: Vec<(i64, &Scene)> = vec![(0, &s0), (1, &s1)];
         let mixed = Passes { depth: false, ..passes };
-        assert!(with_gpu(|| blurred(&s0, &cam, format, 2, mixed, &blur, &frames)).is_some(), "on the GPU");
+        assert!(with_gpu(|| blurred(&s0, &cam, format, 2, mixed, &blur, &frames, false)).is_some(), "on the GPU");
         let cpu = crate::gpu::cpu_only(|| super::super::render_blurred(&s0, &cam, format, 2, None, passes, None, Some(&blur)));
         let out = with_gpu(|| super::super::render_blurred(&s0, &cam, format, 2, None, passes, None, Some(&blur)));
         for (name, mean, off) in differences(&cpu, &out) {
@@ -298,4 +298,42 @@ fn sprites_match_the_cpu() {
     let out = with_gpu(|| render_sprites_2d(&flat, &Sprites::default(), format, None));
     let (_, mean, off) = differences(&cpu, &out)[0].clone();
     assert!(mean <= 1e-4 && off <= 0.001, "2D: mean {mean:.2e}, {:.3} % off", off * 100.0);
+}
+
+/// Motion blur over particle sprites adds up on the GPU (each time's
+/// sprites laid over that time's render there) as the CPU renders it time
+/// by time; sprites added up over a background render time by time.
+#[test]
+fn motion_blur_with_sprites_adds_up_on_the_gpu() {
+    if crate::gpu::test_device().is_none() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let format = Size { width: 160, height: 90 };
+    for blend in ["over", "additive"] {
+        let graph = moving(&busy(PERSPECTIVE))
+            .replace(
+                r#"{"id": "scene", "op": "scene", "inputs": ["#,
+                &format!(
+                    r#"{{"id": "em", "op": "particle_emitter", "params": {{"rate": 40, "life": 30, "speed": 2.0, "spread": 50.0, "size": 0.4, "translate": [0, -0.5, 0]}}}},
+        {{"id": "pr", "op": "particle_render", "inputs": ["em", "", ""], "params": {{"blend": "{blend}", "opacity": 0.6}}}},
+        {{"id": "scene", "op": "scene", "inputs": ["pr", "#
+                ),
+            );
+        let ((s0, cam), (s1, _)) = (scene_at(&graph, 6), scene_at(&graph, 7));
+        assert!(!s0.particles.is_empty(), "a particle stream");
+        let blur = super::super::Blur { times: super::super::Blur::times(0.0, 0.5, 6), frames: vec![(0, &*s0, cam.clone()), (1, &*s1, cam.clone())], jitter: true };
+        let frames: Vec<(i64, &Scene)> = vec![(0, &s0), (1, &s1)];
+        let passes = Passes::from_names(["depth", "mattes"]);
+        let mixed = Passes { depth: false, ..passes };
+        assert!(with_gpu(|| blurred(&s0, &cam, format, 2, mixed, &blur, &frames, false)).is_some(), "{blend}: on the GPU");
+        let cpu = crate::gpu::cpu_only(|| super::super::render_blurred(&s0, &cam, format, 2, None, passes, None, Some(&blur)));
+        let out = with_gpu(|| super::super::render_blurred(&s0, &cam, format, 2, None, passes, None, Some(&blur)));
+        for (name, mean, off) in differences(&cpu, &out) {
+            let (most_mean, most_off) = super::check::allowed(&name);
+            assert!(mean <= most_mean && off <= most_off, "{blend}, {name}: mean {mean:.2e}, {:.3} % of values off", off * 100.0);
+        }
+        // Added up over a background: time by time.
+        assert_eq!(with_gpu(|| blurred(&s0, &cam, format, 2, mixed, &blur, &frames, true)).is_some(), blend == "over");
+    }
 }

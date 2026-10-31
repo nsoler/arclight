@@ -606,10 +606,11 @@ pub fn render_blurred(scene: &Scene, cam: &Camera, format: Size, samples: usize,
     let mixed = Passes { depth: false, position: false, normal: false, uv: false, motion: false, id: false, ..passes };
     let frames: Vec<(i64, &Scene)> = blur.frames.iter().map(|f| (f.0, f.1)).collect();
     // On the GPU, every time added up there (a background without planes
-    // goes over the mean: the same as over each time).
+    // goes over the mean: the same as over each time; particle sprites
+    // go over each time's render there too).
     #[cfg(feature = "gpu")]
     if background.is_none_or(|b| b.planes.is_empty()) {
-        if let Some(mean) = gpu::blurred(scene, cam, format, samples, mixed, blur, &frames) {
+        if let Some(mean) = gpu::blurred(scene, cam, format, samples, mixed, blur, &frames, background.is_some()) {
             let mean = match background {
                 Some(bg) => over_background(mean, bg),
                 None => mean,

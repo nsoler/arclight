@@ -558,10 +558,17 @@ switch, the status and the tests' skip work end to end.
   cheaper on the CPU, which needn't send the frame across. Measured: 20 k
   big textured sprites 1080p 85 ms against 15.8 s, 4K 297 ms against
   61.7 s; 500 k dust-sized sprites stay on the CPU (~0.15–0.24 s).
-  Particle objects were already meshes on the GPU. Motion blur with
-  sprites still renders time by time (each time's sprites on the GPU
-  when big); adding sprites into the GPU's motion-blur sum is a
-  follow-up.
+  Particle objects were already meshes on the GPU.
+- **Done (motion blur with sprites):** each time renders into a scratch
+  frame on the GPU, `blur.wgsl` turns it into a picture and depth, that
+  time's sprites go over it there (`sprites::Job`, whatever their size:
+  nothing crosses to the CPU), and the jitter cell's pixels join the sum.
+  Added-up sprites over a background still render time by time (the mean
+  over a background differs there). Measured, 4K, the particle scene,
+  motion blur 8 (CPU / GPU): 50 k sprites 6.7 s / 334 ms (20×), 500 k
+  10.4 s / 2.65 s (4×). For 500 k, ~75 ms a time is CPU work (the
+  particles at each time, projecting and sorting them, binning): moving
+  the sort and binning to the GPU is the next step if it matters.
 - Target (4K, the measured scene): motion blur 8 + shadows from 28 s to
   under 0.3 s.
 

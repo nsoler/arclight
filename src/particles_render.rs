@@ -135,9 +135,16 @@ impl Sprites {
 /// it). The result covers the frame and has a `depth` plane: the nearest
 /// sprite's where one shows, else the background's.
 pub fn render_sprites(particles: &[Particle], sprites: &Sprites, cam: &Camera, format: Size, background: Option<&Image>) -> Image {
+    draw(splats_through(particles, sprites, cam, format), sprites, format, background, true)
+}
+
+/// `particles` as `sprites` seen through `cam` in a frame of `format`:
+/// the sprites on the frame, in the particles' order (those behind the
+/// camera or past its far plane left out).
+pub(crate) fn splats_through(particles: &[Particle], sprites: &Sprites, cam: &Camera, format: Size) -> Vec<Splat> {
     let f = cam.focal_pixels(format);
     let view = cam.view();
-    let splats = particles
+    particles
         .iter()
         .filter_map(|p| {
             let c = crate::geom::transform_point(&view, &p.position);
@@ -146,8 +153,16 @@ pub fn render_sprites(particles: &[Particle], sprites: &Sprites, cam: &Camera, f
             let radius = if cam.is_ortho() { half * cam.pixels_per_unit(depth, format) } else { half * f / depth };
             (depth <= cam.far).then(|| sprites.splat(p, at, radius, depth))
         })
-        .collect();
-    draw(splats, sprites, format, background, true)
+        .collect()
+}
+
+/// `splats` in the order `sprites` lays them: farthest first when laid
+/// over each other (so nearer ones go over them), else as they are.
+pub(crate) fn sort_for(splats: &mut [Splat], sprites: &Sprites) {
+    if sprites.blend == Blend::Over {
+        // (Stable: equally far ones keep the particles' order.)
+        splats.par_sort_by(|a, b| b.depth.total_cmp(&a.depth));
+    }
 }
 
 /// `particles` as `sprites` straight onto frame pixels of `format` (their
@@ -197,10 +212,7 @@ fn draw(mut splats: Vec<Splat>, sprites: &Sprites, format: Size, background: Opt
     }
     // What the background puts in front, before sprites change `depth`.
     let wall = with_depth.then(|| depth.clone());
-    if sprites.blend == Blend::Over {
-        // Farthest first, so nearer ones go over them.
-        splats.sort_by(|a, b| b.depth.total_cmp(&a.depth));
-    }
+    sort_for(&mut splats, sprites);
     // On the GPU where it can (see render3d/gpu/sprites.rs).
     #[cfg(feature = "gpu")]
     if let Some((pixels, d)) = crate::render3d::sprites_on_gpu(&splats, sprites, format, &out.pixels, &depth, with_depth) {
