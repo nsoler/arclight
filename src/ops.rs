@@ -94,7 +94,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_set" | "instance_on_points" | "realize_instances" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_set" | "instance_on_points" | "realize_instances" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1150,6 +1150,29 @@ pub static OPS: &[OpInfo] = &[
                Shape; Invert turns it over. Combine sets it, or multiplies, maxes or mins it with the attribute already \
                there. Use it in formulas (@weight) to scale, color or delete by distance: MoGraph's effector.",
     },
+    OpInfo {
+        name: "attribute_from_image",
+        label: "Attribute from Image",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN, req("image"), scene_in("camera")],
+        params: &[
+            fixed!("elements", "Elements", ParamKind::Choice(&["points", "mesh points", "instances"]), "points"),
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("name", "Attribute", ParamKind::Text, "Cd"),
+            fixed!("via", "Via", ParamKind::Choice(&["uv", "camera"]), "uv"),
+            fixed!("take", "Take", ParamKind::Choice(&["rgba", "rgb", "luminance", "alpha"]), "rgba"),
+            fixed!("outside", "Outside", ParamKind::Choice(&["keep", "fill"]), "keep"),
+            p!("fill", "Fill", ParamKind::Float { min: -1000.0, max: 1000.0 }, 0.0),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Samples the image input at each of the points, the meshes' points or the instances (of Group's node, or \
+               all), blending the nearest pixels, into an attribute (Cd by default): where the camera input's camera sees \
+               the element (Via camera: project a plate or a painted map onto the scene) or at its texture coordinates \
+               (Via uv: a mesh's uvs, or the uv a Scatter gives its points). Take rgba (vec4), rgb (vec3), luminance or \
+               alpha (float). Elements off the image, behind the camera or without uvs keep the attribute they have \
+               (Outside keep), or take Fill.",
+    },
     // Fit Plane (geo_fit.rs; Dev1).
     OpInfo {
         name: "fit_plane",
@@ -2186,6 +2209,11 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         }
         "realize_instances" => Ok(scene_output(DEFAULT_FORMAT, geo_ops::realize_instances(params, input_scene(inputs))?)),
         "attribute_set" => Ok(scene_output(DEFAULT_FORMAT, geo_ops::attribute_set(params, input_scene(inputs), ctx.frame as f64)?)),
+        "attribute_from_image" => {
+            let image = inputs.get(1).copied().flatten().filter(|i| i.scene.is_none());
+            let camera = inputs.get(2).copied().flatten().and_then(|i| i.scene.as_deref());
+            Ok(scene_output(DEFAULT_FORMAT, crate::geo_attr::attribute_from_image(params, input_scene(inputs), image, camera)?))
+        }
         "falloff" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_attr::falloff(params, input_scene(inputs), inputs.get(1).copied().flatten().and_then(|i| i.scene.as_deref()))?)),
         "attribute_noise" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_attr::attribute_noise(params, input_scene(inputs))?)),
         "fit_plane" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_fit::fit_plane(params, input_scene(inputs), inputs.get(1).copied().flatten())?)),

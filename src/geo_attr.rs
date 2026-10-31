@@ -7,6 +7,8 @@
 //!   multiplied in, optionally only in a region with a soft edge.
 //! - Falloff: a 0–1 weight by distance to curves, points (a locator, a
 //!   tracker's) or a region, as MoGraph's effectors.
+//! - Attribute from Image: an image sampled at each element, where a
+//!   camera sees it or at its uv.
 
 use crate::geo::{self, Attr, Attrs};
 use crate::geom::{self, Mat4, Vec3};
@@ -35,12 +37,20 @@ impl Elements {
     }
 }
 
-/// One object's elements: their places in the scene and its attributes
-/// to change.
+/// One object's elements: their places in the scene, their texture
+/// coordinates if they have them, and its attributes to change.
 struct Target<'a> {
     placed: Vec<Vec3>,
+    uvs: Option<Vec<[f64; 2]>>,
     attrs: &'a mut Attrs,
 }
+
+/// The `uv` attribute as texture coordinates (Scatter's, a vec3).
+fn uv_attr(attrs: &Attrs) -> Option<Vec<[f64; 2]>> {
+    attrs.vec3("uv").map(|v| v.iter().map(|u| [u[0] as f64, u[1] as f64]).collect())
+}
+
+
 
 /// Call `f` with each object of `scene` (of `group`'s nodes, a name or a
 /// pattern, or all) that has `elements`.
@@ -50,23 +60,24 @@ fn each_target(scene: &mut Scene, elements: Elements, group: &str, mut f: impl F
         Elements::Points => {
             for g in scene.point_sets.iter_mut().filter(|g| take(&g.node)) {
                 let placed = (0..g.len()).map(|i| g.placed(i)).collect();
-                f(Target { placed, attrs: &mut g.attrs })?;
+                f(Target { placed, uvs: uv_attr(&g.attrs), attrs: &mut g.attrs })?;
             }
             for c in scene.curves.iter_mut().filter(|c| take(&c.node)) {
                 let placed = c.positions.iter().map(|p| geom::transform_point(&c.world, p)).collect();
-                f(Target { placed, attrs: &mut c.attrs })?;
+                f(Target { placed, uvs: uv_attr(&c.attrs), attrs: &mut c.attrs })?;
             }
         }
         Elements::MeshPoints => {
             for m in scene.meshes.iter_mut().filter(|m| take(&m.node)) {
                 let placed = m.mesh.positions.iter().map(|p| geom::transform_point(&m.world, p)).collect();
-                f(Target { placed, attrs: &mut Arc::make_mut(&mut m.mesh).point_attrs })?;
+                let uvs = (!m.mesh.uvs.is_empty()).then(|| m.mesh.uvs.clone());
+                f(Target { placed, uvs, attrs: &mut Arc::make_mut(&mut m.mesh).point_attrs })?;
             }
         }
         Elements::Instances => {
             for g in scene.instances.iter_mut().filter(|g| take(&g.node)) {
                 let placed = g.worlds.iter().map(|w| Vec3::new(w[(0, 3)], w[(1, 3)], w[(2, 3)])).collect();
-                f(Target { placed, attrs: &mut g.attrs })?;
+                f(Target { placed, uvs: uv_attr(&g.attrs), attrs: &mut g.attrs })?;
             }
         }
     }
@@ -399,6 +410,91 @@ pub fn falloff(params: &Value, mut scene: Scene, from: Option<&Scene>) -> Result
     Ok(scene)
 }
 
+/// `img` at frame position `x`, `y` (pixels, y down), blended from the
+/// four nearest pixel centers; transparent off its data window.
+pub fn sample(img: &crate::image::Image, x: f64, y: f64) -> [f64; 4] {
+    let (fx, fy) = (x - 0.5 - img.x0 as f64, y - 0.5 - img.y0 as f64);
+    let (ix, iy) = (fx.floor(), fy.floor());
+    let (tx, ty) = (fx - ix, fy - iy);
+    let at = |cx: f64, cy: f64| -> [f64; 4] {
+        if cx < 0.0 || cy < 0.0 || cx >= img.width as f64 || cy >= img.height as f64 {
+            return [0.0; 4];
+        }
+        img.pixels[cy as usize * img.width + cx as usize].map(f64::from)
+    };
+    let (a, b, c, d) = (at(ix, iy), at(ix + 1.0, iy), at(ix, iy + 1.0), at(ix + 1.0, iy + 1.0));
+    std::array::from_fn(|k| (a[k] * (1.0 - tx) + b[k] * tx) * (1.0 - ty) + (c[k] * (1.0 - tx) + d[k] * tx) * ty)
+}
+
+/// An Attribute from Image: on each element `image` sampled where the
+/// camera input's camera sees it (Via camera) or at its texture
+/// coordinates (Via uv), as RGBA, RGB, luminance or alpha. Elements off
+/// the image, behind the camera or without uvs keep their value or take
+/// Fill (Outside).
+pub fn attribute_from_image(params: &Value, mut scene: Scene, image: Option<&crate::image::Image>, camera: Option<&Scene>) -> Result<Scene> {
+    let image = image.ok_or_else(|| anyhow::anyhow!("Attribute from Image: connect an image to its image input"))?;
+    let name = params["name"].as_str().unwrap_or("Cd").trim();
+    if name.is_empty() || name == "P" {
+        bail!("Attribute from Image: give it an attribute to write (not P)");
+    }
+    let take = params["take"].as_str().unwrap_or("rgba");
+    let (kind, w) = match take {
+        "rgb" => ("vec3", 3),
+        "luminance" | "alpha" => ("float", 1),
+        _ => ("vec4", 4),
+    };
+    let via_camera = params["via"].as_str() == Some("camera");
+    let cam = match camera.and_then(|s| s.cameras.first()) {
+        Some(c) => Some(c.clone()),
+        None if via_camera => bail!("Attribute from Image: Via is camera, but nothing with a camera is connected to its camera input"),
+        None => None,
+    };
+    let keep = params["outside"].as_str() != Some("fill");
+    let fill = params["fill"].as_f64().unwrap_or(0.0);
+    let f = image.format;
+    let group = params["group"].as_str().unwrap_or("").trim();
+    each_target(&mut scene, Elements::from(params), group, |t| {
+        let n = t.placed.len();
+        let old = t.attrs.get(name).filter(|a| width(a.kind()) == w);
+        let at = |i: usize| -> Option<[f64; 2]> {
+            let q = match &cam {
+                Some(c) if via_camera => c.project(&t.placed[i], f)?.0,
+                _ => {
+                    let [u, v] = t.uvs.as_ref()?[i];
+                    [u * f.width as f64, (1.0 - v) * f.height as f64]
+                }
+            };
+            // In the frame, its edge pixels reach to its edge (as a
+            // texture clamps), so a uv of 0 or 1 isn't half transparent.
+            let inside = q[0] >= 0.0 && q[1] >= 0.0 && q[0] <= f.width as f64 && q[1] <= f.height as f64;
+            inside.then(|| [q[0].clamp(0.5, f.width as f64 - 0.5), q[1].clamp(0.5, f.height as f64 - 0.5)])
+        };
+        let values: Vec<f64> = (0..n)
+            .into_par_iter()
+            .flat_map_iter(|i| {
+                let v: Vec<f64> = match at(i) {
+                    Some([x, y]) => {
+                        let p = sample(image, x, y);
+                        match take {
+                            "rgb" => p[..3].to_vec(),
+                            "luminance" => vec![0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]],
+                            "alpha" => vec![p[3]],
+                            _ => p.to_vec(),
+                        }
+                    }
+                    None => match old.filter(|_| keep) {
+                        Some(a) => components(a, i, w, fill),
+                        None => vec![fill; w],
+                    },
+                };
+                v.into_iter()
+            })
+            .collect();
+        t.attrs.set(name, attr_of(kind, w, &values), n)
+    })?;
+    Ok(scene)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -614,5 +710,76 @@ mod tests {
         for i in 0..9 {
             assert!((mul[i] - 0.5 * set[i]).abs() < 1e-6 && (max[i] - set[i].max(0.5)).abs() < 1e-6 && (min[i] - set[i].min(0.5)).abs() < 1e-6, "{i}");
         }
+    }
+
+    /// A 4 × 2 image whose red is its column and green its row (× 0.1),
+    /// with a data window starting at (1, 0) of a 5 × 2 frame.
+    fn ramp() -> crate::image::Image {
+        let mut img = crate::image::Image::blank(crate::image::Size { width: 5, height: 2 }, crate::image::IRect::new(1, 0, 5, 2));
+        for y in 0..2 {
+            for x in 0..4 {
+                img.pixels[y * 4 + x] = [(x + 1) as f32 * 0.1, y as f32 * 0.1, 0.0, 1.0];
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn sampling_blends_pixel_centers_within_the_data_window() {
+        let img = ramp();
+        let near = |a: [f64; 4], b: [f64; 4]| (0..4).all(|k| (a[k] - b[k]).abs() < 1e-6);
+        // Pixel (2, 1)'s center, and halfway between (2, 0) and (3, 0).
+        assert!(near(sample(&img, 2.5, 1.5), [0.2, 0.1, 0.0, 1.0]));
+        assert!(near(sample(&img, 3.0, 0.5), [0.25, 0.0, 0.0, 1.0]));
+        // Left of the data window: transparent, blended at its edge.
+        assert!(near(sample(&img, 0.5, 0.5), [0.0; 4]));
+        assert!(near(sample(&img, 1.0, 0.5), [0.05, 0.0, 0.0, 0.5]));
+    }
+
+    /// As a node: a Plane's points take a red Constant's color by their uvs.
+    #[test]
+    fn image_in_a_graph_by_uv() {
+        let graph: crate::graph::Graph = serde_json::from_value(json!({"nodes": [
+            {"id": "ground", "op": "plane", "params": {"size": [2, 2], "segments": [3, 3]}},
+            {"id": "red", "op": "constant", "params": {"width": 64, "height": 64, "color": [1.0, 0.0, 0.0, 1.0]}},
+            {"id": "paint", "op": "attribute_from_image", "inputs": ["ground", "red", ""], "params": {"elements": "mesh points"}},
+        ]})).unwrap();
+        let ctx = crate::ops::EvalContext { frame: 1, write_outputs: false };
+        let out = crate::graph::Evaluator::new().evaluate(&graph, "paint", &ctx).unwrap();
+        let cd = out.scene.as_ref().unwrap().meshes[0].mesh.point_attrs.vec4("Cd").expect("Cd").to_vec();
+        assert_eq!(cd.len(), 16);
+        // Red everywhere, its edges and corners too.
+        assert!(cd.iter().all(|c| c == &[1.0, 0.0, 0.0, 1.0]), "{cd:?}");
+    }
+
+    #[test]
+    fn image_via_uv_and_via_a_camera() {
+        // Points with uvs at pixel centers of the frame (u = x / 5, v = 1 - y / 2).
+        let mut g = PointSet { positions: vec![Vec3::zeros(); 3], node: "p".into(), ..PointSet::default() };
+        g.attrs.set("uv", Attr::Vec3(vec![[2.5 / 5.0, 1.0 - 1.5 / 2.0, 0.0], [4.5 / 5.0, 1.0 - 0.5 / 2.0, 0.0], [1.5, 0.5, 0.0]]), 3).unwrap();
+        let scene = Scene { point_sets: vec![g], ..Scene::default() };
+        let out = attribute_from_image(&json!({}), scene.clone(), Some(&ramp()), None).unwrap();
+        let cd = out.point_sets[0].attrs.vec4("Cd").unwrap();
+        assert!((cd[0][0] - 0.2).abs() < 1e-6 && (cd[0][1] - 0.1).abs() < 1e-6 && (cd[1][0] - 0.4).abs() < 1e-6, "{cd:?}");
+        assert_eq!(cd[2], [0.0; 4], "off the image: Fill");
+        let lum = attribute_from_image(&json!({"take": "luminance", "name": "k"}), scene.clone(), Some(&ramp()), None).unwrap();
+        assert!((lum.point_sets[0].attrs.float("k").unwrap()[0] as f64 - (0.2126 * 0.2 + 0.7152 * 0.1)).abs() < 1e-6);
+        // Outside keeps what's there.
+        let mut kept = scene.clone();
+        kept.point_sets[0].attrs.set("k", Attr::Float(vec![7.0; 3]), 3).unwrap();
+        let k = attribute_from_image(&json!({"take": "alpha", "name": "k"}), kept, Some(&ramp()), None).unwrap();
+        assert_eq!(k.point_sets[0].attrs.float("k").unwrap(), [1.0, 1.0, 7.0]);
+        // A camera at z = 10 looking down -z: a point on its axis lands at
+        // the frame's middle; one behind it is outside.
+        let cam = crate::geom::Camera { world: geom::trs([0.0, 0.0, 10.0], [0.0; 3], [1.0; 3]), ..crate::geom::Camera::default() };
+        let seen = Scene { cameras: vec![cam], ..Scene::default() };
+        let pts = Scene { point_sets: vec![PointSet { positions: vec![Vec3::zeros(), Vec3::new(0.0, 0.0, 20.0)], ..PointSet::default() }], ..Scene::default() };
+        let out = attribute_from_image(&json!({"via": "camera", "take": "rgb", "outside": "fill", "fill": -1.0}), pts.clone(), Some(&ramp()), Some(&seen)).unwrap();
+        let c = out.point_sets[0].attrs.vec3("Cd").unwrap();
+        let mid = sample(&ramp(), 2.5, 1.0);
+        assert!((c[0][0] as f64 - mid[0]).abs() < 1e-5 && (c[0][1] as f64 - mid[1]).abs() < 1e-5, "{c:?} vs {mid:?}");
+        assert_eq!(c[1], [-1.0; 3], "behind the camera");
+        assert!(attribute_from_image(&json!({"via": "camera"}), pts.clone(), Some(&ramp()), None).is_err(), "no camera");
+        assert!(attribute_from_image(&json!({}), pts, None, None).is_err(), "no image");
     }
 }

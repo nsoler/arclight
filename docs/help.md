@@ -410,7 +410,10 @@ selected object.
   Offset animated makes it drift; a Falloff region limits it.
   **Falloff** weighs points by their distance to a Locator, a curve or a
   region (1 near, 0 far): use @weight in Attribute Set to scale, color or
-  delete them by distance.
+  delete them by distance. **Attribute from Image** reads an image at
+  each point: through a camera (color scattered rocks by the plate they
+  sit on) or at its uv (a painted map); then use @Cd or the luminance in
+  formulas.
   **Instance on Points** puts a copy of a prototype (the
   meshes, cards or splats wired to its second input) at every scattered
   point: rocks on a ground, a crowd of cards, trees. Each point picks one

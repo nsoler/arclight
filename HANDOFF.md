@@ -37,6 +37,10 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.20, P3: Attribute from Image** (Dev1): `attribute_from_image`,
+  via camera (`Camera::project` at the image's format) or uv (mesh uvs,
+  or Scatter's `uv` attr); bilinear `sample()` honoring the data window,
+  clamped to the outermost pixel centers inside the frame.
 - **0.13.19, P4b B2: instanced shadow maps** (Dev2): `shadow.rs`
   `plan_in` / `extent_of` (extent over every copy's placed vertices);
   copies behind the camera are records too; per map, copies reaching in

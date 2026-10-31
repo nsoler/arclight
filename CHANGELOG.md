@@ -17,6 +17,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.20 — 2026-10-31
+
+- Geometry: an **Attribute from Image** node samples an image at each
+  point, mesh point or instance, where a camera sees it (color scattered
+  things from the plate) or at its uv (a painted map), as a color, RGB,
+  luminance or alpha attribute, blending pixels; what's off the image
+  keeps its value or takes a fill.
+
 ## 0.13.19 — 2026-10-31
 
 - GPU: shadows cast by instances now render through GPU instancing too
