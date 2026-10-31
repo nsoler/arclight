@@ -17,6 +17,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.18 — 2026-10-31
+
+- Geometry: a **Falloff** node gives points, mesh points or instances a
+  0–1 weight by their distance to a Locator (or any points), a curve, or a
+  sphere or box region shown in the 3D view: full within Inner, none past
+  Outer, with a smooth, linear or eased curve, inverted or combined with a
+  weight already there. Use it in formulas (`@weight`) to scale, color or
+  thin things by distance.
+
 ## 0.13.17 — 2026-10-31
 
 - GPU: instances render much faster, and far more of them fit: each

@@ -5,6 +5,8 @@
 //!
 //! - Attribute Noise: 3-D noise (the formulas' `noise3`), set, added or
 //!   multiplied in, optionally only in a region with a soft edge.
+//! - Falloff: a 0–1 weight by distance to curves, points (a locator, a
+//!   tracker's) or a region, as MoGraph's effectors.
 
 use crate::geo::{self, Attr, Attrs};
 use crate::geom::{self, Mat4, Vec3};
@@ -219,6 +221,184 @@ pub fn attribute_noise(params: &Value, mut scene: Scene) -> Result<Scene> {
     Ok(scene)
 }
 
+/// Points to find the nearest of quickly: a k-d tree, split at the
+/// median along x, y, z in turn (built in O(n log² n), queried in about
+/// O(log n)).
+pub struct KdTree {
+    points: Vec<Vec3>,
+    /// `points`' indices, each subtree a range with its median in the
+    /// middle.
+    order: Vec<usize>,
+}
+
+impl KdTree {
+    pub fn new(points: Vec<Vec3>) -> KdTree {
+        let mut order: Vec<usize> = (0..points.len()).collect();
+        fn build(points: &[Vec3], order: &mut [usize], axis: usize) {
+            if order.len() <= 1 {
+                return;
+            }
+            let mid = order.len() / 2;
+            order.select_nth_unstable_by(mid, |&a, &b| points[a][axis].total_cmp(&points[b][axis]));
+            let (lo, rest) = order.split_at_mut(mid);
+            build(points, lo, (axis + 1) % 3);
+            build(points, &mut rest[1..], (axis + 1) % 3);
+        }
+        build(&points, &mut order, 0);
+        KdTree { points, order }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.points.is_empty()
+    }
+
+    /// The point nearest `p`: its index and distance (None if empty).
+    pub fn nearest(&self, p: &Vec3) -> Option<(usize, f64)> {
+        let mut best: Option<(usize, f64)> = None;
+        let mut reach = f64::INFINITY;
+        self.walk(0, self.order.len(), 0, p, &mut |i, d2, best_d2: &mut f64| {
+            if d2 < *best_d2 {
+                *best_d2 = d2;
+                best = Some((i, d2));
+            }
+        }, &mut reach);
+        best.map(|(i, d2)| (i, d2.sqrt()))
+    }
+
+    /// Every point within `r` of `p`: index and distance.
+    pub fn within(&self, p: &Vec3, r: f64) -> Vec<(usize, f64)> {
+        let mut out = Vec::new();
+        let mut reach = r * r;
+        self.walk(0, self.order.len(), 0, p, &mut |i, d2, _: &mut f64| {
+            if d2 <= r * r {
+                out.push((i, d2.sqrt()));
+            }
+        }, &mut reach);
+        out
+    }
+
+    /// Visit the points of `order[lo..hi]` (split on `axis`) that could be
+    /// within `reach` (squared, which `visit` may shrink) of `p`.
+    fn walk(&self, lo: usize, hi: usize, axis: usize, p: &Vec3, visit: &mut impl FnMut(usize, f64, &mut f64), reach: &mut f64) {
+        if lo >= hi {
+            return;
+        }
+        let mid = lo + (hi - lo) / 2;
+        let i = self.order[mid];
+        let q = &self.points[i];
+        visit(i, (q - p).norm_squared(), reach);
+        let d = p[axis] - q[axis];
+        let (near, far) = if d < 0.0 { ((lo, mid), (mid + 1, hi)) } else { ((mid + 1, hi), (lo, mid)) };
+        self.walk(near.0, near.1, (axis + 1) % 3, p, visit, reach);
+        if d * d <= *reach {
+            self.walk(far.0, far.1, (axis + 1) % 3, p, visit, reach);
+        }
+    }
+}
+
+/// The distance from `p` to the segment `a`–`b`.
+fn to_segment(p: &Vec3, a: &Vec3, b: &Vec3) -> f64 {
+    let ab = b - a;
+    let t = if ab.norm_squared() > 0.0 { ((p - a).dot(&ab) / ab.norm_squared()).clamp(0.0, 1.0) } else { 0.0 };
+    (p - (a + ab * t)).norm()
+}
+
+/// What a Falloff measures the distance to.
+enum From {
+    /// Polyline segments (curves, placed).
+    Segments(Vec<(Vec3, Vec3)>),
+    Points(KdTree),
+    /// A box or ball: scene space into the region's (the unit cube or
+    /// ball), and its half size (the scale back).
+    Region { to_region: Mat4, half: Vec3, sphere: bool },
+}
+
+impl From {
+    /// The distance from `p` (0 inside a region).
+    fn distance(&self, p: &Vec3) -> f64 {
+        match self {
+            From::Segments(segs) => segs.iter().map(|(a, b)| to_segment(p, a, b)).fold(f64::INFINITY, f64::min),
+            From::Points(tree) => tree.nearest(p).map_or(f64::INFINITY, |(_, d)| d),
+            From::Region { to_region, half, sphere } => {
+                let q = geom::transform_point(to_region, p);
+                if *sphere {
+                    // Past the surface, in the region's mean radius.
+                    (q.norm() - 1.0).max(0.0) * (half.x + half.y + half.z) / 3.0
+                } else {
+                    Vec3::new((q.x.abs() - 1.0).max(0.0) * half.x, (q.y.abs() - 1.0).max(0.0) * half.y, (q.z.abs() - 1.0).max(0.0) * half.z).norm()
+                }
+            }
+        }
+    }
+}
+
+/// A Falloff's weight curve from `t` (0 at Inner, 1 at Outer) to 1..0.
+fn falloff_curve(shape: &str, t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - match shape {
+        "smooth" => smooth(t),
+        "ease in" => t * t,
+        "ease out" => 1.0 - (1.0 - t) * (1.0 - t),
+        _ => t,
+    }
+}
+
+/// A Falloff: on each element a 0–1 weight attribute (Name), 1 within
+/// Inner of what it measures from and 0 past Outer, shaped between: from
+/// the second input's curves, else its points (locators, tracker points,
+/// point sets), else (nothing connected) the node's own region. Combined
+/// with what's there by Combine; Invert turns it over.
+pub fn falloff(params: &Value, mut scene: Scene, from: Option<&Scene>) -> Result<Scene> {
+    let name = params["name"].as_str().unwrap_or("weight").trim();
+    if name.is_empty() || name == "P" {
+        bail!("Falloff: give it an attribute to write (not P)");
+    }
+    let num = |k: &str, d: f64| params[k].as_f64().filter(|v| v.is_finite()).unwrap_or(d);
+    let (inner, outer) = (num("inner", 0.0).max(0.0), num("outer", 1.0).max(0.0));
+    let shape = params["shape"].as_str().unwrap_or("smooth");
+    let invert = params["invert"].as_bool().unwrap_or(false);
+    let combine = params["combine"].as_str().unwrap_or("set");
+    let source = match from {
+        Some(s) if !s.curves.is_empty() => From::Segments(s.curves.iter().flat_map(|c| c.segments().into_iter().map(|(a, b)| (geom::transform_point(&c.world, &a), geom::transform_point(&c.world, &b)))).collect()),
+        Some(s) => {
+            let pts: Vec<Vec3> = s.points.iter().copied().chain(s.point_sets.iter().flat_map(|g| (0..g.len()).map(move |i| g.placed(i)))).collect();
+            if pts.is_empty() {
+                bail!("Falloff: the scene on its from input has no curves or points to measure from");
+            }
+            From::Points(KdTree::new(pts))
+        }
+        None => {
+            let half = Vec3::from(scene::numbers::<3>(&params["region_size"], 2.0).map(|v| (v.abs() / 2.0).max(1e-12)));
+            let sphere = params["region"].as_str() != Some("box");
+            let world = geom::trs(scene::numbers(&params["region_center"], 0.0), scene::numbers(&params["region_rotate"], 0.0), half.into());
+            scene.regions.push(Region { node: String::new(), world, sphere });
+            From::Region { to_region: world.try_inverse().unwrap_or_else(Mat4::identity), half, sphere }
+        }
+    };
+    let group = params["group"].as_str().unwrap_or("").trim();
+    each_target(&mut scene, Elements::from(params), group, |t| {
+        let n = t.placed.len();
+        let old = t.attrs.float(name).map(<[f32]>::to_vec);
+        let values: Vec<f64> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let d = source.distance(&t.placed[i]);
+                let t01 = if outer > inner { (d - inner) / (outer - inner) } else if d <= inner { 0.0 } else { 1.0 };
+                let w = falloff_curve(shape, t01);
+                let w = if invert { 1.0 - w } else { w };
+                match (combine, old.as_ref().map(|o| o[i] as f64)) {
+                    ("multiply", Some(o)) => o * w,
+                    ("max", Some(o)) => o.max(w),
+                    ("min", Some(o)) => o.min(w),
+                    _ => w,
+                }
+            })
+            .collect();
+        t.attrs.set(name, attr_of("float", 1, &values), n)
+    })?;
+    Ok(scene)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,5 +518,101 @@ mod tests {
         assert_eq!(k[0], k[1], "at the same place");
         let out = attribute_noise(&json!({"name": "k", "group": "other*"}), scene).unwrap();
         assert!(out.point_sets[0].attrs.get("k").is_none(), "not in Group");
+    }
+
+    /// The k-d tree finds what a brute-force search finds.
+    #[test]
+    fn the_kd_tree_matches_brute_force() {
+        let rnd = |k: u64| geo::stable_unit(&[k]) * 10.0 - 5.0;
+        let pts: Vec<Vec3> = (0..2000).map(|i| Vec3::new(rnd(3 * i), rnd(3 * i + 1), rnd(3 * i + 2))).collect();
+        let tree = KdTree::new(pts.clone());
+        for q in 0..300u64 {
+            let p = Vec3::new(rnd(100_000 + 3 * q), rnd(100_001 + 3 * q), rnd(100_002 + 3 * q)) * 1.2;
+            let (i, d) = tree.nearest(&p).unwrap();
+            let best = pts.iter().map(|x| (x - p).norm()).fold(f64::INFINITY, f64::min);
+            assert!((d - best).abs() < 1e-12 && ((pts[i] - p).norm() - d).abs() < 1e-12, "{q}");
+            let mut near: Vec<usize> = tree.within(&p, 1.5).into_iter().map(|(i, _)| i).collect();
+            near.sort();
+            let want: Vec<usize> = (0..pts.len()).filter(|&i| (pts[i] - p).norm() <= 1.5).collect();
+            assert_eq!(near, want, "{q}");
+        }
+        assert!(KdTree::new(Vec::new()).nearest(&Vec3::zeros()).is_none());
+    }
+
+    /// A row of points from x = 0 to 4 (step 0.5) with a weight of 0.5.
+    fn row() -> Scene {
+        let mut g = PointSet { positions: (0..9).map(|i| Vec3::new(i as f64 * 0.5, 0.0, 0.0)).collect(), node: "row".into(), ..PointSet::default() };
+        g.attrs.set("weight", Attr::Float(vec![0.5; 9]), 9).unwrap();
+        Scene { point_sets: vec![g], ..Scene::default() }
+    }
+
+    fn weights(s: &Scene) -> Vec<f64> {
+        floats(s, "weight").iter().map(|v| *v as f64).collect()
+    }
+
+    #[test]
+    fn falloff_from_a_point_with_each_shape() {
+        // A locator at the origin: full within 1, none past 3.
+        let loc = Scene { points: vec![Vec3::zeros()], ..Scene::default() };
+        let w = |shape: &str| weights(&falloff(&json!({"inner": 1.0, "outer": 3.0, "shape": shape}), row(), Some(&loc)).unwrap());
+        let lin = w("linear");
+        let want = [1.0, 1.0, 1.0, 0.75, 0.5, 0.25, 0.0, 0.0, 0.0];
+        assert!(lin.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-6), "{lin:?}");
+        let sm = w("smooth");
+        assert!((sm[3] - 1.0 + smooth(0.25)).abs() < 1e-6 && (sm[4] - 0.5).abs() < 1e-6 && sm[3] > lin[3]);
+        let (ein, eout) = (w("ease in"), w("ease out"));
+        assert!((ein[3] - (1.0 - 0.0625)).abs() < 1e-6 && (eout[3] - (1.0 - 0.4375)).abs() < 1e-6, "{ein:?} {eout:?}");
+        let inv = weights(&falloff(&json!({"inner": 1.0, "outer": 3.0, "shape": "linear", "invert": true}), row(), Some(&loc)).unwrap());
+        assert!(inv.iter().zip(&lin).all(|(a, b)| (a + b - 1.0).abs() < 1e-6));
+    }
+
+    #[test]
+    fn falloff_from_curves_and_from_a_region() {
+        // A curve along y at x = 4: the far end is near it.
+        let mut c = geo::Curves { node: "path".into(), ..geo::Curves::default() };
+        c.push(&[Vec3::new(4.0, -5.0, 0.0), Vec3::new(4.0, 5.0, 0.0)], false);
+        let from = Scene { curves: vec![c], ..Scene::default() };
+        let w = weights(&falloff(&json!({"inner": 0.0, "outer": 2.0, "shape": "linear"}), row(), Some(&from)).unwrap());
+        assert!((w[8] - 1.0).abs() < 1e-6 && (w[6] - 0.5).abs() < 1e-6 && w[0] == 0.0, "{w:?}");
+        // No input: a ball of radius 1 at x = 2, then out to 1 more.
+        let out = falloff(&json!({"inner": 0.0, "outer": 1.0, "shape": "linear", "region": "sphere", "region_center": [2.0, 0.0, 0.0], "region_size": [2.0, 2.0, 2.0]}), row(), None).unwrap();
+        let w = weights(&out);
+        assert!(w[2..7].iter().all(|v| (v - 1.0).abs() < 1e-6) && (w[7] - 0.5).abs() < 1e-6 && w[0] == 0.0, "{w:?}");
+        assert_eq!(out.regions.len(), 1);
+        // A box 1 wide: x 1.5..2.5 inside.
+        let w = weights(&falloff(&json!({"inner": 0.0, "outer": 1.0, "shape": "linear", "region": "box", "region_center": [2.0, 0.0, 0.0], "region_size": [1.0, 4.0, 4.0]}), row(), None).unwrap());
+        assert!(w[3..6].iter().all(|v| (v - 1.0).abs() < 1e-6) && (w[2] - 0.5).abs() < 1e-6 && (w[6] - 0.5).abs() < 1e-6 && w[1] == 0.0 && w[8] == 0.0, "{w:?}");
+        assert!(falloff(&json!({}), row(), Some(&Scene::default())).is_err(), "nothing to measure from");
+    }
+
+    /// As a node: weights by distance to a Locator wired to its from input.
+    #[test]
+    fn falloff_in_a_graph_from_a_locator() {
+        let graph: crate::graph::Graph = serde_json::from_value(json!({"nodes": [
+            {"id": "ground", "op": "plane", "params": {"size": [6, 6]}},
+            {"id": "pts", "op": "scatter", "inputs": ["ground", "", ""], "params": {"density": 10}},
+            {"id": "here", "op": "locator", "params": {"translate": [1.0, 0.0, 0.0]}},
+            {"id": "near", "op": "falloff", "inputs": ["pts", "here"], "params": {"inner": 0.5, "outer": 2.0, "shape": "linear"}},
+        ]})).unwrap();
+        let ctx = crate::ops::EvalContext { frame: 1, write_outputs: false };
+        let out = crate::graph::Evaluator::new().evaluate(&graph, "near", &ctx).unwrap();
+        let s = &out.scene.as_ref().unwrap().point_sets[0];
+        let w = s.attrs.float("weight").expect("weight");
+        for (i, k) in w.iter().enumerate() {
+            let d = (s.placed(i) - Vec3::new(1.0, 0.0, 0.0)).norm();
+            let want = 1.0 - ((d - 0.5) / 1.5).clamp(0.0, 1.0);
+            assert!((*k as f64 - want).abs() < 1e-5, "{i}: {k} at {d}");
+        }
+        assert!(w.contains(&1.0) && w.contains(&0.0));
+    }
+
+    #[test]
+    fn falloff_combines_with_what_is_there() {
+        let loc = Scene { points: vec![Vec3::zeros()], ..Scene::default() };
+        let w = |combine: &str| weights(&falloff(&json!({"inner": 1.0, "outer": 3.0, "shape": "linear", "combine": combine}), row(), Some(&loc)).unwrap());
+        let (set, mul, max, min) = (w("set"), w("multiply"), w("max"), w("min"));
+        for i in 0..9 {
+            assert!((mul[i] - 0.5 * set[i]).abs() < 1e-6 && (max[i] - set[i].max(0.5)).abs() < 1e-6 && (min[i] - set[i].min(0.5)).abs() < 1e-6, "{i}");
+        }
     }
 }

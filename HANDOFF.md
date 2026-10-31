@@ -37,6 +37,10 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.18, P3: Falloff** (Dev1): `falloff` in geo_attr.rs, distance
+  to the from input's curves (segments), else its points (k-d tree:
+  `geo_attr::KdTree`, median split, nearest / within, reused by
+  Attribute Transfer), else its own region; shapes, invert, combine.
 - **0.13.17, P4b B1: GPU instancing** (Dev2): `render3d/gpu/instances.rs`
   plans each instance (wholly in front: instanced record of 20 words;
   crossing the near plane: an ordinary CPU-clipped surface; behind:

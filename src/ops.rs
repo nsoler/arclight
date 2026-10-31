@@ -94,7 +94,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "attribute_set" | "instance_on_points" | "realize_instances" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_set" | "instance_on_points" | "realize_instances" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1121,6 +1121,34 @@ pub static OPS: &[OpInfo] = &[
                multiplies what's there. Vectors (vec3, vec4: a color as Cd) get independent noise per component. Falloff \
                sphere or box limits it to a region (Region center, size, rotate; shown in the 3D view), fading in over \
                Softness of it from the edge. Pscale for sizes, Cd for colors, any name for formulas (@name).",
+    },
+    OpInfo {
+        name: "falloff",
+        label: "Falloff",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN, scene_in("from")],
+        params: &[
+            fixed!("elements", "Elements", ParamKind::Choice(&["points", "mesh points", "instances"]), "points"),
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("name", "Attribute", ParamKind::Text, "weight"),
+            p!("inner", "Inner", ParamKind::Float { min: 0.0, max: 100000.0 }, 0.0),
+            p!("outer", "Outer", ParamKind::Float { min: 0.0, max: 100000.0 }, 1.0),
+            fixed!("shape", "Shape", ParamKind::Choice(&["smooth", "linear", "ease in", "ease out"]), "smooth"),
+            fixed!("invert", "Invert", ParamKind::Bool, false),
+            fixed!("combine", "Combine", ParamKind::Choice(&["set", "multiply", "max", "min"]), "set"),
+            fixed!("region", "Region", ParamKind::Choice(&["sphere", "box"]), "sphere"),
+            p!("region_center", "Region center", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+            p!("region_size", "Region size", ParamKind::Vec3, [2.0, 2.0, 2.0]),
+            p!("region_rotate", "Region rotate", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "A 0–1 weight (the Attribute, weight by default) on the points, the meshes' points or the instances (of \
+               Group's node, or all), by their distance from what the from input holds: its curves, else its points (a \
+               Locator, a camera tracker's point cloud, point sets); with nothing connected, the node's own Region (a \
+               sphere or box, shown in the 3D view). 1 within Inner of it (inside the region), 0 past Outer, between by \
+               Shape; Invert turns it over. Combine sets it, or multiplies, maxes or mins it with the attribute already \
+               there. Use it in formulas (@weight) to scale, color or delete by distance: MoGraph's effector.",
     },
     // Fit Plane (geo_fit.rs; Dev1).
     OpInfo {
@@ -2158,6 +2186,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         }
         "realize_instances" => Ok(scene_output(DEFAULT_FORMAT, geo_ops::realize_instances(params, input_scene(inputs))?)),
         "attribute_set" => Ok(scene_output(DEFAULT_FORMAT, geo_ops::attribute_set(params, input_scene(inputs), ctx.frame as f64)?)),
+        "falloff" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_attr::falloff(params, input_scene(inputs), inputs.get(1).copied().flatten().and_then(|i| i.scene.as_deref()))?)),
         "attribute_noise" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_attr::attribute_noise(params, input_scene(inputs))?)),
         "fit_plane" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_fit::fit_plane(params, input_scene(inputs), inputs.get(1).copied().flatten())?)),
         "scatter" => {
