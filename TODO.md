@@ -7,6 +7,49 @@ they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
+Phase 13 (v0.13.34, the pause after 2026-10-31): try these on Linux and
+on the Macs (the DMG), from the release builds.
+
+- [ ] Tab switches 2D / 3D with the pointer over the node graph, the
+      viewer or Properties; not while typing in a field (0.13.14)
+- [ ] Help ▸ Examples ▸ Geometry nodes opens geo-scatter as an untitled
+      project and renders (rocks, bush cards, sun shadows); Save asks
+      where (0.13.21)
+- [ ] A wire dropped anywhere on a node connects to its first free input
+      (the node lights up, the wire's end snaps); never into a mask; the
+      other way from an input (0.13.2, 0.13.6)
+- [ ] Scatter on a Plane with a painted / keyed mask: raise the density
+      or paint the mask and existing points don't jump; Min distance;
+      tracker points as the source (0.13.9)
+- [ ] Attribute Set / Attribute Noise / Falloff (a Locator moving points'
+      weight) / Attribute from Image (through a camera) /
+      Attribute Transfer, checked in the viewer's **Sheet** (Geo Info)
+- [ ] Instance on Points: rocks and cards facing the camera, pick by
+      variant / random, pscale and Cd; shadows and motion blur; big
+      counts (100k cards) stay quick with the GPU on (0.13.13–0.13.23)
+- [ ] Delete Geo's box / sphere moved with G and sized with S in the 3D
+      view; an expression like random(@id) < 0.3 (0.13.10)
+- [ ] Fit Plane from the camera tracker's point picker (Fit plane, Use
+      picked points); as a shadow catcher (0.13.12)
+- [ ] Curves in the 3D view: pick points (Shift), drag, G / R / S, Bezier
+      handles (Alt breaks), Ctrl/Cmd-click adds or inserts, Delete; a
+      Curve from a solved camera's path (0.13.25, 0.13.26)
+- [ ] Curve to Mesh (tube, ribbon, a profile curve, pscale taper) and
+      Points on Curve with Instance on Points (posts upright, facing
+      along) (0.13.29)
+- [ ] Particles to Points driving Instance on Points; a Particle Emitter
+      with the point set shape on a Scatter (0.13.27)
+- [ ] Project 3D: a plate projected from the shot camera comes back
+      exactly; occlusion; Crop / Edge; Frame hold with a moving camera; a
+      patch stacked Over; GPU on and off look the same (0.13.30, 0.13.32)
+- [ ] Points from Geo / Grid / Line Points, Normals (by angle on a
+      cylinder), Subdivide (Loop on a cube) (0.13.28–0.13.33)
+- [ ] Area-light shadows at Quality 16 render in ~7 s at 4K with the GPU
+      on (0.13.3, 0.13.4)
+- [ ] On the Macs: `arclight gpu --check` (67 rows now, including
+      instancing, instanced shadows and Project 3D) and
+      `cargo test --release` on Metal
+
 - [ ] 0.12.17 (beta release v0.12.17): at the default window size the
       viewer's toolbar wraps onto a second row (Fit and 1:1 visible) and
       the 3D view's too; a long node error (a plugin crash, a missing
@@ -44,7 +87,8 @@ they come up and strike them (or delete them) when they ship.
       tolerances); a 2D chain with big blurs feels quicker with the GPU on
 
 - [ ] 0.11.4: the 3D view with a mouse (user found it hard and erratic in
-      0.11.3): select a Camera / Card / light and the All gizmo shows
+      0.11.3; since 0.13.1 the Move gizmo by default, G / R / S switch it:
+      the user found it good, 2026-10-31): select a Camera / Card / light and the All gizmo shows
       (arrows, rings, cubes); drag each ring, including one seen nearly
       edge-on, and it turns smoothly the way the pointer goes; R with the
       pointer near the object doesn't swing it; middle-drag orbits around

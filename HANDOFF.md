@@ -267,13 +267,10 @@ done), `docs/help.md` (the in-app help) and
   transform sets the tool (from Select or All too) and it stays after
   Esc; Alt+G/R/S and gizmo drags leave it. Test
   `viewer::tests::g_r_s_pick_the_gizmo_they_start`. Not tried by hand yet.
-- **In flight (2026-10-31, after 0.12.19):** Dev1 (wD:p9): free, awaiting
-  the next task. Dev2: profiling many-sample area-light shadows (20–34 s
-  a 4K frame at 16 samples, even on the GPU), proposal before code. Macs:
-  `arclight gpu --check` / `cargo test --release` on Metal not yet run
-  (TODO). Released as the beta **v0.12.19** (Latest): Linux tarball,
-  macOS universal DMG (built and uploaded by the user), `arclt` wheel +
-  sdist; v0.12.17 stays Linux only (no DMG).
+- **(Superseded: the phase 12 "in flight" note.)** Phase 12 ended at
+  0.12.19 (v0.12.19, with the macOS DMG; v0.12.17 stays Linux only). The
+  area-light work it mentions shipped as 0.13.3 / 0.13.4; the Macs'
+  Metal checks are still in TODO.md.
 - **0.12.19, transport labels wrap with their fields** (Dev1):
   `src/gui/transport.rs`'s `together(ui, name, add)` keeps Frame, In,
   Out, FPS and Format with their fields; a group nested in a wrapping row
