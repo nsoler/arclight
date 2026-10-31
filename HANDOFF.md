@@ -37,6 +37,11 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.22, P4b B3: instanced motion** (Dev2): the motion pass is
+  worked out in `finish()` (`instances::Later`, `Plan::cpu_index`,
+  `Plan::next_positions` reproduce the CPU's surface numbering without
+  expanding); motion blur gives each time its own instanced plan and maps
+  (`draw_time`). 10k spheres, blur 6: 3917 → 763 ms.
 - **0.13.21, Help ▸ Examples** (Supervisor, user request): `EXAMPLES`
   in `src/gui/main.rs` (label, file) and `bundled(rel)` (Resources /
   share/arclight / checkout, also used for the starter clip);

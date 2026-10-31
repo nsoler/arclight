@@ -70,6 +70,10 @@ pub(super) struct Plan<'a> {
     pub shadows: Option<Vec<Option<shadow::LightView>>>,
     pub map_own: Vec<Vec<u32>>,
     pub own_surface: std::collections::HashMap<u32, usize>,
+    /// The instances drawn as surfaces of their own for the camera: their
+    /// place in `surfs`, to their set and number there.
+    cpu_of: std::collections::HashMap<usize, (usize, usize)>,
+    counted: std::sync::OnceLock<(Vec<usize>, Vec<Vec<u32>>)>,
 }
 
 /// A prototype's key: its set and its number there.
@@ -131,6 +135,7 @@ impl<'a> Plan<'a> {
         let mut drawn = Vec::new();
         let mut records = Vec::new();
         let mut firsts = Vec::new();
+        let mut cpu_of = std::collections::HashMap::new();
         let mut total: u64 = 0;
         let mut nodes: Vec<String> = Vec::new();
         for (si, g) in sets.iter().enumerate() {
@@ -140,10 +145,13 @@ impl<'a> Plan<'a> {
             for (i, (way, world)) in ways[si].iter().enumerate() {
                 match way {
                     Way::None => {}
-                    Way::Cpu => out.extend(instance_surface(g, i, (ordinals[si] + i) as u32).map(|mut s| {
-                        s.headlight = headlight;
-                        s
-                    })),
+                    Way::Cpu => {
+                        if let Some(mut s) = instance_surface(g, i, (ordinals[si] + i) as u32) {
+                            s.headlight = headlight;
+                            cpu_of.insert(out.len(), (si, i));
+                            out.push(s);
+                        }
+                    }
                     Way::Here => {
                         let key = (si, g.which[i] as usize);
                         let p = *index.entry(key).or_insert_with(|| {
@@ -230,7 +238,7 @@ impl<'a> Plan<'a> {
                 pts.iter().fold((pts[0], pts[0]), |(a, b), p| (a.inf(p), b.sup(p)))
             })
             .collect();
-        Some(Plan { surfs: out, plain, nodes, protos, drawn, records, firsts, triangles: total as u32, ordinals, sets, boxes, shadows: None, map_own: Vec::new(), own_surface: std::collections::HashMap::new() })
+        Some(Plan { surfs: out, plain, nodes, protos, drawn, records, firsts, triangles: total as u32, ordinals, sets, boxes, shadows: None, map_own: Vec::new(), own_surface: std::collections::HashMap::new(), cpu_of, counted: std::sync::OnceLock::new() })
     }
 
     /// The records with each one's object: 1 + its set's node's index in
@@ -253,17 +261,71 @@ impl<'a> Plan<'a> {
     /// Instance triangle number `g`: the CPU's triangle for it (seen
     /// through `cam` in a frame of `format`), and its id-pass number after
     /// `objects` objects.
-    pub fn triangle(&self, g: u32, cam: &Camera, format: Size, objects: usize) -> Option<(Tri, f32)> {
+    pub fn triangle(&self, g: u32, cam: &Camera, format: Size, objects: usize, later: Option<&Later>) -> Option<(Tri, f32)> {
         let k = self.firsts.partition_point(|&f| f <= g).checked_sub(1)?;
         let (si, i, _) = self.drawn[k];
         let set = &self.sets[si];
         let ordinal = self.ordinals[si] + i;
         let mut s = instance_surface(set, i, ordinal as u32)?;
+        let next = later.map(|l| vec![l.positions(&s, self.cpu_index(si, i))]);
         let t = (g - self.firsts[k]) as usize;
         let one = *s.triangles.get(t)?;
         s.triangles = Cow::Owned(vec![one]);
-        let tri = super::super::triangles(&[s], cam, format, None).into_iter().next()?;
+        let tri = super::super::triangles(&[s], cam, format, next.as_deref()).into_iter().next()?;
         Some((tri, (objects + 1 + ordinal) as f32))
+    }
+
+    /// Where instance `i` of set `si` is in the CPU renderer's surfaces
+    /// (the ordinary ones, then each instance of a mesh or card).
+    fn cpu_index(&self, si: usize, i: usize) -> usize {
+        // (Each set's instances of a mesh or card before each one, and
+        // before the set: counted once.)
+        let (bases, before) = self.counted.get_or_init(|| {
+            let before: Vec<Vec<u32>> = self
+                .sets
+                .iter()
+                .map(|g| {
+                    let mut out = Vec::with_capacity(g.len() + 1);
+                    let mut k = 0u32;
+                    for j in 0..g.len() {
+                        out.push(k);
+                        k += u32::from(!matches!(g.prototypes[g.which[j] as usize], Prototype::Splats(_)));
+                    }
+                    out.push(k);
+                    out
+                })
+                .collect();
+            let mut base = 0usize;
+            let bases = before
+                .iter()
+                .map(|b| {
+                    let at = base;
+                    base += *b.last().unwrap_or(&0) as usize;
+                    at
+                })
+                .collect();
+            (bases, before)
+        });
+        self.plain + bases[si] + before[si][i] as usize
+    }
+
+    /// Each of `surfs`' vertices a frame later (for the motion pass), as
+    /// the CPU's `next_positions` finds them for its own surfaces.
+    pub fn next_positions(&self, later: &Later) -> Vec<Vec<Vec3>> {
+        self.surfs
+            .iter()
+            .enumerate()
+            .map(|(j, s)| {
+                if s.triangles.is_empty() {
+                    return Vec::new();
+                }
+                let at = if j < self.plain { Some(j) } else { self.cpu_of.get(&j).map(|&(si, i)| self.cpu_index(si, i)) };
+                match at {
+                    Some(at) => later.positions(s, at),
+                    None => s.positions.iter().map(|p| geom::transform_point(&s.world, p)).collect(),
+                }
+            })
+            .collect()
     }
 
     /// Plan the shadow maps of `lights` (as shadow.rs does for the scene
@@ -350,6 +412,42 @@ impl<'a> Plan<'a> {
 
     pub fn is_empty(&self) -> bool {
         self.drawn.is_empty()
+    }
+}
+
+/// The scene a frame later, as the CPU renderer lists its surfaces (the
+/// ordinary ones, then each instance of a mesh or card), for the motion
+/// pass.
+pub(super) struct Later<'s> {
+    plain: Vec<Surface<'s>>,
+    sets: &'s [Instances],
+    /// Each instance of a mesh or card in order: its set and number.
+    drawable: Vec<(usize, usize)>,
+}
+
+impl<'s> Later<'s> {
+    pub fn new(next: &'s crate::scene::Scene) -> Later<'s> {
+        let drawable = next.instances.iter().enumerate().flat_map(|(si, g)| (0..g.len()).filter(move |&i| !matches!(g.prototypes[g.which[i] as usize], Prototype::Splats(_))).map(move |i| (si, i))).collect();
+        Later { plain: super::super::plain_surfaces(next), sets: &next.instances, drawable }
+    }
+
+    /// Surface `s`'s vertices a frame later: those of the surface at its
+    /// place `at` in the later list, if from the same node (its own
+    /// vertices where it has as many), else where they are now.
+    fn positions(&self, s: &Surface, at: usize) -> Vec<Vec3> {
+        let own;
+        let l = if at < self.plain.len() {
+            Some(&self.plain[at])
+        } else {
+            own = self.drawable.get(at - self.plain.len()).and_then(|&(si, i)| instance_surface(&self.sets[si], i, 0));
+            own.as_ref()
+        };
+        let (world, positions) = match l.filter(|l| l.node == s.node) {
+            Some(l) if l.positions.len() == s.positions.len() => (l.world, &l.positions),
+            Some(l) => (l.world, &s.positions),
+            None => (s.world, &s.positions),
+        };
+        positions.iter().map(|p| geom::transform_point(&world, p)).collect()
     }
 }
 

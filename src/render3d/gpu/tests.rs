@@ -379,6 +379,62 @@ fn instances_cast_shadows_drawn_instanced() {
     assert!(shadowed(&cpu) > 60, "there are shadows: {}", shadowed(&cpu));
 }
 
+/// Moving instances: the motion pass (each copy matched to the next
+/// frame's as the CPU does) and motion blur added up on the GPU, drawn
+/// instanced, as on the CPU.
+#[test]
+fn moving_instances_blur_and_have_motion_drawn_instanced() {
+    if crate::gpu::test_device().is_none() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let (mut a, _) = super::super::tests::instanced();
+    a.lights.iter_mut().for_each(|l| l.shadows = false);
+    let ids = |n: usize| {
+        let mut at = crate::geo::Attrs::default();
+        at.set(crate::geo::ID, crate::geo::Attr::Int((0..n as i32).collect()), n).unwrap();
+        at
+    };
+    let n = a.instances[0].len();
+    let cd = a.instances[0].attrs.vec4(crate::geo::CD).map(|c| c.to_vec());
+    let mut attrs = ids(n);
+    if let Some(c) = cd {
+        attrs.set(crate::geo::CD, crate::geo::Attr::Vec4(c), n).unwrap();
+    }
+    a.instances[0].attrs = attrs;
+    let mut b = a.clone();
+    for w in &mut b.instances[0].worlds {
+        *w = crate::geom::trs([0.6, 0.2, 0.0], [0.0, 25.0, 0.0], [1.0; 3]) * *w;
+    }
+    let cam = super::super::tests::camera();
+    let format = Size { width: 160, height: 80 };
+    // The motion pass, from frame a to b.
+    let passes = Passes::from_names(["depth", "motion", "id"]);
+    let cpu = crate::gpu::cpu_only(|| super::super::render_blurred(&a, &cam, format, 2, None, passes, Some((&b, &cam)), None));
+    let before = INSTANCED.with(|n| n.get());
+    let out = with_gpu(|| super::super::render_blurred(&a, &cam, format, 2, None, passes, Some((&b, &cam)), None));
+    assert_eq!(INSTANCED.with(|n| n.get()), before + 1, "motion: drawn instanced: {:?}", crate::gpu::last_error());
+    for (name, mean, off) in differences(&cpu, &out) {
+        let (most_mean, most_off) = super::check::allowed(&name);
+        assert!(mean <= most_mean && off <= most_off, "motion, {name}: mean {mean:.2e}, {:.3} % of values off", off * 100.0);
+    }
+    let moving = out.plane("motion.u").unwrap().data.iter().filter(|v| v.abs() > 1.0).count();
+    assert!(moving > 100, "the copies move: {moving}");
+    // Motion blur over the shutter, added up on the GPU.
+    let blur = super::super::Blur { times: super::super::Blur::times(0.0, 0.5, 6), frames: vec![(0, &a, cam.clone()), (1, &b, cam.clone())], jitter: true };
+    let frames: Vec<(i64, &Scene)> = vec![(0, &a), (1, &b)];
+    let passes = Passes::from_names(["depth", "mattes"]);
+    let before = INSTANCED.with(|n| n.get());
+    let direct = with_gpu(|| blurred(&a, &cam, format, 2, Passes { depth: false, ..passes }, &blur, &frames, false));
+    assert!(direct.is_some() && INSTANCED.with(|n| n.get()) > before, "blurred, instanced: {:?}", crate::gpu::last_error());
+    let cpu = crate::gpu::cpu_only(|| super::super::render_blurred(&a, &cam, format, 2, None, passes, None, Some(&blur)));
+    let out = with_gpu(|| super::super::render_blurred(&a, &cam, format, 2, None, passes, None, Some(&blur)));
+    for (name, mean, off) in differences(&cpu, &out) {
+        let (most_mean, most_off) = super::check::allowed(&name);
+        assert!(mean <= most_mean && off <= most_off, "blur, {name}: mean {mean:.2e}, {:.3} % of values off; {}", off * 100.0, blur_path(direct.as_ref(), &out));
+    }
+}
+
 /// The raster and the instances' binning set an instance's corners up
 /// with the same function (so a triangle is binned where it's drawn).
 #[test]

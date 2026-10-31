@@ -17,6 +17,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.22 — 2026-10-31
+
+- GPU: motion blur and the motion pass over instances render through GPU
+  instancing too: 10,000 instanced meshes with 6-sample motion blur take
+  about 0.8 s instead of 3.9 s at 1080p.
+
 ## 0.13.21 — 2026-10-31
 
 - **Help ▸ Examples**: example projects ship with the app (the Linux
