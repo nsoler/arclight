@@ -164,7 +164,7 @@ static TOOLS: &[Tool] = &[
         }, "required": ["node"]}),
     tool!("render_output", "Render the whole frame range of a media_out node to its file(s).",
         {"type": "object", "properties": {"node": {"type": "string"}}, "required": ["node"]}),
-    tool!("probe_media", "Metadata of an image, image sequence (####) or video file: size, frame range, fps.",
+    tool!("probe_media", "Metadata of an image, image sequence (####) or video file: size, frame range, fps, and a video's sound (sample rate, channels, duration; null without).",
         {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}),
     tool!("new_graph", "Start an empty graph (undoable).", {"type": "object", "properties": {}}),
     tool!("load_graph", "Open a graph JSON file (undoable).",
@@ -464,12 +464,13 @@ pub fn call_tool_with_progress(s: &mut Session, tool: &str, args: &Value, progre
 }
 
 /// Metadata for a media file: stills report their size, sequences their
-/// range too, videos their fps and frame count.
+/// range too, videos their fps, frame count and sound (or null).
 pub fn probe_media(path: &Path) -> Result<Value> {
     let s = path.to_string_lossy();
     if media::is_video(path) {
         let v = media::probe_video(path)?;
-        return Ok(json!({"kind": "video", "width": v.width, "height": v.height, "bits": v.bits, "fps": v.fps, "frames": v.frames}));
+        let audio = crate::audio::probe(path).map(|a| json!({"sample_rate": a.sample_rate, "channels": a.channels, "duration": a.duration_secs, "start": a.start_secs}));
+        return Ok(json!({"kind": "video", "width": v.width, "height": v.height, "bits": v.bits, "fps": v.fps, "frames": v.frames, "audio": audio}));
     }
     let (pattern, range) = if media::is_sequence_pattern(&s) {
         (s.to_string(), media::detect_sequence_range(&s))

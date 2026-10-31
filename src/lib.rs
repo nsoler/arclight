@@ -5,6 +5,7 @@
 
 pub mod alembic;
 pub mod anim;
+pub mod audio;
 pub mod bundle;
 pub mod camtrack;
 #[cfg(unix)]

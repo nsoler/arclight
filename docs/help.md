@@ -168,6 +168,12 @@ an empty file gets a name in the project folder. **Codec** lists only
 what the chosen video container can hold, and goes back to auto when a
 new format can't hold the current one. Codec and FPS show only for
 video, the DPX settings only for DPX.
+**Audio** (video only): auto keeps the sound of the clip feeding Media
+Out (a Media In or Read of a video with sound), none leaves it out, or
+type a node's name. The sound covers exactly the frames you render, in
+sync with the picture (silent before the clip starts; sped up or slowed
+if Media Out's frame rate differs from the clip's). The Read and Media In
+panels show a clip's sound (e.g. "audio 48 kHz stereo").
 
 New **Read** and **Media In** nodes fit what they read to the project's
 size (**Fit to project**), and follow it when it changes:

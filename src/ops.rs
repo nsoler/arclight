@@ -1455,6 +1455,7 @@ pub static OPS: &[OpInfo] = &[
             fixed!("last_frame", "Last frame", FRAME, 100),
             fixed!("fps", "FPS (video)", ParamKind::Float { min: 1.0, max: 240.0 }, 24.0),
             fixed!("codec", "Codec (video)", ParamKind::Choice(crate::media::VIDEO_CODECS), "auto"),
+            fixed!("audio", "Audio (video)", ParamKind::Text, "auto"),
             fixed!("dpx", "DPX encoding", ParamKind::Choice(crate::dpx::ENCODINGS), "10-bit log"),
             fixed!("dpx_alpha", "DPX alpha", ParamKind::Bool, false),
         ],
@@ -1466,7 +1467,11 @@ pub static OPS: &[OpInfo] = &[
                HEVC 10-bit, ProRes 422 HQ 10-bit, ProRes 4444 with alpha, DNxHR HQX \
                10-bit, DNxHR 444 10-bit, VP9 10-bit, VP9 with alpha (8-bit, for the web) \
                or AV1 10-bit; a codec its container can't hold is refused, naming the \
-               ones that can. The 10-bit codecs get the full 10 bits. DPX \
+               ones that can. The 10-bit codecs get the full 10 bits. Audio (video): \
+               auto takes the sound of the clip upstream (a Media In or Read of a video \
+               with sound), none leaves it out, or name a node to take it from; it covers \
+               the rendered frames, in sync (AAC in .mp4/.m4v, FLAC in .mkv, 24-bit PCM in \
+               .mov/.mxf/.avi, Opus in .webm). DPX \
                encoding (for .dpx sequences): 10-bit log (keeps values above 1.0), \
                10/16-bit video (sRGB-coded, full range, marked Rec. 709) or 32-bit \
                float linear (exact); DPX alpha stores alpha too (straight).",

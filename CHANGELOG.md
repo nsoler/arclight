@@ -12,6 +12,19 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.34 — 2026-10-30
+
+- Clips with sound: the Read and Media In panels (and MCP / Python
+  metadata) show the audio's sample rate and channels.
+- **Media Out keeps the sound** of the clip upstream in videos (new
+  **Audio** setting: auto, none, or a node), for exactly the rendered
+  frames and in sync: silent before the clip starts, sped up or slowed if
+  Media Out's frame rate differs from the clip's. AAC in `.mp4` / `.m4v`,
+  FLAC in `.mkv` (AAC plays 21 ms early there), 24-bit PCM in `.mov` /
+  `.mxf` / `.avi`, Opus in `.webm`.
+- New core audio API (`arclight::audio`: `probe`, `decode`,
+  `source_at`) for reading clips' sound.
+
 ## 0.10.33 — 2026-10-30
 
 - Media Out's properties have a **Format** menu (image sequences EXR,

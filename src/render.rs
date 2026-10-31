@@ -32,6 +32,7 @@ struct MediaOut {
     codec: String,
     dpx: String,
     dpx_alpha: bool,
+    audio: String,
 }
 
 /// Render the frame range of `media_out` node `out_id` to its file(s).
@@ -63,6 +64,10 @@ pub fn render_media_out_with(graph: &Graph, out_id: &str, progress: &Progress, m
     if let Some(c) = codec {
         c.encoder().with_context(|| out_id.to_string())?;
     }
+    let audio = if video { audio_track(graph, out_id, &p.audio, first, last, p.fps)? } else { None };
+    if audio.is_some() {
+        media::audio_encoder(path).with_context(|| out_id.to_string())?;
+    }
     if !video && last > first && !media::is_sequence_pattern(&p.path) {
         bail!("{out_id}: to write several frames, put #### or %04d in the file name");
     }
@@ -79,7 +84,7 @@ pub fn render_media_out_with(graph: &Graph, out_id: &str, progress: &Progress, m
         if video {
             let w = match writer.as_mut() {
                 Some(w) => w,
-                None => writer.insert(VideoWriter::new(path, img.format.width, img.format.height, p.fps, codec.unwrap())?),
+                None => writer.insert(VideoWriter::new(path, img.format.width, img.format.height, p.fps, codec.unwrap(), audio.as_ref())?),
             };
             w.push(&img)?;
         } else {
@@ -91,6 +96,35 @@ pub fn render_media_out_with(graph: &Graph, out_id: &str, progress: &Progress, m
         w.finish()?;
     }
     Ok(last - first + 1)
+}
+
+/// The sound Media Out `out_id` muxes into frames `first..=last` at
+/// `fps`: `choice` "auto" plays what its input plays, "none" nothing, else
+/// that node's (see [`crate::audio::source_at`]). From the first frame
+/// with sound to the last, mapped to source time so it stays in sync;
+/// None if no frame has any.
+fn audio_track(graph: &Graph, out_id: &str, choice: &str, first: i64, last: i64, fps: f64) -> Result<Option<media::AudioTrack>> {
+    let node = match choice.trim() {
+        "none" => return Ok(None),
+        "auto" | "" => match graph.node(out_id).and_then(|n| n.inputs.first()).filter(|i| !i.is_empty()) {
+            Some(input) => input.clone(),
+            None => return Ok(None),
+        },
+        other if graph.node(other).is_some() => other.to_string(),
+        other => bail!("{out_id}: no node named '{other}' to take the sound from"),
+    };
+    let at = |f: i64| crate::audio::source_at(graph, &node, f);
+    let Some(f0) = (first..=last).find(|&f| at(f).is_some()) else { return Ok(None) };
+    let f1 = (f0..=last).rev().find(|&f| at(f).is_some()).unwrap_or(f0);
+    let src = at(f0).unwrap();
+    Ok(Some(media::AudioTrack {
+        secs: (f1 - f0 + 1) as f64 * src.secs_per_frame,
+        tempo: src.secs_per_frame * fps,
+        delay_secs: (f0 - first) as f64 / fps,
+        total_secs: (last - first + 1) as f64 / fps,
+        from_secs: src.secs,
+        path: src.path,
+    }))
 }
 
 #[cfg(test)]
@@ -160,6 +194,99 @@ mod tests {
         }
         let err = render("bad.mp4", "ProRes 422 HQ 10-bit").unwrap_err();
         assert!(format!("{err:#}").contains("ProRes 422 HQ 10-bit can't go in a .mp4 file: use .mov or .mkv"), "{err:#}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A Media Out of the clip `clip` (a Media In from frame 101, or as
+    /// `media_in` says) over frames `first..=last` to `file`.
+    fn audio_out(dir: &std::path::Path, clip: &std::path::Path, file: &str, range: (i64, i64), fps: f64, audio: &str, media_in: serde_json::Value) -> Result<i64> {
+        let mut clip_params = serde_json::json!({ "path": clip.to_string_lossy(), "first_frame": 101, "last_frame": 196 });
+        for (k, v) in media_in.as_object().unwrap() {
+            clip_params[k] = v.clone();
+        }
+        let graph: Graph = serde_json::from_value(serde_json::json!({ "nodes": [
+            { "id": "clip", "op": "media_in", "params": clip_params },
+            { "id": "graded", "op": "grade", "inputs": ["clip"], "params": {} },
+            { "id": "bg", "op": "constant", "params": { "width": 64, "height": 64 } },
+            { "id": "out", "op": "media_out", "inputs": ["graded"], "params": {
+                "path": dir.join(file).to_string_lossy(), "first_frame": range.0, "last_frame": range.1, "fps": fps, "audio": audio } },
+        ]}))
+        .unwrap();
+        render_media_out(&graph, "out", &Progress::default())
+    }
+
+    /// Media Out carries the sound of the clip upstream for exactly the
+    /// frames it renders: frames 137–160 of a Media In from 101 are 1.5 s
+    /// to 2.5 s of the clip, so its click (2 s in) is half a second in;
+    /// at twice the clip's rate the half second is a quarter. Each
+    /// container gets its codec; 'none', or a clip without sound, gives
+    /// none; frames before the clip starts are silent.
+    #[test]
+    fn media_out_carries_the_sound_of_its_frames() {
+        use crate::audio::{self, tests as clips};
+        let dir = std::env::temp_dir().join(format!("arclight_audio_out_{}", std::process::id()));
+        let Some(clip) = clips::clip(&dir, "tone.mov", false) else {
+            eprintln!("skipping: no ffmpeg");
+            return;
+        };
+        let streams = |file: &str| {
+            let out = Command::new(media::tool("ffprobe"))
+                .args(["-v", "error", "-show_entries", "stream=codec_type,codec_name", "-of", "csv=p=0"])
+                .arg(dir.join(file))
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect::<Vec<_>>()
+        };
+        // Lossless: the click to within a sample or two.
+        audio_out(&dir, &clip, "pcm.mov", (137, 160), 24.0, "auto", serde_json::json!({})).unwrap();
+        let info = audio::probe(&dir.join("pcm.mov")).unwrap();
+        assert!((info.duration_secs - 1.0).abs() < 0.03, "{info:?}");
+        let s = audio::decode(&dir.join("pcm.mov"), 0.0, 1.0, 48000, 1).unwrap();
+        let at = clips::loudest(&s, 1) as f64 / 48000.0;
+        assert!((at - 0.5).abs() < 0.002, "click at {at}");
+        assert_eq!(streams("pcm.mov"), ["prores,video", "pcm_s24le,audio"]);
+        let rms = |a: &[f32]| (a.iter().map(|v| v * v).sum::<f32>() / a.len() as f32).sqrt();
+        // At twice the clip's rate (sped up, so a click is smeared): 24
+        // frames are half a second; frames 91–100, before the clip
+        // starts, are silent.
+        audio_out(&dir, &clip, "fast.mov", (91, 114), 48.0, "auto", serde_json::json!({})).unwrap();
+        let info = audio::probe(&dir.join("fast.mov")).unwrap();
+        assert!((info.duration_secs - 0.5).abs() < 0.03, "{info:?}");
+        let s = audio::decode(&dir.join("fast.mov"), 0.0, 0.5, 48000, 1).unwrap();
+        let lead = 10 * 1000;
+        assert!(rms(&s[..lead - 200]) < 1e-4 && (rms(&s[lead + 400..]) - 0.25).abs() < 0.01, "{} {}", rms(&s[..lead - 200]), rms(&s[lead + 400..]));
+        // Lossy codecs: the click within a few milliseconds.
+        for (file, codec) in [("aac.mp4", "aac"), ("aac.m4v", "aac"), ("flac.mkv", "flac"), ("opus.webm", "opus"), ("pcm.mxf", "pcm_s24le"), ("pcm.avi", "pcm_s24le")] {
+            if media::audio_encoder(std::path::Path::new(file)).is_err() || media::VideoCodec::choose("auto", std::path::Path::new(file)).unwrap().encoder().is_err() {
+                eprintln!("skipping {file}: an encoder is missing");
+                continue;
+            }
+            // (DNxHR, MXF's video, needs 256x120 frames.)
+            let fit = if file.ends_with(".mxf") { serde_json::json!({ "fit": "stretch" }) } else { serde_json::json!({}) };
+            audio_out(&dir, &clip, file, (137, 160), 24.0, "auto", fit).unwrap_or_else(|e| panic!("{file}: {e:#}"));
+            assert_eq!(streams(file).last().map(String::as_str), Some(format!("{codec},audio").as_str()), "{file}");
+            let info = audio::probe(&dir.join(file)).unwrap();
+            assert!((info.duration_secs - 1.0).abs() < 0.06, "{file}: {info:?}");
+            let s = audio::decode(&dir.join(file), 0.0, 1.0, 48000, 1).unwrap();
+            let at = clips::loudest(&s, 1) as f64 / 48000.0;
+            assert!((at - 0.5).abs() < 0.01, "{file}: click at {at}");
+        }
+        // Frames 91–120 with the clip starting at 101: ten frames of silence first.
+        audio_out(&dir, &clip, "late.mov", (91, 120), 24.0, "clip", serde_json::json!({})).unwrap();
+        let s = audio::decode(&dir.join("late.mov"), 0.0, 1.25, 48000, 1).unwrap();
+        let lead = 10 * 2000;
+        assert!(rms(&s[..lead - 200]) < 1e-4 && (rms(&s[lead + 200..]) - 0.25).abs() < 0.01, "{} {}", rms(&s[..lead - 200]), rms(&s[lead + 200..]));
+        // None asked for, or none to take.
+        audio_out(&dir, &clip, "none.mov", (137, 160), 24.0, "none", serde_json::json!({})).unwrap();
+        assert_eq!(streams("none.mov"), ["prores,video"]);
+        let silent = clips::clip(&dir, "silent.mp4", true).unwrap();
+        audio_out(&dir, &silent, "mute.mp4", (137, 160), 24.0, "auto", serde_json::json!({})).unwrap();
+        assert_eq!(streams("mute.mp4"), ["h264,video"]);
+        audio_out(&dir, &clip, "bg.mp4", (137, 160), 24.0, "bg", serde_json::json!({})).unwrap();
+        assert_eq!(streams("bg.mp4"), ["h264,video"], "a node with no sound upstream");
+        let err = audio_out(&dir, &clip, "nope.mp4", (137, 160), 24.0, "nope", serde_json::json!({})).unwrap_err();
+        assert!(format!("{err:#}").contains("no node named 'nope' to take the sound from"), "{err:#}");
+        assert!(!dir.join("nope.mp4").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 

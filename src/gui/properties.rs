@@ -363,6 +363,7 @@ impl Properties {
 
             match op.as_str() {
                 "media_in" => self.media_in_extras(ui, doc, id),
+                "read" => self.read_extras(ui, doc, id),
                 "media_out" => self.media_out_extras(ui, doc, id),
                 "tracker" => self.tracker_extras(ui, doc, id),
                 "camera_tracker" => crate::camera_tracker::panel(ui, doc, id, &mut self.camera_jobs),
@@ -743,7 +744,7 @@ impl Properties {
                 let mut buf = self.text_edit.remove(&key).unwrap_or_else(|| current.clone());
                 let mut out = None;
                 let layers = self.input_layers.as_ref().filter(|(n, _)| n == id).map(|(_, l)| l.as_slice());
-                let offered = text_suggestions(op, spec.name, layers);
+                let offered = if op == "media_out" && spec.name == "audio" { audio_suggestions(doc) } else { text_suggestions(op, spec.name, layers) };
                 ui.horizontal(|ui| {
                     let resp = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(150.0));
                     if resp.has_focus() {
@@ -890,6 +891,17 @@ impl Properties {
                 }
             });
         });
+    }
+
+    /// A Read of a video: what it is (size, rate, frames, sound).
+    fn read_extras(&mut self, ui: &mut egui::Ui, doc: &mut Doc, id: &str) {
+        let path = doc.param(id, "path").as_str().unwrap_or("").to_string();
+        if !media::is_video(Path::new(&path)) {
+            return;
+        }
+        let info = self.media_info.entry(id.to_string()).or_insert_with(|| describe_media(&path)).clone();
+        ui.add_space(4.0);
+        ui.weak(info);
     }
 
     fn media_in_extras(&mut self, ui: &mut egui::Ui, doc: &mut Doc, id: &str) {
@@ -1292,13 +1304,21 @@ pub struct Browse {
 
 /// Whether a Light 2D of type `kind` uses param `name` (the shape params
 /// of other types are hidden; the rest always show).
+/// What a Media Out's Audio offers: auto, none, and the clips with sound.
+fn audio_suggestions(doc: &Doc) -> Vec<String> {
+    let clips = doc.graph.nodes.iter().filter(|n| {
+        matches!(n.op.as_str(), "media_in" | "read") && n.params["path"].as_str().is_some_and(|p| media::is_video(Path::new(p)) && arclight::audio::probe(Path::new(p)).is_some())
+    });
+    ["auto".to_string(), "none".to_string()].into_iter().chain(clips.map(|n| n.id.clone())).collect()
+}
+
 /// Whether a Media Out writing `path` shows param `name`: the codec and
 /// frame rate for a video, the DPX settings for a .dpx sequence;
 /// everything until the path names a format.
 fn media_out_shows(path: &str, name: &str) -> bool {
     let Some(ext) = media::output_format(path) else { return true };
     match name {
-        "codec" | "fps" => media::VIDEO_WRITE_EXTS.contains(&ext),
+        "codec" | "fps" | "audio" => media::VIDEO_WRITE_EXTS.contains(&ext),
         "dpx" | "dpx_alpha" => ext == "dpx",
         _ => true,
     }
@@ -1420,11 +1440,24 @@ pub fn apply_media(doc: &mut Doc, id: &str, file: &Path) {
     }
 }
 
+/// "48 kHz stereo", "44.1 kHz mono", "48 kHz 6 ch".
+fn describe_audio(a: &arclight::audio::AudioInfo) -> String {
+    let channels = match a.channels {
+        1 => "mono".to_string(),
+        2 => "stereo".to_string(),
+        n => format!("{n} ch"),
+    };
+    format!("{} kHz {channels}", a.sample_rate as f64 / 1000.0)
+}
+
 fn describe_media(path: &str) -> String {
     let p = Path::new(path);
     if media::is_video(p) {
         match media::probe_video(p) {
-            Ok(v) => format!("Video · {}x{} · {}-bit · {:.3} fps · {} frames", v.width, v.height, v.bits, v.fps, v.frames),
+            Ok(v) => {
+                let sound = arclight::audio::probe(p).map_or_else(|| " · no audio".to_string(), |a| format!(" · audio {}", describe_audio(&a)));
+                format!("Video · {}x{} · {}-bit · {:.3} fps · {} frames{sound}", v.width, v.height, v.bits, v.fps, v.frames)
+            }
             Err(e) => format!("{e:#}"),
         }
     } else if media::is_sequence_pattern(path) {
@@ -1730,11 +1763,11 @@ mod tests {
     #[test]
     fn a_media_out_shows_what_its_format_uses() {
         let shown = |path: &str| -> Vec<&str> { arclight::ops::info("media_out").unwrap().params.iter().map(|p| p.name).filter(|n| media_out_shows(path, n)).collect() };
-        assert_eq!(shown("/r/shot.mov"), ["path", "first_frame", "last_frame", "fps", "codec"]);
+        assert_eq!(shown("/r/shot.mov"), ["path", "first_frame", "last_frame", "fps", "codec", "audio"]);
         assert_eq!(shown("/r/shot.####.dpx"), ["path", "first_frame", "last_frame", "dpx", "dpx_alpha"]);
         assert_eq!(shown("/r/shot.####.exr"), ["path", "first_frame", "last_frame"]);
-        assert_eq!(shown("").len(), 7);
-        assert_eq!(shown("/r/shot.mpg").len(), 7, "not a format: all shown");
+        assert_eq!(shown("").len(), 8);
+        assert_eq!(shown("/r/shot.mpg").len(), 8, "not a format: all shown");
     }
 
     /// Choosing a format renames the file; a codec the new container can't

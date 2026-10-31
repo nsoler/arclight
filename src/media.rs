@@ -668,6 +668,73 @@ fn ffmpeg_encoders() -> &'static Result<Vec<String>, String> {
     &ENCODERS
 }
 
+/// The sound muxed with a video: `secs` of `path` from `from_secs`,
+/// sped up or slowed by `tempo` (source seconds per second of video),
+/// starting `delay_secs` into the video, silent after it ends, and cut
+/// to `total_secs` (the video's length).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AudioTrack {
+    pub path: PathBuf,
+    pub from_secs: f64,
+    pub secs: f64,
+    pub tempo: f64,
+    pub delay_secs: f64,
+    pub total_secs: f64,
+}
+
+/// The audio encoder and its arguments for a video in a `.ext` file: AAC
+/// in MP4 / M4V, FLAC in Matroska (AAC's priming there plays 21 ms
+/// early), 24-bit PCM at 48 kHz in QuickTime, MXF and AVI, Opus at
+/// 48 kHz in WebM.
+fn audio_codec(ext: &str) -> (&'static str, &'static [&'static str]) {
+    match ext {
+        "mov" | "mxf" | "avi" => ("pcm_s24le", &["-c:a", "pcm_s24le", "-ar", "48000"]),
+        "mkv" => ("flac", &["-c:a", "flac", "-sample_fmt", "s32"]),
+        "webm" => ("libopus", &["-c:a", "libopus", "-b:a", "192k", "-ar", "48000"]),
+        _ => ("aac", &["-c:a", "aac", "-b:a", "256k"]),
+    }
+}
+
+/// The audio encoder a video at `path` needs, if the installed ffmpeg has
+/// it; Err naming it if not.
+pub fn audio_encoder(path: &Path) -> Result<&'static str> {
+    audio_encoder_in(path, ffmpeg_encoders().as_ref().map_err(|e| anyhow!("{e}"))?)
+}
+
+fn audio_encoder_in(path: &Path, have: &[String]) -> Result<&'static str> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let (encoder, _) = audio_codec(&ext);
+    if !have.iter().any(|h| h == encoder) {
+        bail!("sound in a .{ext} file needs ffmpeg's {encoder} encoder, which this ffmpeg ({}) doesn't have", tool("ffmpeg").display());
+    }
+    Ok(encoder)
+}
+
+/// The audio filters for `track`: its tempo (atempo takes 0.5 to 2 a
+/// step), its delay, then silence to the video's end and no further
+/// (-shortest overshoots: ffmpeg buffers the longer stream), counted in
+/// samples (after atempo and adelay the timestamps are off).
+fn audio_filters(track: &AudioTrack) -> String {
+    let mut parts = Vec::new();
+    let mut t = track.tempo;
+    if (t - 1.0).abs() > 1e-9 {
+        while t > 2.0 {
+            parts.push("atempo=2".to_string());
+            t /= 2.0;
+        }
+        while t < 0.5 {
+            parts.push("atempo=0.5".to_string());
+            t /= 0.5;
+        }
+        parts.push(format!("atempo={t}"));
+    }
+    if track.delay_secs > 0.0 {
+        parts.push(format!("adelay={}:all=1", track.delay_secs * 1000.0));
+    }
+    parts.push(format!("asetpts=N/SR/TB,apad=whole_dur={0},atrim=end={0}", track.total_secs));
+    parts.join(",")
+}
+
 /// Streams frames into an ffmpeg encode (see [`VideoCodec`]). Dropped
 /// before [`VideoWriter::finish`] (a failed or cancelled render), the
 /// encode is stopped and its file removed.
@@ -682,7 +749,8 @@ pub struct VideoWriter {
 }
 
 impl VideoWriter {
-    pub fn new(path: &Path, width: usize, height: usize, fps: f64, codec: VideoCodec) -> Result<Self> {
+    /// With `audio`, its sound is muxed in (see [`AudioTrack`]).
+    pub fn new(path: &Path, width: usize, height: usize, fps: f64, codec: VideoCodec, audio: Option<&AudioTrack>) -> Result<Self> {
         let (min_w, min_h) = codec.min_size();
         if width < min_w || height < min_h {
             bail!("{} needs frames at least {min_w}x{min_h} (these are {width}x{height})", codec.name());
@@ -694,9 +762,16 @@ impl VideoWriter {
             }
         }
         let input = if codec.deep() { "rgba64le" } else { "rgba" };
-        let mut child = Command::new(tool("ffmpeg"))
-            .args(["-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", input])
-            .args(["-s", &format!("{width}x{height}"), "-r", &format!("{fps}"), "-i", "-"])
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        let mut cmd = Command::new(tool("ffmpeg"));
+        cmd.args(["-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", input])
+            .args(["-s", &format!("{width}x{height}"), "-r", &format!("{fps}"), "-i", "-"]);
+        if let Some(a) = audio {
+            audio_encoder(path)?;
+            cmd.args(["-ss", &format!("{}", a.from_secs), "-t", &format!("{}", a.secs), "-i"]).arg(&a.path);
+            cmd.args(["-map", "0:v", "-map", "1:a:0", "-af", &audio_filters(a)]).args(audio_codec(&ext).1);
+        }
+        let mut child = cmd
             // 4:2:0 / 4:2:2 chroma needs even dimensions. RGB → YUV with the
             // BT.709 matrix (swscale's default is BT.601, which players
             // decoding HD as BT.709 show shifted: 200,100,50 came out 209,105,45).
@@ -810,6 +885,17 @@ mod tests {
         assert!(err.starts_with("AV1 10-bit needs ffmpeg's libsvtav1 or libaom-av1 encoder, which this ffmpeg"), "{err}");
         let err = VideoCodec::Dnxhr444.encoder_in(&[]).unwrap_err().to_string();
         assert!(err.starts_with("DNxHR 444 10-bit needs ffmpeg's dnxhd encoder"), "{err}");
+        // Sound: Opus for WebM, AAC for MP4, PCM for QuickTime.
+        let err = audio_encoder_in(Path::new("a.webm"), &have(&["aac", "pcm_s24le"])).unwrap_err().to_string();
+        assert!(err.starts_with("sound in a .webm file needs ffmpeg's libopus encoder"), "{err}");
+        assert_eq!(audio_encoder_in(Path::new("a.MP4"), &have(&["aac"])).unwrap(), "aac");
+        assert_eq!(audio_encoder_in(Path::new("a.mov"), &have(&["pcm_s24le"])).unwrap(), "pcm_s24le");
+        let track = |tempo: f64, delay_secs: f64| AudioTrack { path: "a.mov".into(), from_secs: 0.0, secs: 1.0, tempo, delay_secs, total_secs: 1.5 };
+        let end = "asetpts=N/SR/TB,apad=whole_dur=1.5,atrim=end=1.5";
+        assert_eq!(audio_filters(&track(1.0, 0.0)), end);
+        assert_eq!(audio_filters(&track(2.0, 0.5)), format!("atempo=2,adelay=500:all=1,{end}"));
+        assert_eq!(audio_filters(&track(5.0, 0.0)), format!("atempo=2,atempo=2,atempo=1.25,{end}"));
+        assert_eq!(audio_filters(&track(0.2, 0.0)), format!("atempo=0.5,atempo=0.5,atempo=0.8,{end}"));
     }
 
     /// The formats offered are exactly the ones written, and each
