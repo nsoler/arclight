@@ -54,7 +54,11 @@ const LIGHT_WORDS: u32 = 36u;
 const LEVEL_WORDS: u32 = 8u;
 const SHL_WORDS: u32 = 4u;
 const SRC_WORDS: u32 = 8u;
-const MAP_WORDS: u32 = 28u;
+const MAP_WORDS: u32 = 32u;
+const PJ_WORDS: u32 = 32u;
+const PJ_ORTHO: u32 = 1u;
+const PJ_CROP: u32 = 2u;
+const PJ_BACKFACES: u32 = 4u;
 // Nothing in a shadow map's texel.
 const FAR_AWAY: f32 = 3.0e38;
 // The see-through casters a shadow map's texel gathers while it's drawn,
@@ -119,7 +123,8 @@ struct Params {
     shadow: vec4<u32>,
     // splats: there are some (1) or not, where the pairs start in `lists`
     // (after the tile starts), where the sets' table starts in `words`
-    // (SPLAT_SET_WORDS a set: object + 1, holdout), (unused)
+    // (SPLAT_SET_WORDS a set: object + 1, holdout); where the projections
+    // start in the tables (see `projected`)
     splat: vec4<u32>,
     // instances (instances.wgsl): their bins + 1 (0: none), where their
     // records start in `proj`, where their bins' lists start in `lists`
@@ -447,6 +452,130 @@ fn footprint(t: u32, hs: u32, s: u32, q: vec2<f32>, uv: vec2<f32>, step: f32) ->
     let ax = (tri_uv(t, hs, correct(c, plain_bary(c, q + vec2<f32>(step, 0.0)))) - uv) * size;
     let ay = (tri_uv(t, hs, correct(c, plain_bary(c, q + vec2<f32>(0.0, step)))) - uv) * size;
     return max(length(ax), length(ay));
+}
+
+// ---- projections (Project 3D's: render3d/project.rs) -------------------
+
+// A projection's words (PJ_WORDS, from P.splat.w in the tables): its
+// camera's view (three rows), position and +Z; its focal length in image
+// pixels (orthographic: pixels a unit), flags (PJ_*), the image's width
+// and height, the camera's near; the image's first texture level and
+// mipmaps, the mode (0 replace, 1 over, 2 multiply), mix, edge; its depth
+// map (NONE: no occlusion).
+fn jw(j: u32, k: u32) -> u32 { return words[P.tables.z + P.splat.w + j * PJ_WORDS + k]; }
+fn jf(j: u32, k: u32) -> f32 { return bitcast<f32>(jw(j, k)); }
+fn jv3(j: u32, k: u32) -> vec3<f32> { return vec3<f32>(jf(j, k), jf(j, k + 1u), jf(j, k + 2u)); }
+fn jv4(j: u32, k: u32) -> vec4<f32> { return vec4<f32>(jf(j, k), jf(j, k + 1u), jf(j, k + 2u), jf(j, k + 3u)); }
+
+// Level `base` (`n` mipmaps after it) at uv, clamped to its frame, for a
+// sample covering `covered` texels: as surface_color.
+fn level_color(base: u32, n: u32, uv: vec2<f32>, covered: f32) -> vec4<f32> {
+    let finite = covered == covered && covered < 3.0e38;
+    if (covered <= 1.0 + 1e-6 || !finite) { return sample_level(base, false, uv); }
+    let lod = min(log2(covered), f32(n));
+    let k = u32(floor(lod));
+    let w = lod - floor(lod);
+    let a = sample_level(base + k, false, uv);
+    if (w == 0.0 || k >= n) { return a; }
+    let b = sample_level(base + k + 1u, false, uv);
+    return a + (b - a) * w;
+}
+
+// Where p lands in projection j's image (.xy); .z < 0: nearer than its
+// camera's near (or behind it).
+fn pj_place(j: u32, p: vec3<f32>) -> vec3<f32> {
+    let p4 = vec4<f32>(p, 1.0);
+    let c = vec3<f32>(dot(jv4(j, 0u), p4), dot(jv4(j, 4u), p4), dot(jv4(j, 8u), p4));
+    let depth = -c.z;
+    if (depth < max(jf(j, 22u), 1e-9)) { return vec3<f32>(0.0, 0.0, -1.0); }
+    let mid = vec2<f32>(jf(j, 20u), jf(j, 21u)) / 2.0;
+    let f = jf(j, 18u);
+    if ((jw(j, 19u) & PJ_ORTHO) != 0u) { return vec3<f32>(mid.x + f * c.x, mid.y - f * c.y, 1.0); }
+    return vec3<f32>(mid.x + f * c.x / depth, mid.y - f * c.y / depth, 1.0);
+}
+
+// The unit direction from p toward projection j's camera.
+fn pj_to_eye(j: u32, p: vec3<f32>) -> vec3<f32> {
+    if ((jw(j, 19u) & PJ_ORTHO) != 0u) { return unit_or(jv3(j, 15u), vec3<f32>(0.0, 0.0, 1.0)); }
+    return unit_or(jv3(j, 12u) - p, vec3<f32>(0.0, 0.0, 1.0));
+}
+
+// How much of projection j reaches image position px: cropped to its
+// frame, faded in over its edge.
+fn pj_crop(j: u32, px: vec2<f32>) -> f32 {
+    if ((jw(j, 19u) & PJ_CROP) == 0u) { return 1.0; }
+    let d = min(min(px.x, jf(j, 20u) - px.x), min(px.y, jf(j, 21u) - px.y));
+    if (d <= 0.0) { return 0.0; }
+    let edge = jf(j, 27u);
+    if (edge <= 0.0) { return 1.0; }
+    let t = min(d / edge, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// How much of a projection with depth map m reaches p (normal n, its
+// camera toward l): 0 where something is nearer it, looked up a little
+// off the surface toward it (shadow.rs's Projector::seen).
+fn pj_seen(m: u32, l: vec3<f32>, p: vec3<f32>, n: vec3<f32>) -> f32 {
+    var nn = n;
+    if (dot(nn, l) < 0.0) { nn = -nn; }
+    let texel = map_texel_at(m, p);
+    let c = dot(nn, l);
+    let slant = sqrt(1.0 - pow(clamp(c, 0.0, 1.0), 2.0)) / max(c, 0.2);
+    let off = p + nn * texel * 1.5 + l * texel * (1.0 + slant);
+    let q = map_place(m, off);
+    if (q.z < 0.0) { return 1.0; }
+    return map_lit_at(map_at(m), q.xy, map_key(m, off));
+}
+
+// `color` (premultiplied) with projection j's `plate` put on by its mode,
+// w of the way.
+fn pj_apply(j: u32, color: vec4<f32>, plate: vec4<f32>, w: f32) -> vec4<f32> {
+    let a = color.a;
+    var put: vec4<f32>;
+    switch (jw(j, 25u)) {
+        case 1u: { put = vec4<f32>(plate.rgb * a + color.rgb * (1.0 - plate.a), a); }
+        case 2u: { put = vec4<f32>(color.rgb * (plate.rgb + vec3<f32>(1.0 - plate.a)), a); }
+        default: { put = vec4<f32>(plate.rgb * a, a); }
+    }
+    return color + (put - color) * w;
+}
+
+// Surface s's color at a hit (triangle t, hit surface hs, barycentric b,
+// at q with the next sample `step` on) with its projections put on, in
+// order (render3d/project.rs).
+fn projected(s: u32, t: u32, hs: u32, b: vec3<f32>, q: vec2<f32>, step: f32, color: vec4<f32>) -> vec4<f32> {
+    let list = su(s, 11u);
+    if (list == NONE) { return color; }
+    let p = tri_world(t, hs, b);
+    let n = unit_or(tri_normal(t, hs, b), vec3<f32>(0.0, 0.0, 1.0));
+    let c = tri_at(t, hs);
+    let px = tri_world(t, hs, correct(c, plain_bary(c, q + vec2<f32>(step, 0.0))));
+    let py = tri_world(t, hs, correct(c, plain_bary(c, q + vec2<f32>(0.0, step))));
+    let at = P.tables.z + P.splat.w + list;
+    let count = words[at];
+    var out = color;
+    for (var i = 0u; i < count; i++) {
+        let j = words[at + 1u + i];
+        let l = pj_to_eye(j, p);
+        if ((jw(j, 19u) & PJ_BACKFACES) == 0u && dot(n, l) < 0.0) { continue; }
+        let here = pj_place(j, p);
+        if (here.z < 0.0) { continue; }
+        var w = jf(j, 26u) * pj_crop(j, here.xy);
+        if (w <= 0.0) { continue; }
+        let m = jw(j, 28u);
+        if (m != NONE) {
+            w *= pj_seen(m, l, p, n);
+            if (w <= 0.0) { continue; }
+        }
+        // (How many image pixels the sample covers: where the next ones
+        // land.)
+        let ax = pj_place(j, px);
+        let ay = pj_place(j, py);
+        let covered = max(select(1.0, length(ax.xy - here.xy), ax.z >= 0.0), select(1.0, length(ay.xy - here.xy), ay.z >= 0.0));
+        let uv = here.xy / vec2<f32>(jf(j, 20u), jf(j, 21u));
+        out = pj_apply(j, out, level_color(jw(j, 23u), jw(j, 24u), uv, covered), w);
+    }
+    return out;
 }
 
 // ---- lights -----------------------------------------------------------
@@ -1273,6 +1402,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
             if (!is_inst(hs)) { q = vec2<f32>(f32(x - ti(t, 12u)), f32(y - ti(t, 13u))) + vec2<f32>((f32(i) + 0.5) * step, (f32(j) + 0.5) * step); }
             let uv = tri_uv(t, hs, b);
             var color = surface_color(s, uv, footprint(t, hs, s, q, uv, step)) * hit_tint(hs);
+            color = projected(s, t, hs, b, q, step, color);
             let sflags = su(s, 12u);
             let p = tri_world(t, hs, b);
             var view: vec3<f32>;
@@ -1471,8 +1601,8 @@ fn map_caster(key: f32, a: f32, f: u32, s: u32) {
 
 // Map P.cell.w's texel: the nearest opaque caster's distance from the
 // light, and the see-through ones nearer (its layers, if the map has
-// them), as shadow.rs's `Map::draw` finds them (casters only, holdouts
-// not; a texel's middle; any texture alpha above 0 casts). Layers past
+// them), as shadow.rs's `Map::draw` finds them (casters only, or for a
+// projector's map, its word 28 set, every surface; holdouts not; a texel's middle; any texture alpha above 0 casts). Layers past
 // the map's K, or past those gathered, are left out, and the texel says
 // from how far: a lookup further than that sends its pixel to the CPU.
 @compute @workgroup_size(16, 16)
@@ -1494,7 +1624,7 @@ fn shadow_map(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (x < ti(t, 14u) || x >= ti(t, 16u) || y < ti(t, 15u) || y >= ti(t, 17u)) { continue; }
         let s = tu(t, 10u);
         let f = su(s, 12u);
-        if ((f & S_CASTS) == 0u || (f & S_HOLDOUT) != 0u) { continue; }
+        if (((f & S_CASTS) == 0u && mu(m, 28u) == 0u) || (f & S_HOLDOUT) != 0u) { continue; }
         let c = cover(tri_at(t, s), q);
         if (c.x < 0.0) { continue; }
         let a = surface_color(s, tri_uv(t, s, c.yzw), 0.0).a;
@@ -1521,7 +1651,7 @@ fn shadow_map(@builtin(global_invocation_id) gid: vec3<u32>) {
             let s = INSTANCE | lists[su_at + 9u];
             let ps = hit_surface(s);
             let f = su(ps, 12u);
-            if ((f & S_CASTS) == 0u || (f & S_HOLDOUT) != 0u) { continue; }
+            if (((f & S_CASTS) == 0u && mu(m, 28u) == 0u) || (f & S_HOLDOUT) != 0u) { continue; }
             let c = cover(Tri3(vec2<f32>(bitcast<f32>(lists[su_at]), bitcast<f32>(lists[su_at + 1u])), vec2<f32>(bitcast<f32>(lists[su_at + 2u]), bitcast<f32>(lists[su_at + 3u])), vec2<f32>(bitcast<f32>(lists[su_at + 4u]), bitcast<f32>(lists[su_at + 5u])), vec3<f32>(bitcast<f32>(lists[su_at + 6u]), bitcast<f32>(lists[su_at + 7u]), bitcast<f32>(lists[su_at + 8u])), ortho), q);
             if (c.x < 0.0) { continue; }
             let a = surface_color(ps, tri_uv(t, s, c.yzw), 0.0).a * hit_tint(s).a;

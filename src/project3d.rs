@@ -2,7 +2,9 @@
 //! onto the scene's meshes and cards, per rendered sample, as a slide
 //! projector would (set extensions, patches over a plate). The node adds
 //! a [`Projection`] to the scene, naming the nodes whose surfaces take it;
-//! the renderer (`render3d`) projects each shaded sample's point through
+//! instances carry theirs themselves (see
+//! [`Instances::projections`](crate::geo::Instances::projections)). The
+//! renderer (`render3d`) projects each shaded sample's point through
 //! the projector's camera into the image, before lighting. `ops.rs`
 //! registers the node; the graph hands it its projector and image at the
 //! Hold frame when Frame hold is on (see [`held_inputs`]).
@@ -26,9 +28,8 @@ pub enum Mode {
     Multiply,
 }
 
-/// An image projected from a camera onto the surfaces of `targets`'
-/// nodes (a node's instances take it too, as do those of an Instance on
-/// Points node, the target "" until the node is tagged).
+/// An image projected from a camera onto the cards and meshes of
+/// `targets`' nodes (or onto the instances holding it).
 #[derive(Clone)]
 pub struct Projection {
     pub targets: Vec<String>,
@@ -100,8 +101,8 @@ pub fn project_3d(params: &Value, mut scene: Scene, image: Option<&Image>, proje
     let image = image.filter(|i| i.scene.is_none()).ok_or_else(|| anyhow::anyhow!("Project 3D: connect the image to project to its image input"))?;
     let group = params["group"].as_str().unwrap_or("").trim();
     let take = |node: &str| group.is_empty() || geo::glob(group, node);
-    // Cards and meshes by their nodes; instances by theirs, or by one of
-    // their prototypes'.
+    // Cards and meshes by their nodes; instances (by theirs, or by one of
+    // their prototypes') hold it themselves.
     let mut targets: Vec<String> = Vec::new();
     let mut add = |n: &str| {
         if !targets.iter().any(|t| t == n) {
@@ -109,23 +110,13 @@ pub fn project_3d(params: &Value, mut scene: Scene, image: Option<&Image>, proje
         }
     };
     scene.cards.iter().map(|c| &c.node).chain(scene.meshes.iter().map(|m| &m.node)).filter(|n| take(n)).for_each(|n| add(n));
-    for g in &scene.instances {
-        let proto = |p: &geo::Prototype| match p {
-            geo::Prototype::Model(m) => take(&m.node),
-            geo::Prototype::Card(c) => take(&c.node),
-            geo::Prototype::Splats(_) => false,
-        };
-        if take(&g.node) || g.prototypes.iter().any(proto) {
-            add(&g.node);
-        }
-    }
     let mode = match params["mode"].as_str().unwrap_or("replace") {
         "over" => Mode::Over,
         "multiply" => Mode::Multiply,
         _ => Mode::Replace,
     };
     let on = |n: &str, d: bool| params[n].as_bool().unwrap_or(d);
-    scene.projections.push(Projection {
+    let projection = Projection {
         targets,
         camera: camera.clone(),
         image: Arc::new(image.clone()),
@@ -135,7 +126,18 @@ pub fn project_3d(params: &Value, mut scene: Scene, image: Option<&Image>, proje
         edge: params["edge"].as_f64().unwrap_or(0.0).max(0.0),
         occlusion: on("occlusion", true),
         backfaces: on("backfaces", false),
-    });
+    };
+    for g in scene.instances.iter_mut() {
+        let proto = |p: &geo::Prototype| match p {
+            geo::Prototype::Model(m) => take(&m.node),
+            geo::Prototype::Card(c) => take(&c.node),
+            geo::Prototype::Splats(_) => false,
+        };
+        if take(&g.node) || g.prototypes.iter().any(proto) {
+            g.projections.push(Projection { targets: Vec::new(), ..projection.clone() });
+        }
+    }
+    scene.projections.push(projection);
     Ok(scene)
 }
 
@@ -303,7 +305,7 @@ mod tests {
         check(&projected(copied(&protos), &cam, json!({ "group": "tile" })));
         // On the prototypes before they're copied.
         let scene = copied(&projected(protos.clone(), &cam, json!({})));
-        assert_eq!(scene.projections[0].targets, vec!["copies".to_string()]);
+        assert_eq!(scene.instances[0].projections.len(), 1);
         check(&scene);
         // Realized, they keep it.
         check(&crate::ops::geo_ops::realize_instances(&json!({}), scene).unwrap());

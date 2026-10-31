@@ -177,15 +177,15 @@ fn own_surfaces(scene: &Scene) -> Vec<Surface<'_>> {
 }
 
 /// `surfs` (`scene`'s, as `then` makes them of a scene) with the
-/// projections that land on them, and (where `scene` is at another time
-/// than its frame) their vertices at the frame, from its
-/// [`rest`](Scene::rest).
+/// projections that land on them (as well as their own: an instance's),
+/// and (where `scene` is at another time than its frame) their vertices
+/// at the frame, from its [`rest`](Scene::rest).
 fn attach<'a>(surfs: &mut [Surface<'a>], scene: &'a Scene, then: impl FnOnce(&'a Scene) -> Vec<Surface<'a>>) {
-    if scene.projections.is_empty() {
+    if !scene.has_projections() {
         return;
     }
     for s in surfs.iter_mut() {
-        s.projections = scene.projections.iter().filter(|p| p.targets(s.node)).collect();
+        s.projections.extend(scene.projections.iter().filter(|p| p.targets(s.node)));
     }
     let Some(rest) = scene.rest.as_deref().filter(|_| surfs.iter().any(|s| !s.projections.is_empty())) else { return };
     for (s, r) in surfs.iter_mut().zip(then(rest)) {
@@ -247,6 +247,7 @@ pub(crate) fn instance_surface(g: &crate::geo::Instances, i: usize, k: u32) -> O
     s.world = g.worlds[i] * own;
     s.node = &g.node;
     s.instance = Some(k);
+    s.projections = g.projections.iter().collect();
     if mult != [1.0; 4] {
         s.color = std::array::from_fn(|c| s.color[c] * mult[c]);
     }
@@ -777,7 +778,8 @@ pub fn render_blurred(scene: &Scene, cam: &Camera, format: Size, samples: usize,
     // goes over the mean: the same as over each time; particle sprites
     // go over each time's render there too).
     #[cfg(feature = "gpu")]
-    if background.is_none_or(|b| b.planes.is_empty()) && scene.projections.is_empty() {
+    // (Projections under motion blur: on the CPU, for now.)
+    if background.is_none_or(|b| b.planes.is_empty()) && !scene.has_projections() {
         if let Some(mean) = gpu::blurred(scene, cam, format, samples, mixed, blur, &frames, background.is_some()) {
             let mean = match background {
                 Some(bg) => over_background(mean, bg),
@@ -921,9 +923,6 @@ pub fn render_preview_blurred(scene: &Scene, cam: &Camera, format: Size, preview
 /// pixel, ...): then [`render_preview_blurred`] as before.
 #[cfg(feature = "gpu")]
 pub fn render_preview_gpu(scene: &Scene, cam: &Camera, format: Size, preview: Preview, blur: Option<&Blur>) -> Option<crate::gpu::Resident> {
-    if !scene.projections.is_empty() {
-        return None;
-    }
     gpu::preview(scene, cam, format, preview, blur)
 }
 
@@ -951,9 +950,8 @@ fn preview_cell(scene: &Scene, cam: &Camera, format: Size, preview: Preview, cel
 #[allow(clippy::too_many_arguments)]
 fn draw_with_instances<'a>(surfs: Vec<Surface<'a>>, scene: &'a Scene, headlight: bool, lights: &[Light], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes, next: Option<(&Scene, &Camera)>, cell: Option<Cell>, splats: Option<&splats::Prepared>) -> Image {
     let sets = &scene.instances;
-    // (Projections on the CPU, for now.)
     #[cfg(feature = "gpu")]
-    if sets.iter().any(|g| !g.is_empty()) && scene.projections.is_empty() {
+    if sets.iter().any(|g| !g.is_empty()) {
         if let Some(img) = gpu::draw_instanced(&surfs, sets, headlight, lights, points, cam, format, samples, passes, next, cell, splats) {
             return img;
         }
@@ -1174,10 +1172,8 @@ fn object_nodes<'a>(surfs: &[Surface<'a>]) -> Vec<&'a str> {
 fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes, next: Option<(&Scene, &Camera)>, cell: Option<Cell>, splats: Option<&splats::Prepared>) -> Image {
     // On the GPU where it can (see gpu/mod.rs), else here.
     #[cfg(feature = "gpu")]
-    if surfs.iter().all(|s| s.projections.is_empty()) {
-        if let Some(img) = gpu::draw_passes(surfs, lights, points, cam, format, samples, passes, next, cell, splats) {
-            return img;
-        }
+    if let Some(img) = gpu::draw_passes(surfs, lights, points, cam, format, samples, passes, next, cell, splats) {
+        return img;
     }
     draw_cpu(surfs, lights, points, cam, format, samples, passes, next, cell, splats, None)
 }

@@ -66,6 +66,25 @@ pub(super) fn busy_shadowed(camera: &str) -> String {
         .replace(r#""opacity": 0.4"#, r#""opacity": 0.4, "casts_shadows": false"#)
 }
 
+/// [`busy`] (its see-through card made opaque) with a checkerboard
+/// projected onto everything from a camera up and to the side (Project
+/// 3D: occluded, cropped with a soft edge), and a patch over it
+/// from the shot's own camera onto the front card (stacked, a
+/// see-through checkerboard Over by its alpha, no occlusion).
+pub(super) fn projected(camera: &str) -> String {
+    busy(camera).replace(r#""opacity": 0.4"#, r#""opacity": 1.0"#).replace(r#"{"id": "scene", "op": "scene""#, r#"{"id": "all", "op": "scene""#).replace(
+        camera,
+        &format!(
+            r#"{{"id": "plate", "op": "checkerboard", "params": {{"width": 320, "height": 180, "size": 9}}}},
+        {{"id": "patch", "op": "checkerboard", "params": {{"width": 160, "height": 90, "size": 20, "color_a": [0.6, 0.1, 0.1, 0.6], "color_b": [0, 0, 0, 0]}}}},
+        {{"id": "proj", "op": "camera", "params": {{"translate": [1.5, 1.2, 4], "rotate": [-12, 18, 0], "focal": 30}}}},
+        {{"id": "plated", "op": "project_3d", "inputs": ["all", "plate", "proj"], "params": {{"edge": 12}}}},
+        {{"id": "scene", "op": "project_3d", "inputs": ["plated", "patch", "cam"], "params": {{"mode": "over", "occlusion": false, "group": "card"}}}},
+        {camera}"#
+        ),
+    )
+}
+
 /// Shadows through casters that let light through, over a floor: a card
 /// at opacity 0.4, a cutout (a feathered ellipse: clear, opaque and part
 /// way between), three cards at 0.5 stacked, eight at 0.8 (deeper than a
@@ -232,6 +251,7 @@ pub(crate) fn rows(gpu: &Gpu) -> Vec<CheckRow> {
     let (flat, ortho) = scene_of(&busy(ORTHO));
     let (shaded, _) = scene_of(&busy_shadowed(PERSPECTIVE));
     let (see, see_cam) = scene_of(&layered(256, 12.0));
+    let (thrown, _) = scene_of(&projected(PERSPECTIVE));
     let all = Passes::from_names(Passes::NAMES);
     vec![
         row(gpu, "3D render, lit, AA 3×3", &scene, &cam, hd, 3, Passes::DEPTH, false),
@@ -239,6 +259,7 @@ pub(crate) fn rows(gpu: &Gpu) -> Vec<CheckRow> {
         row(gpu, "3D render, orthographic", &flat, &ortho, hd, 2, Passes::DEPTH, false),
         row(gpu, "3D render, shadows (4 lights)", &shaded, &cam, hd, 2, Passes::from_names(["depth", "shadow", "lights"]), false),
         row(gpu, "3D render, see-through shadows", &see, &see_cam, hd, 2, Passes::from_names(["depth", "shadow"]), false),
+        row(gpu, "3D render, projections (Project 3D)", &thrown, &cam, hd, 2, Passes::DEPTH, false),
         blur_row(Size { width: 960, height: 540 }),
         sprites_row(Size { width: 960, height: 540 }),
         splats_row(hd),

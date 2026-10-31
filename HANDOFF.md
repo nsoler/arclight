@@ -37,6 +37,15 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.32, P8 B: Project 3D on the GPU** (Dev2): instances hold their
+  projections (`geo::Instances.projections`; Realize turns them into
+  scene projections), replacing A's tag() trick; projection images in the
+  textures; occlusion maps among the shadow maps (MAP_WORDS 28 → 32, word
+  28 = projector map, every non-holdout surface draws); a projection
+  table (PJ_WORDS 32) at P.splat.w, per-surface list via SURF word 11;
+  `projected()` in raster.wgsl after surface_color, before lighting.
+  Still CPU: motion blur with projections; projector maps holding
+  see-through surfaces. gpu --check 67 rows.
 - **0.13.31, P5: Normals** (Dev1): `geo_mesh::normals` smooth / flat /
   by angle (`normals_by_angle`: welded faces, angle-weighted within Angle
   of a corner's own face, vertices split where corners differ).

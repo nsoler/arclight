@@ -1,7 +1,7 @@
 //! The GPU renderer against the CPU one on the same scenes (D8 of
 //! docs/gpu-plan.md): skipped without a GPU.
 
-use super::check::{busy, busy_shadowed, differences, layered, moving, nearest_pass, scattered, scene_at, scene_of, ORTHO, PERSPECTIVE};
+use super::check::{busy, busy_shadowed, differences, layered, moving, nearest_pass, projected, scattered, scene_at, scene_of, ORTHO, PERSPECTIVE};
 use super::*;
 
 thread_local! {
@@ -377,6 +377,66 @@ fn instances_cast_shadows_drawn_instanced() {
     assert!(plan.map_own.iter().any(|m| !m.is_empty()), "{:?}", plan.map_own);
     let shadowed = |img: &Image| img.plane("shadow.R").unwrap().data.iter().filter(|v| **v > 0.02).count();
     assert!(shadowed(&cpu) > 60, "there are shadows: {}", shadowed(&cpu));
+}
+
+/// Project 3D's projections render on the GPU as on the CPU: a plate on
+/// cards and meshes, lit, occluded where the projector sees something
+/// nearer, cropped with a soft edge, a see-through patch stacked over it;
+/// and through a camera that sees what the projector doesn't.
+#[test]
+fn projections_match_the_cpu_render() {
+    let Some(gpu) = crate::gpu::test_device() else {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    };
+    let (scene, cam) = scene_of(&projected(PERSPECTIVE));
+    assert_eq!(scene.projections.len(), 2);
+    let format = Size { width: 320, height: 180 };
+    compare(&gpu, &scene, &cam, format, 2, Passes::from_names(["depth", "diffuse", "id"]), None);
+    // (The projections show: not the scene without them.)
+    let plain = Scene { projections: Vec::new(), ..(*scene).clone() };
+    let (a, b) = crate::gpu::cpu_only(|| (super::super::render(&scene, &cam, format, 1, None), super::super::render(&plain, &cam, format, 1, None)));
+    let changed = a.pixels.iter().zip(&b.pixels).filter(|(p, q)| (0..3).any(|c| (p[c] - q[c]).abs() > 0.05)).count();
+    assert!(changed > a.pixels.len() / 4, "{changed}");
+    // From the side, behind the sphere: what the projector doesn't see.
+    let side = Camera { world: crate::geom::trs([-3.0, 0.5, -1.5], [0.0, -75.0, 0.0], [1.0; 3]), ..cam.clone() };
+    compare(&gpu, &scene, &side, format, 2, Passes::DEPTH, None);
+}
+
+/// Instances with a projection drawn instanced on the GPU (their
+/// prototypes carrying it) as on the CPU, each copy occluding the others
+/// from the projector.
+#[test]
+fn projections_on_instances_drawn_instanced() {
+    if crate::gpu::test_device().is_none() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let (copies, _) = super::super::tests::instanced();
+    let plate = crate::gpu::check::noise(Size { width: 96, height: 64 }, crate::image::IRect::new(0, 0, 96, 64), false, 5);
+    let projector = Scene { cameras: vec![Camera { world: crate::geom::trs([1.5, 1.0, -2.0], [-8.0, 12.0, 0.0], [1.0; 3]), ..Camera::default() }], ..Scene::default() };
+    let mut copies = crate::ops::project3d::project_3d(&serde_json::json!({ "edge": 6 }), copies, Some(&plate), Some(&projector)).unwrap();
+    assert_eq!(copies.instances[0].projections.len(), 1);
+    // (Opaque copies: a projector's map with see-through ones is the CPU's.)
+    let n = copies.instances[0].len();
+    copies.instances[0].attrs.set(crate::geo::CD, crate::geo::Attr::Vec4(vec![[1.0, 0.6, 0.6, 1.0]; n]), n).unwrap();
+    let cam = super::super::tests::camera();
+    let format = Size { width: 160, height: 80 };
+    let passes = Passes::from_names(["depth", "id", "shadow"]);
+    let cpu = crate::gpu::cpu_only(|| super::super::render_passes(&copies, &cam, format, 2, None, passes));
+    let before = INSTANCED.with(|n| n.get());
+    let out = with_gpu(|| super::super::render_passes(&copies, &cam, format, 2, None, passes));
+    assert_eq!(INSTANCED.with(|n| n.get()), before + 1, "drawn instanced: {:?}", crate::gpu::last_error());
+    for (name, mean, off) in differences(&cpu, &out) {
+        let (most_mean, most_off) = super::check::allowed(&name);
+        assert!(mean <= most_mean && off <= most_off, "{name}: mean {mean:.2e}, {:.3} % of values off", off * 100.0);
+    }
+    // See-through copies: the CPU's (the same picture).
+    let n = copies.instances[0].len();
+    copies.instances[0].attrs.set(crate::geo::CD, crate::geo::Attr::Vec4(vec![[1.0, 0.6, 0.6, 0.7]; n]), n).unwrap();
+    let cpu = crate::gpu::cpu_only(|| super::super::render_passes(&copies, &cam, format, 2, None, passes));
+    let out = with_gpu(|| super::super::render_passes(&copies, &cam, format, 2, None, passes));
+    assert!(differences(&cpu, &out).iter().all(|(_, mean, _)| *mean == 0.0));
 }
 
 /// Moving instances: the motion pass (each copy matched to the next

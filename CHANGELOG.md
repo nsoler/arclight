@@ -17,6 +17,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.32 — 2026-10-31
+
+- Project 3D renders on the GPU too (Scanline Render and the 3D view),
+  instanced copies included; under motion blur it still renders on the
+  CPU.
+
 ## 0.13.31 — 2026-10-31
 
 - Geometry: a **Normals** node shades meshes smooth, flat (faceted) or by

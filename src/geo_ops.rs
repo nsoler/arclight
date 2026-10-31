@@ -906,13 +906,11 @@ pub fn instance_on_points(params: &Value, mut scene: Scene, protos: Option<&Scen
     if !params["keep_points"].as_bool().unwrap_or(false) {
         scene.point_sets.retain(|g| !take(&g.node));
     }
-    // The prototypes' projections go on their copies (this node's, once
-    // tagged: the target "").
-    if !made.is_empty() {
-        let nodes: Vec<&str> = protos.meshes.iter().map(|m| m.node.as_str()).chain(protos.cards.iter().map(|c| c.node.as_str())).collect();
-        for p in protos.projections.iter().filter(|p| nodes.iter().any(|n| p.targets(n))) {
-            scene.projections.push(crate::ops::project3d::Projection { targets: vec![String::new()], ..p.clone() });
-        }
+    // The prototypes' projections go on their copies.
+    let nodes: Vec<&str> = protos.meshes.iter().map(|m| m.node.as_str()).chain(protos.cards.iter().map(|c| c.node.as_str())).collect();
+    let carried: Vec<crate::ops::project3d::Projection> = protos.projections.iter().filter(|p| nodes.iter().any(|n| p.targets(n))).cloned().collect();
+    for g in made.iter_mut() {
+        g.projections = carried.clone();
     }
     scene.instances.extend(made);
     Ok(scene)
@@ -932,6 +930,10 @@ pub fn realize_instances(params: &Value, mut scene: Scene) -> Result<Scene> {
     let (gone, kept): (Vec<geo::Instances>, Vec<geo::Instances>) = std::mem::take(&mut scene.instances).into_iter().partition(|g| take(&g.node));
     scene.instances = kept;
     for g in gone {
+        // (Their projections on the meshes and cards they become.)
+        for p in &g.projections {
+            scene.projections.push(crate::ops::project3d::Projection { targets: vec![g.node.clone()], ..p.clone() });
+        }
         for i in 0..g.len() {
             let w = g.worlds[i];
             match &g.prototypes[g.which[i] as usize] {

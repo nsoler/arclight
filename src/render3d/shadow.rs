@@ -251,6 +251,12 @@ impl Projector {
     /// [`PROJECTOR_RES`]), spanning that side (a tall image's frame
     /// widened to it).
     pub fn draw(surfs: &[Surface], cam: &Camera, format: Size) -> Projector {
+        let all: Vec<Surface> = surfs.iter().map(|s| Surface { casts: true, ..s.view() }).collect();
+        Projector(Map::draw(&all, &Projector::view(cam, format)))
+    }
+
+    /// Where [`draw`](Self::draw)'s map looks from.
+    pub fn view(cam: &Camera, format: Size) -> View {
         let (w, long) = (format.width.max(1) as f64, format.width.max(format.height).max(1));
         let res = long.min(PROJECTOR_RES);
         let wider = long as f64 / w;
@@ -258,8 +264,7 @@ impl Projector {
         let size = Size { width: res, height: res };
         let along = cam.is_ortho().then(|| -cam.world.fixed_view::<3, 1>(0, 2).into_owned().try_normalize(1e-300).unwrap_or_else(Vec3::z));
         let texel = if cam.is_ortho() { cam.ortho / res as f64 } else { 1.0 / cam.focal_pixels(size) };
-        let all: Vec<Surface> = surfs.iter().map(|s| Surface { casts: true, ..s.view() }).collect();
-        Projector(Map::draw(&all, &View::new(cam, res, along, texel)))
+        View::new(cam, res, along, texel)
     }
 
     /// How much of the projection reaches point `p` of a surface with

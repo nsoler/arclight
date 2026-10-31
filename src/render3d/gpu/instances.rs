@@ -201,6 +201,8 @@ impl<'a> Plan<'a> {
             };
             s.headlight = headlight;
             s.node = "";
+            // (The images projected onto every copy.)
+            s.projections = sets[si].projections.iter().collect();
             let has_normals = s.normals.len() == s.positions.len();
             table[p][0] = out.len() as u32;
             table[p][1] = (head + data.len()) as u32;

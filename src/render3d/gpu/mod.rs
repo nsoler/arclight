@@ -27,6 +27,12 @@
 //! renders the frame where even one won't fit). A pixel whose shadow
 //! lookup needs more than a texel kept overflows the same way.
 //!
+//! Project 3D's projections go on each hit as `render3d/project.rs` puts
+//! them on: their images among the textures, their depth maps drawn with
+//! the shadow maps (every surface but holdouts in them). Under motion blur,
+//! or where a see-through surface would be in a projector's map, the CPU
+//! renders.
+//!
 //! [`draw_passes`] returns None, and the CPU renders, where this can't yet:
 //! shadows (G5), splats (G6), and more light nodes or objects than the
 //! shader keeps for the lights and mattes passes. A GPU error is recorded
@@ -38,6 +44,7 @@ use crate::geom::{Camera, Vec3};
 use crate::gpu::Gpu;
 use crate::image::{IRect, Image, Size};
 use crate::mesh::Shading;
+use crate::ops::project3d::{Mode, Projection};
 use crate::scene::Scene;
 use crate::shade::{Light, LightKind};
 use anyhow::{anyhow, Result};
@@ -73,7 +80,8 @@ const TRI_WORDS: usize = 42;
 const SURF_WORDS: usize = 16;
 const LIGHT_WORDS: usize = 36;
 const LEVEL_WORDS: usize = 8;
-const MAP_WORDS: usize = 28;
+const PJ_WORDS: usize = 32;
+const MAP_WORDS: usize = 32;
 const NONE: u32 = u32::MAX;
 /// A kept surface that's a splat (see raster.wgsl).
 const SPLAT: u32 = 0x4000_0000;
@@ -291,6 +299,8 @@ struct Readout {
 struct Prepared {
     /// Where the splat sets' table starts in `tables` (see raster.wgsl).
     splat_table: usize,
+    /// Where the projections' table starts in `tables`.
+    proj_at: usize,
     /// The instances' records (their objects filled in), if any.
     records: Vec<u32>,
     layout: Layout,
@@ -326,7 +336,26 @@ fn prepare(gpu: &Gpu, surfs: &[Surface], plan: Option<&instances::Plan>, lights:
     });
     let tris = super::triangles(surfs, cam, format, next_world.as_deref());
     let px = format.width * format.height;
-    let textures = Textures::plan(surfs);
+    // The projections on the surfaces, each once (their images among the
+    // textures, their depth maps among the shadow maps); under motion
+    // blur (a surface at another time than its frame), on the CPU.
+    let mut projs: Vec<&Projection> = Vec::new();
+    for p in surfs.iter().flat_map(|s| s.projections.iter()) {
+        if !projs.iter().any(|q| std::ptr::eq(*q, *p)) {
+            projs.push(p);
+        }
+    }
+    if surfs.iter().any(|s| s.rest.is_some()) {
+        return None;
+    }
+    // (A projector's map with see-through surfaces in it: on the CPU,
+    // which keeps their layers.)
+    let through = |k: usize, s: &Surface| !s.holdout && ((s.color[3] > 0.0 && s.color[3] < 1.0) || s.texture.is_some_and(|t| !opaque(t)) || plan.is_some_and(|p| k >= p.plain && s.triangles.is_empty() && s.instance.is_none() && p.sees_through(k)));
+    if projs.iter().any(|p| p.occlusion) && surfs.iter().enumerate().any(|(k, s)| through(k, s)) {
+        return None;
+    }
+    let plates: Vec<&Arc<Image>> = projs.iter().map(|p| &p.image).collect();
+    let textures = Textures::plan(surfs, &plates);
     // Every buffer the shader takes must fit a binding.
     let limit = gpu.limits.max_storage_buffer_binding_size as usize;
     if px * 64 > limit || px * layout.slots.stride * 4 > limit || textures.texels * 16 > limit {
@@ -341,20 +370,23 @@ fn prepare(gpu: &Gpu, surfs: &[Surface], plan: Option<&instances::Plan>, lights:
     let see: Vec<bool> = if shadows.iter().any(Option::is_some) { surfs.iter().enumerate().map(|(k, s)| sees_through(s) || plan.is_some_and(|p| k >= p.plain && s.triangles.is_empty() && s.instance.is_none() && p.sees_through(k))).collect() } else { vec![false; surfs.len()] };
     let (bins, levels_at) = binned(&tris, format.width, format.height, &textures.levels);
     let mut tables = Tables { tris: tri_table(&tris), bins, levels_at, tables: surf_table(surfs, &textures.base, &layout, &see), at: [0; 4], maps: Vec::new(), map_words: 0 };
-    tables.add_lights(surfs, plan, lights, &layout, &shadows, &textures.levels, &see);
+    let projector_views: Vec<shadow::View> = projs.iter().filter(|p| p.occlusion).map(|p| shadow::Projector::view(&p.camera, p.image.format)).collect();
+    let light_maps = map_views(&shadows).len();
+    tables.add_lights(surfs, plan, lights, &layout, &shadows, &projector_views, &textures.levels, &see);
     // Each splat set's object (+ 1) and whether it's a holdout.
     let splat_table = tables.tables.len();
     for (k, n) in splat_nodes.iter().enumerate() {
         let object = layout.nodes.iter().position(|o| o == n).filter(|_| !n.is_empty()).map_or(0, |o| o as u32 + 1);
         tables.tables.extend_from_slice(&[object, splats.is_some_and(|sp| sp.holdout(k)) as u32]);
     }
+    let proj_at = tables.add_projections(surfs, &projs, &textures.plates, light_maps);
     // The maps within a binding; with layers, within a budget too (else
     // the CPU renders the frame, as it does all of a light's layers).
     let room = if tables.maps.iter().any(|m| m.layered) { layer_room(gpu).min(limit) } else { limit };
     if !tables.add_layers(room) {
         return None;
     }
-    Some(Prepared { layout, tris, textures, tables, lights: lights.len(), splat_table, records })
+    Some(Prepared { layout, tris, textures, tables, lights: lights.len(), splat_table, proj_at, records })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -692,11 +724,15 @@ impl Tables {
     /// surfaces, and the maps to draw (each set up on the CPU as shadow.rs
     /// sets up its own).
     #[allow(clippy::too_many_arguments)]
-    fn add_lights(&mut self, surfs: &[Surface], inst: Option<&instances::Plan>, lights: &[Light], layout: &Layout, plan: &[Option<shadow::LightView>], levels: &[u32], see: &[bool]) {
+    /// After the lights' maps, `projectors`' (the projections' depth maps,
+    /// every surface but holdouts drawing into them).
+    fn add_lights(&mut self, surfs: &[Surface], inst: Option<&instances::Plan>, lights: &[Light], layout: &Layout, plan: &[Option<shadow::LightView>], projectors: &[shadow::View], levels: &[u32], see: &[bool]) {
         self.at[0] = self.tables.len();
         self.tables.extend(light_table(lights, layout));
-        // Each map, with its light.
-        let views = map_views(plan);
+        // Each map, with its light (a projector's: one past the lights).
+        let mut views = map_views(plan);
+        let light_maps = views.len();
+        views.extend(projectors.iter().enumerate().map(|(j, v)| (lights.len() + j, v)));
         let (mut shl, mut srcs, mut maps) = (Vec::new(), Vec::new(), Vec::new());
         let (mut first_src, mut first_map) = (0u32, 0u32);
         let f = |v: f64| (v as f32).to_bits();
@@ -721,7 +757,7 @@ impl Tables {
             }
         }
         let mut texels = 0usize;
-        for (_, v) in &views {
+        for (m, (_, v)) in views.iter().enumerate() {
             let size = Size { width: v.res, height: v.res };
             let view = v.cam.view();
             let mut w = [0u32; MAP_WORDS];
@@ -742,6 +778,7 @@ impl Tables {
             w[23] = f(v.texel);
             w[24] = texels as u32;
             // (25, 26: its layers, 27: its blocks, from `add_layers`.)
+            w[28] = (m >= light_maps) as u32;
             maps.extend_from_slice(&w);
             texels += v.res * v.res;
         }
@@ -786,6 +823,60 @@ impl Tables {
                 MapJob { tris: tri_table(&tris), bins, levels_at, res: v.res, near: v.cam.near, far: v.cam.far, light, layered, cam: v.cam.clone(), skip }
             })
             .collect();
+    }
+
+    /// The projections `projs` (PJ_WORDS each: as raster.wgsl reads them;
+    /// their images at `plates`, their depth maps, those with Occlusion,
+    /// after the lights' `light_maps`), then each surface's list of them
+    /// (how many, then which), its place in its surface's words; where
+    /// the projections start.
+    fn add_projections(&mut self, surfs: &[Surface], projs: &[&Projection], plates: &[(u32, u32)], light_maps: usize) -> usize {
+        let at = self.tables.len();
+        let f = |v: f64| (v as f32).to_bits();
+        let mut map = light_maps as u32;
+        for (p, &(base, mips)) in projs.iter().zip(plates) {
+            let mut w = [0u32; PJ_WORDS];
+            let (cam, size) = (&p.camera, p.image.format);
+            let view = cam.view();
+            for r in 0..3 {
+                for c in 0..4 {
+                    w[4 * r + c] = f(view[(r, c)]);
+                }
+            }
+            for k in 0..3 {
+                w[12 + k] = f(cam.world[(k, 3)]);
+                w[15 + k] = f(cam.world[(k, 2)]);
+            }
+            w[18] = f(if cam.is_ortho() { cam.pixels_per_unit(1.0, size) } else { cam.focal_pixels(size) });
+            w[19] = cam.is_ortho() as u32 | (p.crop as u32) << 1 | (p.backfaces as u32) << 2;
+            w[20] = f(size.width as f64);
+            w[21] = f(size.height as f64);
+            w[22] = f(cam.near);
+            w[23] = base;
+            w[24] = mips;
+            w[25] = match p.mode {
+                Mode::Replace => 0,
+                Mode::Over => 1,
+                Mode::Multiply => 2,
+            };
+            w[26] = p.mix.to_bits();
+            w[27] = f(p.edge);
+            w[28] = if p.occlusion {
+                map += 1;
+                map - 1
+            } else {
+                NONE
+            };
+            self.tables.extend_from_slice(&w);
+        }
+        for (si, s) in surfs.iter().enumerate().filter(|(_, s)| !s.projections.is_empty()) {
+            self.tables[si * SURF_WORDS + 11] = (self.tables.len() - at) as u32;
+            self.tables.push(s.projections.len() as u32);
+            for p in &s.projections {
+                self.tables.push(projs.iter().position(|q| std::ptr::eq(*q, *p)).unwrap_or(0) as u32);
+            }
+        }
+        at
     }
 
     /// Each map's blocks (see `map_blocks` in raster.wgsl: 2 words a 4 × 4
@@ -973,7 +1064,8 @@ fn dispatch(gpu: &Gpu, prep: &Prepared, maps: &wgpu::Buffer, frame: &Frame, cam:
     let none = storage(gpu, &[], "render3d no splats");
     let view = splats.and_then(|sp| sp.gpu());
     let (mut proj, mut lists) = view.map_or((&none, &none), |v| (&v.proj, &v.lists));
-    let splat = view.map_or([0; 4], |v| [1, (v.tiles + 1) as u32, (at[1] + prep.splat_table) as u32, 0]);
+    let mut splat = view.map_or([0; 4], |v| [1, (v.tiles + 1) as u32, (at[1] + prep.splat_table) as u32, 0]);
+    splat[3] = prep.proj_at as u32;
     let joined_bufs: (wgpu::Buffer, wgpu::Buffer);
     let mut inst_words = [0u32; 4];
     if let Some((records, inst_lists, _, _)) = inst {
@@ -1276,6 +1368,8 @@ fn surf_table(surfs: &[Surface], tex_base: &[Option<(u32, u32)>], layout: &Layou
         }
         flags |= (s.holdout as u32) << 3 | (s.headlight as u32) << 4 | (s.two_sided as u32) << 5 | (s.wrap as u32) << 6 | (s.casts as u32) << 7 | (s.receives as u32) << 8 | (see[si] as u32) << 9;
         o[12] = flags;
+        // (Its projections' list, from `add_projections`.)
+        o[11] = NONE;
         let (base, levels) = tex_base[si].unwrap_or((NONE, 0));
         o[13] = base;
         o[14] = levels;
@@ -1339,6 +1433,8 @@ fn light_table(lights: &[Light], layout: &Layout) -> Vec<u32> {
 struct Textures {
     levels: Vec<u32>,
     base: Vec<Option<(u32, u32)>>,
+    /// Each projection's image: its first level and mipmaps.
+    plates: Vec<(u32, u32)>,
     /// Each texture once (with whether it wraps) and its first level.
     images: Vec<(Arc<Image>, bool, u32)>,
     texels: usize,
@@ -1363,29 +1459,28 @@ type KeptTexels = Option<(Vec<(Weak<Image>, bool)>, Arc<wgpu::Buffer>)>;
 static KEPT: Mutex<KeptTexels> = Mutex::new(None);
 
 impl Textures {
-    fn plan(surfs: &[Surface]) -> Textures {
+    /// The surfaces' textures, then `plates` (clamped).
+    fn plan(surfs: &[Surface], plates: &[&Arc<Image>]) -> Textures {
         let mut images: Vec<(Arc<Image>, bool, u32)> = Vec::new();
         let (mut levels, mut texels) = (Vec::new(), 0usize);
-        let base = surfs
-            .iter()
-            .map(|s| {
-                let img = s.texture?;
-                let mips = mip_sizes(img).len() as u32;
-                if let Some(&(_, _, first)) = images.iter().find(|(i, wrap, _)| Arc::ptr_eq(i, img) && *wrap == s.wrap) {
-                    return Some((first, mips));
-                }
-                let first = (levels.len() / LEVEL_WORDS) as u32;
-                levels.extend_from_slice(&[texels as u32, img.format.width as u32, img.format.height as u32, img.x0 as u32, img.y0 as u32, img.width as u32, img.height as u32, 0]);
-                texels += img.pixels.len();
-                for (w, h) in mip_sizes(img) {
-                    levels.extend_from_slice(&[texels as u32, w as u32, h as u32, 0, 0, w as u32, h as u32, 0]);
-                    texels += w * h;
-                }
-                images.push((img.clone(), s.wrap, first));
-                Some((first, mips))
-            })
-            .collect();
-        Textures { levels, base, images, texels }
+        let mut add = |img: &Arc<Image>, wrap: bool| {
+            let mips = mip_sizes(img).len() as u32;
+            if let Some(&(_, _, first)) = images.iter().find(|(i, w, _)| Arc::ptr_eq(i, img) && *w == wrap) {
+                return (first, mips);
+            }
+            let first = (levels.len() / LEVEL_WORDS) as u32;
+            levels.extend_from_slice(&[texels as u32, img.format.width as u32, img.format.height as u32, img.x0 as u32, img.y0 as u32, img.width as u32, img.height as u32, 0]);
+            texels += img.pixels.len();
+            for (w, h) in mip_sizes(img) {
+                levels.extend_from_slice(&[texels as u32, w as u32, h as u32, 0, 0, w as u32, h as u32, 0]);
+                texels += w * h;
+            }
+            images.push((img.clone(), wrap, first));
+            (first, mips)
+        };
+        let base = surfs.iter().map(|s| s.texture.map(|img| add(img, s.wrap))).collect();
+        let plates = plates.iter().map(|img| add(img, false)).collect();
+        Textures { levels, base, plates, images, texels }
     }
 
     /// The texels on the GPU: kept from the last render, else uploaded

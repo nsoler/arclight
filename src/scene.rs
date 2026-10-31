@@ -190,15 +190,15 @@ impl Scene {
                 *n = id.to_string();
             }
         }
-        // (Instance on Points passes its prototypes' projections on to
-        // its own instances.)
-        for t in self.projections.iter_mut().flat_map(|p| p.targets.iter_mut()).filter(|t| t.is_empty()) {
-            *t = id.to_string();
-        }
         // (A copy of the struct only: the splats themselves stay shared.)
         for s in self.splats.iter_mut().filter(|s| s.node.is_empty()) {
             Arc::make_mut(s).node = id.to_string();
         }
+    }
+
+    /// Whether anything in it has an image projected onto it.
+    pub fn has_projections(&self) -> bool {
+        !self.projections.is_empty() || self.instances.iter().any(|g| !g.projections.is_empty())
     }
 
     /// The node camera `i` came from ("" when unknown).
@@ -428,7 +428,7 @@ impl Scene {
     pub fn at_time(&self, frames: &[(i64, &Scene)], t: f64) -> Scene {
         let mut out = self.clone();
         out.particles = self.particles.iter().map(|s| s.shifted(t)).collect();
-        if !self.projections.is_empty() && self.rest.is_none() {
+        if self.has_projections() && self.rest.is_none() {
             out.rest = Some(Arc::new(self.clone()));
         }
         let k = t.floor();

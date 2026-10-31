@@ -383,6 +383,8 @@ pub struct Instances {
     /// Each card prototype's corners, made once by the renderer for every
     /// copy to share (left empty in a copy of these: made again there).
     pub card_meshes: CardMeshes,
+    /// Images projected onto every copy (Project 3D's), in order.
+    pub projections: Vec<crate::ops::project3d::Projection>,
 }
 
 /// A card's corners as a mesh: what each of a card prototype's copies is
