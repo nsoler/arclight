@@ -388,6 +388,11 @@ var<private> layers_short: bool;
 fn map_layers(m: u32) -> u32 { return mu(m, 26u); }
 fn map_layer_at(m: u32, i: u32) -> u32 { return mu(m, 25u) + i * (2u * map_layers(m) + 1u); }
 
+// Map m's words a lookup reads per texel: texels across, where its depths
+// and layers start, and its layers a texel.
+struct MapAt { res: i32, depth: u32, layers: u32, k: u32 };
+fn map_at(m: u32) -> MapAt { return MapAt(i32(mu(m, 14u)), mu(m, 24u), mu(m, 25u), map_layers(m)); }
+
 // The nearest caster at texel (x, y) of map m, opaque or not.
 fn map_depth(m: u32, x: i32, y: i32) -> f32 {
     let res = i32(mu(m, 14u));
@@ -401,17 +406,15 @@ fn map_depth(m: u32, x: i32, y: i32) -> f32 {
 // How lit a point `key` away is at texel (x, y) of map m: 0 behind an
 // opaque caster, else what the see-through ones nearer let through (as
 // shadow.rs's `through`).
-fn map_lit_texel(m: u32, x: i32, y: i32, key: f32) -> f32 {
-    let res = i32(mu(m, 14u));
-    if (x < 0 || y < 0 || x >= res || y >= res) { return 1.0; }
-    let i = u32(y * res + x);
-    if (maps[mu(m, 24u) + i] < key) { return 0.0; }
-    let k = map_layers(m);
-    if (k == 0u) { return 1.0; }
-    let at = map_layer_at(m, i);
+fn map_lit_texel(a: MapAt, x: i32, y: i32, key: f32) -> f32 {
+    if (x < 0 || y < 0 || x >= a.res || y >= a.res) { return 1.0; }
+    let i = u32(y * a.res + x);
+    if (maps[a.depth + i] < key) { return 0.0; }
+    if (a.k == 0u) { return 1.0; }
+    let at = a.layers + i * (2u * a.k + 1u);
     if (maps[at] < key) { layers_short = true; }
     var through = 1.0;
-    for (var j = 0u; j < k; j++) {
+    for (var j = 0u; j < a.k; j++) {
         let l = at + 1u + 2u * j;
         if (!(maps[l] < key)) { break; }
         through *= maps[l + 1u];
@@ -421,17 +424,54 @@ fn map_lit_texel(m: u32, x: i32, y: i32, key: f32) -> f32 {
 
 // How lit (0 to 1) a point `key` away is at texel position q: the four
 // texels round it compared, weighted bilinearly.
-fn map_lit_at(m: u32, q: vec2<f32>, key: f32) -> f32 {
+fn map_lit_at(a: MapAt, q: vec2<f32>, key: f32) -> f32 {
     let x = q - vec2<f32>(0.5);
     let x0 = floor(x);
     let f = x - x0;
     let ix = i32(x0.x);
     let iy = i32(x0.y);
-    let l00 = map_lit_texel(m, ix, iy, key);
-    let l10 = map_lit_texel(m, ix + 1, iy, key);
-    let l01 = map_lit_texel(m, ix, iy + 1, key);
-    let l11 = map_lit_texel(m, ix + 1, iy + 1, key);
+    let l00 = map_lit_texel(a, ix, iy, key);
+    let l10 = map_lit_texel(a, ix + 1, iy, key);
+    let l01 = map_lit_texel(a, ix, iy + 1, key);
+    let l11 = map_lit_texel(a, ix + 1, iy + 1, key);
     return (l00 * (1.0 - f.x) + l10 * f.x) * (1.0 - f.y) + (l01 * (1.0 - f.x) + l11 * f.x) * f.y;
+}
+
+// map_lit's (2n + 1)² taps where they fall a texel apart (step 1): each
+// tap as map_lit_at weighs it (its own fraction, worked out the same way)
+// and summed in the same order, but each texel of their footprint read
+// once (a row kept for the next), not four times. False (and nothing
+// summed) where rounding puts a tap on a texel other than the footprint's
+// (then the taps go one by one).
+fn map_lit_grid(a: MapAt, q: vec2<f32>, key: f32, n: i32, out: ptr<function, f32>) -> bool {
+    let x0 = floor(q - vec2<f32>(0.5));
+    let ix = i32(x0.x) - n;
+    let iy = i32(x0.y) - n;
+    let w = 2 * n + 2;
+    var fx: array<f32, 9>;
+    var fy: array<f32, 9>;
+    for (var i = 0; i < w - 1; i++) {
+        let t = q + vec2<f32>(f32(i - n)) - vec2<f32>(0.5);
+        let t0 = floor(t);
+        if (i32(t0.x) != ix + i || i32(t0.y) != iy + i) { return false; }
+        fx[i] = t.x - t0.x;
+        fy[i] = t.y - t0.y;
+    }
+    var lo: array<f32, 10>;
+    var hi: array<f32, 10>;
+    for (var i = 0; i < w; i++) { lo[i] = map_lit_texel(a, ix + i, iy, key); }
+    var sum = 0.0;
+    for (var j = 0; j < w - 1; j++) {
+        for (var i = 0; i < w; i++) { hi[i] = map_lit_texel(a, ix + i, iy + j + 1, key); }
+        let f_y = fy[j];
+        for (var i = 0; i < w - 1; i++) {
+            let f_x = fx[i];
+            sum += (lo[i] * (1.0 - f_x) + lo[i + 1] * f_x) * (1.0 - f_y) + (hi[i] * (1.0 - f_x) + hi[i + 1] * f_x) * f_y;
+        }
+        lo = hi;
+    }
+    *out = sum / f32((2 * n + 1) * (2 * n + 1));
+    return true;
 }
 
 // The mean distance of the casters nearer the light than `key` within r
@@ -470,13 +510,16 @@ fn map_lit(m: u32, p: vec3<f32>, soft: f32, radius: f32) -> f32 {
         r += radius * (key - b) / b / texel;
     }
     r = min(r, 24.0);
-    if (r < 0.5) { return map_lit_at(m, q, key); }
+    let a = map_at(m);
+    if (r < 0.5) { return map_lit_at(a, q, key); }
     let n = i32(min(ceil(r), 4.0));
     let step = r / f32(n);
+    var lit: f32;
+    if (step == 1.0 && map_lit_grid(a, q, key, n, &lit)) { return lit; }
     var sum = 0.0;
     for (var j = -n; j <= n; j++) {
         for (var i = -n; i <= n; i++) {
-            sum += map_lit_at(m, q + vec2<f32>(f32(i), f32(j)) * step, key);
+            sum += map_lit_at(a, q + vec2<f32>(f32(i), f32(j)) * step, key);
         }
     }
     return sum / f32((2 * n + 1) * (2 * n + 1));

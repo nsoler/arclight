@@ -17,6 +17,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.3 — 2026-10-31
+
+- GPU: soft shadows render faster, most of all from area lights at high
+  Quality: each shadow-map texel under the softening filter is read once
+  instead of up to four times (4K, a Quality 16 area light: 22.9 s to
+  15.8 s at softness 1, 51.2 s to 31.4 s at softness 2), with the same
+  pixels as before.
+
 ## 0.13.2 — 2026-10-31
 
 - Node graph: drop a wire anywhere on a node (body or title) to connect

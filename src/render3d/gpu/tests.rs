@@ -250,6 +250,22 @@ fn see_through_casters_shadow_as_on_the_cpu() {
     compare(&gpu, &scene, &cam, format, 1, Passes::from_names(["depth", "shadow"]), None);
 }
 
+/// An area light of many samples (16 × 16 shadow cubes) shadows as on the
+/// CPU, at softness 1 and 2 (whose filter taps fall a texel apart: each
+/// texel of their footprint read once) and 1.5 (taps between texels).
+#[test]
+fn many_sample_area_lights_shadow_as_on_the_cpu() {
+    let Some(gpu) = crate::gpu::test_device() else {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    };
+    for soft in ["1.0", "2.0", "1.5"] {
+        let graph = layered(128, 12.0).replace(r#""shape": "ellipse""#, &format!(r#""shape": "ellipse", "quality": 16, "shadow_softness": {soft}"#));
+        let (scene, cam) = scene_of(&graph);
+        compare(&gpu, &scene, &cam, Size { width: 160, height: 90 }, 2, Passes::from_names(["shadow", "depth"]), None);
+    }
+}
+
 /// Where the layers won't all fit the maps' room, the lights keep fewer
 /// a texel (more pixels go to the CPU, the same picture); where even one
 /// won't, the frame is the CPU's.

@@ -558,6 +558,20 @@ switch, the status and the tests' skip work end to end.
   K in view (`gpu --check`'s row, 1080p) those pixels' CPU pass and the
   64-hit second try (which a shadow overflow sets off too) bring it to
   2.1 s against 5.0 s.
+- **Many-sample area lights, step 1 (after phase 12):** an area light at
+  Quality 16 is 16 × 16 shadow cubes (1536 maps of 128²); at 4K AA 3
+  nearly all of its 21 s went to the lookups (256 a sample, each 3 × 3
+  filter taps of 4 texels at softness 1), not to drawing the maps
+  (0.2 s), and the time follows the texels read. Where the taps fall a
+  texel apart (integer softness up to 4, no penumbra radius: every area
+  light at the default softness), `map_lit_grid` reads each texel of
+  their footprint once (16 instead of 36 at softness 1, 36 instead of
+  100 at 2) and weighs and sums the taps as before, to the bit (renders
+  compared bit for bit; where rounding would put a tap off the
+  footprint, the taps go one by one). 4K AA 3, the scene above with a
+  Quality 16 area light: 22.9 → 15.8 s at softness 1, 51.2 → 31.4 s at
+  2; the layered scene 35.1 → 22.8 s. Step 2 (skipping footprints wholly
+  lit or shadowed, from per-block nearest / farthest casters) is next.
 - Motion blur and the jittered shutter added up on the GPU
   (`gpu::blurred`): every (cell, time) render into one frame's buffers,
   each cell's pixels packed onto threads, one read-back; the triangles

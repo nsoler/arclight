@@ -24,6 +24,14 @@ done), `docs/help.md` (the in-app help) and
   user's two UI asks of the same day go first: drop a dragged wire on a
   node's body to connect it (Dev1) and the 3D gizmo starting as Move,
   switched by G / R / S (Dev2).
+- **0.13.3, area-light step 1** (Dev2, user-approved): `raster.wgsl`
+  `map_lit_grid` reads each footprint texel once where PCF taps fall a
+  texel apart (integer softness ≤ 4, no penumbra radius), same tap order
+  and weights (bit-identical 4K renders); map table words read once per
+  lookup (`MapAt`). 4K AA3 Quality 16: softness 1 22.9 → 15.8 s, 2 51.2 →
+  31.4 s, layered bench 35.1 → 22.8 s. Test
+  `many_sample_area_lights_shadow_as_on_the_cpu`. Step 2 (skip uniform
+  footprints) in progress.
 - **0.13.2, drop a wire on a node's body** (Dev1): `node_editor.rs`
   `body_input` (first free input whose kind fits, in port order, else the
   first that fits; none on a cycle via `doc.is_upstream`) and
