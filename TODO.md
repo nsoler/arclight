@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-A running list of what's still wanted, as of 0.9.68 (2026-10-30). The
+A running list of what's still wanted, as of 0.11.0 (2026-10-30). The
 3D plan (`docs/phase-4-plan.md`, M1–M13) is done; this is what's left
 around it. `HANDOFF.md` has the details and history; add items here as
 they come up and strike them (or delete them) when they ship.
@@ -109,20 +109,35 @@ Phase 10: 0.10.x on branch `wip-ns-splats` (started 0.10.0).
 
 ## Media
 
-- [ ] Audio: Media Out writes video only, and sources' audio isn't read
+- [X] Audio: Media Out writes video only, and sources' audio isn't read
       (reading, syncing and mixing it is a project of its own)
 
-## Engine and platform (larger)
+## Phase 11: engine and platform (0.11.x, branch `wip-ns-engine`)
+
+Ends in a **beta** (About box, release titles, GitHub pre-releases) for
+a public release once tested.
+
+- [ ] Crash reporting
+- [ ] Plugin process isolation (a crashing native plugin kills the app)
+
+## Later: 0.12.0
 
 - [ ] GPU acceleration (`wgpu` compute; CPU / rayon only today)
 - [ ] Tile-based / region-of-interest processing for very large images
 - [ ] Python plugins (custom nodes in Python)
-- [ ] Plugin process isolation (a crashing native plugin kills the app)
 - [ ] Distro packages (deb / rpm / AUR) and signed, notarized macOS
-      builds (no right-click → Open)
+      builds (no right-click → Open; needs the Apple Developer Program)
 - [ ] USD / Hydra
-- [ ] Crash reporting
 - [ ] RLE / 1-bit DPX (needs a sample file first)
+
+## Before going public
+
+- [ ] Licence (MIT / Apache or GPL), a LICENSE and a NOTICES file
+- [ ] Audit the repo for anything private (paths, emails in notes,
+      `examples/mad-martian.png`, where `musicmen.MP4` came from)
+- [ ] A public-facing README, issue templates, CONTRIBUTING
+- [ ] Actions is free for public repos: the macOS DMG and wheels should
+      build there again
 
 ## Housekeeping
 

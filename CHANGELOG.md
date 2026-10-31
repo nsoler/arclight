@@ -1,9 +1,11 @@
 # Changelog
 
 Arclight is alpha software: versions are `0.<phase>.<increment>`. The
-middle number is the development phase the project is in (10 now:
-Gaussian splats, on branch `wip-ns-splats`; phase 9, the 3D viewport, ran
-0.9.0–0.9.68 on `wip-ns-3dwork`), and every feature or change that
+middle number is the development phase the project is in (11 now:
+engine and platform (crash reporting, plugin process isolation), on
+branch `wip-ns-engine`, ending in a beta for a public release; phase 10,
+Gaussian splats and follow-ups, ran 0.10.0–0.10.37 on `wip-ns-splats`;
+phase 9, the 3D viewport, ran 0.9.0–0.9.68 on `wip-ns-3dwork`), and every feature or change that
 ships bumps the last number (0.9.1, 0.9.2, … 0.9.nn). Phase 9 started
 at 0.9.0 (the user's choice); phase 8 ran 0.8.1–0.8.4. Renumbered from `0.0.36` to `0.8.1` on 2026-10-29 at the
 user's request (nothing else changed then). The version is
@@ -11,6 +13,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 `plugins/example/Cargo.toml`, kept in step) and shows in the GUI's Help
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
+
+## 0.11.0 — 2026-10-30
+
+- **Phase 11 begins: engine and platform**, on branch `wip-ns-engine`:
+  crash reporting and plugin process isolation, then a beta for a public
+  release. Same features as 0.10.37.
 
 ## 0.10.37 — 2026-10-30
 
