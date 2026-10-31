@@ -17,6 +17,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.23 — 2026-10-31
+
+- Instanced cards share their corners when drawn on the CPU, halving the
+  memory 100,000 copies take there. GPU instancing (P4b) is complete:
+  10,000 instanced meshes render in about 120 ms at 1080p (150 ms with a
+  sun's shadows, 0.8 s with 6-sample motion blur), and a million instanced
+  cards fit and render in about half a second.
+
 ## 0.13.22 — 2026-10-31
 
 - GPU: motion blur and the motion pass over instances render through GPU

@@ -112,6 +112,12 @@ fn card_surface(card: &crate::scene::Card) -> Surface<'_> {
     }
 }
 
+/// Card `card`'s corners as a mesh (as [`card_surface`] draws it).
+fn card_mesh(card: &crate::scene::Card) -> crate::geo::CardMesh {
+    let s = card_surface(card);
+    crate::geo::CardMesh { positions: s.positions.into_owned(), normals: s.normals.into_owned(), uvs: s.uvs.into_owned(), triangles: s.triangles.into_owned() }
+}
+
 /// Model `m`: its mesh, its material's color (premultiplied by its
 /// opacity) times its texture, which repeats.
 fn model_surface(m: &crate::scene::Model) -> Surface<'_> {
@@ -186,9 +192,18 @@ pub(crate) fn instance_tint(g: &crate::geo::Instances, i: usize) -> Option<[f32;
 /// the instance before the prototype's own placement, its node `g`'s.
 pub(crate) fn instance_surface(g: &crate::geo::Instances, i: usize, k: u32) -> Option<Surface<'_>> {
     let mult = instance_tint(g, i)?;
-    let (mut s, own) = match &g.prototypes[g.which[i] as usize] {
+    let proto = g.which[i] as usize;
+    let (mut s, own) = match &g.prototypes[proto] {
         crate::geo::Prototype::Model(m) => (model_surface(m), m.world),
-        crate::geo::Prototype::Card(c) => (card_surface(c), c.world),
+        crate::geo::Prototype::Card(c) => {
+            // (Its corners shared with the prototype's other copies.)
+            let meshes = g.card_meshes.get_or_init(|| g.prototypes.iter().map(|p| if let crate::geo::Prototype::Card(c) = p { Some(card_mesh(c)) } else { None }).collect());
+            let mut s = card_surface(c);
+            if let Some(m) = &meshes[proto] {
+                (s.positions, s.normals, s.uvs, s.triangles) = (Cow::Borrowed(&m.positions[..]), Cow::Borrowed(&m.normals[..]), Cow::Borrowed(&m.uvs[..]), Cow::Borrowed(&m.triangles[..]));
+            }
+            (s, c.world)
+        }
         crate::geo::Prototype::Splats(_) => return None,
     };
     s.world = g.worlds[i] * own;
@@ -1549,6 +1564,21 @@ mod tests {
         copies.instances[0].node = "copies".into();
         let real = crate::ops::geo_ops::realize_instances(&serde_json::json!({}), copies.clone()).unwrap();
         (copies, real)
+    }
+
+    /// A card prototype's copies share its corners (one set, not one a
+    /// copy), made again in a copy of the instances.
+    #[test]
+    fn card_copies_share_their_corners() {
+        use crate::geo::{Instances, Prototype};
+        let card = Card::new(Arc::new(checker()), Mat4::identity(), [1.0, 2.0]);
+        let g = Instances { prototypes: vec![Prototype::Card(card.clone())], which: vec![0; 3], worlds: vec![Mat4::identity(); 3], ..Instances::default() };
+        let surfs = instance_surfaces(std::slice::from_ref(&g));
+        assert_eq!(surfs.len(), 3);
+        assert!(surfs.iter().all(|s| matches!(s.positions, Cow::Borrowed(_)) && s.positions.as_ptr() == surfs[0].positions.as_ptr()));
+        assert_eq!(surfs[0].positions[..], card_surface(&card).positions[..], "the card's own corners");
+        let copy = g.clone();
+        assert!(instance_surfaces(std::slice::from_ref(&copy))[0].positions.as_ptr() != surfs[0].positions.as_ptr(), "a copy makes its own");
     }
 
     /// Instances draw as the same objects realized would, shadows and

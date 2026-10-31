@@ -380,6 +380,38 @@ pub struct Instances {
     pub attrs: Attrs,
     /// The node they came from ("" until tagged).
     pub node: String,
+    /// Each card prototype's corners, made once by the renderer for every
+    /// copy to share (left empty in a copy of these: made again there).
+    pub card_meshes: CardMeshes,
+}
+
+/// A card's corners as a mesh: what each of a card prototype's copies is
+/// drawn with (see [`Instances::card_meshes`]).
+#[derive(Clone, Debug, Default)]
+pub struct CardMesh {
+    pub positions: Vec<Vec3>,
+    pub normals: Vec<Vec3>,
+    pub uvs: Vec<[f64; 2]>,
+    pub triangles: Vec<[u32; 3]>,
+}
+
+/// Instances' card prototypes' corners, made when first asked for (by
+/// prototype; None for the rest).
+#[derive(Default)]
+pub struct CardMeshes(std::sync::OnceLock<Vec<Option<CardMesh>>>);
+
+impl Clone for CardMeshes {
+    /// Empty: the copy's prototypes may change, so it makes its own.
+    fn clone(&self) -> CardMeshes {
+        CardMeshes::default()
+    }
+}
+
+impl CardMeshes {
+    /// The corners, made by `make` the first time.
+    pub fn get_or_init(&self, make: impl FnOnce() -> Vec<Option<CardMesh>>) -> &[Option<CardMesh>] {
+        self.0.get_or_init(make)
+    }
 }
 
 impl Instances {

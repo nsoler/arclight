@@ -901,7 +901,7 @@ pub fn instance_on_points(params: &Value, mut scene: Scene, protos: Option<&Scen
                 (which as u32, w)
             })
             .collect();
-        made.push(geo::Instances { prototypes: prototypes.clone(), which: placed.iter().map(|p| p.0).collect(), worlds: placed.into_iter().map(|p| p.1).collect(), attrs: a.clone(), node: String::new() });
+        made.push(geo::Instances { prototypes: prototypes.clone(), which: placed.iter().map(|p| p.0).collect(), worlds: placed.into_iter().map(|p| p.1).collect(), attrs: a.clone(), node: String::new(), ..geo::Instances::default() });
     }
     if !params["keep_points"].as_bool().unwrap_or(false) {
         scene.point_sets.retain(|g| !take(&g.node));

@@ -37,6 +37,13 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.23, P4b B4: shared card corners** (Dev2): `geo::CardMeshes`
+  (a OnceLock per card prototype, made by the renderer; Clone gives an
+  empty one); `instance_surface` borrows it. 100k cards' CPU expansion
+  56.8 → 28.8 MB. **P4b done.** Final bench 1080p AA2 (RTX 5070): 10k
+  spheres 121 ms (806 before), + sun 148 (1473), blur 6 763 (3917); 1M
+  cards 536 ms (didn't fit), + sun 646. GPU memory for 1M cards: 80 MB
+  records + 80 MB setups + ~40 MB bins.
 - **0.13.22, P4b B3: instanced motion** (Dev2): the motion pass is
   worked out in `finish()` (`instances::Later`, `Plan::cpu_index`,
   `Plan::next_positions` reproduce the CPU's surface numbering without
