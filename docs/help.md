@@ -671,7 +671,10 @@ defaults**.
   an error). Setting `ARCLIGHT_GPU=0` in the environment turns it off
   whatever Preferences say (the checkbox is then greyed). GPU and CPU
   results match within a very small tolerance, not bit for bit;
-  `arclight render --cpu` renders on the CPU only.
+  `arclight render --cpu` renders on the CPU only. On the GPU so far:
+  Scanline Render and the 3D view's shaded meshes and cards (every light
+  and pass, anti-aliasing, see-through stacks); scenes with lights that
+  cast shadows, and Gaussian splats, still render on the CPU.
 
 ## GPU self-test
 

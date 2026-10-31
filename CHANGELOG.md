@@ -15,6 +15,18 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.2 — 2026-10-31
+
+- GPU: **Scanline Render and the 3D view render on the GPU**: a compute
+  rasterizer that follows the CPU renderer sample for sample (every light
+  and pass, anti-aliasing, holdouts, see-through stacks, mipmaps made on
+  the GPU). 4K anti-aliased is about 12× faster than the CPU here, the 3D
+  view about 2–3×. Scenes with shadow-casting lights or splats still
+  render on the CPU (G5, G6). Pixels with very deep see-through stacks
+  (over 64 layers) are finished on the CPU, the rest stays on the GPU.
+- The CPU renderer's pass assembly runs in parallel (a little faster).
+- The GPU self-test gains four 3D rows.
+
 ## 0.12.1 — 2026-10-30
 
 - GPU: **Blur runs on the GPU**, and Grade, Exposure, Saturation, Invert,

@@ -13,6 +13,10 @@ they come up and strike them (or delete them) when they ship.
       gpu` names the GPU (Metal; "unified memory" on the M4 Pro), `arclight
       gpu --check` passes, and `cargo test --release` there (the GPU tests
       run on Metal)
+- [ ] 0.12.2 (GPU G4): a Scanline Render without shadows renders much
+      faster with the GPU on, and looks the same as with it off (toggle
+      in Preferences); the 3D view orbits more smoothly (Lit and Solid);
+      on the Macs too
 - [ ] 0.12.1 (GPU G2): on the Macs, `arclight gpu --check` includes the
       Grade / Merge / Blur rows (Metal's fast math against the
       tolerances); a 2D chain with big blurs feels quicker with the GPU on

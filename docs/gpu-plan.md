@@ -231,17 +231,31 @@ and 2D ops, Dev2 the 3D renderer and splats. 3D needs only the core
   (`gpu.cache_mb`, default 2048) evicts least-recently-used GPU entries by
   reading them back to CPU entries (cache semantics unchanged).
 - **D6, the 3D renderer renders on the GPU and reads back once.**
-  `render3d`'s public entry points pick the GPU path inside themselves,
-  so Scanline Render, the 3D view's `render_preview`, particles' render
-  and Camera Tracker point picking all get it without changes elsewhere.
-  It is a *render pipeline* (vertex / fragment, depth buffers), not
-  compute, except for splats and the transparency resolve. Geometry,
-  textures and splat sets are uploaded once and cached on the GPU by
-  `Arc` identity (as `splats::same` already does for its `View` cache).
-  AA keeps the CPU's n×n sample grid by rendering n² sub-pixel-shifted
-  passes and averaging, which also makes motion blur (time samples) and
-  jittered shutter the same accumulation loop; no MSAA (it can't do 3×3
-  positions).
+  *(Revised in G4, 2026-10-31, accepted by the Supervisor: a compute
+  rasterizer instead of a render pipeline with fragment lists.)*
+  `render3d::draw_passes` tries `render3d/gpu` first, so Scanline Render,
+  the 3D view's `render_preview`, particles' render and Camera Tracker
+  point picking all get it without changes elsewhere. It mirrors the CPU
+  renderer's algorithm sample for sample, in compute: triangles set up on
+  the CPU in f64 as now (`triangles()`: clipping, projection), binned into
+  16 × 16 tiles; one GPU thread a pixel gathers each sample's covering
+  triangles, keeps the nearest 16 sorted by (depth, triangle), and blends
+  them front to back with the CPU's rules (holdouts, one hit where two
+  triangles of a surface meet, the nearest half-opaque surface for the
+  passes), shading each hit (mipmapped texture, every light type). The
+  n×n sample grid is the CPU's; a dispatch takes one row of samples, so
+  no dispatch runs long. Why not hardware raster: the CPU blends *every*
+  fragment of a sample in depth order, which a depth buffer can't, and
+  per-pixel fragment lists cost 4K × 9 × K memory; this way results stay
+  deterministic, close to the CPU, and need no atomics. Shared edges are
+  evaluated in a fixed vertex order, so no sample falls between two
+  triangles. Where a sample has more than 16 surfaces and more than 1e-4
+  of the light still comes through them, the frame runs again keeping 64,
+  and pixels past that are rendered on the CPU and put in (per pixel, not
+  per frame). P, N, uv, motion and id come from the surface each pixel
+  kept, worked out on the CPU by the CPU's code. Textures are uploaded
+  once per set (kept while the same `Arc`s) and their mipmaps made on the
+  GPU; output buffers are kept between renders.
 - **D7, the switch and fallback.** GPU used when all hold: built with
   `gpu`; `ARCLIGHT_GPU` isn't `0` (`ARCLIGHT_GPU=0` forces the CPU, and
   overrides the preference); Preferences ▸ Performance ▸ "GPU
@@ -488,23 +502,28 @@ switch, the status and the tests' skip work end to end.
 
 ### G4: Scanline Render on the GPU [Dev2]
 
-- `src/render3d/gpu/`: cards and meshes (cached vertex / index buffers
-  and textures per `Arc`), perspective and ortho cameras, near clipping,
-  unlit / lambert / specular shading and all light types as in
-  `shade.rs`, textures with mipmaps built on the GPU and the CPU's
-  footprint rule, holdouts, background.
-- **See-through surfaces:** the CPU blends every fragment per sample in
-  depth order. On the GPU: opaque surfaces through the depth buffer;
-  see-through ones into per-pixel fragment lists (fixed K per pixel, K
-  sized from the scene; overflow drops the farthest and is counted) and a
-  compute pass that sorts and blends them front to back over the opaque
-  result. (Risk R2.)
-- AA by n² sub-pixel passes (D6). Passes: depth, P, N, uv, id, mattes,
-  light parts, per light, as storage outputs.
-- `render_cell` / `render_preview` choose the GPU when `gpu::get()` is
-  `Some` and the scene has nothing unported (G4: no shadows, no motion
-  blur, no splats, no particles → those scenes stay on the CPU until G5 /
-  G6). The 3D view gets it through `render_preview`, unchanged.
+- `src/render3d/gpu/`: the compute rasterizer of D6 (`raster.wgsl`),
+  mipmaps on the GPU (`mip.wgsl`), cards and meshes, perspective and
+  ortho cameras, unlit / Lambert / Blinn shading and every light type as
+  in `shade.rs`, holdouts, the 3D view's Solid shading, jittered cells,
+  every pass (depth, P, N, uv, motion, id, mattes, light parts, per
+  light, shadow). See-through stacks as in D6 (16, then 64, then the CPU
+  per pixel).
+- `draw_passes` takes the GPU when `gpu::get()` is `Some` and the frame
+  has no shadow-casting light (G5) and no splats (G6), at most 32 objects
+  with mattes and 16 light nodes with the lights pass. Particle sprites
+  are drawn after it on the CPU as now (particle objects are meshes, so
+  on the GPU). Motion blur works (each time a GPU render), not yet fast
+  (G5).
+- Measured (RTX 5070, warm: the camera moving between renders, scene and
+  textures kept, as in the GUI): 4K AA 3×3, the 4-object 3-light scene,
+  **83 ms** against the CPU's 1004 ms (12×; the plan's ~50 ms needs the
+  read-back gone: ~15 ms GPU, ~35 ms read-back, ~15 ms CPU finishing);
+  1080p one sample (the 3D view) **19 ms** against 44 ms; 4K with P, N,
+  motion and id 382 ms against 1233 ms (the CPU works those passes out
+  per pixel). Smoke of 30–60 see-through cards: all on the GPU, 1080p AA
+  3×3 63–84 ms against 222–445 ms; 200 cards at 10 %: 8 % of pixels on the
+  CPU, 1.0 s against 1.8 s.
 - Tests: hand-made scenes exact away from edges, the M-series test scenes
   statistically (D8), passes compared channel by channel.
 
@@ -512,9 +531,14 @@ switch, the status and the tests' skip work end to end.
 
 - Shadow maps on the GPU (`shadow.rs`'s maps: directional / spot depth
   maps, point-light cube maps, area-light points, softness), drawn once
-  per time sample.
-- Motion blur and the jittered shutter as the accumulation loop (time
-  samples × AA samples), the motion pass from the next frame's vertices.
+  per time sample by a depth-only variant of G4's rasterizer (nearest
+  caster per texel, see-through casters as layers), looked up with the
+  CPU's filtering inside the light loop. Maps are 128–2048 texels a side:
+  6–25 MB a light.
+- Motion blur and the jittered shutter accumulated on the GPU: one frame
+  of buffers summed over every time and cell (G4 reads each time back and
+  sums on the CPU: 1080p, 8 times, 1.2 s against the CPU's 3–6 s), one
+  read-back at the end; the triangles set up on the CPU per time.
 - Particles: sprites (textured, sequences) and instanced meshes on the
   GPU, motion blur included.
 - Target (4K, the measured scene): motion blur 8 + shadows from 28 s to
@@ -569,11 +593,11 @@ Risks:
   per-sample fragment sorting; the GPU will differ at edges and in
   shadow-map texels. D8's statistical tolerance is the contract; if the
   user needs bit-exact renders, the CPU stays available (Q2).
-- **R2, transparency on the GPU.** Per-pixel fragment lists cost memory
-  (4K × 9 samples × K fragments); many stacked see-through cards (smoke
-  sprites, glass) can overflow K. Mitigation: fall back to the CPU
-  renderer for a frame whose overflow count is non-zero, and say so in
-  the node's info.
+- **R2, transparency on the GPU.** *(Settled in G4, see D6.)* A sample
+  keeps 16 surfaces, then 64 in a second try; past that, those pixels
+  render on the CPU. Measured: 30–60 overlapping see-through cards stay
+  on the GPU; 200 at 10 % opacity send 8 % of pixels to the CPU (still
+  faster than all-CPU).
 - **R3, transfer cost.** 4K round trip ~42 ms; a chain alternating GPU and
   CPU-only ops (shapes, plugins, Light 2D) can be slower than all-CPU. The
   dispatcher should keep a node on the CPU when its inputs are CPU-side

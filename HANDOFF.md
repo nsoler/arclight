@@ -30,6 +30,21 @@ done), `docs/help.md` (the in-app help) and
   "Dropped TexturesDelta with 1 unapplied deltas" (egui 0.37) now end
   `ctx.run_ui(..)` with `.drop_without_applying_deltas()` instead of
   `let _ =`; all GUI tests pass. **Tip:** do the same in new egui tests.
+- **0.12.2, GPU G4** (Dev2): `src/render3d/gpu/` is a compute
+  rasterizer copying the CPU's per-sample algorithm (D6 in the plan, as
+  rewritten), dispatched at the top of `draw_passes`; `Slots`,
+  `next_positions`, `draw_points`, `add_planes` are shared with the CPU,
+  and `draw_cpu(.., only)` renders a pixel mask. Deep see-through stacks:
+  16 layers, then a rerun keeping 64, then those pixels on the CPU. Lib
+  unit tests keep the GPU renderer off unless a test sets
+  `render3d::gpu::tests::GPU_ON` (the old render3d tests check exact CPU
+  values); the GPU is held to D8 in its own tests. Warm render_preview
+  1080p Lit 21 ms vs CPU 61 ms on a quiet machine. Under heavy CPU load
+  (builds) the GPU path suffers more: half its time is still CPU work
+  (setup, read-back, finishing), which G7 removes. Seen once in 17
+  bench runs: SIGSEGV at process exit inside NVIDIA's shader-compiler
+  thread (the device is a static, never torn down): Dev1 to add a
+  `gpu::shutdown()` before exit.
 - **0.12.1, GPU G2** (Dev1): Evaluator cache entries `Res::{Cpu, Gpu}`
   (graph.rs; read back once on first CPU need), `gpu::ops` (dispatcher;
   the uber-shader's op codes must match `pointwise.wgsl`'s consts),

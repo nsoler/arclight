@@ -27,16 +27,17 @@ use rayon::prelude::*;
 use std::borrow::Cow;
 use std::sync::{Arc, OnceLock};
 
+#[cfg(feature = "gpu")]
+mod gpu;
 mod mip;
 mod particles;
 mod shadow;
 mod splats;
 
-/// The 3D renderer's rows in the GPU self-test ([`crate::gpu::check`]):
-/// none until the renderer runs on the GPU.
+/// The 3D renderer's rows in the GPU self-test ([`crate::gpu::check`]).
 #[cfg(feature = "gpu")]
-pub fn gpu_checks(_gpu: &crate::gpu::Gpu) -> Vec<crate::gpu::check::CheckRow> {
-    Vec::new()
+pub fn gpu_checks(gpu: &crate::gpu::Gpu) -> Vec<crate::gpu::check::CheckRow> {
+    gpu::check::rows(gpu)
 }
 
 /// A triangle mesh to draw, in its own space, placed by `world`, colored
@@ -791,6 +792,132 @@ fn slot(k: &mut usize, on: bool, n: usize) -> usize {
     at
 }
 
+/// Where each pass's channels are among a pixel's extra ones (for
+/// `objects` object nodes and `light_nodes` light nodes): P (3), N (3),
+/// uv (2), motion (2), id, a matte per node, the four lighting parts (3
+/// each), each light node (3 each), shadow (3), as asked for.
+#[derive(Clone, Copy, Debug)]
+struct Slots {
+    /// The channels a pixel has (0: none).
+    stride: usize,
+    p_at: usize,
+    n_at: usize,
+    uv_at: usize,
+    motion_at: usize,
+    id_at: usize,
+    matte_at: usize,
+    part_on: [bool; 4],
+    part_at: [usize; 4],
+    light_at: usize,
+    shadow_at: usize,
+    /// Any light part, lights or shadow asked for.
+    any_part: bool,
+    /// The lights and mattes passes (for the GPU's shader).
+    #[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+    lights: bool,
+    #[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+    mattes: bool,
+}
+
+impl Slots {
+    fn new(passes: Passes, objects: usize, light_nodes: usize) -> Slots {
+        let mut k = 0;
+        let p_at = slot(&mut k, passes.position, 3);
+        let n_at = slot(&mut k, passes.normal, 3);
+        let uv_at = slot(&mut k, passes.uv, 2);
+        let motion_at = slot(&mut k, passes.motion, 2);
+        let id_at = slot(&mut k, passes.id, 1);
+        let matte_at = slot(&mut k, passes.mattes, objects);
+        let part_on = [passes.diffuse, passes.specular, passes.emission, passes.ambient];
+        let part_at = part_on.map(|on| slot(&mut k, on, 3));
+        let light_at = slot(&mut k, passes.lights, 3 * light_nodes);
+        let shadow_at = slot(&mut k, passes.shadow, 3);
+        let any_part = part_on.iter().any(|b| *b) || passes.lights || passes.shadow;
+        Slots { stride: k, p_at, n_at, uv_at, motion_at, id_at, matte_at, part_on, part_at, light_at, shadow_at, any_part, lights: passes.lights, mattes: passes.mattes }
+    }
+}
+
+/// Each surface's vertices in the scene a frame later, for the motion
+/// pass: the surface at the same place in `next`'s list, if it's from the
+/// same node (its own vertices if it has as many, so deforming meshes
+/// move too), else where they are now.
+fn next_positions(surfs: &[Surface], next: Option<(&Scene, &Camera)>) -> Vec<Vec<Vec3>> {
+    let later = next.map(|n| surfaces(n.0)).unwrap_or_default();
+    surfs
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let (world, positions) = match later.get(i).filter(|l| l.node == s.node) {
+                Some(l) if l.positions.len() == s.positions.len() => (l.world, &l.positions),
+                Some(l) => (l.world, &s.positions),
+                None => (s.world, &s.positions),
+            };
+            positions.iter().map(|p| geom::transform_point(&world, p)).collect()
+        })
+        .collect()
+}
+
+/// `points` through `cam` as one-pixel dots into a frame of `format`
+/// (`color` and `depth` by pixel), where nothing nearer is.
+fn draw_points(points: &[Vec3], cam: &Camera, format: Size, color: &mut [Rgba], depth: &mut [f32]) {
+    let frame = IRect::frame(format);
+    for p in points {
+        if let Some((q, d)) = cam.project(p, format) {
+            let (x, y) = (q[0].floor() as i32, q[1].floor() as i32);
+            if frame.contains(x, y) && d <= cam.far {
+                let i = y as usize * format.width + x as usize;
+                if depth[i] == 0.0 || (d as f32) < depth[i] {
+                    color[i] = [1.0, 1.0, 1.0, 1.0];
+                    depth[i] = d as f32;
+                }
+            }
+        }
+    }
+}
+
+/// The passes' planes onto `out` (a frame-sized render): `depth`, and the
+/// rest from `extra` (`stride` channels a pixel, where `s` says), the
+/// mattes and lights named by `nodes` and `light_names`.
+#[allow(clippy::too_many_arguments)]
+fn add_planes(out: &mut Image, depth: Vec<f32>, extra: &[f32], stride: usize, passes: Passes, s: &Slots, nodes: &[&str], light_names: &[&str]) {
+    let n = out.pixels.len();
+    if passes.depth {
+        *out.plane_mut("depth") = depth;
+    }
+    let mut plane = |name: String, c: usize| *out.plane_mut(&name) = (0..n).into_par_iter().map(|i| extra[i * stride + c]).collect();
+    if passes.position {
+        ["x", "y", "z"].iter().enumerate().for_each(|(i, a)| plane(format!("P.{a}"), s.p_at + i));
+    }
+    if passes.normal {
+        ["x", "y", "z"].iter().enumerate().for_each(|(i, a)| plane(format!("N.{a}"), s.n_at + i));
+    }
+    if passes.uv {
+        plane("uv.u".into(), s.uv_at);
+        plane("uv.v".into(), s.uv_at + 1);
+    }
+    if passes.motion {
+        plane("motion.u".into(), s.motion_at);
+        plane("motion.v".into(), s.motion_at + 1);
+    }
+    if passes.id {
+        plane("id".into(), s.id_at);
+    }
+    if passes.mattes {
+        nodes.iter().enumerate().for_each(|(o, node)| plane(format!("matte.{node}"), s.matte_at + o));
+    }
+    for (p, name) in ["diffuse", "specular", "emission", "ambient"].iter().enumerate().filter(|(p, _)| s.part_on[*p]) {
+        ["R", "G", "B"].iter().enumerate().for_each(|(c, ch)| plane(format!("{name}.{ch}"), s.part_at[p] + c));
+    }
+    if passes.lights {
+        for (o, node) in light_names.iter().enumerate() {
+            ["R", "G", "B"].iter().enumerate().for_each(|(c, ch)| plane(format!("light.{node}.{ch}"), s.light_at + 3 * o + c));
+        }
+    }
+    if passes.shadow {
+        ["R", "G", "B"].iter().enumerate().for_each(|(c, ch)| plane(format!("shadow.{ch}"), s.shadow_at + c));
+    }
+}
+
 /// Surfaces `surfs` and dots at `points` through `cam` into a frame of
 /// `format`, with depth (see [`render`]).
 #[cfg(test)]
@@ -813,27 +940,22 @@ fn object_nodes<'a>(surfs: &[Surface<'a>]) -> Vec<&'a str> {
 /// [`draw`] writing `passes` (see [`render_passes`]).
 #[allow(clippy::too_many_arguments)]
 fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes, next: Option<(&Scene, &Camera)>, cell: Option<Cell>, splats: Option<&splats::Prepared>) -> Image {
+    // On the GPU where it can (see gpu/mod.rs), else here.
+    #[cfg(feature = "gpu")]
+    if let Some(img) = gpu::draw_passes(surfs, lights, points, cam, format, samples, passes, next, cell, splats) {
+        return img;
+    }
+    draw_cpu(surfs, lights, points, cam, format, samples, passes, next, cell, splats, None)
+}
+
+/// [`draw_passes`] on the CPU; with `only`, just the pixels it marks (by
+/// index in the frame; the rest left empty).
+#[allow(clippy::too_many_arguments)]
+fn draw_cpu(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camera, format: Size, samples: usize, passes: Passes, next: Option<(&Scene, &Camera)>, cell: Option<Cell>, splats: Option<&splats::Prepared>, only: Option<&[bool]>) -> Image {
     let n = samples.clamp(1, 16);
-    // With the motion pass: each surface's vertices a frame later (the
-    // surface at the same place in the next frame's list, if it's from the
-    // same node; its own vertices if it has as many, so deforming meshes
-    // move too), else where they are now.
+    // With the motion pass: each surface's vertices a frame later.
     let next_cam = next.map_or(cam, |n| n.1);
-    let next_world: Option<Vec<Vec<Vec3>>> = passes.motion.then(|| {
-        let later = next.map(|n| surfaces(n.0)).unwrap_or_default();
-        surfs
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let (world, positions) = match later.get(i).filter(|l| l.node == s.node) {
-                    Some(l) if l.positions.len() == s.positions.len() => (l.world, &l.positions),
-                    Some(l) => (l.world, &s.positions),
-                    None => (s.world, &s.positions),
-                };
-                positions.iter().map(|p| geom::transform_point(&world, p)).collect()
-            })
-            .collect()
-    });
+    let next_world = passes.motion.then(|| next_positions(surfs, next));
     let tris = triangles(surfs, cam, format, next_world.as_deref());
     let rows = bin_rows(&tris, format.height);
     let frame = IRect::frame(format);
@@ -849,21 +971,9 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
     let object: Vec<Option<usize>> = surfs.iter().map(|s| nodes.iter().position(|n| *n == s.node)).collect();
     let splat_object: Vec<Option<usize>> = splats.map_or(&[][..], |sp| sp.nodes()).iter().map(|s| nodes.iter().position(|n| n == s)).collect();
     let (light_names, light_of) = light_nodes(lights);
-    // Per pixel, the extra channels, as asked for: P (3), N (3), uv (2), id,
-    // a matte per node, the four lighting parts (3 each), each light node
-    // (3 each).
-    let mut k = 0;
-    let p_at = slot(&mut k, passes.position, 3);
-    let n_at = slot(&mut k, passes.normal, 3);
-    let uv_at = slot(&mut k, passes.uv, 2);
-    let motion_at = slot(&mut k, passes.motion, 2);
-    let id_at = slot(&mut k, passes.id, 1);
-    let matte_at = slot(&mut k, passes.mattes, nodes.len());
-    let part_on = [passes.diffuse, passes.specular, passes.emission, passes.ambient];
-    let part_at = part_on.map(|on| slot(&mut k, on, 3));
-    let light_at = slot(&mut k, passes.lights, 3 * light_names.len());
-    let shadow_at = slot(&mut k, passes.shadow, 3);
-    let any_part = part_on.iter().any(|b| *b) || passes.lights || passes.shadow;
+    // Per pixel, the extra channels, as asked for (see [`Slots`]).
+    let slots = Slots::new(passes, nodes.len(), light_names.len());
+    let Slots { stride: k, p_at, n_at, uv_at, motion_at, id_at, matte_at, part_on, part_at, light_at, shadow_at, any_part, .. } = slots;
     let shadows = shadow::Shadows::build(if lights.is_empty() { &[] } else { surfs }, lights);
     // Each surface's texture's mipmaps, made if a sample sees it small.
     let mips: Vec<OnceLock<Arc<mip::Mips>>> = surfs.iter().map(|_| OnceLock::new()).collect();
@@ -879,7 +989,7 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
         .enumerate()
         .for_each(|(y, ((crow, drow), xrow))| {
             let row = &rows[y];
-            if (row.is_empty() && splats.is_none()) || cell.is_some_and(|c| y % c.side != c.y) {
+            if (row.is_empty() && splats.is_none()) || cell.is_some_and(|c| y % c.side != c.y) || only.is_some_and(|m| !m[y * w..(y + 1) * w].contains(&true)) {
                 return;
             }
             let (yu, y) = (y, y as i32);
@@ -904,7 +1014,7 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
                     next += 1;
                 }
                 here.retain(|&i| tris[i as usize].bounds.x1 > xi);
-                if cell.is_some_and(|c| x % c.side != c.x) {
+                if cell.is_some_and(|c| x % c.side != c.x) || only.is_some_and(|m| !m[yu * w + x]) {
                     continue;
                 }
                 if let Some(sp) = splats {
@@ -1141,55 +1251,10 @@ fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], cam: &Camer
             }
         });
     // Points: a one-pixel dot each, where nothing nearer is.
-    for p in points {
-        if let Some((q, d)) = cam.project(p, format) {
-            let (x, y) = (q[0].floor() as i32, q[1].floor() as i32);
-            if frame.contains(x, y) && d <= cam.far {
-                let i = y as usize * w + x as usize;
-                if depth[i] == 0.0 || (d as f32) < depth[i] {
-                    color[i] = [1.0, 1.0, 1.0, 1.0];
-                    depth[i] = d as f32;
-                }
-            }
-        }
-    }
+    draw_points(points, cam, format, &mut color, &mut depth);
     let mut out = Image::blank(format, frame);
     out.pixels = color;
-    if passes.depth {
-        *out.plane_mut("depth") = depth;
-    }
-    let mut plane = |name: String, c: usize| *out.plane_mut(&name) = (0..w * h).map(|i| extra[i * stride + c]).collect();
-    if passes.position {
-        ["x", "y", "z"].iter().enumerate().for_each(|(i, a)| plane(format!("P.{a}"), p_at + i));
-    }
-    if passes.normal {
-        ["x", "y", "z"].iter().enumerate().for_each(|(i, a)| plane(format!("N.{a}"), n_at + i));
-    }
-    if passes.uv {
-        plane("uv.u".into(), uv_at);
-        plane("uv.v".into(), uv_at + 1);
-    }
-    if passes.motion {
-        plane("motion.u".into(), motion_at);
-        plane("motion.v".into(), motion_at + 1);
-    }
-    if passes.id {
-        plane("id".into(), id_at);
-    }
-    if passes.mattes {
-        nodes.iter().enumerate().for_each(|(o, node)| plane(format!("matte.{node}"), matte_at + o));
-    }
-    for (p, name) in ["diffuse", "specular", "emission", "ambient"].iter().enumerate().filter(|(p, _)| part_on[*p]) {
-        ["R", "G", "B"].iter().enumerate().for_each(|(c, ch)| plane(format!("{name}.{ch}"), part_at[p] + c));
-    }
-    if passes.lights {
-        for (o, node) in light_names.iter().enumerate() {
-            ["R", "G", "B"].iter().enumerate().for_each(|(c, ch)| plane(format!("light.{node}.{ch}"), light_at + 3 * o + c));
-        }
-    }
-    if passes.shadow {
-        ["R", "G", "B"].iter().enumerate().for_each(|(c, ch)| plane(format!("shadow.{ch}"), shadow_at + c));
-    }
+    add_planes(&mut out, depth, &extra, stride, passes, &slots, &nodes, &light_names);
     out
 }
 
