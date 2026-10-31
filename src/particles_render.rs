@@ -351,6 +351,7 @@ mod tests {
             spin: 0.0,
             axis: Vec3::z(),
             start_size: size,
+            source: crate::particles::NO_SOURCE,
         }
     }
 

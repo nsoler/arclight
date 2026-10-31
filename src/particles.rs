@@ -65,7 +65,13 @@ pub struct Particle {
     pub axis: Vec3,
     /// The size it was born with.
     pub start_size: f64,
+    /// The point it was born at, of a point set the emitter emits from
+    /// ([`Shape::Points`]); [`NO_SOURCE`] for the other shapes.
+    pub source: u32,
 }
+
+/// A particle born from a shape other than a point set.
+pub const NO_SOURCE: u32 = u32::MAX;
 
 impl Particle {
     /// It `secs` seconds on (or back), along its velocity and pulled by its
@@ -98,6 +104,61 @@ pub enum Shape {
     /// Where an image's alpha is, as likely as the alpha is high; see
     /// [`Shape::mask`].
     Mask(Arc<Mask>),
+    /// At the points of point sets, each particle at one (and, where the
+    /// points have them, with their velocity, size, color, life and turn).
+    Points(Arc<PointSource>),
+}
+
+/// Points to emit from (in the scene): their positions, and what their
+/// attributes say about the particles born at them (see
+/// [`PointSource::new`]); all their attributes, for the particles to carry.
+#[derive(Clone, Debug, Default)]
+pub struct PointSource {
+    pub positions: Vec<Vec3>,
+    pub attrs: crate::geo::Attrs,
+    velocity: Option<Vec<Vec3>>,
+    size: Option<Vec<f64>>,
+    color: Option<Vec<[f32; 4]>>,
+    life: Option<Vec<f64>>,
+    /// Their turn: an axis and degrees about it.
+    turn: Option<Vec<(Vec3, f64)>>,
+}
+
+impl PointSource {
+    /// Points at `positions` (in the scene) with `attrs`: their v
+    /// (velocity), pscale (size), Cd (color, linear RGBA straight), life
+    /// (frames) and orient (a quaternion x, y, z, w) give the particles
+    /// born at them theirs.
+    pub fn new(positions: Vec<Vec3>, attrs: crate::geo::Attrs) -> PointSource {
+        use crate::geo::{ALPHA, CD, ORIENT, PSCALE};
+        let v3 = |a: &[f32; 3]| Vec3::new(a[0] as f64, a[1] as f64, a[2] as f64);
+        let velocity = attrs.vec3("v").map(|v| v.iter().map(v3).collect());
+        let size = attrs.float(PSCALE).map(|v| v.iter().map(|&x| x as f64).collect());
+        let alpha = attrs.float(ALPHA);
+        // (Particles' colors are premultiplied.)
+        let color = attrs.vec4(CD).map(|c| c.iter().enumerate().map(|(i, c)| {
+            let a = alpha.map_or(c[3], |al| c[3] * al[i]);
+            [c[0] * a, c[1] * a, c[2] * a, a]
+        }).collect());
+        let life = attrs.float("life").map(|v| v.iter().map(|&x| x as f64).collect());
+        let turn = attrs.vec4(ORIENT).map(|v| {
+            v.iter()
+                .map(|q| {
+                    let q = nalgebra::UnitQuaternion::new_normalize(nalgebra::Quaternion::new(q[3] as f64, q[0] as f64, q[1] as f64, q[2] as f64));
+                    q.axis_angle().map_or((Vec3::z(), 0.0), |(axis, angle)| (axis.into_inner(), angle.to_degrees()))
+                })
+                .collect()
+        });
+        PointSource { positions, attrs, velocity, size, color, life, turn }
+    }
+
+    pub fn len(&self) -> usize {
+        self.positions.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.positions.is_empty()
+    }
 }
 
 impl PartialEq for Shape {
@@ -106,6 +167,7 @@ impl PartialEq for Shape {
             (Shape::MeshSurface(a), Shape::MeshSurface(b)) => Arc::ptr_eq(a, b),
             (Shape::MeshVertices(a), Shape::MeshVertices(b)) => Arc::ptr_eq(a, b),
             (Shape::Mask(a), Shape::Mask(b)) => Arc::ptr_eq(a, b),
+            (Shape::Points(a), Shape::Points(b)) => Arc::ptr_eq(a, b),
             (Shape::Point, Shape::Point) => true,
             (Shape::Line { length: a }, Shape::Line { length: b }) => a == b,
             (Shape::Rect { width: a, height: b }, Shape::Rect { width: c, height: d }) => (a, b) == (c, d),
@@ -240,6 +302,12 @@ impl Shape {
                 let (x, y) = m.pixels[pick(&m.weights, r[2] * total)];
                 (Vec3::new(x as f64 + r[0], y as f64 + r[1], 0.0), z)
             }
+            Shape::Points(p) => {
+                if p.is_empty() {
+                    return None;
+                }
+                (p.positions[((r[2] * p.len() as f64) as usize).min(p.len() - 1)], Vec3::zeros())
+            }
         })
     }
 }
@@ -302,6 +370,9 @@ pub struct Emitter {
     pub spin: f64,
     pub spin_var: f64,
     pub seed: u64,
+    /// From a point set: its burst one particle at each point, in order
+    /// (else each picks a point at random).
+    pub each_once: bool,
 }
 
 impl Default for Emitter {
@@ -330,6 +401,7 @@ impl Default for Emitter {
             spin: 0.0,
             spin_var: 0.0,
             seed: 0,
+            each_once: false,
         }
     }
 }
@@ -365,6 +437,9 @@ impl Emitter {
         let r = |slot: Draw, k: u64| random(self.seed, id, slot as u64 + k);
         let vary = |slot: Draw| 2.0 * r(slot, 0) - 1.0;
         let s = Draw::Shape;
+        if let Shape::Points(src) = &self.shape {
+            return self.born_at_point(src, id, transform);
+        }
         let (local, normal) = self.shape.sample([r(s, 0), r(s, 1), r(s, 2), r(s, 3)])?;
         let m = transform;
         let position = crate::geom::transform_point(m, &local);
@@ -388,14 +463,66 @@ impl Emitter {
             spin: self.spin + self.spin_var * vary(Draw::Spin),
             axis: unit_vector(r(Draw::Axis, 0), r(Draw::Axis, 1)),
             start_size: size,
+            source: NO_SOURCE,
         })
     }
 
-    /// Size and color for `p`'s age.
+    /// Particle `id` born at a point of `src` (the `k`-th of a burst at
+    /// the `k`-th point when each is emitted once, else one at random):
+    /// as [`Emitter::particle`], but the point's velocity, size, color,
+    /// life and turn where it has them (varied as the emitter's would be;
+    /// Spread turning its velocity).
+    fn born_at_point(&self, src: &PointSource, id: u64, transform: &Mat4) -> Option<Particle> {
+        let r = |slot: Draw, k: u64| random(self.seed, id, slot as u64 + k);
+        let vary = |slot: Draw| 2.0 * r(slot, 0) - 1.0;
+        let n = src.len();
+        if n == 0 {
+            return None;
+        }
+        let k = (id & 0xffff_ffff) as usize;
+        let i = if self.each_once && k < n && (k as u64) < self.burst as u64 { k } else { ((r(Draw::Shape, 2) * n as f64) as usize).min(n - 1) };
+        let m = transform;
+        let position = crate::geom::transform_point(m, &src.positions[i]);
+        let turn = |v: Vec3| m.fixed_view::<3, 3>(0, 0) * v;
+        let (dir, speed) = match &src.velocity {
+            Some(v) => (turn(v[i]).try_normalize(1e-12).unwrap_or_default(), v[i].norm()),
+            None => (turn(self.direction).try_normalize(1e-12).unwrap_or_default(), self.speed),
+        };
+        let dir = cone(dir, self.spread.to_radians(), r(Draw::Cone, 0), r(Draw::Cone, 1));
+        let speed = speed * (1.0 + self.speed_var * vary(Draw::Speed));
+        let life = (src.life.as_ref().map_or(self.life, |l| l[i]) * (1.0 + self.life_var * vary(Draw::Life))).max(0.0);
+        let size = (src.size.as_ref().map_or(self.size, |s| s[i]) * (1.0 + self.size_var * vary(Draw::Size))).max(0.0);
+        let (axis, rotation) = match &src.turn {
+            Some(t) => t[i],
+            None => (unit_vector(r(Draw::Axis, 0), r(Draw::Axis, 1)), self.rotation + self.rotation_var * vary(Draw::Rotation)),
+        };
+        Some(Particle {
+            id,
+            position,
+            velocity: dir * speed,
+            accel: Vec3::zeros(),
+            age: 0.0,
+            life,
+            size,
+            color: src.color.as_ref().map_or(self.color, |c| c[i]),
+            rotation,
+            spin: self.spin + self.spin_var * vary(Draw::Spin),
+            axis,
+            start_size: size,
+            source: i as u32,
+        })
+    }
+
+    /// Size and color for `p`'s age (from its point's color, where it was
+    /// born at one that has one).
     fn grow(&self, p: &mut Particle) {
         let t = if p.life > 0.0 { (p.age / p.life).clamp(0.0, 1.0) } else { 1.0 };
         p.size = p.start_size * (1.0 + (self.size_end - 1.0) * t);
-        p.color = std::array::from_fn(|i| self.color[i] + (self.color_end[i] - self.color[i]) * t as f32);
+        let from = match &self.shape {
+            Shape::Points(src) => src.color.as_ref().and_then(|c| c.get(p.source as usize)).copied().unwrap_or(self.color),
+            _ => self.color,
+        };
+        p.color = std::array::from_fn(|i| from[i] + (self.color_end[i] - self.color[i]) * t as f32);
     }
 }
 

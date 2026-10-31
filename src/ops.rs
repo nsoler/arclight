@@ -14,6 +14,8 @@ use crate::geo::glob;
 pub mod geo_ops;
 #[path = "geo_curves.rs"]
 pub mod geo_curves;
+#[path = "geo_particles.rs"]
+pub mod geo_particles;
 use crate::geom;
 use crate::render3d;
 use crate::scene::{self, Scene};
@@ -96,7 +98,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1297,6 +1299,20 @@ pub static OPS: &[OpInfo] = &[
                (what Instance on Points turns copies by).",
     },
     OpInfo {
+        name: "particles_to_points",
+        label: "Particles to Points",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN],
+        params: &[fixed!("group", "Group", ParamKind::Text, ""), fixed!("keep_particles", "Keep particles", ParamKind::Bool, false)],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Makes each particle stream in the scene (of Group's node, a name or a pattern with *, or all) a point set of \
+               its particles at this frame, for geometry nodes to use (Instance on Points puts copies on them). Each point \
+               gets its particle's id, v (velocity), age and life (frames), pscale (size), Cd (color), orient (its turn) and \
+               spin; a particle born at a point (a Particle Emitter with shape point set: Points to Particles) gets that \
+               point's other attributes back, and its id. The streams go unless Keep particles is on.",
+    },
+    OpInfo {
         name: "resample",
         label: "Resample",
         category: Category::Scene,
@@ -2303,6 +2319,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "splat_crop" => splat_crop(params, inputs),
         "delete_geo" => Ok(scene_output(DEFAULT_FORMAT, geo_ops::delete(params, input_scene(inputs), ctx.frame as f64)?)),
         "curve" => Ok(scene_output(DEFAULT_FORMAT, geo_curves::curve(params)?)),
+        "particles_to_points" => Ok(scene_output(DEFAULT_FORMAT, geo_particles::particles_to_points(params, input_scene(inputs))?)),
         "resample" => Ok(scene_output(DEFAULT_FORMAT, geo_curves::resample(params, input_scene(inputs))?)),
         "instance_on_points" => {
             let protos = inputs.get(1).copied().flatten().and_then(|i| i.scene.as_deref());

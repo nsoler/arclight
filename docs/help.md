@@ -440,7 +440,11 @@ selected object.
   handles: drag one to shape the curve, holding Alt to move it alone.
   Ctrl-click (Cmd on a Mac) adds a point after the picked one, on
   whatever is under the pointer; Ctrl-click on the curve itself inserts a
-  point there. Delete removes the picked points.
+  point there. Delete removes the picked points. **Particles to Points**
+  turns a particle stream back into points at the current frame, with
+  each particle's id, velocity (v), age, size (pscale), color (Cd) and
+  turn (orient), plus the attributes of the point it came from: wire it
+  into Instance on Points to put a mesh on every particle.
 - **Example:** **Help ▸ Examples ▸ Geometry nodes** (or File ▸ Open
   `examples/geo-scatter.json`) opens it as a new project: a masked Scatter
   of rocks and bush cards, sized and colored by Attribute Set and copied
@@ -592,7 +596,12 @@ drag its position, size and angle in the viewer.
   rectangle, disk, sphere, box, placed by Translate / Rotate / Scale; **On
   the surface** for a sphere's or box's skin), the surface or vertices of
   the **geometry** input (a card, a primitive, a file), or where the
-  **mask** input's alpha is (for Particles 2D); an animated geometry or
+  **mask** input's alpha is (for Particles 2D), or the **point set** shape
+  (Points to Particles: wire a Scatter or any point set to the geometry
+  input; each point sends off one particle with Each point once, or the
+  points are picked at random at the Rate; a point's v sets its
+  particle's velocity, pscale its size, Cd its color, life its life and
+  orient its turn); an animated geometry or
   mask emits from where it is at each frame (a moving object leaves a
   trail), stepping on frame by frame, and an edit to it re-simulates
   only from the first frame it changes. **Rate** a frame from

@@ -17,6 +17,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.27 — 2026-10-31
+
+- New **Particles to Points** node: a particle stream's particles at the
+  frame as a point set (id, velocity, age, life, size, color, turn), so
+  particles can drive Instance on Points and other geometry nodes.
+- The Particle Emitter can emit from point sets (shape **point set**,
+  Points to Particles): one particle at each point, or at random points,
+  taking each point's velocity, size, color, life and turn; Particles to
+  Points gives the other attributes back.
+
 ## 0.13.26 — 2026-10-31
 
 - Curves are edited in the 3D view: select a Curve to see its points,

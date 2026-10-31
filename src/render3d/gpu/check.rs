@@ -158,6 +158,7 @@ pub(super) fn scattered(n: usize) -> Vec<crate::particles::Particle> {
                 spin: 0.0,
                 axis: crate::geom::Vec3::z(),
                 start_size: 0.1,
+                source: crate::particles::NO_SOURCE,
             }
         })
         .collect()

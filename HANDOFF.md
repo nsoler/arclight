@@ -37,6 +37,14 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.27, P6 part 1: particles <-> points** (Dev2):
+  `src/geo_particles.rs` (Particles to Points); `particles.rs`
+  `Shape::Points(Arc<PointSource>)`, `Emitter.each_once`,
+  `Particle.source` (NO_SOURCE otherwise), `born_at_point`; the emitter's
+  shape `point set`. ops.rs split from Dev1's Points-from-Geo block by
+  the Supervisor. Next (Dev2): Curve to Mesh + Points on Curve, then P8.
+  **User (2026-10-31): when phase 13 is complete, pause for hand
+  testing: commit, push, merge, release (the user posts the DMG).**
 - **0.13.26, P5 curves 2: editing in the 3D view** (Dev2):
   `gizmo3d::PointsTransforming` (G / R / S on picked control points about
   their median, handles turned / scaled with them, one `points` edit,

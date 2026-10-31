@@ -58,7 +58,7 @@ const FRACTION: ParamKind = ParamKind::Float { min: 0.0, max: 1.0 };
 const SIGNED: ParamKind = ParamKind::Float { min: -100.0, max: 100.0 };
 const ANGLE: ParamKind = ParamKind::Float { min: -360.0, max: 360.0 };
 
-const SHAPES: &[&str] = &["point", "line", "rectangle", "disk", "sphere", "box", "geometry surface", "geometry vertices", "mask"];
+const SHAPES: &[&str] = &["point", "line", "rectangle", "disk", "sphere", "box", "geometry surface", "geometry vertices", "point set", "mask"];
 const REGIONS: &[&str] = &["none", "inside sphere", "outside sphere", "inside box", "outside box"];
 const LOOKS: &[&str] = &["points", "sprites", "objects"];
 const OUTLINES: &[&str] = &["round", "square"];
@@ -102,6 +102,7 @@ pub static OPS: &[OpInfo] = &[
             fixed!("shape", "Shape", ParamKind::Choice(SHAPES), "point"),
             p!("dimensions", "Dimensions", ParamKind::Vec3, [1.0, 1.0, 1.0]),
             fixed!("surface", "On the surface", ParamKind::Bool, false),
+            fixed!("each_point_once", "Each point once", ParamKind::Bool, true),
             p!("translate", "Translate", ParamKind::Vec3, [0.0, 0.0, 0.0]),
             p!("rotate", "Rotate", ParamKind::Vec3, [0.0, 0.0, 0.0]),
             p!("scale", "Scale", ParamKind::Vec3, [1.0, 1.0, 1.0]),
@@ -134,7 +135,10 @@ pub static OPS: &[OpInfo] = &[
         help: "Gives birth to particles: Rate a frame (fractions carry over) from Start frame to End frame, and a \
                Burst all at once at the start. They come from the Shape: a point, a line (Dimensions x long), a \
                rectangle (x by y), a disk or sphere (x across), a box (x, y, z), the surface or vertices of the \
-               geometry input, or where the mask input's alpha is (frame pixels, for Particles 2D). On the surface \
+               geometry input, its point sets (point set: Points to Particles, one particle at each point at the start \
+               with Each point once, else Rate picking points at random; a point's v, pscale, Cd, life and orient \
+               attributes give its particle's velocity, size, color, life and turn, and Particles to Points gives its \
+               other attributes back), or where the mask input's alpha is (frame pixels, for Particles 2D). On the surface \
                emits from a sphere's or box's skin rather than inside it. Translate, Rotate and Scale place the shape. \
                Each leaves along Direction at Speed (give or take Speed variation, a fraction) within a cone Spread \
                degrees around it, plus Speed along normal out of the shape's surface; units per second. Life (frames, \
@@ -506,7 +510,7 @@ pub fn input_frames(op: &str, p: &Value, frame: i64) -> Result<Option<(usize, st
 /// The input an emitter with params `p` takes its shape from, if any.
 fn shape_port(p: &Value) -> Option<usize> {
     match text(p, "shape") {
-        "geometry surface" | "geometry vertices" => Some(0),
+        "geometry surface" | "geometry vertices" | "point set" => Some(0),
         "mask" => Some(1),
         _ => None,
     }
@@ -606,6 +610,7 @@ pub fn eval(op: &str, cx: Context, state: &mut ParticleState) -> Result<Output> 
 /// mask shapes; the others are made from the params).
 pub fn emitter(p: &Value, shape: Option<Shape>) -> Emitter {
     let d = vec3(p, "dimensions");
+    let each_once = p["each_point_once"].as_bool().unwrap_or(true);
     let shape = shape.unwrap_or_else(|| match text(p, "shape") {
         "line" => Shape::Line { length: d.x },
         "rectangle" => Shape::Rect { width: d.x, height: d.y },
@@ -614,11 +619,16 @@ pub fn emitter(p: &Value, shape: Option<Shape>) -> Emitter {
         "box" => Shape::Box { size: d, surface: p["surface"] == true },
         _ => Shape::Point,
     });
+    // (From a point set, each point once: as many as it has.)
+    let burst = match &shape {
+        Shape::Points(src) if each_once => src.len() as u32,
+        _ => int(p, "burst").max(0) as u32,
+    };
     Emitter {
         shape,
         transform: geom::trs(arr3(vec3(p, "translate")), arr3(vec3(p, "rotate")), arr3(vec3(p, "scale"))),
         rate: num(p, "rate").max(0.0),
-        burst: int(p, "burst").max(0) as u32,
+        burst,
         start: int(p, "start"),
         end: end_frame(p, "end"),
         direction: vec3(p, "direction"),
@@ -638,6 +648,7 @@ pub fn emitter(p: &Value, shape: Option<Shape>) -> Emitter {
         spin: num(p, "spin"),
         spin_var: num(p, "spin_var"),
         seed: int(p, "seed").max(0) as u64,
+        each_once,
     }
 }
 
@@ -670,6 +681,15 @@ fn make_shape(kind: &str, source: &Image) -> Result<Shape> {
         "mask" => Shape::mask(source),
         _ => {
             let Some(scene) = source.scene.as_deref() else { bail!("the geometry input needs a scene (a card or a mesh)") };
+            if kind == "point set" {
+                // Every point set's points, placed in the scene.
+                if scene.point_sets.is_empty() {
+                    bail!("its shape is 'point set': the geometry input has no points (a Scatter makes them)");
+                }
+                let positions = scene.point_sets.iter().flat_map(|g| (0..g.len()).map(move |i| g.placed(i))).collect();
+                let attrs = crate::geo::Attrs::concat(&scene.point_sets.iter().map(|g| (&g.attrs, g.len())).collect::<Vec<_>>());
+                return Ok(Shape::Points(Arc::new(crate::particles::PointSource::new(positions, attrs))));
+            }
             let mesh = Arc::new(world_mesh(scene));
             if kind == "geometry surface" { Shape::mesh_surface(mesh) } else { Shape::MeshVertices(mesh) }
         }
