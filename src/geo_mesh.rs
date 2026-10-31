@@ -282,6 +282,136 @@ pub fn normals(params: &Value, mut scene: Scene) -> Result<Scene> {
     Ok(scene)
 }
 
+/// The most triangles Subdivide makes.
+pub const MAX_TRIANGLES: usize = 5_000_000;
+
+/// `attr` for the vertices `pairs` (each the mean of two; an int, the
+/// first's), after its own values.
+fn with_midpoints(attr: &Attr, pairs: &[(u32, u32)]) -> Attr {
+    let mid = |a: f32, b: f32| (a + b) / 2.0;
+    match attr {
+        Attr::Float(v) => Attr::Float(v.iter().copied().chain(pairs.iter().map(|&(a, b)| mid(v[a as usize], v[b as usize]))).collect()),
+        Attr::Int(v) => Attr::Int(v.iter().copied().chain(pairs.iter().map(|&(a, _)| v[a as usize])).collect()),
+        Attr::Vec3(v) => Attr::Vec3(v.iter().copied().chain(pairs.iter().map(|&(a, b)| std::array::from_fn(|k| mid(v[a as usize][k], v[b as usize][k])))).collect()),
+        Attr::Vec4(v) => Attr::Vec4(v.iter().copied().chain(pairs.iter().map(|&(a, b)| std::array::from_fn(|k| mid(v[a as usize][k], v[b as usize][k])))).collect()),
+    }
+}
+
+/// `m` subdivided once: each triangle into four at its edges' midpoints,
+/// and with `smooth` moved by Loop's rules (on the vertices welded by
+/// position, so seams stay closed; boundaries kept as curves). Vertices
+/// keep their layout (seams stay seams); new ones take the mean of their
+/// edge's ends' uvs and attributes; child faces their parent's.
+pub fn subdivide_once(m: &Mesh, smooth: bool) -> Mesh {
+    let (of, firsts) = weld(&m.positions);
+    let key = |a: u32, b: u32| if a < b { (a, b) } else { (b, a) };
+    // Welded edges: the points opposite them, a face each.
+    let mut edges: HashMap<(u32, u32), Vec<u32>> = HashMap::new();
+    for tri in &m.triangles {
+        let g = tri.map(|v| of[v as usize]);
+        for k in 0..3 {
+            edges.entry(key(g[k], g[(k + 1) % 3])).or_default().push(g[(k + 2) % 3]);
+        }
+    }
+    let at = |g: u32| m.positions[firsts[g as usize] as usize];
+    // Each welded point's neighbors, and those along a boundary.
+    let mut near: Vec<Vec<u32>> = vec![Vec::new(); firsts.len()];
+    let mut rim: Vec<Vec<u32>> = vec![Vec::new(); firsts.len()];
+    for (&(a, b), opposite) in &edges {
+        near[a as usize].push(b);
+        near[b as usize].push(a);
+        if opposite.len() == 1 {
+            rim[a as usize].push(b);
+            rim[b as usize].push(a);
+        }
+    }
+    let moved: Vec<Vec3> = (0..firsts.len() as u32)
+        .map(|g| {
+            let v = at(g);
+            if !smooth {
+                return v;
+            }
+            let (n, r) = (&near[g as usize], &rim[g as usize]);
+            if r.len() >= 2 {
+                v * 0.75 + (at(r[0]) + at(r[1])) * 0.125
+            } else if r.is_empty() && !n.is_empty() {
+                let k = n.len() as f64;
+                let beta = if n.len() == 3 { 3.0 / 16.0 } else { 3.0 / (8.0 * k) };
+                v * (1.0 - k * beta) + n.iter().map(|&j| at(j)).sum::<Vec3>() * beta
+            } else {
+                v
+            }
+        })
+        .collect();
+    let edge_point = |a: u32, b: u32| -> Vec3 {
+        let opposite = &edges[&key(a, b)];
+        if smooth && opposite.len() == 2 {
+            (at(a) + at(b)) * 0.375 + (at(opposite[0]) + at(opposite[1])) * 0.125
+        } else {
+            (at(a) + at(b)) * 0.5
+        }
+    };
+    let has_uv = m.uvs.len() == m.positions.len();
+    let has_n = m.normals.len() == m.positions.len();
+    let mut out = Mesh { positions: of.iter().map(|g| moved[*g as usize]).collect(), uvs: if has_uv { m.uvs.clone() } else { Vec::new() }, ..Mesh::default() };
+    if has_n && !smooth {
+        out.normals = m.normals.clone();
+    }
+    // A new vertex per edge of the original layout.
+    let mut mids: HashMap<(u32, u32), u32> = HashMap::new();
+    let mut pairs = Vec::new();
+    let mut mid = |a: u32, b: u32, out: &mut Mesh| -> u32 {
+        *mids.entry(key(a, b)).or_insert_with(|| {
+            out.positions.push(edge_point(of[a as usize], of[b as usize]));
+            if has_uv {
+                let (p, q) = (m.uvs[a as usize], m.uvs[b as usize]);
+                out.uvs.push([(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0]);
+            }
+            if has_n && !smooth {
+                out.normals.push((m.normals[a as usize] + m.normals[b as usize]).try_normalize(1e-300).unwrap_or(m.normals[a as usize]));
+            }
+            pairs.push((a, b));
+            out.positions.len() as u32 - 1
+        })
+    };
+    let mut parents = Vec::with_capacity(m.triangles.len() * 4);
+    for (t, &[a, b, c]) in m.triangles.iter().enumerate() {
+        let (ab, bc, ca) = (mid(a, b, &mut out), mid(b, c, &mut out), mid(c, a, &mut out));
+        out.triangles.extend([[a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]]);
+        parents.extend([t as u32; 4]);
+    }
+    for (name, a) in m.point_attrs.iter() {
+        let n = out.positions.len();
+        let _ = out.point_attrs.set(name, with_midpoints(a, &pairs), n);
+    }
+    out.face_attrs = m.face_attrs.gathered(&parents);
+    if smooth && has_n {
+        out.smooth_normals();
+    }
+    out
+}
+
+/// A Subdivide: the meshes (Group's) subdivided Iterations times, linear
+/// (the shape kept, finer) or Loop (smoothed toward a limit surface).
+pub fn subdivide(params: &Value, mut scene: Scene) -> Result<Scene> {
+    let group = params["group"].as_str().unwrap_or("").trim();
+    let take = |node: &str| group.is_empty() || geo::glob(group, node);
+    let smooth = params["mode"].as_str() != Some("linear");
+    let times = params["iterations"].as_u64().unwrap_or(1).clamp(1, 4) as u32;
+    for m in scene.meshes.iter_mut().filter(|m| take(&m.node)) {
+        let made = m.mesh.triangles.len().saturating_mul(4usize.pow(times));
+        if made > MAX_TRIANGLES {
+            bail!("Subdivide: {} would have {made} triangles (at most {MAX_TRIANGLES}); fewer iterations", m.node);
+        }
+        let mut mesh = (*m.mesh).clone();
+        for _ in 0..times {
+            mesh = subdivide_once(&mesh, smooth);
+        }
+        m.mesh = std::sync::Arc::new(mesh);
+    }
+    Ok(scene)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,5 +576,63 @@ mod tests {
     fn normals_in_a_graph() {
         let m = graph_mesh(json!([{"id": "c", "op": "cylinder"}, {"id": "n", "op": "normals", "inputs": ["c"], "params": {"mode": "flat"}}]), "n");
         assert_eq!(m.positions.len(), m.triangles.len() * 3);
+    }
+
+    #[test]
+    fn linear_subdivision_keeps_the_shape_and_interpolates() {
+        let mut plane = mesh_of("plane", json!({"size": [2, 2]}));
+        let n = plane.positions.len();
+        plane.point_attrs.set("w", Attr::Float((0..n).map(|i| i as f32).collect()), n).unwrap();
+        plane.face_attrs.set("f", Attr::Int(vec![4, 7]), 2).unwrap();
+        let out = subdivide(&json!({"mode": "linear", "iterations": 2}), one(plane.clone())).unwrap();
+        let m = &out.meshes[0].mesh;
+        assert_eq!(m.triangles.len(), 2 * 16);
+        assert!(m.positions.iter().all(|p| p.z == 0.0 && p.x.abs() <= 1.0 + 1e-12), "flat and within");
+        assert!(m.normals.len() == m.positions.len() && m.normals.iter().all(|n| (n.z - 1.0).abs() < 1e-12), "normals kept");
+        let once = subdivide_once(&plane, false);
+        let w = once.point_attrs.float("w").unwrap();
+        // The first new vertex: the mean of the first edge's ends.
+        let t = plane.triangles[0];
+        assert_eq!(w[n], (t[0] + t[1]) as f32 / 2.0);
+        assert_eq!(once.face_attrs.int("f").unwrap(), [4, 4, 4, 4, 7, 7, 7, 7]);
+        assert!(subdivide(&json!({"iterations": 4}), one(mesh_of("sphere", json!({"segments": [512, 256]})))).is_err(), "too many");
+    }
+
+    #[test]
+    fn loop_subdivision_by_hand_and_closed_seams() {
+        // A regular tetrahedron about the origin: every vertex goes to a
+        // quarter of itself (1 - 3·3/16 of it, 3/16 of the others' sum,
+        // which is minus it), every edge point to a quarter of its ends.
+        let v = [Vec3::new(1.0, 1.0, 1.0), Vec3::new(1.0, -1.0, -1.0), Vec3::new(-1.0, 1.0, -1.0), Vec3::new(-1.0, -1.0, 1.0)];
+        let tet = Mesh { positions: v.to_vec(), triangles: vec![[0, 1, 2], [0, 3, 1], [0, 2, 3], [1, 3, 2]], ..Mesh::default() };
+        let s = subdivide_once(&tet, true);
+        for (i, p) in v.iter().enumerate() {
+            assert!((s.positions[i] - p / 4.0).norm() < 1e-12, "{i}");
+        }
+        let (a, b) = (s.triangles[0][0], s.triangles[0][1]);
+        assert!((s.positions[b as usize] - (v[0] + v[1]) / 4.0).norm() < 1e-12, "{a} {b}");
+        // A cube (faces with their own vertices): the same welded points as
+        // a linear split (no cracks), drawn in toward a sphere.
+        let cube = mesh_of("cube", json!({"size": [2, 2, 2]}));
+        let (smooth, lin) = (subdivide_once(&cube, true), subdivide_once(&cube, false));
+        assert_eq!(weld(&smooth.positions).1.len(), weld(&lin.positions).1.len());
+        assert_eq!(weld(&smooth.positions).1.len(), 8 + 18);
+        assert!(smooth.positions.iter().all(|p| p.norm() < 3f64.sqrt() - 0.1), "rounded");
+        let r: Vec<f64> = smooth.positions.iter().map(|p| p.norm()).collect();
+        let corner = r.iter().cloned().fold(0.0, f64::max);
+        assert!(r.iter().filter(|x| (**x - corner).abs() < 1e-9).count() >= 8, "symmetric corners");
+        // A flat plane stays flat; its border shrinks along itself only.
+        let p = subdivide_once(&mesh_of("plane", json!({"size": [2, 2], "segments": [2, 2]})), true);
+        assert!(p.positions.iter().all(|q| q.z.abs() < 1e-12));
+        // Its corner (1, 1) moves in along the border: ¾ of it and ⅛ of each
+        // border neighbor, (1, 0) and (0, 1).
+        let far = p.positions.iter().map(|q| q.x + q.y).fold(f64::MIN, f64::max);
+        assert!((far - 1.75).abs() < 1e-12, "{far}");
+    }
+
+    #[test]
+    fn subdivide_in_a_graph() {
+        let m = graph_mesh(json!([{"id": "c", "op": "cube"}, {"id": "s", "op": "subdivide", "inputs": ["c"], "params": {"iterations": 2}}]), "s");
+        assert_eq!(m.triangles.len(), 12 * 16);
     }
 }

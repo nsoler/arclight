@@ -37,6 +37,10 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.33, P5: Subdivide** (Dev1): `subdivide_once` + Loop rules on
+  welded positions (beta 3/16 for n = 3, else 3/(8n); boundary 3/4 + 1/8
+  + 1/8), original vertex layout kept (seams stay seams, no cracks);
+  linear keeps normals, Loop smooths; 5 M triangle cap.
 - **0.13.32, P8 B: Project 3D on the GPU** (Dev2): instances hold their
   projections (`geo::Instances.projections`; Realize turns them into
   scene projections), replacing A's tag() trick; projection images in the

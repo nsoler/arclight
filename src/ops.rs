@@ -100,7 +100,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "points_from_geo" | "grid_points" | "line_points" | "normals" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "curve_to_mesh" | "points_on_curve" | "project_3d" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "points_from_geo" | "grid_points" | "line_points" | "normals" | "subdivide" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "curve_to_mesh" | "points_on_curve" | "project_3d" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1280,6 +1280,23 @@ pub static OPS: &[OpInfo] = &[
         help: "Sets the meshes' (Group's, or all) normals, which shading follows: smooth (each point the mean of the \
                faces around it, across seams), flat (each face its own, faceted), or by angle (smooth where faces meet at \
                less than Angle, sharp across harder edges: a cylinder's side smooth and its caps crisp).",
+    },
+    OpInfo {
+        name: "subdivide",
+        label: "Subdivide",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN],
+        params: &[
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("mode", "Mode", ParamKind::Choice(&["loop", "linear"]), "loop"),
+            fixed!("iterations", "Iterations", ParamKind::Int { min: 1, max: 4 }, 1),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Splits each triangle of the meshes (Group's, or all) into four, Iterations times: Loop smooths the shape \
+               toward a rounded limit (a cube becomes a blob; open edges stay as smooth curves), linear keeps it as it is \
+               but finer (for Displace). Seams stay closed; uvs and point attributes are blended onto the new points, and \
+               each new face keeps its face's attributes. More than 5,000,000 triangles is an error.",
     },
     // Fit Plane (geo_fit.rs; Dev1).
     OpInfo {
@@ -2507,6 +2524,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "grid_points" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_mesh::grid_points(params, input_scene(inputs))?)),
         "line_points" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_mesh::line_points(params, input_scene(inputs))?)),
         "normals" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_mesh::normals(params, input_scene(inputs))?)),
+        "subdivide" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_mesh::subdivide(params, input_scene(inputs))?)),
         "fit_plane" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_fit::fit_plane(params, input_scene(inputs), inputs.get(1).copied().flatten())?)),
         "scatter" => {
             let image = inputs.get(1).copied().flatten().filter(|i| i.scene.is_none());

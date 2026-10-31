@@ -399,6 +399,8 @@ selected object.
   put copies on: a model's corners or faces, a jittered grid, a row along
   a line. **Normals** makes meshes smooth, faceted, or smooth with crisp
   edges past an angle (a cylinder's side smooth, its caps sharp).
+  **Subdivide** makes meshes finer: Loop rounds them off, linear keeps
+  their shape for Displace to work on.
   **Delete Geo** removes points, faces or instances inside or outside a
   box or sphere you place in the 3D view (G moves it, S sizes it), or
   where an expression is true: `@P.y < 0` drops everything below the

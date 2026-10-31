@@ -17,6 +17,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.33 — 2026-10-31
+
+- Geometry: a **Subdivide** node splits meshes' triangles, Loop
+  (smoothing toward a rounded surface) or linear (finer, the same shape),
+  up to four times; seams stay closed and uvs, attributes and normals
+  carry over.
+
 ## 0.13.32 — 2026-10-31
 
 - Project 3D renders on the GPU too (Scanline Render and the 3D view),
