@@ -443,7 +443,7 @@ fn interpolated(attrs: &Attrs, mesh: &Mesh, points: &[Candidate]) -> Attrs {
 /// into the unit cube or ball), or where a formula is true.
 enum Doomed {
     Region { to_region: Mat4, sphere: bool, inside: bool },
-    Formula { expr: crate::expr::Expr, frame: f64 },
+    Formula { expr: crate::expr::Expr, frame: f64, refs: serde_json::Map<String, Value> },
 }
 
 impl Doomed {
@@ -455,7 +455,7 @@ impl Doomed {
                 let within = if *sphere { q.norm_squared() <= 1.0 } else { q.x.abs() <= 1.0 && q.y.abs() <= 1.0 && q.z.abs() <= 1.0 };
                 Ok(within == *inside)
             }
-            Doomed::Formula { expr, frame } => match expr.eval_elem(crate::expr::Clock::default(), *frame, elem)? {
+            Doomed::Formula { expr, frame, refs } => match expr.eval_elem(crate::expr::Clock::default(), *frame, elem, refs)? {
                 Val::Num(x) => Ok(x != 0.0),
                 Val::List(v) => Err(format!("the expression gives a list of {} (a condition is one number)", v.len())),
             },
@@ -480,6 +480,12 @@ impl Doomed {
             .collect::<Result<Vec<bool>, String>>()
             .map_err(|e| anyhow::anyhow!("Delete: {e}"))
     }
+}
+
+/// The other nodes' params a geometry node's formulas read, as the graph
+/// worked them out for this cook (see `ops::resolve_params_linked`).
+fn refs_of(params: &Value) -> serde_json::Map<String, Value> {
+    params["_refs"].as_object().cloned().unwrap_or_default()
 }
 
 /// Attribute `name`'s value at element `i`, as a formula reads it.
@@ -509,7 +515,7 @@ pub fn delete(params: &Value, mut scene: Scene, frame: f64) -> Result<Scene> {
             if src.is_empty() {
                 return Ok(scene);
             }
-            Doomed::Formula { expr: crate::expr::parse(src).map_err(|e| anyhow::anyhow!("Delete: {e}"))?, frame }
+            Doomed::Formula { expr: crate::expr::parse(src).map_err(|e| anyhow::anyhow!("Delete: {e}"))?, frame, refs: refs_of(params) }
         }
         mode => {
             let size = crate::scene::numbers::<3>(&params["size"], 1.0).map(|v| (v.abs() / 2.0).max(1e-12));
@@ -600,6 +606,209 @@ fn without_faces(mesh: &Mesh, keep: &[u32]) -> Mesh {
         point_attrs: mesh.point_attrs.gathered(&used),
         face_attrs: mesh.face_attrs.gathered(keep),
     }
+}
+
+/// The kind of value an Attribute Set row makes.
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Float,
+    Vec3,
+    Vec4,
+    Int,
+}
+
+/// One row of an Attribute Set: the attribute it sets, its kind, and the
+/// formula worked out per element.
+struct Row {
+    name: String,
+    kind: Kind,
+    expr: crate::expr::Expr,
+}
+
+/// An Attribute Set's rows (those with a name), in order.
+fn rows(params: &Value) -> Result<Vec<Row>> {
+    let mut out = Vec::new();
+    for k in 1..=4 {
+        let name = params[format!("attr{k}_name")].as_str().unwrap_or("").trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let kind = match params[format!("attr{k}_kind")].as_str() {
+            Some("vec3") => Kind::Vec3,
+            Some("vec4") => Kind::Vec4,
+            Some("int") => Kind::Int,
+            _ => Kind::Float,
+        };
+        if (name == "P" || name == geo::N) && kind != Kind::Vec3 {
+            bail!("Attribute Set, row {k}: {name} is a vec3");
+        }
+        let src = params[format!("attr{k}_expr")].as_str().unwrap_or("").trim();
+        let expr = crate::expr::parse(src).map_err(|e| anyhow::anyhow!("Attribute Set, row {k} ({name}): {e}"))?;
+        out.push(Row { name, kind, expr });
+    }
+    Ok(out)
+}
+
+/// What a formula sees of a collection of elements: how many, where each
+/// is (in the scene), its attributes, and @ names of its own (by name and
+/// element).
+struct Elements<'a> {
+    count: usize,
+    at: &'a (dyn Fn(usize) -> Vec3 + Sync),
+    attrs: &'a Attrs,
+    extra: &'a (dyn Fn(&str, usize) -> Option<Val> + Sync),
+}
+
+impl Row {
+    /// Its value for each of `els`, as an attribute of its kind.
+    fn values(&self, els: &Elements, refs: &serde_json::Map<String, Value>, frame: f64) -> Result<Attr> {
+        let count = els.count;
+        let vals: Vec<Val> = (0..count)
+            .into_par_iter()
+            .map(|i| {
+                let p = (els.at)(i);
+                let elem = |name: &str| match name {
+                    "P" => Some(Val::List(vec![p.x, p.y, p.z])),
+                    "index" => Some(Val::Num(i as f64)),
+                    "count" => Some(Val::Num(count as f64)),
+                    _ => attr_value(els.attrs, name, i).or_else(|| (els.extra)(name, i)),
+                };
+                self.expr.eval_elem(crate::expr::Clock::default(), frame, &elem, refs)
+            })
+            .collect::<Result<_, String>>()
+            .map_err(|e| anyhow::anyhow!("Attribute Set ({}): {e}", self.name))?;
+        let wrong = |v: &Val| anyhow::anyhow!("Attribute Set ({}): the formula gives {}", self.name, match v { Val::Num(_) => "a number".to_string(), Val::List(l) => format!("a list of {}", l.len()) });
+        let num = |v: &Val| match v {
+            Val::Num(x) => Ok(*x),
+            _ => Err(wrong(v)),
+        };
+        fn many<const N: usize>(v: &Val, wrong: &dyn Fn(&Val) -> anyhow::Error) -> Result<[f32; N]> {
+            match v {
+                Val::Num(x) => Ok([*x as f32; N]),
+                Val::List(l) if l.len() == N => Ok(std::array::from_fn(|i| l[i] as f32)),
+                _ => Err(wrong(v)),
+            }
+        }
+        Ok(match self.kind {
+            Kind::Float => Attr::Float(vals.iter().map(|v| num(v).map(|x| x as f32)).collect::<Result<_>>()?),
+            Kind::Int => Attr::Int(vals.iter().map(|v| num(v).map(|x| x.round() as i32)).collect::<Result<_>>()?),
+            Kind::Vec3 => Attr::Vec3(vals.iter().map(|v| many::<3>(v, &wrong)).collect::<Result<_>>()?),
+            Kind::Vec4 => Attr::Vec4(vals.iter().map(|v| many::<4>(v, &wrong)).collect::<Result<_>>()?),
+        })
+    }
+}
+
+fn vec3s(a: &Attr) -> Vec<Vec3> {
+    match a {
+        Attr::Vec3(v) => v.iter().map(|p| Vec3::new(p[0] as f64, p[1] as f64, p[2] as f64)).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// An Attribute Set: each row's formula worked out for every element of
+/// its kind (in its group), then set as that attribute, row after row
+/// (a later row sees an earlier one's). @P moves the points (an
+/// instance's placement), a mesh's @N sets its normals.
+pub fn attribute_set(params: &Value, mut scene: Scene, frame: f64) -> Result<Scene> {
+    let rows = rows(params)?;
+    let group = params["group"].as_str().unwrap_or("").trim();
+    let take = |node: &str| group.is_empty() || geo::glob(group, node);
+    let refs = refs_of(params);
+    let none = |_: &str, _: usize| None;
+    let unplace = |world: &Mat4, ps: &[Vec3]| {
+        let inv = world.try_inverse().unwrap_or_else(Mat4::identity);
+        ps.iter().map(|p| geom::transform_point(&inv, p)).collect::<Vec<Vec3>>()
+    };
+    match params["elements"].as_str() {
+        Some("mesh points") => {
+            for m in scene.meshes.iter_mut().filter(|m| take(&m.node)) {
+                for row in &rows {
+                    let s = Surf::new(m.mesh.clone(), &m.world);
+                    let normal = |name: &str, i: usize| (name == geo::N).then(|| s.normals.get(i).map(|n| Val::List(vec![n.x, n.y, n.z]))).flatten();
+                    let els = Elements { count: s.placed.len(), at: &|i| s.placed[i], attrs: &s.mesh.point_attrs, extra: &normal };
+                    let a = row.values(&els, &refs, frame)?;
+                    let n = s.placed.len();
+                    let mesh = Arc::make_mut(&mut m.mesh);
+                    match row.name.as_str() {
+                        "P" => mesh.positions = unplace(&m.world, &vec3s(&a)),
+                        "N" => {
+                            // Back into the mesh's space: the placement's
+                            // linear part, transposed.
+                            let lt = m.world.fixed_view::<3, 3>(0, 0).transpose();
+                            mesh.normals = vec3s(&a).iter().map(|n| (lt * n).try_normalize(1e-300).unwrap_or(*n)).collect();
+                        }
+                        name => mesh.point_attrs.set(name, a, n)?,
+                    }
+                }
+            }
+        }
+        Some("faces") => {
+            for m in scene.meshes.iter_mut().filter(|m| take(&m.node)) {
+                for row in &rows {
+                    if row.name == "P" {
+                        bail!("Attribute Set: faces can't be moved (@P): set mesh points instead");
+                    }
+                    let s = Surf::new(m.mesh.clone(), &m.world);
+                    let center = |t: usize| s.corners(t).iter().sum::<Vec3>() / 3.0;
+                    let normal = |name: &str, t: usize| (name == geo::N).then(|| {
+                        let [a, b, c] = s.corners(t);
+                        let n = (b - a).cross(&(c - a)).try_normalize(1e-300).unwrap_or_else(Vec3::y);
+                        Val::List(vec![n.x, n.y, n.z])
+                    });
+                    let els = Elements { count: s.mesh.triangles.len(), at: &center, attrs: &s.mesh.face_attrs, extra: &normal };
+                    let a = row.values(&els, &refs, frame)?;
+                    let n = s.mesh.triangles.len();
+                    Arc::make_mut(&mut m.mesh).face_attrs.set(&row.name, a, n)?;
+                }
+            }
+        }
+        Some("instances") => {
+            for g in scene.instances.iter_mut().filter(|g| take(&g.node)) {
+                for row in &rows {
+                    let origins: Vec<Vec3> = g.worlds.iter().map(|w| Vec3::new(w[(0, 3)], w[(1, 3)], w[(2, 3)])).collect();
+                    let els = Elements { count: g.len(), at: &|i| origins[i], attrs: &g.attrs, extra: &none };
+                    let a = row.values(&els, &refs, frame)?;
+                    if row.name == "P" {
+                        for (w, p) in g.worlds.iter_mut().zip(vec3s(&a)) {
+                            w.fixed_view_mut::<3, 1>(0, 3).copy_from(&p);
+                        }
+                    } else {
+                        let n = g.len();
+                        g.attrs.set(&row.name, a, n)?;
+                    }
+                }
+            }
+        }
+        _ => {
+            for g in scene.point_sets.iter_mut().filter(|g| take(&g.node)) {
+                for row in &rows {
+                    let els = Elements { count: g.len(), at: &|i| g.placed(i), attrs: &g.attrs, extra: &none };
+                    let a = row.values(&els, &refs, frame)?;
+                    match row.name.as_str() {
+                        "P" => g.positions = unplace(&g.world, &vec3s(&a)),
+                        name => {
+                            let n = g.len();
+                            g.attrs.set(name, a, n)?;
+                        }
+                    }
+                }
+            }
+            for c in scene.curves.iter_mut().filter(|c| take(&c.node)) {
+                for row in &rows {
+                    let els = Elements { count: c.positions.len(), at: &|i| geom::transform_point(&c.world, &c.positions[i]), attrs: &c.attrs, extra: &none };
+                    let a = row.values(&els, &refs, frame)?;
+                    match row.name.as_str() {
+                        "P" => c.positions = unplace(&c.world, &vec3s(&a)),
+                        name => {
+                            let n = c.positions.len();
+                            c.attrs.set(name, a, n)?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(scene)
 }
 
 #[cfg(test)]
@@ -751,5 +960,51 @@ mod tests {
         let c = &out.curves[0];
         assert!(c.validate().is_ok());
         assert_eq!((c.len(), c.positions.len()), (1, 2), "the first keeps two points; the second, none left, goes");
+    }
+
+    /// Attribute Set: rows in order on each kind of element; @P moves
+    /// things, a mesh's @N sets its normals; kinds checked; other nodes'
+    /// params read from what the graph resolved.
+    #[test]
+    fn attribute_set_works_out_rows_per_element() {
+        use crate::geo::Instances;
+        let set = |p: Value, s: Scene| attribute_set(&p, s, 1.0);
+        let pts = PointSet { positions: vec![Vec3::zeros(), Vec3::x(), Vec3::new(2.0, 0.0, 0.0)], world: geom::trs([0.0, 1.0, 0.0], [0.0; 3], [1.0; 3]), node: "s".into(), ..PointSet::default() };
+        let scene = Scene { point_sets: vec![pts], ..Scene::default() };
+        // Row 1 a float from x; row 2 reads it; row 3 a color; row 4 moves
+        // them up by row 1 (in the scene: the set's own placement undone).
+        let out = set(json!({
+            "attr1_name": "w", "attr1_kind": "float", "attr1_expr": "@P.x * 2",
+            "attr2_name": "k", "attr2_kind": "int", "attr2_expr": "@w + @index + 0.4",
+            "attr3_name": "Cd", "attr3_kind": "vec4", "attr3_expr": "0.5",
+            "attr4_name": "P", "attr4_kind": "vec3", "attr4_expr": "@P + [0, @w, 0]",
+        }), scene.clone()).unwrap();
+        let g = &out.point_sets[0];
+        assert_eq!(g.attrs.float("w"), Some(&[0.0, 2.0, 4.0][..]));
+        assert_eq!(g.attrs.int("k"), Some(&[0, 3, 6][..]));
+        assert_eq!(g.attrs.vec4(geo::CD).unwrap()[2], [0.5; 4]);
+        assert_eq!(g.placed(1), Vec3::new(1.0, 3.0, 0.0));
+        assert!(g.validate().is_ok());
+        // Kinds: a list for a float, P not a vec3; a formula's own errors.
+        assert!(set(json!({ "attr1_name": "w", "attr1_expr": "@P" }), scene.clone()).err().unwrap().to_string().contains("list of 3"));
+        assert!(set(json!({ "attr1_name": "P", "attr1_kind": "float", "attr1_expr": "1" }), scene.clone()).is_err());
+        assert!(set(json!({ "attr1_name": "w", "attr1_expr": "@nope" }), scene.clone()).is_err());
+        // Other nodes' params from _refs.
+        let out = set(json!({ "attr1_name": "d", "attr1_expr": "dist(@P, loc.translate)", "_refs": { "loc.translate": [0, 1, 0] } }), scene.clone()).unwrap();
+        assert_eq!(out.point_sets[0].attrs.float("d"), Some(&[0.0, 1.0, 2.0][..]));
+        // Mesh points: moved and given normals; faces: an attribute.
+        let mesh = Scene { meshes: vec![crate::scene::Model { node: "m".into(), ..crate::scene::Model::new(Arc::new(crate::mesh::plane([2.0, 2.0], [1, 1])), geom::trs([5.0, 0.0, 0.0], [0.0; 3], [1.0; 3]), crate::mesh::Material::default()) }], ..Scene::default() };
+        let out = set(json!({ "elements": "mesh points", "attr1_name": "P", "attr1_kind": "vec3", "attr1_expr": "@P * 2", "attr2_name": "N", "attr2_kind": "vec3", "attr2_expr": "[1, 0, 0]" }), mesh.clone()).unwrap();
+        let m = &out.meshes[0].mesh;
+        assert_eq!(geom::transform_point(&out.meshes[0].world, &m.positions[0]), Vec3::new(8.0, -2.0, 0.0), "(4, -1, 0) doubled in the scene");
+        assert!(m.normals.iter().all(|n| (n - Vec3::x()).norm() < 1e-9));
+        let out = set(json!({ "elements": "faces", "attr1_name": "up", "attr1_kind": "float", "attr1_expr": "@N.z" }), mesh.clone()).unwrap();
+        assert_eq!(out.meshes[0].mesh.face_attrs.float("up"), Some(&[1.0, 1.0][..]));
+        assert!(set(json!({ "elements": "faces", "attr1_name": "P", "attr1_kind": "vec3", "attr1_expr": "@P" }), mesh).is_err());
+        // Instances: @P is the placement's origin; setting it moves them.
+        let at = |x: f64| geom::trs([x, 0.0, 0.0], [0.0, 90.0, 0.0], [1.0; 3]);
+        let inst = Scene { instances: vec![Instances { worlds: vec![at(1.0), at(2.0)], which: vec![0, 0], node: "i".into(), ..Instances::default() }], ..Scene::default() };
+        let out = set(json!({ "elements": "instances", "attr1_name": "P", "attr1_kind": "vec3", "attr1_expr": "@P * [1, 0, 0] + [0, @index, 0]" }), inst).unwrap();
+        assert_eq!(out.instances[0].worlds[1], geom::trs([2.0, 1.0, 0.0], [0.0, 90.0, 0.0], [1.0; 3]), "moved, still turned");
     }
 }

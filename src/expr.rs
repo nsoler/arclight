@@ -15,7 +15,8 @@
 //! - Functions: `sin cos tan asin acos atan atan2 sqrt abs floor ceil
 //!   round fract sign min max clamp mix smoothstep pow exp log rad deg
 //!   length dist if(c, a, b)`; `noise(x[, seed])` (smooth, -1..1),
-//!   `random(seed)` (0..1, the same every frame), `wiggle(freq, amp[,
+//!   `noise3([x, y, z][, seed])` (smooth over 3-D space, one number in
+//!   -1..1), `random(seed)` (0..1, the same every frame), `wiggle(freq, amp[,
 //!   seed])` (`amp × noise(frame × freq)`: `freq` wobbles per frame), and
 //!   `at(x, f)`: `x` worked out at frame `f` (`at(t.track1, frame - 2)`).
 //!
@@ -27,8 +28,10 @@
 //! one component), `@N` (its normal, where it has one), `@id`, `@index`
 //! (its number, from 0), `@count` (how many there are), and any of its
 //! attributes as `@name` (a number, or a list for a vector or a color).
-//! `random(@id)` gives each its own number that stays with it. Other
-//! nodes' params (`node.param`) can't be read there yet.
+//! `random(@id)` gives each its own number that stays with it, and
+//! `noise3(@P * 4)` a smooth 3-D noise (-1..1) over the scene. Other
+//! nodes' params (`node.param`) are read as they are at the frame being
+//! made (once for all the elements); `at()` can't read them at another.
 
 use serde_json::{json, Value};
 use std::fmt;
@@ -148,7 +151,7 @@ funcs! {
     Min = "min", 1..=16; Max = "max", 1..=16; Clamp = "clamp", 3..=3; Mix = "mix", 3..=3;
     Smoothstep = "smoothstep", 3..=3; Pow = "pow", 2..=2; Exp = "exp", 1..=1; Log = "log", 1..=1;
     Rad = "rad", 1..=1; Deg = "deg", 1..=1; Length = "length", 1..=1; Dist = "dist", 2..=2;
-    If = "if", 3..=3; Noise = "noise", 1..=2; Random = "random", 1..=1; Wiggle = "wiggle", 2..=3;
+    If = "if", 3..=3; Noise = "noise", 1..=2; Noise3 = "noise3", 1..=2; Random = "random", 1..=1; Wiggle = "wiggle", 2..=3;
     At = "at", 2..=2;
 }
 
@@ -528,11 +531,38 @@ impl Expr {
 
     /// Its value for one element of a geometry node's (see the module's
     /// notes), at frame `t`: `elem` gives the element's `@` names (None
-    /// for one it hasn't). Parse once, then run this per element (it's
-    /// safe from many threads at once).
-    pub fn eval_elem(&self, clock: Clock, t: f64, elem: Elem) -> Result<Val, String> {
-        let no_params: Lookup = &|node, param, _| Err(format!("{node}.{param}: other nodes' params can't be read in a geometry node's expression yet"));
-        eval(&self.0, no_params, clock, t, Some(elem))
+    /// for one it hasn't), `refs` the `node.param` values it reads (by
+    /// "node.param", worked out at `t` beforehand: see [`Expr::refs`]).
+    /// Parse once, then run this per element (it's safe from many threads
+    /// at once).
+    pub fn eval_elem(&self, clock: Clock, t: f64, elem: Elem, refs: &serde_json::Map<String, Value>) -> Result<Val, String> {
+        let read: Lookup = &|node, param, at| {
+            if at != t {
+                return Err(format!("{node}.{param}: a geometry node's expression reads other nodes' params at its own frame only (not through at())"));
+            }
+            match refs.get(&format!("{node}.{param}")) {
+                Some(Value::Null) => Err(format!("{node}.{param}: there's no such node or param")),
+                Some(v) => Ok(v.clone()),
+                None => Err(format!("{node}.{param} isn't known here")),
+            }
+        };
+        eval(&self.0, read, clock, t, Some(elem))
+    }
+
+    /// Whether its value can change from frame to frame (it reads the
+    /// frame or time, or wiggles).
+    pub fn uses_time(&self) -> bool {
+        fn walk(n: &Node) -> bool {
+            match n {
+                Node::Frame | Node::Time => true,
+                Node::Call(Func::Wiggle | Func::At, _) => true,
+                Node::List(v) | Node::Call(_, v) => v.iter().any(walk),
+                Node::Index(a, b) | Node::Binary(_, a, b) => walk(a) || walk(b),
+                Node::Unary(_, a) => walk(a),
+                Node::Num(_) | Node::Fps | Node::Ref { .. } | Node::Attr(_) => false,
+            }
+        }
+        walk(&self.0)
     }
 }
 
@@ -663,6 +693,13 @@ fn call(f: Func, mut a: Vec<Val>, t: f64) -> Result<Val, String> {
             let seed = a.get(1).map_or(Ok(0.0), Val::num)?;
             Ok(a[0].clone().map(|x| noise(x, seed)))
         }
+        Func::Noise3 => {
+            let seed = a.get(1).map_or(Ok(0.0), Val::num)?;
+            match &a[0] {
+                Val::List(v) if v.len() == 3 => Ok(Val::Num(noise3([v[0], v[1], v[2]], seed))),
+                v => Err(format!("takes a point [x, y, z], not {}", match v { Val::Num(_) => "a number".to_string(), Val::List(l) => format!("a list of {}", l.len()) })),
+            }
+        }
         Func::Random => Ok(a[0].clone().map(|s| hash01(s, 0.0))),
         Func::Wiggle => {
             let seed = a.get(2).map_or(Ok(0.0), Val::num)?;
@@ -693,6 +730,35 @@ fn noise(x: f64, seed: f64) -> f64 {
     let s = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
     // Gradient noise peaks at ±0.5 in 1-D; scale to about ±1.
     ((a + (b - a) * s) * 2.0).clamp(-1.0, 1.0)
+}
+
+/// Smooth 3-D gradient noise in -1..1 (Perlin's, with a hashed gradient
+/// at each whole-number corner).
+fn noise3(p: [f64; 3], seed: f64) -> f64 {
+    let cell = p.map(f64::floor);
+    let f = [p[0] - cell[0], p[1] - cell[1], p[2] - cell[2]];
+    let ease = |t: f64| t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+    // A unit gradient at corner `c`, from the hash of its coordinates.
+    let grad = |c: [f64; 3]| {
+        let h = |k: f64| hash01(c[0] * 73856093.0 + c[1] * 19349663.0 + c[2] * 83492791.0 + k, seed);
+        let (z, a) = (h(0.0) * 2.0 - 1.0, h(0.5) * std::f64::consts::TAU);
+        let r = (1.0 - z * z).sqrt();
+        [r * a.cos(), r * a.sin(), z]
+    };
+    let mut corners = [0.0; 8];
+    for (k, v) in corners.iter_mut().enumerate() {
+        let o = [(k & 1) as f64, ((k >> 1) & 1) as f64, ((k >> 2) & 1) as f64];
+        let g = grad([cell[0] + o[0], cell[1] + o[1], cell[2] + o[2]]);
+        *v = g[0] * (f[0] - o[0]) + g[1] * (f[1] - o[1]) + g[2] * (f[2] - o[2]);
+    }
+    let (u, v, w) = (ease(f[0]), ease(f[1]), ease(f[2]));
+    let lerp = |a: f64, b: f64, t: f64| a + (b - a) * t;
+    let x00 = lerp(corners[0], corners[1], u);
+    let x10 = lerp(corners[2], corners[3], u);
+    let x01 = lerp(corners[4], corners[5], u);
+    let x11 = lerp(corners[6], corners[7], u);
+    // Gradient noise in 3-D peaks near ±0.87; scale to about ±1.
+    (lerp(lerp(x00, x10, v), lerp(x01, x11, v), w) * 1.15).clamp(-1.0, 1.0)
 }
 
 /// `src` with references to node `old` pointed at `new` (quoted when
@@ -733,13 +799,23 @@ mod tests {
             "id" => Some(Val::Num(7.0)),
             _ => None,
         };
-        let run = |src: &str| parse(src).unwrap().eval_elem(Clock::default(), 1.0, &elem);
+        let mut refs = serde_json::Map::new();
+        refs.insert("loc.translate".into(), json!([1, 0, 0]));
+        let run = |src: &str| parse(src).unwrap().eval_elem(Clock::default(), 1.0, &elem, &refs);
         assert_eq!(run("@P.y * 2 + @id"), Ok(Val::Num(11.0)));
         assert_eq!(run("@P + [1, 1, 1]"), Ok(Val::List(vec![2.0, 3.0, 4.0])));
         assert_eq!(run("random(@id)"), run("random(7)"));
         assert_eq!(run("@P.y > 1 && @id == 7"), Ok(Val::Num(1.0)));
         assert!(run("@Cd").unwrap_err().contains("@Cd"));
-        assert!(run("cam.focal + @id").unwrap_err().contains("can't be read"));
+        assert!(run("cam.focal + @id").unwrap_err().contains("isn't known"));
+        assert_eq!(run("dist(@P, loc.translate)"), Ok(Val::Num(13f64.sqrt())), "a ref resolved beforehand");
+        assert!(run("at(loc.translate, 3)").unwrap_err().contains("own frame"));
+        // 3-D noise: smooth, -1..1, 0 at whole points, repeatable.
+        let n = |p: [f64; 3]| match run(&format!("noise3([{}, {}, {}])", p[0], p[1], p[2])) { Ok(Val::Num(x)) => x, v => panic!("{v:?}") };
+        assert_eq!(n([2.0, 3.0, 4.0]), 0.0);
+        assert!((n([0.31, 0.5, 0.7]) - n([0.3101, 0.5, 0.7])).abs() < 1e-3 && n([0.31, 0.5, 0.7]) != 0.0);
+        assert!(run("noise3(1)").is_err());
+        assert!(parse("@P.x * frame").unwrap().uses_time() && !parse("@P.x + loc.translate.x").unwrap().uses_time());
         assert_eq!(parse("@P.x + @id").unwrap().attrs(), vec!["P", "id"]);
         let none: Lookup = &|_, _, _| Err("none".into());
         assert!(parse("@id").unwrap().eval(none, Clock::default(), 1.0).unwrap_err().contains("geometry node"));

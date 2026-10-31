@@ -94,7 +94,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "attribute_set" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -307,6 +307,8 @@ const MASK_INVERT: ParamSpec = fixed!("mask_invert", "Invert mask", ParamKind::B
 const SPLAT_UPS: &[&str] = &["y", "z", "-y"];
 /// The scene a splat editing node changes (everything else passed on).
 const SPLATS_IN: Port = Port { label: "scene", optional: false, kind: Kind::Scene };
+/// The kinds of attribute an Attribute Set row makes (see [`crate::geo::Attr`]).
+const ATTR_KINDS: &[&str] = &["float", "vec3", "vec4", "int"];
 
 const PLACE_T: ParamSpec = p!("translate", "Translate", ParamKind::Vec3, [0.0, 0.0, 0.0]);
 const PLACE_R: ParamSpec = p!("rotate", "Rotate", ParamKind::Vec3, [0.0, 0.0, 0.0]);
@@ -1115,6 +1117,37 @@ pub static OPS: &[OpInfo] = &[
                points is an error.",
     },
     OpInfo {
+        name: "attribute_set",
+        label: "Attribute Set",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN],
+        params: &[
+            fixed!("elements", "Elements", ParamKind::Choice(&["points", "mesh points", "faces", "instances"]), "points"),
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("attr1_name", "Attribute 1", ParamKind::Text, "Cd"),
+            fixed!("attr1_kind", "Kind 1", ParamKind::Choice(ATTR_KINDS), "vec4"),
+            fixed!("attr1_expr", "Expression 1", ParamKind::Text, "[1, 1, 1, 1]"),
+            fixed!("attr2_name", "Attribute 2", ParamKind::Text, ""),
+            fixed!("attr2_kind", "Kind 2", ParamKind::Choice(ATTR_KINDS), "float"),
+            fixed!("attr2_expr", "Expression 2", ParamKind::Text, ""),
+            fixed!("attr3_name", "Attribute 3", ParamKind::Text, ""),
+            fixed!("attr3_kind", "Kind 3", ParamKind::Choice(ATTR_KINDS), "float"),
+            fixed!("attr3_expr", "Expression 3", ParamKind::Text, ""),
+            fixed!("attr4_name", "Attribute 4", ParamKind::Text, ""),
+            fixed!("attr4_kind", "Kind 4", ParamKind::Choice(ATTR_KINDS), "float"),
+            fixed!("attr4_expr", "Expression 4", ParamKind::Text, ""),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Sets up to four attributes on the points (of point sets and curves), the meshes' points, their faces, or \
+               the instances (of Group's node, a name or a pattern with *, or all): each its name, kind (float, vec3, vec4 or \
+               int) and a formula worked out for every element, reading it by @ names (@P its place in the scene, @N, @id, \
+               @index, @count, any attribute as @name), other nodes' params (`dist(@P, locator1.translate)`), random(@id) \
+               and noise3(@P * 4). The rows go in order: a later one sees what an earlier one set. Setting P moves the points \
+               (the mesh's, or each instance's placement), a mesh's N its normals; Cd colors, pscale sizes, orient turns \
+               what Instance on Points puts there. A number fills every part of a vec3 or vec4.",
+    },
+    OpInfo {
         name: "delete_geo",
         label: "Delete Geo",
         category: Category::Scene,
@@ -1645,6 +1678,45 @@ pub type Links<'a> = Option<&'a dyn Fn(&Value, f64) -> Value>;
 
 /// [`resolve_params`], following live links through `links`.
 pub fn resolve_params_linked(op: &str, params: &Value, frame: i64, links: Links) -> Value {
+    let mut out = resolve_linked(op, params, frame, links);
+    add_formula_refs(op, &mut out, frame, links);
+    out
+}
+
+/// The params of geometry nodes that are per-element formulas (see
+/// [`crate::expr::Expr::eval_elem`]).
+const FORMULA_PARAMS: [&str; 5] = ["expression", "attr1_expr", "attr2_expr", "attr3_expr", "attr4_expr"];
+
+/// `op`'s per-element formulas in `params`, parsed (those that parse).
+fn formulas(op: &str, params: &Value) -> Vec<crate::expr::Expr> {
+    if !matches!(op, "delete_geo" | "attribute_set") {
+        return Vec::new();
+    }
+    FORMULA_PARAMS.iter().filter_map(|k| params[*k].as_str()).filter_map(|src| crate::expr::parse(src).ok()).collect()
+}
+
+/// The other nodes' params a geometry node's formulas read, worked out
+/// once now through `links` (the graph's), as `_refs` {"node.param":
+/// value}: so they're in the node's cache key, and its elements all read
+/// the same values.
+fn add_formula_refs(op: &str, out: &mut Value, frame: i64, links: Links) {
+    let (Some(follow), Value::Object(map)) = (links, &mut *out) else { return };
+    let mut refs = Map::new();
+    for e in formulas(op, &Value::Object(map.clone())) {
+        for (node, param) in e.refs() {
+            let key = format!("{node}.{param}");
+            if !refs.contains_key(&key) {
+                let link = json!({ "link": { "expr": format!("\"{node}\".{param}") } });
+                refs.insert(key, follow(&link, frame as f64));
+            }
+        }
+    }
+    if !refs.is_empty() {
+        map.insert("_refs".into(), Value::Object(refs));
+    }
+}
+
+fn resolve_linked(op: &str, params: &Value, frame: i64, links: Links) -> Value {
     let Value::Object(map) = params else { return params.clone() };
     if !map.values().any(|v| anim::is_animated(v) || crate::link::is_link(v)) {
         let mut out = params.clone();
@@ -1740,6 +1812,8 @@ pub fn is_time_varying(op: &str, params: &Value) -> bool {
         "media_in" => true,
         "read" => media::is_sequence_pattern(path) || media::is_video(Path::new(path)),
         "write" => media::is_sequence_pattern(path),
+        // A geometry formula reading the frame or time.
+        "delete_geo" | "attribute_set" => formulas(op, params).iter().any(crate::expr::Expr::uses_time),
         _ => crate::plugin::is_time_varying(op),
     }
 }
@@ -1970,6 +2044,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "read_splat" => read_splat(params),
         "splat_crop" => splat_crop(params, inputs),
         "delete_geo" => Ok(scene_output(DEFAULT_FORMAT, geo_ops::delete(params, input_scene(inputs), ctx.frame as f64)?)),
+        "attribute_set" => Ok(scene_output(DEFAULT_FORMAT, geo_ops::attribute_set(params, input_scene(inputs), ctx.frame as f64)?)),
         "scatter" => {
             let image = inputs.get(1).copied().flatten().filter(|i| i.scene.is_none());
             let camera = inputs.get(2).copied().flatten().and_then(|i| i.scene.as_deref());
@@ -3918,6 +3993,36 @@ mod tests {
     /// over 64 on the ground): a sphere round the ball keeps just it, a
     /// thin box (turned or not) just the ground; inverted, the rest; what
     /// keeps everything shares it; the rest of the scene passes through.
+    /// A geometry formula reads other nodes' params through the graph,
+    /// once a cook: a moved locator re-cooks it; one reading the frame
+    /// changes with it, one that doesn't is the same every frame.
+    #[test]
+    fn geometry_formulas_read_other_nodes_through_the_graph() {
+        use crate::graph::{Evaluator, Graph};
+        let graph = |x: f64, expr: &str| -> Graph {
+            serde_json::from_value(json!({ "nodes": [
+                { "id": "loc", "op": "locator", "params": { "translate": [x, 0, 0] } },
+                { "id": "ground", "op": "plane", "params": { "size": [4, 4] } },
+                { "id": "pts", "op": "scatter", "inputs": ["ground"], "params": { "density": 5 } },
+                { "id": "set", "op": "attribute_set", "inputs": ["pts"], "params": { "attr1_name": "d", "attr1_kind": "float", "attr1_expr": expr } },
+            ] }))
+            .unwrap()
+        };
+        let d = |e: &mut Evaluator, g: &Graph, frame: i64| {
+            let img = e.evaluate(g, "set", &EvalContext { frame, write_outputs: false }).unwrap();
+            img.scene.as_ref().unwrap().point_sets[0].attrs.float("d").unwrap()[0]
+        };
+        let mut e = Evaluator::new();
+        let near = d(&mut e, &graph(0.0, "dist(@P, loc.translate)"), 1);
+        let far = d(&mut e, &graph(100.0, "dist(@P, loc.translate)"), 1);
+        assert!(near < 3.0 && far > 97.0, "{near} then {far}: the locator moved, the node re-cooked");
+        assert!(is_time_varying("attribute_set", &json!({ "attr1_expr": "@P.x * frame" })) && !is_time_varying("attribute_set", &json!({ "attr1_expr": "@P.x" })));
+        let g = graph(0.0, "frame");
+        assert_eq!((d(&mut e, &g, 1), d(&mut e, &g, 7)), (1.0, 7.0));
+        let missing = e.evaluate(&graph(0.0, "dist(@P, nobody.translate)"), "set", &EvalContext { frame: 1, write_outputs: false });
+        assert!(missing.is_err());
+    }
+
     /// Transform Geo moves its group's meshes, cards, point sets, curves
     /// and instances about the pivot; cameras and lights only when asked.
     #[test]

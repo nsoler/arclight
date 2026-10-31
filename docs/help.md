@@ -394,7 +394,13 @@ selected object.
   box or sphere you place in the 3D view (G moves it, S sizes it), or
   where an expression is true: `@P.y < 0` drops everything below the
   ground, `random(@id) < 0.3` thins a scatter by a third, the same third
-  every time.
+  every time. **Attribute Set** works out attributes for every point (or
+  mesh point, face, instance) from a formula: Cd to color them, pscale to
+  size what Instance on Points puts there, P to move them (`@P + [0,
+  noise3(@P * 2) * 0.3, 0]` lifts a scatter into dunes). Formulas read the
+  element with @ names and other nodes' params by name, so a locator can
+  push points away from it (`dist(@P, locator1.translate)`). Up to four
+  rows, in order.
 - **Read Geo** reads an OBJ file (with its MTL colors and textures), a
   glTF file (.gltf, .glb) or an Alembic cache (.abc): its meshes move and
   deform frame by frame. **Frame rate** (set to the project's when you

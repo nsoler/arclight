@@ -17,6 +17,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.11 — 2026-10-31
+
+- New **Attribute Set** node: sets up to four attributes on points, mesh
+  points, faces or instances from formulas worked out per element (`@P`,
+  `@N`, `@id`, `@index`, `@count`, any `@name`), which can also read other
+  nodes' params (`dist(@P, locator1.translate)`) and 3D noise
+  (`noise3(@P * 4)`); setting P moves them. Delete Geo's expressions read
+  other nodes' params too.
+
 ## 0.13.10 — 2026-10-31
 
 - New **Delete Geo** node: deletes points, mesh faces or instances inside

@@ -37,6 +37,14 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.11, P3: Attribute Set** (Dev2): `attribute_set`, 4 rows (name,
+  kind, expression) run in order, per element in parallel; @P writes
+  positions through the placement's inverse (instances: world
+  translation), mesh N writes normals. Refs plumbing:
+  `ops::resolve_params_linked` puts `params._refs` {node.param: value}
+  for delete_geo / attribute_set formulas (in the cache key);
+  `is_time_varying` via `Expr::uses_time`. `noise3`. Committed without
+  Dev1's in-progress fit_plane lines in ops.rs (split by the Supervisor).
 - **0.13.10, P2: Delete Geo + @ names** (Dev2): `expr.rs` `@name`
   tokens (`.x/.y/.z/.w`), `Node::Attr`, `Expr::attrs()`,
   `Expr::eval_elem` (Sync, rayon); `node.param` refs inside geometry
