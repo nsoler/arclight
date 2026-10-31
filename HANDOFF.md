@@ -42,7 +42,8 @@ done), `docs/help.md` (the in-app help) and
   stacks are 8 KiB), `alarm(3)`, re-entry guard, report before the
   backtrace; `crash::tests::crashes_leave_a_report` covers panic /
   worker / segv / thread / wild jump / stuck. Open: `arclight mcp --http`
-  SIGINT / SIGTERM handler (Dev1, next).
+  SIGINT / SIGTERM handler: done in 0.12.5 (the handler only sets an
+  atomic; `serve_http` returns, so main ends through `exit_process`).
 - **0.12.3, GPU G5 part 1** (Dev2): shadows and motion-blur
   accumulation on the GPU. `shadow::plan` is the single source of map
   placement for both renderers; `gpu::blurred` is tried first in

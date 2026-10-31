@@ -15,6 +15,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.5 — 2026-10-31
+
+- `arclight mcp --http` stops cleanly on Ctrl-C or SIGTERM: it finishes
+  the request in progress (new ones get 503), then shuts the GPU down and
+  exits 0; a second Ctrl-C stops at once.
+
 ## 0.12.4 — 2026-10-31
 
 - GPU: **Transform, Corner Pin and Tracker (with motion blur), Lens

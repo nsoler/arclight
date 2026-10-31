@@ -17,6 +17,7 @@ use serde_json::{json, Map, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -703,18 +704,64 @@ pub fn serve_stdio(server: &mut Server) -> Result<()> {
 
 /// Serve MCP over HTTP: each `POST` carries one JSON-RPC message and gets the
 /// reply as `application/json` (202 for notifications).
+/// Set by SIGINT or SIGTERM while serving HTTP: stop.
+static STOP: AtomicBool = AtomicBool::new(false);
+
+/// SIGINT / SIGTERM: stop after the request in progress; a second one
+/// ends the process at once (a render not worth waiting for).
+extern "C" fn on_stop(sig: libc::c_int) {
+    // SAFETY: async-signal-safe calls only.
+    unsafe {
+        if STOP.swap(true, Ordering::SeqCst) {
+            libc::_exit(128 + sig);
+        }
+        let msg = b"\narclight: stopping after the request in progress (again to stop now)\n";
+        libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
+    }
+}
+
+/// Serve MCP over HTTP at `addr` until SIGINT or SIGTERM: then new
+/// requests are refused, the one in progress finishes, and this returns
+/// (so the program ends through its `main`, see `gpu::exit_process`).
 pub fn serve_http(server: Server, addr: &str) -> Result<()> {
     let listener = TcpListener::bind(addr).with_context(|| format!("binding {addr}"))?;
     eprintln!("arclight: MCP server on http://{}/mcp", listener.local_addr()?);
-    let server = Arc::new(Mutex::new(server));
-    for stream in listener.incoming().flatten() {
-        let server = server.clone();
-        std::thread::spawn(move || {
-            if let Err(e) = serve_http_client(stream, &server) {
-                eprintln!("arclight: http: {e:#}");
-            }
-        });
+    // SAFETY: installs a handler that only touches an atomic and writes.
+    unsafe {
+        let mut act: libc::sigaction = std::mem::zeroed();
+        act.sa_sigaction = on_stop as *const () as libc::sighandler_t;
+        libc::sigemptyset(&mut act.sa_mask);
+        for sig in [libc::SIGINT, libc::SIGTERM] {
+            libc::sigaction(sig, &act, std::ptr::null_mut());
+        }
     }
+    // Polled, so a signal is noticed between connections.
+    listener.set_nonblocking(true)?;
+    let server = Arc::new(Mutex::new(server));
+    while !STOP.load(Ordering::SeqCst) {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream.set_nonblocking(false)?;
+                let server = server.clone();
+                std::thread::spawn(move || {
+                    if let Err(e) = serve_http_client(stream, &server) {
+                        eprintln!("arclight: http: {e:#}");
+                    }
+                });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => {
+                eprintln!("arclight: http: {e}");
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
+    // The request in progress finishes; none starts after it (the lock is
+    // kept until the process ends).
+    std::mem::forget(server.lock().unwrap_or_else(|e| e.into_inner()));
+    eprintln!("arclight: MCP server stopped");
     Ok(())
 }
 
@@ -748,6 +795,8 @@ fn serve_http_client(stream: TcpStream, server: &Mutex<Server>) -> Result<()> {
         let method = request_line.split_whitespace().next().unwrap_or("");
         let (status, payload) = if method != "POST" {
             ("405 Method Not Allowed", String::new())
+        } else if STOP.load(Ordering::SeqCst) {
+            ("503 Service Unavailable", String::new())
         } else {
             let reply = match parse_message(&String::from_utf8_lossy(&body)) {
                 Ok(msg) => server.lock().unwrap().handle(&msg),

@@ -99,3 +99,43 @@ fn a_failed_render_exits_1_with_its_error() {
     assert!(String::from_utf8_lossy(&out.stderr).starts_with("Error: "), "{}", String::from_utf8_lossy(&out.stderr));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// `arclight mcp --http` stops on SIGTERM (or SIGINT) after the request in
+/// progress, and ends cleanly (exit 0, through `gpu::exit_process`).
+#[test]
+fn the_http_server_stops_on_a_signal() {
+    use std::io::{BufRead, BufReader, Read};
+    let mut child = Command::new(BIN).args(["mcp", "--http", "127.0.0.1:0"]).stderr(Stdio::piped()).stdout(Stdio::null()).spawn().unwrap();
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut first = String::new();
+    stderr.read_line(&mut first).unwrap();
+    let addr = first.trim().strip_prefix("arclight: MCP server on http://").and_then(|a| a.strip_suffix("/mcp")).unwrap_or_else(|| panic!("{first}")).to_string();
+    // One request first: a render (on the GPU when there is one).
+    let post = |body: serde_json::Value| {
+        let body = body.to_string();
+        let mut s = std::net::TcpStream::connect(&addr).unwrap();
+        write!(s, "POST /mcp HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+        let mut reply = String::new();
+        s.read_to_string(&mut reply).unwrap();
+        reply
+    };
+    let call = |name: &str, args: serde_json::Value| serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": args}});
+    post(call("create_node", serde_json::json!({"op": "checkerboard", "name": "cb", "params": {"width": 320, "height": 200}})));
+    post(call("create_node", serde_json::json!({"op": "blur", "name": "soft", "inputs": ["cb"]})));
+    let reply = post(call("render_frame", serde_json::json!({"node": "soft"})));
+    assert!(reply.starts_with("HTTP/1.1 200") && reply.contains("\"width\":320"), "{reply}");
+    // SAFETY: a signal to our own child.
+    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+    let t0 = std::time::Instant::now();
+    let status = loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            break s;
+        }
+        assert!(t0.elapsed().as_secs() < 10, "the server didn't stop");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let mut rest = String::new();
+    stderr.read_to_string(&mut rest).unwrap();
+    assert!(status.success(), "{status:?}\n{rest}");
+    assert!(rest.contains("stopping after the request in progress") && rest.contains("MCP server stopped"), "{rest}");
+}
