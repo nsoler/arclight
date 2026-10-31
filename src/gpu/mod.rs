@@ -160,7 +160,7 @@ pub fn wanted() -> bool {
 /// The ops with a GPU path (see `gpu::ops`).
 pub const OPS: &[&str] = &[
     "grade", "exposure", "saturation", "invert", "clamp", "premult", "unpremult", "channel_select", "switch", "dissolve", "keymix", "constant",
-    "checkerboard", "merge", "blur", "transform", "corner_pin", "tracker", "lens_distort", "resize", "keyer",
+    "checkerboard", "merge", "blur", "transform", "corner_pin", "tracker", "lens_distort", "resize", "keyer", "shuffle",
 ];
 
 /// What a node's cache key mixes in for the backend: 1 when `op` has a

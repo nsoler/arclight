@@ -59,7 +59,7 @@ pub fn preference(op: &str, params: &Value) -> Prefer {
 /// is uploaded). Unknown values fall to the CPU, which reports them.
 pub fn supports(op: &str, params: &Value) -> bool {
     match op {
-        "merge" => params.get("operation").and_then(Value::as_str).is_some_and(|o| merge_mode(o).is_some()),
+        "merge" => params.get("operation").and_then(Value::as_str).is_some_and(|o| o == "zmerge" || merge_mode(o).is_some()),
         "invert" => params.get("channels").and_then(Value::as_str).is_some_and(|c| ops::invert_channels(c).is_ok()),
         "channel_select" => ["red", "green", "blue", "alpha"].iter().all(|k| params.get(*k).and_then(Value::as_str).is_some_and(|n| ops::channel_source(n).is_ok())),
         _ => super::OPS.contains(&op),
@@ -186,7 +186,14 @@ fn eval_op(gpu: &Gpu, op: &str, params: &Value, inputs: &[Option<&GpuImage>], cp
         }
         "merge" => {
             let Some(p) = parsed::<ops::Merge>(params, op) else { return Ok(None) };
-            let (Some(fg), Some(bg), Some(mode)) = (input(0), input(1), merge_mode(&p.operation)) else { return Ok(None) };
+            let (Some(fg), Some(bg)) = (input(0), input(1)) else { return Ok(None) };
+            if p.operation == "zmerge" {
+                // By depth, passes and all, in B's frame.
+                let mut out = zmerge(gpu, fg, bg)?;
+                out.format = bg.format;
+                return Ok(Some(out));
+            }
+            let Some(mode) = merge_mode(&p.operation) else { return Ok(None) };
             let Ok(blank) = ops::blend(&p.operation, color::TRANSPARENT, color::TRANSPARENT) else { return Ok(None) };
             let window = ops::pointwise_window(bg.format, &[fg.window, bg.window], blank);
             (k.op, k.mode) = (MERGE, mode);
@@ -230,6 +237,11 @@ fn eval_op(gpu: &Gpu, op: &str, params: &Value, inputs: &[Option<&GpuImage>], cp
             let Some(p) = parsed::<ops::Blur>(params, op) else { return Ok(None) };
             let Some(src) = input(0) else { return Ok(None) };
             blur(gpu, src, p.radius.max(0.0).round() as usize, p.passes.max(1))?
+        }
+        "shuffle" => {
+            let Some(src) = input(0) else { return Ok(None) };
+            let Some(plan) = shuffle_plan(params, src) else { return Ok(None) };
+            shuffle(gpu, src, &plan)?
         }
         "transform" | "corner_pin" | "tracker" | "lens_distort" => {
             let Some(src) = input(0) else { return Ok(None) };
@@ -390,6 +402,191 @@ fn average(gpu: &Gpu, images: &[GpuImage]) -> Result<GpuImage> {
         acc = Some(k.run(gpu, first.format, window, [acc.as_ref(), Some(img), None])?);
     }
     Ok(acc.expect("at least one sample"))
+}
+
+// -- Shuffle and zmerge (channels.wgsl) ------------------------------------
+
+const CHANNELS: &str = include_str!("channels.wgsl");
+
+/// Where one of a Shuffle's output channels comes from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Channel {
+    Value(f32),
+    /// A component of the input's color.
+    Color(u32),
+    /// The input's plane with this index.
+    Plane(usize),
+}
+
+/// What a Shuffle makes of its input: its color's four channels and its
+/// planes (names in order, each from a channel).
+#[derive(Debug, PartialEq)]
+struct ShufflePlan {
+    color: [Channel; 4],
+    planes: Vec<(String, Channel)>,
+}
+
+/// Codes the probe's channels carry: the color's components, then the
+/// planes. Far from the 0 and 1 Shuffle's constant channels give.
+const COLOR_CODE: f32 = 1001.0;
+const PLANE_CODE: f32 = 2001.0;
+
+/// A Shuffle with `params` on `src`, worked out by the CPU's own Shuffle on
+/// a 1 x 1 probe whose channels hold codes: Shuffle only moves channels,
+/// so each code that comes out says where its channel came from, layers,
+/// names and order as on the CPU. None when the CPU's Shuffle refuses (a
+/// layer or channel the input lacks, ...: it says why) or anything but a
+/// code or 0 / 1 comes out.
+fn shuffle_plan(params: &Value, src: &GpuImage) -> Option<ShufflePlan> {
+    let mut probe = Image::blank(Size { width: 1, height: 1 }, IRect::new(0, 0, 1, 1));
+    probe.pixels[0] = std::array::from_fn(|c| COLOR_CODE + c as f32);
+    probe.planes = src.planes.iter().enumerate().map(|(k, (name, _))| crate::image::Plane { name: name.clone(), data: vec![PLANE_CODE + k as f32] }).collect();
+    let ctx = ops::EvalContext { frame: 0, write_outputs: false };
+    let out = ops::eval("shuffle", params, &[Some(&probe)], &ctx).ok()?;
+    let channel = |v: f32| -> Option<Channel> {
+        if v == 0.0 || v == 1.0 {
+            return Some(Channel::Value(v));
+        }
+        let c = v - COLOR_CODE;
+        if (0.0..4.0).contains(&c) && c.fract() == 0.0 {
+            return Some(Channel::Color(c as u32));
+        }
+        let k = v - PLANE_CODE;
+        (k >= 0.0 && k.fract() == 0.0 && (k as usize) < src.planes.len()).then_some(Channel::Plane(k as usize))
+    };
+    let px = *out.pixels.first()?;
+    let color = [channel(px[0])?, channel(px[1])?, channel(px[2])?, channel(px[3])?];
+    let planes = out.planes.iter().map(|p| Some((p.name.clone(), channel(*p.data.first()?)?))).collect::<Option<_>>()?;
+    Some(ShufflePlan { color, planes })
+}
+
+/// channels.wgsl's `Params`.
+#[derive(Default)]
+struct ChannelParams {
+    out_win: [i32; 4],
+    win_a: [i32; 4],
+    win_b: [i32; 4],
+    kind: [u32; 4],
+    index: [u32; 4],
+    value: [f32; 4],
+    rule: u32,
+    has: u32,
+}
+
+impl ChannelParams {
+    fn bytes(&self) -> Vec<u32> {
+        let i = |v: [i32; 4]| v.map(|x| x as u32);
+        [i(self.out_win), i(self.win_a), i(self.win_b), self.kind, self.index, self.value.map(f32::to_bits), [self.rule, self.has, 0, 0]].concat()
+    }
+
+    /// `entry` of channels.wgsl over `out_win`, buffers at their bindings.
+    fn dispatch(&self, gpu: &Gpu, entry: &'static str, buffers: &[(u32, &wgpu::Buffer)]) -> Result<()> {
+        let w = self.out_win;
+        let window = IRect::new(w[0], w[1], w[0] + w[2], w[1] + w[3]);
+        if window.is_empty() {
+            return Ok(());
+        }
+        let pipeline = gpu.compute_pipeline("gpu/channels", CHANNELS, entry);
+        gpu.scoped(|| {
+            let uniform = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("channels"), contents: bytemuck::cast_slice(&self.bytes()), usage: wgpu::BufferUsages::UNIFORM });
+            let mut entries = vec![wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }];
+            entries.extend(buffers.iter().map(|(b, buf)| wgpu::BindGroupEntry { binding: *b, resource: buf.as_entire_binding() }));
+            let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some(entry), layout: &pipeline.get_bind_group_layout(0), entries: &entries });
+            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            dispatch_2d(&mut encoder, &pipeline, &bind, window);
+            gpu.queue.submit([encoder.finish()]);
+            Ok(())
+        })
+    }
+}
+
+/// `src` shuffled as `plan` says: planes taken as they are where they can
+/// be (shared buffers), the rest gathered or extracted.
+fn shuffle(gpu: &Gpu, src: &GpuImage, plan: &ShufflePlan) -> Result<GpuImage> {
+    let n = src.len() as u64;
+    let none = placeholder(gpu);
+    let base = ChannelParams { out_win: win(src.window), ..ChannelParams::default() };
+    // Up to four planes into slots 0-3 (bindings 2-5).
+    let mut slots: Vec<usize> = Vec::new();
+    fn set(p: &mut ChannelParams, slots: &mut Vec<usize>, c: usize, ch: Channel) {
+        match ch {
+            Channel::Value(v) => (p.kind[c], p.value[c]) = (0, v),
+            Channel::Color(k) => (p.kind[c], p.index[c]) = (1, k),
+            Channel::Plane(k) => {
+                let slot = slots.iter().position(|s| *s == k).unwrap_or_else(|| {
+                    slots.push(k);
+                    slots.len() - 1
+                });
+                (p.kind[c], p.index[c]) = (2, slot as u32);
+            }
+        }
+    }
+    let bindings = |slots: &[usize]| -> Vec<(u32, wgpu::Buffer)> {
+        let mut b = vec![(1, src.rgba.clone())];
+        b.extend((0..4).map(|s| (2 + s as u32, slots.get(s).map_or_else(|| none.clone(), |k| src.planes[*k].1.clone()))));
+        b
+    };
+    let rgba = if plan.color == [0, 1, 2, 3].map(Channel::Color) {
+        src.rgba.clone()
+    } else {
+        let mut p = ChannelParams { ..base };
+        for (c, ch) in plan.color.iter().enumerate() {
+            set(&mut p, &mut slots, c, *ch);
+        }
+        let out = storage_buffer(gpu, "shuffled", n * 16, gpu.transfer_path(), false)?;
+        let mut b = bindings(&slots);
+        b.push((6, out.clone()));
+        p.dispatch(gpu, "gather", &b.iter().map(|(i, buf)| (*i, buf)).collect::<Vec<_>>())?;
+        out
+    };
+    let mut planes = Vec::new();
+    for (name, ch) in &plan.planes {
+        let buf = match ch {
+            Channel::Plane(k) => src.planes[*k].1.clone(),
+            _ => {
+                slots.clear();
+                let mut p = ChannelParams { ..base };
+                set(&mut p, &mut slots, 0, *ch);
+                let out = storage_buffer(gpu, "shuffled plane", n * 4, gpu.transfer_path(), false)?;
+                let mut b = bindings(&slots);
+                b.push((7, out.clone()));
+                p.dispatch(gpu, "extract", &b.iter().map(|(i, buf)| (*i, buf)).collect::<Vec<_>>())?;
+                out
+            }
+        };
+        planes.push((name.clone(), buf));
+    }
+    Ok(GpuImage { format: src.format, window: src.window, rgba, planes, scene: src.scene.clone(), transfer: gpu.transfer_path() })
+}
+
+/// `a` and `b` merged by depth (`Image::zmerge`): the result over both
+/// windows in `a`'s frame, its planes by `image::zmerge_plane`'s rules.
+fn zmerge(gpu: &Gpu, a: &GpuImage, b: &GpuImage) -> Result<GpuImage> {
+    let window = a.window.union(&b.window);
+    let n = (window.width() * window.height()) as u64;
+    let none = placeholder(gpu);
+    let (depth_a, depth_b) = (a.plane("depth"), b.plane("depth"));
+    let mut p = ChannelParams { out_win: win(window), win_a: win(a.window), win_b: win(b.window), ..ChannelParams::default() };
+    p.has = u32::from(depth_a.is_some()) << 2 | u32::from(depth_b.is_some()) << 3;
+    let rgba = storage_buffer(gpu, "zmerged", n * 16, gpu.transfer_path(), false)?;
+    let shared = [(1, &a.rgba), (8, &b.rgba), (9, depth_a.unwrap_or(&none)), (10, depth_b.unwrap_or(&none))];
+    p.dispatch(gpu, "zmerge", &[&shared[..], &[(6, &rgba)]].concat())?;
+    let names = |img: &GpuImage| img.planes.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>();
+    let mut planes = Vec::new();
+    for name in crate::image::zmerge_names(&names(a), &names(b)) {
+        let (pa, pb) = (a.plane(&name), b.plane(&name));
+        let mut q = ChannelParams { ..p };
+        q.rule = match crate::image::zmerge_plane(&name) {
+            crate::image::ZPlane::Depth => 0,
+            crate::image::ZPlane::Coverage => 1,
+            crate::image::ZPlane::Data => 2,
+        };
+        q.has |= u32::from(pa.is_some()) | u32::from(pb.is_some()) << 1;
+        let out = storage_buffer(gpu, "zmerged plane", n * 4, gpu.transfer_path(), false)?;
+        q.dispatch(gpu, "zmerge_plane", &[&shared[..], &[(11, pa.unwrap_or(&none)), (12, pb.unwrap_or(&none)), (7, &out)]].concat())?;
+        planes.push((name, out));
+    }
+    Ok(GpuImage { format: a.format, window, rgba, planes, scene: None, transfer: gpu.transfer_path() })
 }
 
 /// warp.wgsl's `Warp`.
@@ -865,12 +1062,75 @@ mod tests {
         }
     }
 
+    /// `img` with more planes: a layer `P` (x, y, z), a matte and a
+    /// coverage layer's component, from noise.
+    fn with_planes(mut img: Image, seed: u32) -> Image {
+        let n = img.pixels.len();
+        for (k, name) in ["P.x", "P.y", "P.z", "matte.hero", "diffuse.R"].into_iter().enumerate() {
+            let src = noise(img.format, img.window(), false, seed * 10 + k as u32);
+            let data = (0..n).map(|i| src.pixels[i][k % 4]).collect();
+            img.planes.push(crate::image::Plane { name: name.into(), data });
+        }
+        img
+    }
+
+    /// Shuffle on the GPU as on the CPU: channels swapped and set to 0 / 1,
+    /// a plane or layer into the color, the color into a new or existing
+    /// layer, layers removed; a missing layer is left to the CPU.
+    #[test]
+    fn shuffle_matches_the_cpu() {
+        let Some(gpu) = crate::gpu::test_device() else { return eprintln!("skipped: no GPU adapter") };
+        let a = with_planes(images().0, 3);
+        for params in [
+            json!({}),
+            json!({"red": "G", "green": "R", "blue": "0", "alpha": "1"}),
+            json!({"in": "depth"}),
+            json!({"in": "P", "red": "B", "green": "G", "blue": "R"}),
+            json!({"out": "P"}),
+            json!({"out": "spec", "red": "A", "remove": "matte"}),
+            json!({"in": "P", "out": "N", "remove": "depth, diffuse"}),
+            json!({"red": "P.y", "green": "matte.hero", "blue": "depth", "alpha": "diffuse.R"}),
+            json!({"remove": "*"}),
+        ] {
+            agree(&gpu, "shuffle", params, &[Some(&a)], (0.0, 0.0));
+        }
+        let up = GpuImage::upload(&gpu, &a).unwrap();
+        let none = |_| anyhow::bail!("not needed");
+        for missing in [json!({"in": "nope"}), json!({"red": "Q.x"})] {
+            let p = ops::params_with_defaults("shuffle", &missing);
+            assert!(eval(&gpu, "shuffle", &p, &[Some(&up)], &none).unwrap().is_none(), "{missing}");
+        }
+        // The plain one shares the input's color.
+        let p = ops::params_with_defaults("shuffle", &json!({}));
+        let out = eval(&gpu, "shuffle", &p, &[Some(&up)], &none).unwrap().unwrap();
+        assert!(out.rgba == up.rgba && out.planes.iter().zip(&up.planes).all(|(o, i)| o.1 == i.1));
+    }
+
+    /// Merge's zmerge on the GPU as on the CPU: depth on both, on one, on
+    /// neither; coverage and data passes; a plane only one input has; Swap
+    /// and a mask.
+    #[test]
+    fn zmerge_matches_the_cpu() {
+        let Some(gpu) = crate::gpu::test_device() else { return eprintln!("skipped: no GPU adapter") };
+        let (a, _, m) = images();
+        let a = with_planes(a, 1);
+        let b = with_planes(noise(a.format, IRect::new(12, 8, 90, 70), true, 4), 2);
+        let mut b_flat = noise(a.format, IRect::new(30, -6, 70, 50), false, 6);
+        b_flat.planes.push(crate::image::Plane { name: "matte.side".into(), data: vec![0.5; b_flat.pixels.len()] });
+        for (x, y) in [(&a, &b), (&b, &a), (&a, &b_flat), (&b_flat, &a)] {
+            agree(&gpu, "merge", json!({"operation": "zmerge"}), &[Some(x), Some(y), None], POINT);
+        }
+        agree(&gpu, "merge", json!({"operation": "zmerge", "swap": true, "mix": 0.6}), &[Some(&a), Some(&b), Some(&m)], POINT);
+        let plain = noise(a.format, IRect::new(5, 5, 60, 40), false, 8);
+        agree(&gpu, "merge", json!({"operation": "zmerge"}), &[Some(&plain), Some(&b_flat), None], POINT);
+    }
+
     /// Inputs that can't be met here are declined (the CPU reports them),
     /// and unknown values aren't claimed.
     #[test]
     fn what_the_gpu_declines() {
-        assert!(!supports("merge", &json!({"operation": "zmerge"})) && !supports("invert", &json!({"channels": "rg"})));
-        assert!(!supports("shuffle", &json!({})) && supports("grade", &json!({})));
+        assert!(!supports("merge", &json!({"operation": "zmorph"})) && !supports("invert", &json!({"channels": "rg"})));
+        assert!(!supports("light_2d", &json!({})) && supports("grade", &json!({})));
         let Some(gpu) = crate::gpu::test_device() else { return eprintln!("skipped: no GPU adapter") };
         let a = GpuImage::upload(&gpu, &images().0).unwrap();
         let p = ops::params_with_defaults("channel_select", &json!({"red": "B red"}));

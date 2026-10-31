@@ -15,6 +15,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.11 — 2026-10-31
+
+- GPU: **Shuffle and Merge's zmerge run on the GPU too**, so a 2D chain
+  no longer drops to the CPU for them; a plain Shuffle costs nothing
+  (its buffers are shared). Shuffle follows the CPU's own layer and
+  naming rules exactly (it is worked out on a 1×1 probe by the CPU
+  Shuffle itself).
+
 ## 0.12.10 — 2026-10-31
 
 - GPU: **Gaussian splats render on the GPU**: the view is prepared

@@ -560,6 +560,40 @@ const COMPONENTS: [&str; 10] = ["R", "G", "B", "A", "x", "y", "z", "w", "u", "v"
 
 /// A plane name's layer and component: `P.x` → (`P`, Some(`x`)), `depth`
 /// → (`depth`, None), `matte.card1` → (`matte.card1`, None).
+/// [`Image::zmerge_planes`] from the two images' plane names.
+pub fn zmerge_names(a: &[String], b: &[String]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for n in a.iter().chain(b) {
+        if !names.contains(n) {
+            names.push(n.clone());
+        }
+    }
+    names
+}
+
+/// How [`Image::zmerge`] merges a plane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZPlane {
+    /// `depth`: the nearer (positive) value.
+    Depth,
+    /// Coverage passes (mattes, layers of R, G, B, A): over, as the color.
+    Coverage,
+    /// Data passes (`P`, `N`, `uv`, `motion`, `id`, ...): the nearer
+    /// image's value where it covers the pixel, else the other's.
+    Data,
+}
+
+/// How [`Image::zmerge`] merges plane `name`.
+pub fn zmerge_plane(name: &str) -> ZPlane {
+    if name == "depth" {
+        ZPlane::Depth
+    } else if name.starts_with("matte.") || matches!(split_plane(name).1, Some("R" | "G" | "B" | "A")) {
+        ZPlane::Coverage
+    } else {
+        ZPlane::Data
+    }
+}
+
 pub fn split_plane(name: &str) -> (&str, Option<&str>) {
     match name.rsplit_once('.') {
         Some((layer, c)) if !layer.is_empty() && COMPONENTS.contains(&c) => (layer, Some(c)),
@@ -680,6 +714,13 @@ impl Image {
         Ok(())
     }
 
+    /// The names of `a`'s planes, then those of `b`'s that `a` lacks: a
+    /// [`zmerge`](Self::zmerge)'s planes, in order.
+    pub fn zmerge_planes(a: &Image, b: &Image) -> Vec<String> {
+        let names = |img: &Image| img.planes.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        zmerge_names(&names(a), &names(b))
+    }
+
     /// `a` and `b` merged by depth (their `depth` planes; 0 or no plane is
     /// nothing there, as far as can be): at each pixel the nearer goes over
     /// the farther, so an antialiased edge in front blends with what's
@@ -713,29 +754,20 @@ impl Image {
             let (fp, kp) = (f.at(x, y), k.at(x, y));
             *px = std::array::from_fn(|c| fp[c] + kp[c] * (1.0 - fp[3]));
         }
-        let mut names: Vec<String> = Vec::new();
-        for p in a.planes.iter().chain(&b.planes) {
-            if !names.contains(&p.name) {
-                names.push(p.name.clone());
-            }
-        }
-        for name in names {
+        for name in Image::zmerge_planes(a, b) {
             let (pa, pb) = (a.plane(&name), b.plane(&name));
             let value = |img: &Image, p: Option<&Plane>, x: i32, y: i32| p.map_or(0.0, |p| img.plane_value(p, x, y));
-            let coverage = name.starts_with("matte.") || matches!(split_plane(&name).1, Some("R" | "G" | "B" | "A"));
+            let kind = zmerge_plane(&name);
             let data: Vec<f32> = (0..n)
                 .map(|i| {
                     let (x, y) = at(i);
                     let (va, vb) = (value(a, pa, x, y), value(b, pb, x, y));
                     let (vf, vk, f, fp) = if a_front[i] { (va, vb, a, pa) } else { (vb, va, b, pb) };
-                    if name == "depth" {
-                        [va, vb].into_iter().filter(|d| *d > 0.0).fold(0.0, |m: f32, d| if m == 0.0 { d } else { m.min(d) })
-                    } else if coverage {
-                        vf + vk * (1.0 - f.at(x, y)[3])
-                    } else if fp.is_some() && f.at(x, y)[3] > 0.0 {
-                        vf
-                    } else {
-                        vk
+                    match kind {
+                        ZPlane::Depth => [va, vb].into_iter().filter(|d| *d > 0.0).fold(0.0, |m: f32, d| if m == 0.0 { d } else { m.min(d) }),
+                        ZPlane::Coverage => vf + vk * (1.0 - f.at(x, y)[3]),
+                        ZPlane::Data if fp.is_some() && f.at(x, y)[3] > 0.0 => vf,
+                        ZPlane::Data => vk,
                     }
                 })
                 .collect();

@@ -383,6 +383,8 @@ fn op_rows(gpu: &super::Gpu, sizes: &[Sized]) -> Vec<CheckRow> {
         ("grade", "grade", json!({"multiply": [1.1, 0.9, 1.0], "offset": [0.01, 0.0, -0.01], "gamma": [2.2, 1.0, 0.8]}), POINT, false, false, false),
         ("grade + mask, mix 0.5", "grade", json!({"gamma": [1.6, 1.6, 1.6], "mix": 0.5, "mask_channel": "luminance"}), POINT, false, true, false),
         ("merge screen", "merge", json!({"operation": "screen"}), POINT, true, false, false),
+        ("merge zmerge", "merge", json!({"operation": "zmerge"}), POINT, true, false, false),
+        ("shuffle", "shuffle", json!({"red": "G", "green": "R", "blue": "0", "alpha": "1"}), (0.0, 0.0), false, false, false),
         ("blur r 8 x 3", "blur", json!({"radius": 8, "passes": 3}), FILTER, false, false, false),
         ("blur r 32 x 3", "blur", json!({"radius": 32, "passes": 3}), FILTER, false, false, false),
         ("blur r 100 x 3", "blur", json!({"radius": 100, "passes": 3}), FILTER, false, false, false),
@@ -411,7 +413,7 @@ fn op_rows(gpu: &super::Gpu, sizes: &[Sized]) -> Vec<CheckRow> {
             if *two {
                 inputs.push(Some(&b));
             }
-            if *masked || *op != "merge" {
+            if *masked || !matches!(*op, "merge" | "shuffle") {
                 inputs.push(masked.then_some(&b));
             }
             let (want, cpu_ms) = timed(|| crate::ops::eval(op, &params, &inputs, &ctx));
