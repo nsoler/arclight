@@ -831,21 +831,30 @@ impl Transforming {
 pub enum Tool {
     /// None: clicks only select.
     Select,
+    /// What a selected object shows until another tool is picked (G / R
+    /// / S pick Move / Rotate / Scale, as they start).
+    #[default]
     Move,
     Rotate,
     Scale,
-    /// Move, rotate and scale together (what a selected object shows
-    /// until another tool is picked).
-    #[default]
+    /// Move, rotate and scale together.
     All,
 }
 
 impl Tool {
+    /// The tool whose gizmo does what `mode` does.
+    pub fn of(mode: Mode) -> Tool {
+        match mode {
+            Mode::Move => Tool::Move,
+            Mode::Rotate => Tool::Rotate,
+            Mode::Scale => Tool::Scale,
+        }
+    }
     pub const ALL: [(Tool, &'static str, &'static str); 5] = [
-        (Tool::Select, "Select", "No gizmo: clicks select (G / R / S still work)"),
-        (Tool::Move, "Move", "Arrows move along an axis, squares in a plane, the center circle in the view plane"),
-        (Tool::Rotate, "Rotate", "Rings turn about an axis, the outer ring about the view, inside like a trackball"),
-        (Tool::Scale, "Scale", "Cubes scale along an axis, the center circle all of them"),
+        (Tool::Select, "Select", "No gizmo: clicks select (G / R / S still move, rotate or scale, and pick that gizmo)"),
+        (Tool::Move, "Move", "Arrows move along an axis, squares in a plane, the center circle in the view plane (G)"),
+        (Tool::Rotate, "Rotate", "Rings turn about an axis, the outer ring about the view, inside like a trackball (R)"),
+        (Tool::Scale, "Scale", "Cubes scale along an axis, the center circle all of them (S)"),
         (Tool::All, "All", "Move, rotate and scale gizmos together"),
     ];
     fn moves(self) -> bool {

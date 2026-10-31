@@ -17,6 +17,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.1 — 2026-10-31
+
+- A selected object in the 3D view now shows the Move gizmo instead of
+  all three; G, R and S switch to the Move, Rotate or Scale gizmo as they
+  start, so the rotate rings stay up for tweaks after R (All is still on
+  the toolbar).
+
 ## 0.13.0 — 2026-10-31
 
 - Phase 13 begins: procedural geometry nodes (GeoNodes-like: scatter,

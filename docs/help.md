@@ -302,11 +302,13 @@ or rotate it with G / R or the gizmo to aim it.
 | Right-click or **Esc** | Cancel |
 | **⌥G** / **⌥R** / **⌥S** | Reset translate / rotate / scale |
 
-The viewer's toolbar picks a gizmo for the selected object: **All** (the
-default: arrows, rings and cubes together), **Move** (axis
-arrows, plane squares, a center circle), **Rotate** (axis rings, an outer
-view ring, a trackball inside), **Scale** (axis cubes, the center for all
-axes), or **Select** for none; **Global / Local** sets the axes. Drag a
+The viewer's toolbar picks a gizmo for the selected object: **Move** (the
+default: axis arrows, plane squares, a center circle), **Rotate** (axis
+rings, an outer view ring, a trackball inside), **Scale** (axis cubes, the
+center for all axes), **All** (arrows, rings and cubes together), or
+**Select** for none; **Global / Local** sets the axes. G, R and S also
+switch the gizmo to Move, Rotate or Scale as they start, and it stays
+after Esc: after R the rings stay up to tweak the turn. Drag a
 ring along its length to turn about its axis (it turns the same way
 however the ring is seen, even edge-on); with **R**, start with the
 pointer away from the object: close to its center the turn is damped. Gizmo

@@ -176,8 +176,9 @@ number sets the amount exactly (`G X 2 Enter`, `R Z 90 Enter`,
 15°, 0.1); **Enter** or a click confirms, **Esc** or a right-click
 cancels and puts everything back. **Alt + G / R / S** resets translate /
 rotate / scale. The viewer toolbar's **Select / Move / Rotate / Scale /
-All** pick the gizmo on the selected object (**All**, the default, shows
-arrows, rings and cubes together): drag an arrow to move along
+All** pick the gizmo on the selected object (**Move**, the default;
+**G / R / S** also pick Move / Rotate / Scale as they start, so the gizmo
+stays up for tweaks; **All** shows arrows, rings and cubes together): drag an arrow to move along
 an axis, a square to move in that plane, the center circle to move in the
 view plane; a colored ring to rotate about that axis (by how far the
 pointer moves along the ring, so it turns smoothly even seen edge-on), the white outer

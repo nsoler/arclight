@@ -226,8 +226,9 @@ impl Viewer {
         self.transforming.is_some()
     }
 
-    /// G / R / S over the 3D view (Blender's keys; see `gizmo3d`), and Alt +
-    /// G / R / S to reset. Runs before the viewport, so a gesture takes its
+    /// G / R / S over the 3D view (Blender's keys; see `gizmo3d`), each
+    /// picking its gizmo's tool as it starts, and Alt + G / R / S to reset
+    /// (the tool as it was). Runs before the viewport, so a gesture takes its
     /// keys first; [`Viewer::transform_overlay`] draws the header after.
     fn transform_keys(&mut self, ui: &mut egui::Ui, resp: &egui::Response, doc: &mut Doc, frame: i64) {
         let view = self.viewport3d.projector();
@@ -269,7 +270,11 @@ impl Viewer {
                     match (&view, resp.hover_pos()) {
                         (Some(_), Some(at)) => {
                             let objects = self.objects(doc, &selection, frame);
-                            Transforming::start_many(doc, &objects, mode, at, frame).map(|t| self.transforming = Some(t))
+                            // Its gizmo stays up after, for drag tweaks.
+                            Transforming::start_many(doc, &objects, mode, at, frame).map(|t| {
+                                self.transforming = Some(t);
+                                self.tool = Tool::of(mode);
+                            })
                         }
                         _ => Err("The 3D view isn't ready yet".into()),
                     }
@@ -1086,6 +1091,61 @@ mod tests {
         // The Select tool shows no gizmo, by choice: nothing to say.
         v.tool = Tool::Select;
         assert_eq!(pick(&mut v, &mut doc, "loose", None), (None, None));
+    }
+
+    /// A selected object shows the Move gizmo; G / R / S start their
+    /// transform and pick that tool, which stays after Esc; Alt + a key
+    /// resets and leaves the tool alone.
+    #[test]
+    fn g_r_s_pick_the_gizmo_they_start() {
+        use crate::viewport3d::ViewCam;
+        let graph: Graph = serde_json::from_value(serde_json::json!({ "nodes": [
+            { "id": "card", "op": "card" },
+            { "id": "scene", "op": "scene", "inputs": ["card"] },
+        ] }))
+        .unwrap();
+        let mut doc = Doc::new(graph.clone(), None);
+        doc.select_only("card");
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let mut eval = arclight::graph::Evaluator::new();
+        let scene = crate::worker::scene_of(&mut eval, &graph, "scene", 1).unwrap();
+        let (ghosts, _) = crate::worker::ghosts_of(&mut eval, &graph, scene.as_deref(), &doc.selection(), 1);
+        let mut v = Viewer::default();
+        v.viewport3d.show_for_test(scene, ghosts, ViewCam::default().projector(rect));
+        assert_eq!(v.tool, Tool::Move);
+        assert_eq!(v.gizmo(&doc).map(|g| g.0.tool), Some(Tool::Move));
+        let ctx = egui::Context::default();
+        let key = |key: egui::Key, modifiers: egui::Modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+        let frame = |v: &mut Viewer, doc: &mut Doc, events: Vec<egui::Event>| {
+            let mut events = events;
+            events.insert(0, egui::Event::PointerMoved(Pos2::new(300.0, 200.0)));
+            let raw = egui::RawInput { screen_rect: Some(rect), events, ..Default::default() };
+            ctx.run_ui(raw, |ui| {
+                let resp = ui.allocate_rect(rect, egui::Sense::click_and_drag());
+                v.transform_keys(ui, &resp, doc, 1);
+            })
+            .drop_without_applying_deltas();
+        };
+        frame(&mut v, &mut doc, vec![]);
+        for (k, tool) in [(egui::Key::R, Tool::Rotate), (egui::Key::S, Tool::Scale), (egui::Key::G, Tool::Move)] {
+            for from in [Tool::Select, Tool::All, Tool::Move] {
+                v.tool = from;
+                frame(&mut v, &mut doc, vec![key(k, egui::Modifiers::NONE)]);
+                assert!(v.is_transforming(), "{k:?} from {from:?}: started");
+                assert_eq!(v.tool, tool, "{k:?} from {from:?}");
+                frame(&mut v, &mut doc, vec![key(egui::Key::Escape, egui::Modifiers::NONE)]);
+                assert!(!v.is_transforming(), "{k:?}: Esc cancels");
+                assert_eq!(v.tool, tool, "{k:?}: the tool stays after Esc");
+            }
+        }
+        v.tool = Tool::All;
+        frame(&mut v, &mut doc, vec![key(egui::Key::R, egui::Modifiers::ALT)]);
+        assert!(!v.is_transforming());
+        assert_eq!(v.tool, Tool::All, "Alt + R resets, the tool as it was");
+        // Nothing selected: no transform, no change.
+        doc.clear_selection();
+        frame(&mut v, &mut doc, vec![key(egui::Key::S, egui::Modifiers::NONE)]);
+        assert_eq!(v.tool, Tool::All);
     }
 
     #[test]

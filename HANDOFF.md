@@ -24,6 +24,11 @@ done), `docs/help.md` (the in-app help) and
   user's two UI asks of the same day go first: drop a dragged wire on a
   node's body to connect it (Dev1) and the 3D gizmo starting as Move,
   switched by G / R / S (Dev2).
+- **0.13.1, gizmo starts as Move** (Dev2): `gizmo3d::Tool` defaults to
+  `Move` (was `All` since 0.11.4); a plain G / R / S that starts its
+  transform sets the tool (from Select or All too) and it stays after
+  Esc; Alt+G/R/S and gizmo drags leave it. Test
+  `viewer::tests::g_r_s_pick_the_gizmo_they_start`. Not tried by hand yet.
 - **In flight (2026-10-31, after 0.12.19):** Dev1 (wD:p9): free, awaiting
   the next task. Dev2: profiling many-sample area-light shadows (20–34 s
   a 4K frame at 16 samples, even on the GPU), proposal before code. Macs:
