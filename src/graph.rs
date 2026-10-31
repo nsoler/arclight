@@ -476,10 +476,47 @@ impl Graph {
     }
 }
 
+/// A node's cached result: on the CPU, or left on the GPU for the next
+/// GPU op (read back when something on the CPU needs it, then kept).
+#[derive(Clone)]
+enum Res {
+    Cpu(Arc<Image>),
+    #[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+    Gpu(Arc<crate::gpu::Resident>),
+}
+
+#[cfg(test)]
+impl Res {
+    fn cpu_now(self) -> Arc<Image> {
+        match self {
+            Res::Cpu(img) => img,
+            Res::Gpu(r) => r.cpu().unwrap(),
+        }
+    }
+}
+
+/// `res` on the CPU. A failed read-back (a GPU error) sets `failed`, so
+/// the evaluation is done again on the CPU (see [`Evaluator::evaluate`]).
+fn read(res: &Res, id: &str, failed: &mut bool) -> Result<Arc<Image>, NodeError> {
+    match res {
+        Res::Cpu(img) => Ok(img.clone()),
+        Res::Gpu(r) => r.cpu().map_err(|e| {
+            *failed = true;
+            node_err(id, format!("reading its result back from the GPU: {e:#}"))
+        }),
+    }
+}
+
 /// Evaluates graphs, keeping each node's latest result for reuse.
 #[derive(Default)]
 pub struct Evaluator {
-    cache: HashMap<String, (u64, Arc<Image>)>,
+    cache: HashMap<String, (u64, Res)>,
+    /// When each result left on the GPU was last made or used (a count),
+    /// for evicting the least recently used past the budget.
+    gpu_used: HashMap<String, u64>,
+    gpu_tick: u64,
+    /// A GPU result couldn't be read back during this evaluation.
+    gpu_failed: bool,
     /// Results at other frames, by offset from the one evaluated, for
     /// nodes that need them (a Scanline Render's motion pass and motion
     /// blur: see [`ops::other_frames`]).
@@ -538,12 +575,9 @@ impl Evaluator {
         ctx: &EvalContext,
     ) -> Result<Arc<Image>, NodeError> {
         let index = graph.index()?;
-        self.cache.retain(|id, _| index.contains_key(id.as_str()));
-        self.particles.retain(|id| index.contains_key(id));
-        self.elsewhen.retain(|id, _| index.contains_key(id.as_str()));
         let order = Graph::order(&index, [target.to_string()])?;
-        self.run(&index, &order, ctx, &graph.project)?;
-        Ok(self.cache[target].1.clone())
+        let mut out = self.evaluate_order(&index, &order, &[target.to_string()], ctx, &graph.project)?;
+        Ok(out.remove(target).expect("the target is read back"))
     }
 
     /// Render every node.
@@ -553,18 +587,29 @@ impl Evaluator {
         ctx: &EvalContext,
     ) -> Result<HashMap<String, Arc<Image>>, NodeError> {
         let index = graph.index()?;
+        let order = Graph::order(&index, graph.nodes.iter().map(|n| n.id.clone()))?;
+        self.evaluate_order(&index, &order, &order, ctx, &graph.project)
+    }
+
+    /// Run `order` and read back the results of `wanted`. Results never
+    /// fail because of the GPU: when one can't be read back, the GPU's
+    /// results are dropped and it all runs again on the CPU.
+    fn evaluate_order(&mut self, index: &HashMap<&str, &NodeSpec>, order: &[String], wanted: &[String], ctx: &EvalContext, project: &Project) -> Result<HashMap<String, Arc<Image>>, NodeError> {
         self.cache.retain(|id, _| index.contains_key(id.as_str()));
+        self.gpu_used.retain(|id, _| index.contains_key(id.as_str()));
         self.particles.retain(|id| index.contains_key(id));
         self.elsewhen.retain(|id, _| index.contains_key(id.as_str()));
-        let order = Graph::order(&index, graph.nodes.iter().map(|n| n.id.clone()))?;
-        self.run(&index, &order, ctx, &graph.project)?;
-        Ok(order
-            .into_iter()
-            .map(|id| {
-                let img = self.cache[&id].1.clone();
-                (id, img)
-            })
-            .collect())
+        let attempt = |ev: &mut Evaluator| -> Result<HashMap<String, Arc<Image>>, NodeError> {
+            ev.run(index, order, ctx, project)?;
+            wanted.iter().map(|id| Ok((id.clone(), read(&ev.cache[id.as_str()].1, id, &mut ev.gpu_failed)?))).collect()
+        };
+        match attempt(self) {
+            Err(_) if std::mem::take(&mut self.gpu_failed) => {
+                self.cache.retain(|_, (_, r)| matches!(r, Res::Cpu(_)));
+                crate::gpu::cpu_only(|| attempt(self))
+            }
+            other => other,
+        }
     }
 
     /// The cache key `target` would have at `ctx.frame`, without rendering.
@@ -634,7 +679,7 @@ impl Evaluator {
                 if !self.cache.get(id).is_some_and(|(k, _)| *k == key) {
                     let out = match bypass_input(node) {
                         Some(dep) => self.cache[dep].1.clone(),
-                        None => Arc::new(nothing(&node.op, graph_format)),
+                        None => Res::Cpu(Arc::new(nothing(&node.op, graph_format))),
                     };
                     self.cache.insert(id.clone(), (key, out));
                 }
@@ -663,7 +708,8 @@ impl Evaluator {
                 let found: Vec<_> = deps.iter().map(|d| d.as_ref().map(|d| later.cache[d].clone())).collect();
                 key = mix(key, &[off as u64]);
                 key = mix(key, &found.iter().flatten().map(|f| f.0).collect::<Vec<_>>());
-                others.push((off, found.into_iter().map(|f| f.map(|f| f.1)).collect()));
+                let images = found.into_iter().zip(&deps).map(|(f, d)| f.map(|f| read(&f.1, d.as_deref().unwrap_or(id), &mut self.gpu_failed)).transpose());
+                others.push((off, images.collect::<Result<_, _>>()?));
             }
             // An input needed at other frames (a texture sequence, an
             // emitter's geometry): keyed on its keys then too.
@@ -682,6 +728,15 @@ impl Evaluator {
                 continue;
             }
             crate::crash::evaluating(&node.op, id);
+            // On the GPU when it has this op and it pays (see `gpu::ops`).
+            if particle_nodes::info(&node.op).is_none() && others.is_empty() && elsewhen.is_none() {
+                if let Some(out) = self.try_gpu(node, &params, &empty) {
+                    self.cache.insert(id.clone(), (key, out));
+                    self.touch(id);
+                    self.enforce_gpu_budget();
+                    continue;
+                }
+            }
             let mut kept = elsewhen.as_ref().map(|_| self.elsewhen.entry(id.clone()).or_default());
             // A texture sequence's frames, those not kept rendered now.
             let sequence: Option<Vec<Arc<Image>>> = match (&elsewhen, kept.as_deref_mut()) {
@@ -707,6 +762,13 @@ impl Evaluator {
             // unplugged doesn't blank everything below it.
             let strict = info.is_some_and(|i| i.category == Category::Output);
             let n_ports = ports.len().max(node.inputs.len());
+            // The inputs on the CPU (read back from the GPU if they're there).
+            let mut held: HashMap<&str, Arc<Image>> = HashMap::new();
+            for dep in node.inputs.iter().filter(|d| !d.is_empty()) {
+                if !held.contains_key(dep.as_str()) {
+                    held.insert(dep, read(&self.cache[dep].1, dep, &mut self.gpu_failed)?);
+                }
+            }
             let mut inputs: Vec<Option<&Image>> = Vec::with_capacity(n_ports);
             for i in 0..n_ports {
                 let dep = node.inputs.get(i).map_or("", String::as_str);
@@ -719,7 +781,7 @@ impl Evaluator {
                         None => inputs.push(None),
                     }
                 } else {
-                    let img = self.cache[dep].1.as_ref();
+                    let img = held[dep].as_ref();
                     // A scene only into a scene port, an image only into an
                     // image port (a hand-edited or old file may mix them).
                     if let Some(port) = ops::port(&node.op, i).filter(|p| !p.kind.takes(img)) {
@@ -755,9 +817,117 @@ impl Evaluator {
             if let Some(scene) = out.scene.as_mut() {
                 Arc::make_mut(scene).tag(id);
             }
-            self.cache.insert(id.clone(), (key, Arc::new(out)));
+            self.cache.insert(id.clone(), (key, Res::Cpu(Arc::new(out))));
         }
         Ok(())
+    }
+
+    /// Mark result `id` as just used (for the GPU budget).
+    fn touch(&mut self, id: &str) {
+        self.gpu_tick += 1;
+        self.gpu_used.insert(id.to_string(), self.gpu_tick);
+    }
+
+    /// Past the GPU budget ([`crate::gpu::cache_budget`]), the least
+    /// recently used results on the GPU go back to the CPU.
+    fn enforce_gpu_budget(&mut self) {
+        self.evict_gpu_past(crate::gpu::cache_budget());
+    }
+
+    /// Results on the GPU back to the CPU, least recently used first,
+    /// until they hold at most `budget` bytes there.
+    fn evict_gpu_past(&mut self, budget: u64) {
+        loop {
+            let mut seen = std::collections::HashSet::new();
+            let mut total = 0;
+            for (_, r) in self.cache.values() {
+                if let Res::Gpu(r) = r {
+                    if seen.insert(Arc::as_ptr(r)) {
+                        total += r.bytes();
+                    }
+                }
+            }
+            if total <= budget {
+                return;
+            }
+            let lru = self.cache.iter().filter(|(_, (_, r))| matches!(r, Res::Gpu(_))).min_by_key(|(id, _)| self.gpu_used.get(*id).copied().unwrap_or(0)).map(|(id, _)| id.clone());
+            let Some(id) = lru else { return };
+            let res = &mut self.cache.get_mut(&id).expect("just found").1;
+            match res {
+                Res::Gpu(r) => match r.cpu() {
+                    Ok(img) => *res = Res::Cpu(img),
+                    // (Rendered again when next needed.)
+                    Err(_) => {
+                        self.cache.remove(&id);
+                    }
+                },
+                Res::Cpu(_) => {}
+            }
+        }
+    }
+
+    /// `node` on the GPU, if it has a GPU path for these params and it
+    /// pays (see [`crate::gpu::ops::preference`]): its inputs uploaded
+    /// when they're on the CPU (and kept there, for the next GPU op).
+    /// None: run it on the CPU (a GPU error is recorded).
+    #[cfg(feature = "gpu")]
+    fn try_gpu(&mut self, node: &NodeSpec, params: &Value, empty: &Image) -> Option<Res> {
+        use crate::gpu::{self, ops::Prefer, GpuImage, Resident};
+        if !gpu::OPS.contains(&node.op.as_str()) || !gpu::ops::supports(&node.op, params) {
+            return None;
+        }
+        let gpu = gpu::get()?;
+        let on_gpu = node.inputs.iter().any(|d| matches!(self.cache.get(d), Some((_, Res::Gpu(_)))));
+        match gpu::ops::preference(&node.op) {
+            Prefer::Never => return None,
+            Prefer::WithResidentInput if !on_gpu => return None,
+            _ => {}
+        }
+        let failed = |e: anyhow::Error| gpu::report_error(format!("{}: {e:#}", node.id), false);
+        let ports = ops::info(&node.op).map(|i| i.inputs).unwrap_or(&[]);
+        let mut inputs: Vec<Option<Arc<Resident>>> = Vec::new();
+        for i in 0..ports.len().max(node.inputs.len()) {
+            let dep = node.inputs.get(i).map_or("", String::as_str);
+            if dep.is_empty() {
+                // An unconnected required port sees the empty image.
+                if ports.get(i).is_some_and(|p| !p.optional) {
+                    let up = GpuImage::upload(&gpu, empty).map_err(failed).ok()?;
+                    inputs.push(Some(Arc::new(Resident::uploaded(gpu.clone(), up, Arc::new(empty.clone())))));
+                } else {
+                    inputs.push(None);
+                }
+                continue;
+            }
+            let r = match self.cache.get(dep)?.1.clone() {
+                Res::Gpu(r) => r,
+                // A scene stays on the CPU, which refuses it in an image port.
+                Res::Cpu(img) if img.scene.is_some() => return None,
+                Res::Cpu(img) => {
+                    let up = GpuImage::upload(&gpu, &img).map_err(failed).ok()?;
+                    let r = Arc::new(Resident::uploaded(gpu.clone(), up, img));
+                    self.cache.get_mut(dep)?.1 = Res::Gpu(r.clone());
+                    r
+                }
+            };
+            if r.image.scene.is_some() {
+                return None;
+            }
+            self.touch(dep);
+            inputs.push(Some(r));
+        }
+        let refs: Vec<Option<&GpuImage>> = inputs.iter().map(|r| r.as_ref().map(|r| &r.image)).collect();
+        match gpu::ops::eval(&gpu, &node.op, params, &refs) {
+            Ok(out) => out.map(|out| Res::Gpu(Arc::new(Resident::new(gpu, out)))),
+            Err(e) => {
+                failed(e);
+                None
+            }
+        }
+    }
+
+    #[cfg(not(feature = "gpu"))]
+    fn try_gpu(&mut self, _node: &NodeSpec, _params: &Value, _empty: &Image) -> Option<Res> {
+        None
     }
 }
 
@@ -865,6 +1035,8 @@ fn node_key(node: &NodeSpec, params: &Value, keys: &HashMap<&str, u64>, ctx: &Ev
     for dep in &node.inputs {
         keys.get(dep.as_str()).copied().unwrap_or(0).hash(&mut h);
     }
+    // CPU and GPU results are kept apart (see `gpu::backend_tag`).
+    crate::gpu::backend_tag(&node.op).hash(&mut h);
     if particle || ops::is_time_varying(&node.op, params) {
         ctx.frame.hash(&mut h);
     }
@@ -1324,5 +1496,52 @@ mod tests {
         Evaluator::new().evaluate(&g(false), "w", &ctx).unwrap();
         assert!(file.exists(), "on, it writes");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A chain through GPU ops, a CPU-only op and back renders as on the
+    /// CPU alone; the GPU's results stay there between GPU ops, go back
+    /// to the CPU past the budget, and are keyed apart from the CPU's.
+    #[test]
+    fn gpu_chains_render_as_on_the_cpu() {
+        use serde_json::json;
+        let node = |id: &str, op: &str, inputs: &[&str], params: Value| NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None, disabled: false };
+        let mut nodes = vec![
+            node("checker", "checkerboard", &[], json!({ "width": 301, "height": 203, "size": 7 })),
+            node("soft", "blur", &["checker"], json!({ "radius": 6, "passes": 2 })),
+            node("look", "grade", &["soft"], json!({ "gamma": [1.4, 1.0, 0.8] })),
+            node("turn", "transform", &["look"], json!({ "rotate": 10, "scale": [0.8, 0.8] })),
+            node("glow", "blur", &["turn"], json!({ "radius": 3 })),
+            node("comp", "merge", &["glow", "look"], json!({ "operation": "screen" })),
+            node("dim", "exposure", &["comp", "checker"], json!({ "stops": -0.5, "mix": 0.6, "mask_channel": "luminance" })),
+            node("off", "saturation", &["dim"], json!({ "saturation": 0 })),
+            node("alone", "rectangle", &[], json!({ "width": 64, "height": 32 })),
+        ];
+        nodes[7].disabled = true;
+        let g = Graph { nodes, ..Graph::default() };
+        let ctx = EvalContext { frame: 1, write_outputs: false };
+        let cpu = crate::gpu::cpu_only(|| Evaluator::new().evaluate(&g, "off", &ctx).unwrap());
+        let mut ev = Evaluator::new();
+        let got = ev.evaluate(&g, "off", &ctx).unwrap();
+        let row = crate::gpu::check::compare("chain", "", &cpu, &got, 1e-4, 1e-4, 0.0, 0.0, 0.0);
+        assert!(row.pass, "{row:?}");
+        if crate::gpu::get().is_none() {
+            return eprintln!("skipped the GPU half: no GPU adapter");
+        }
+        let on_gpu = |ev: &Evaluator, id: &str| matches!(ev.cache[id].1, Res::Gpu(_));
+        assert!(on_gpu(&ev, "soft") && on_gpu(&ev, "look") && on_gpu(&ev, "glow") && on_gpu(&ev, "comp") && on_gpu(&ev, "dim"));
+        // Transform (no GPU path yet) and the checkerboard ran on the CPU;
+        // their results were uploaded for the blurs and kept there.
+        assert!(on_gpu(&ev, "turn") && on_gpu(&ev, "checker"));
+        // Keys: GPU ops (and what's below them) apart, others the same.
+        let key = |id: &str| Evaluator::key(&g, id, &ctx).unwrap();
+        let cpu_key = |id: &str| crate::gpu::cpu_only(|| Evaluator::key(&g, id, &ctx).unwrap());
+        assert!(key("soft") != cpu_key("soft") && key("turn") != cpu_key("turn"));
+        assert_eq!(key("alone"), cpu_key("alone"));
+        assert_eq!(ev.cache["off"].0, key("off"), "run and key agree");
+        // Past the budget: back on the CPU, the same pixels, no re-render.
+        ev.evict_gpu_past(0);
+        assert!(ev.cache.values().all(|(_, r)| matches!(r, Res::Cpu(_))));
+        let again = ev.evaluate(&g, "off", &ctx).unwrap();
+        assert!(Arc::ptr_eq(&again, &ev.cache["off"].1.clone().cpu_now()) && again.pixels == got.pixels);
     }
 }

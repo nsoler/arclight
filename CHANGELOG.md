@@ -15,6 +15,22 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.1 — 2026-10-30
+
+- GPU: **Blur runs on the GPU**, and Grade, Exposure, Saturation, Invert,
+  Clamp, Premult, Unpremult, Channel Select, Switch, Dissolve, Keymix and
+  Merge (all but zmerge) with their masks and mix, when their input is
+  already on the GPU. Results stay on the GPU between GPU nodes and are
+  read back only when needed.
+- GPU memory for results kept there: settings.json `"gpu": {"cache_mb":
+  2048}`; past it the least recently used go back to the CPU.
+- Turning GPU acceleration on or off re-renders only the nodes that can
+  run on the GPU, and what's below them.
+- The CPU Blur no longer slows down with its radius (a running sum): a
+  4K radius 100 blur went from about 2 s to 0.23 s.
+- `arclight gpu --check` also checks and times Grade (with a mask),
+  Merge and Blur against the CPU.
+
 ## 0.12.0 — 2026-10-30
 
 Phase 12 starts: **GPU acceleration** (wgpu: Vulkan on Linux, Metal on

@@ -16,6 +16,8 @@
 pub mod check;
 #[cfg(feature = "gpu")]
 pub mod image;
+#[cfg(feature = "gpu")]
+pub mod ops;
 
 #[cfg(feature = "gpu")]
 pub use image::{GpuImage, Transfer};
@@ -143,6 +145,88 @@ pub fn status() -> Status {
     match device() {
         Ok(g) => device_status(&g),
         Err(reason) => Status::Cpu { reason },
+    }
+}
+
+/// Whether this thread would use the GPU, without creating the device:
+/// [`get`]'s answer as far as it can be known in advance (a device that
+/// then fails to come up still renders on the CPU).
+pub fn wanted() -> bool {
+    CPU_ONLY.with(Cell::get) == 0 && current_off_reason().is_none() && !matches!(created(), Some(Err(_)))
+}
+
+/// The ops with a GPU path (see `gpu::ops`).
+pub const OPS: &[&str] = &[
+    "grade", "exposure", "saturation", "invert", "clamp", "premult", "unpremult", "channel_select", "switch", "dissolve", "keymix", "constant",
+    "checkerboard", "merge", "blur",
+];
+
+/// What a node's cache key mixes in for the backend: 1 when `op` has a
+/// GPU path and this thread would use the GPU, else 0. So turning the GPU
+/// on or off re-renders those nodes (and what's below them), and CPU and
+/// GPU results are never mixed up.
+pub fn backend_tag(op: &str) -> u8 {
+    u8::from(OPS.contains(&op) && wanted())
+}
+
+/// How much of the GPU's memory an evaluator's cached results may hold
+/// (settings.json `"gpu": {"cache_mb": ...}`, default 2048); past it the
+/// least recently used go back to the CPU.
+pub fn cache_budget() -> u64 {
+    static MB: OnceLock<u64> = OnceLock::new();
+    let mb = *MB.get_or_init(|| {
+        let text = std::fs::read_to_string(crate::config::Settings::path()).unwrap_or_default();
+        serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v["gpu"]["cache_mb"].as_u64()).unwrap_or(2048)
+    });
+    mb << 20
+}
+
+/// A cached result left on the GPU, read back on the first CPU need and
+/// then kept (see `graph::Evaluator`).
+#[cfg(feature = "gpu")]
+pub struct Resident {
+    pub image: GpuImage,
+    gpu: Arc<Gpu>,
+    cpu: OnceLock<Arc<crate::image::Image>>,
+}
+
+#[cfg(feature = "gpu")]
+impl Resident {
+    pub fn new(gpu: Arc<Gpu>, image: GpuImage) -> Resident {
+        Resident { image, gpu, cpu: OnceLock::new() }
+    }
+
+    /// An upload of `cpu`, which it keeps (no read-back needed).
+    pub fn uploaded(gpu: Arc<Gpu>, image: GpuImage, cpu: Arc<crate::image::Image>) -> Resident {
+        Resident { image, gpu, cpu: OnceLock::from(cpu) }
+    }
+
+    /// The image on the CPU: read back once.
+    pub fn cpu(&self) -> anyhow::Result<Arc<crate::image::Image>> {
+        if let Some(img) = self.cpu.get() {
+            return Ok(img.clone());
+        }
+        let img = Arc::new(self.image.read_back(&self.gpu)?);
+        Ok(self.cpu.get_or_init(|| img).clone())
+    }
+
+    /// GPU memory held.
+    pub fn bytes(&self) -> u64 {
+        self.image.bytes()
+    }
+}
+
+/// Built without GPU support: nothing is ever left on a GPU.
+#[cfg(not(feature = "gpu"))]
+pub enum Resident {}
+
+#[cfg(not(feature = "gpu"))]
+impl Resident {
+    pub fn cpu(&self) -> anyhow::Result<Arc<crate::image::Image>> {
+        match *self {}
+    }
+    pub fn bytes(&self) -> u64 {
+        match *self {}
     }
 }
 

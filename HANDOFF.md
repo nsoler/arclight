@@ -30,6 +30,16 @@ done), `docs/help.md` (the in-app help) and
   "Dropped TexturesDelta with 1 unapplied deltas" (egui 0.37) now end
   `ctx.run_ui(..)` with `.drop_without_applying_deltas()` instead of
   `let _ =`; all GUI tests pass. **Tip:** do the same in new egui tests.
+- **0.12.1, GPU G2** (Dev1): Evaluator cache entries `Res::{Cpu, Gpu}`
+  (graph.rs; read back once on first CPU need), `gpu::ops` (dispatcher;
+  the uber-shader's op codes must match `pointwise.wgsl`'s consts),
+  policy `gpu::ops::preference` (Blur always on the GPU, pointwise only
+  when an input is already there, Constant / Checkerboard on the CPU
+  until G7), `gpu::backend_tag(op)` in `node_key`. **`GpuImage` clones
+  share buffers: kernels must never write into an input's buffer.**
+  Shuffle and zmerge stay on the CPU. CPU Blur is a running sum.
+  Follow-ups: `arclight render` reads back every node (evaluate_all):
+  read back only outputs; a staging-buffer pool (4K round trip ~55 ms).
 - **0.12.0, GPU G1** (Dev1 core, Dev2 Preferences): `src/gpu/` (mod,
   image, check, image.wgsl): lazy headless device, `gpu::{status, get,
   set_enabled, enabled, cpu_only, test_device, report_error, crash_line}`,

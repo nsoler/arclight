@@ -13,6 +13,9 @@ they come up and strike them (or delete them) when they ship.
       gpu` names the GPU (Metal; "unified memory" on the M4 Pro), `arclight
       gpu --check` passes, and `cargo test --release` there (the GPU tests
       run on Metal)
+- [ ] 0.12.1 (GPU G2): on the Macs, `arclight gpu --check` includes the
+      Grade / Merge / Blur rows (Metal's fast math against the
+      tolerances); a 2D chain with big blurs feels quicker with the GPU on
 
 - [ ] 0.11.4: the 3D view with a mouse (user found it hard and erratic in
       0.11.3): select a Camera / Card / light and the All gizmo shows

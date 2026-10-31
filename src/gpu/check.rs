@@ -17,7 +17,7 @@ pub struct CheckRow {
     pub size: String,
     /// Largest difference between the GPU's and the CPU's values.
     pub max_abs: f64,
-    /// Largest difference relative to the CPU's value (where it isn't ~0).
+    /// Largest difference relative to the CPU's value (where it is over 1e-3).
     pub max_rel: f64,
     /// A value passes within `tol_abs` or within `tol_rel` of the CPU's.
     pub tol_abs: f64,
@@ -122,7 +122,8 @@ pub fn compare(case: &str, size: &str, cpu: &Image, gpu: &Image, tol_abs: f64, t
         }
         let d = if c == g { 0.0 } else { (g - c).abs() };
         row.max_abs = row.max_abs.max(d);
-        if c.abs() > 1e-6 {
+        // (Relative to values big enough for it to mean something.)
+        if c.abs() > 1e-3 {
             row.max_rel = row.max_rel.max(d / c.abs());
         }
         if d > tol_abs && d > tol_rel * c.abs() {
@@ -206,6 +207,7 @@ pub fn run() -> CheckReport {
     #[cfg(feature = "gpu")]
     if let Some(gpu) = super::get() {
         let mut rows = image_rows(&gpu);
+        rows.extend(op_rows(&gpu));
         rows.extend(crate::render3d::gpu_checks(&gpu));
         return CheckReport { status, transfer: gpu.transfer().into(), rows };
     }
@@ -290,6 +292,76 @@ fn image_rows(gpu: &super::Gpu) -> Vec<CheckRow> {
     rows
 }
 
+/// The 2D ops on the GPU (`gpu::ops`) against `ops::eval`, at each size:
+/// (case, op, params, tolerance abs / rel, with a second input, with a
+/// mask).
+#[cfg(feature = "gpu")]
+fn op_rows(gpu: &super::Gpu) -> Vec<CheckRow> {
+    use serde_json::json;
+    const POINT: (f64, f64) = (1e-6, 1e-5);
+    const FILTER: (f64, f64) = (1e-4, 1e-4);
+    let cases = [
+        ("grade", "grade", json!({"multiply": [1.1, 0.9, 1.0], "offset": [0.01, 0.0, -0.01], "gamma": [2.2, 1.0, 0.8]}), POINT, false, false),
+        ("grade + mask, mix 0.5", "grade", json!({"gamma": [1.6, 1.6, 1.6], "mix": 0.5, "mask_channel": "luminance"}), POINT, false, true),
+        ("merge screen", "merge", json!({"operation": "screen"}), POINT, true, false),
+        ("blur r 8 x 3", "blur", json!({"radius": 8, "passes": 3}), FILTER, false, false),
+        ("blur r 32 x 3", "blur", json!({"radius": 32, "passes": 3}), FILTER, false, false),
+        ("blur r 100 x 3", "blur", json!({"radius": 100, "passes": 3}), FILTER, false, false),
+    ];
+    let ctx = crate::ops::EvalContext { frame: 1, write_outputs: false };
+    let mut rows = Vec::new();
+    // Each case once on a small image first, so building its pipeline
+    // isn't timed.
+    let mut sizes = sizes();
+    sizes.insert(0, ("warm-up".into(), Size { width: 64, height: 48 }, IRect::new(0, 0, 64, 48), true));
+    for (i, (size, format, window, plane)) in sizes.into_iter().enumerate() {
+        let a = noise(format, window, plane, 10 + i as u32);
+        let b = noise(format, IRect::new(window.x0 + 31, window.y0 - 17, window.x1 - 5, window.y1 + 9), false, 20 + i as u32);
+        for (case, op, params, (tol_abs, tol_rel), two, masked) in &cases {
+            let params = crate::ops::params_with_defaults(op, params);
+            let mut inputs: Vec<Option<&Image>> = vec![Some(&a)];
+            if *two {
+                inputs.push(Some(&b));
+            }
+            if *masked || *op != "merge" {
+                inputs.push(masked.then_some(&b));
+            }
+            let (want, cpu_ms) = timed(|| crate::ops::eval(op, &params, &inputs, &ctx));
+            let run = || -> anyhow::Result<CheckRow> {
+                let want = want.as_ref().map_err(|e| anyhow::anyhow!("on the CPU: {e:#}"))?;
+                let (result, total_ms) = timed(|| -> anyhow::Result<_> {
+                    let up: Vec<Option<super::GpuImage>> = inputs.iter().map(|i| i.map(|i| super::GpuImage::upload(gpu, i)).transpose()).collect::<anyhow::Result<_>>()?;
+                    gpu.wait()?;
+                    let refs: Vec<Option<&super::GpuImage>> = up.iter().map(Option::as_ref).collect();
+                    let (out, kernel_ms) = timed(|| -> anyhow::Result<_> {
+                        let out = super::ops::eval(gpu, op, &params, &refs)?.ok_or_else(|| anyhow::anyhow!("declined"))?;
+                        gpu.wait()?;
+                        Ok(out)
+                    });
+                    Ok((out?.read_back(gpu)?, kernel_ms))
+                });
+                let (got, kernel_ms) = result?;
+                Ok(compare(case, &size, want, &got, *tol_abs, *tol_rel, cpu_ms, kernel_ms, total_ms))
+            };
+            rows.push(run().unwrap_or_else(|e| CheckRow {
+                case: case.to_string(),
+                size: size.clone(),
+                max_abs: 0.0,
+                max_rel: 0.0,
+                tol_abs: *tol_abs,
+                tol_rel: *tol_rel,
+                pass: false,
+                cpu_ms,
+                gpu_kernel_ms: 0.0,
+                gpu_total_ms: 0.0,
+                note: format!("{e:#}"),
+            }));
+        }
+    }
+    rows.retain(|r| r.size != "warm-up" || !r.pass);
+    rows
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,6 +398,6 @@ mod tests {
         }
         let report = run();
         assert!(report.passed(), "{}", report.table());
-        assert!(report.rows.len() >= 6 && report.summary().contains("passed on"), "{}", report.table());
+        assert!(report.rows.len() >= 24 && report.summary().contains("passed on"), "{}", report.table());
     }
 }

@@ -34,6 +34,8 @@ impl Gpu {
 }
 
 /// An [`Image`] on the GPU: the same frame, data window, planes and scene.
+/// Cloning shares the buffers (results are never changed in place).
+#[derive(Clone)]
 pub struct GpuImage {
     pub format: Size,
     pub window: IRect,
@@ -142,49 +144,79 @@ impl GpuImage {
     /// one has none): what `generate(format, window, |x, y| src.at(x, y))`
     /// is on the CPU. Planes come along.
     pub fn rewindow(&self, gpu: &Gpu, window: IRect) -> Result<GpuImage> {
-        let names: Vec<String> = self.planes.iter().map(|(n, _)| n.clone()).collect();
-        let mut out = GpuImage::blank(gpu, self.format, window, &names)?;
-        out.scene = self.scene.clone();
-        if out.is_empty() {
-            return Ok(out);
+        if window == self.window {
+            return Ok(self.clone());
         }
-        let (s, d) = (self.window, window);
-        let windows: [i32; 8] = [s.x0, s.y0, s.width() as i32, s.height() as i32, d.x0, d.y0, d.width() as i32, d.height() as i32];
-        gpu.scoped(|| {
-            let uniform = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("windows"), contents: bytemuck::cast_slice(&windows), usage: wgpu::BufferUsages::UNIFORM });
-            let mut encoder = gpu.device.create_command_encoder(&Default::default());
-            let mut pass = |entry: &'static str, slots: [u32; 2], src: &wgpu::Buffer, dst: &wgpu::Buffer| {
-                let pipeline = gpu.compute_pipeline("gpu/image", SHADER, entry);
-                let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some(entry),
-                    layout: &pipeline.get_bind_group_layout(0),
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: slots[0], resource: src.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: slots[1], resource: dst.as_entire_binding() },
-                    ],
-                });
-                let mut cp = encoder.begin_compute_pass(&Default::default());
-                cp.set_pipeline(&pipeline);
-                cp.set_bind_group(0, &bind, &[]);
-                cp.dispatch_workgroups((d.width() as u32).div_ceil(TILE), (d.height() as u32).div_ceil(TILE), 1);
-            };
-            pass("rewindow", [1, 2], &self.rgba, &out.rgba);
-            for ((_, src), (_, dst)) in self.planes.iter().zip(&out.planes) {
-                pass("rewindow_plane", [3, 4], src, dst);
-            }
-            gpu.queue.submit([encoder.finish()]);
-            Ok(())
-        })?;
-        Ok(out)
+        let rgba = rewindowed(gpu, "rewindow", self.window, &self.rgba, window, 16)?;
+        let planes = self.planes.iter().map(|(n, b)| Ok((n.clone(), rewindowed(gpu, "rewindow_plane", self.window, b, window, 4)?))).collect::<Result<_>>()?;
+        Ok(GpuImage { format: self.format, window, rgba, planes, scene: self.scene.clone(), transfer: gpu.transfer_path() })
     }
+
+    /// `src`'s planes over this image's window (shared when the windows
+    /// match): `Image::keep_planes`.
+    pub fn keep_planes(&mut self, gpu: &Gpu, src: &GpuImage) -> Result<()> {
+        self.planes = if self.window == src.window {
+            src.planes.clone()
+        } else {
+            src.planes.iter().map(|(n, b)| Ok((n.clone(), rewindowed(gpu, "rewindow_plane", src.window, b, self.window, 4)?))).collect::<Result<_>>()?
+        };
+        Ok(())
+    }
+
+    /// The buffer of plane `name`, if it has one.
+    pub fn plane(&self, name: &str) -> Option<&wgpu::Buffer> {
+        self.planes.iter().find(|(n, _)| n == name).map(|(_, b)| b)
+    }
+}
+
+/// A small buffer to bind where a kernel's input is absent (its window
+/// is then empty, so it is never read).
+pub fn placeholder(gpu: &Gpu) -> wgpu::Buffer {
+    gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some("absent"), size: 16, usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false })
+}
+
+/// `src` (pixels over `from`, `stride` bytes each: 16 for color, 4 for a
+/// plane) over window `to`, by `entry` of image.wgsl.
+fn rewindowed(gpu: &Gpu, entry: &'static str, from: IRect, src: &wgpu::Buffer, to: IRect, stride: u64) -> Result<wgpu::Buffer> {
+    let dst = storage_buffer(gpu, "rewindowed", (to.width() * to.height()) as u64 * stride, gpu.transfer_path(), false)?;
+    if to.is_empty() {
+        return Ok(dst);
+    }
+    let windows: [i32; 8] = [from.x0, from.y0, from.width() as i32, from.height() as i32, to.x0, to.y0, to.width() as i32, to.height() as i32];
+    let slots = if stride == 16 { [1, 2] } else { [3, 4] };
+    gpu.scoped(|| {
+        let uniform = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("windows"), contents: bytemuck::cast_slice(&windows), usage: wgpu::BufferUsages::UNIFORM });
+        let pipeline = gpu.compute_pipeline("gpu/image", SHADER, entry);
+        let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(entry),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: slots[0], resource: src.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: slots[1], resource: dst.as_entire_binding() },
+            ],
+        });
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        dispatch_2d(&mut encoder, &pipeline, &bind, to);
+        gpu.queue.submit([encoder.finish()]);
+        Ok(())
+    })?;
+    Ok(dst)
+}
+
+/// One pass of `pipeline` over `window`, a thread per pixel.
+pub fn dispatch_2d(encoder: &mut wgpu::CommandEncoder, pipeline: &wgpu::ComputePipeline, bind: &wgpu::BindGroup, window: IRect) {
+    let mut cp = encoder.begin_compute_pass(&Default::default());
+    cp.set_pipeline(pipeline);
+    cp.set_bind_group(0, bind, &[]);
+    cp.dispatch_workgroups((window.width() as u32).div_ceil(TILE), (window.height() as u32).div_ceil(TILE), 1);
 }
 
 /// A storage buffer of `size` bytes (at least 16: wgpu binds no empty
 /// buffer) that can be copied both ways, and mapped when `transfer` is
 /// `Unified`; mapped for writing at creation when `mapped`. Refused when
 /// over the device's limits (the caller falls back to the CPU).
-fn storage_buffer(gpu: &Gpu, label: &str, size: u64, transfer: Transfer, mapped: bool) -> Result<wgpu::Buffer> {
+pub(crate) fn storage_buffer(gpu: &Gpu, label: &str, size: u64, transfer: Transfer, mapped: bool) -> Result<wgpu::Buffer> {
     let limit = gpu.limits.max_buffer_size.min(gpu.limits.max_storage_buffer_binding_size);
     if size > limit {
         bail!("image too large for the GPU ({} MiB, limit {} MiB)", size >> 20, limit >> 20);

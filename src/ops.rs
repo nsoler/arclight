@@ -338,7 +338,7 @@ const HOLDOUT: ParamSpec = fixed!("holdout", "Holdout", ParamKind::Bool, false);
 const CHANNEL_SOURCES: &[&str] = &[
     "A red", "A green", "A blue", "A alpha", "B red", "B green", "B blue", "B alpha", "zero", "one",
 ];
-const SWITCH_PORTS: usize = 5;
+pub(crate) const SWITCH_PORTS: usize = 5;
 const KEYER_OUTPUTS: &[&str] = &["keyed", "matte", "despill only"];
 
 const SIZE: ParamKind = ParamKind::Int { min: 1, max: 16384 };
@@ -417,7 +417,7 @@ pub fn fit_new_shape(op: &str, params: &mut Value, format: Size) {
 
 /// A source's frame from its own size, 0 meaning [`DEFAULT_FORMAT`] (for
 /// evaluation outside a graph, which fills in the project's).
-fn source_size(width: usize, height: usize) -> Size {
+pub(crate) fn source_size(width: usize, height: usize) -> Size {
     let pick = |own: usize, default: usize| if own == 0 { default } else { own };
     Size { width: pick(width, DEFAULT_FORMAT.width), height: pick(height, DEFAULT_FORMAT.height) }
 }
@@ -1711,7 +1711,7 @@ fn mapped(src: &Image, f: impl Fn(Rgba) -> Rgba + Sync + Send) -> Image {
 /// pixels at the same place: their windows' union, grown to the whole frame
 /// when the op turns transparent inputs (`blank`, its output there) into
 /// something else.
-fn pointwise_window(format: Size, windows: &[IRect], blank: Rgba) -> IRect {
+pub(crate) fn pointwise_window(format: Size, windows: &[IRect], blank: Rgba) -> IRect {
     let w = windows.iter().fold(IRect::default(), |u, w| u.union(w));
     if blank == color::TRANSPARENT { w } else { w.union(&IRect::frame(format)) }
 }
@@ -1796,7 +1796,7 @@ pub fn eval(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalConte
 /// The input whose extra planes (depth, ...) an op keeps where they are: ops
 /// that change color but don't move pixels. Ops that move pixels carry
 /// planes themselves; others (plugins, sources) drop them.
-fn planes_source(op: &str) -> Option<usize> {
+pub(crate) fn planes_source(op: &str) -> Option<usize> {
     match op {
         "grade" | "exposure" | "saturation" | "invert" | "clamp" | "premult" | "unpremult" | "channel_select" | "keyer" | "blur" => Some(0),
         "rectangle" | "ellipse" | "polygon" | "roto" => Some(0),
@@ -1967,11 +1967,11 @@ fn read_media(p: &MediaIn, ctx: &EvalContext) -> Result<Arc<Image>> {
 }
 
 #[derive(Deserialize)]
-struct Constant {
-    width: usize,
-    height: usize,
+pub(crate) struct Constant {
+    pub(crate) width: usize,
+    pub(crate) height: usize,
     /// Straight (unassociated) RGBA; stored premultiplied.
-    color: [f32; 4],
+    pub(crate) color: [f32; 4],
 }
 
 fn constant(params: &Value) -> Result<Image> {
@@ -1981,12 +1981,12 @@ fn constant(params: &Value) -> Result<Image> {
 }
 
 #[derive(Deserialize)]
-struct Checkerboard {
-    width: usize,
-    height: usize,
-    size: usize,
-    color_a: [f32; 4],
-    color_b: [f32; 4],
+pub(crate) struct Checkerboard {
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) size: usize,
+    pub(crate) color_a: [f32; 4],
+    pub(crate) color_b: [f32; 4],
 }
 
 fn checkerboard(params: &Value) -> Result<Image> {
@@ -2070,13 +2070,13 @@ fn fit_to_project(img: Arc<Image>, fit: &str, format: Option<[usize; 2]>) -> Res
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-struct Grade {
+pub(crate) struct Grade {
     /// Per-channel multiply (gain).
-    multiply: [f32; 3],
+    pub(crate) multiply: [f32; 3],
     /// Per-channel additive offset, applied after multiply.
-    offset: [f32; 3],
+    pub(crate) offset: [f32; 3],
     /// Per-channel gamma (output = value^(1/gamma)).
-    gamma: [f32; 3],
+    pub(crate) gamma: [f32; 3],
 }
 
 /// Generic lift/gain/gamma color correction. Operates on unassociated color so
@@ -2084,7 +2084,11 @@ struct Grade {
 fn grade(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: Grade = parse(params, "grade")?;
     let src = input(inputs, 0, "grade")?;
-    Ok(mapped(src, |px| {
+    Ok(mapped(src, grade_pixel(&p)))
+}
+
+fn grade_pixel(p: &Grade) -> impl Fn(Rgba) -> Rgba + Sync + Send + '_ {
+    |px| {
         let s = color::unpremultiply(px);
         let mut rgb = [0.0f32; 3];
         for c in 0..3 {
@@ -2095,16 +2099,40 @@ fn grade(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
             rgb[c] = v;
         }
         color::premultiply([rgb[0], rgb[1], rgb[2], s[3]])
-    }))
+    }
 }
+
+/// What a one-input pointwise op (one of [`POINTWISE`]) makes of a
+/// transparent pixel: when not transparent, its output fills the frame
+/// (see [`pointwise_window`]). For the GPU path, which must choose the
+/// same data window.
+#[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+pub(crate) fn pointwise_blank(op: &str, params: &Value) -> Result<Rgba> {
+    let t = color::TRANSPARENT;
+    Ok(match op {
+        "grade" => grade_pixel(&parse(params, op)?)(t),
+        "exposure" => exposure_pixel(&parse(params, op)?)(t),
+        "saturation" => saturation_pixel(&parse(params, op)?)(t),
+        "invert" => invert_pixel(&parse(params, op)?)?(t),
+        "clamp" => clamp_pixel(&parse(params, op)?)(t),
+        "premult" => color::premultiply(t),
+        "unpremult" => color::unpremultiply(t),
+        other => bail!("'{other}' is not a pointwise op"),
+    })
+}
+
+/// The one-input ops whose output pixel depends only on the input pixel
+/// at the same place.
+#[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+pub(crate) const POINTWISE: &[&str] = &["grade", "exposure", "saturation", "invert", "clamp", "premult", "unpremult"];
 
 // ---------------------------------------------------------------------------
 // Merge
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-struct Merge {
-    operation: String,
+pub(crate) struct Merge {
+    pub(crate) operation: String,
 }
 
 /// Composite input[0] (foreground / A) over input[1] (background / B).
@@ -2152,7 +2180,7 @@ fn merge_planes(out: &mut Image, fg: &Image, bg: &Image, under: bool) {
 }
 
 #[inline]
-fn blend(op: &str, f: Rgba, b: Rgba) -> Result<Rgba> {
+pub(crate) fn blend(op: &str, f: Rgba, b: Rgba) -> Result<Rgba> {
     let fa = f[3];
     let ba = b[3];
     let mk = |rgb: [f32; 3], a: f32| [rgb[0], rgb[1], rgb[2], a];
@@ -2392,9 +2420,9 @@ fn warp(src: &Image, m: &track::Affine) -> Image {
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-struct Blur {
-    radius: f32,
-    passes: usize,
+pub(crate) struct Blur {
+    pub(crate) radius: f32,
+    pub(crate) passes: usize,
 }
 
 fn blur(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
@@ -2423,65 +2451,67 @@ fn blur(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     Ok(img)
 }
 
+/// A box filter of radius `r` along each row, edge pixels repeated: a
+/// running sum (f64, so long rows don't drift), O(1) per pixel whatever
+/// the radius.
 fn box_pass_h(img: &mut Image, r: usize) {
     let w = img.width;
-    let src = img.pixels.clone();
-    let norm = 1.0 / (2 * r + 1) as f32;
-    img.pixels
-        .par_chunks_mut(w)
-        .enumerate()
-        .for_each(|(y, row)| {
-            let base = y * w;
-            for (x, out_px) in row.iter_mut().enumerate() {
-                let mut acc = [0.0f32; 4];
-                for k in 0..=(2 * r) {
-                    let sx = (x as isize + k as isize - r as isize).clamp(0, w as isize - 1) as usize;
-                    let s = src[base + sx];
-                    for ch in 0..4 {
-                        acc[ch] += s[ch];
-                    }
-                }
-                for ch in 0..4 {
-                    out_px[ch] = acc[ch] * norm;
-                }
+    if w == 0 {
+        return;
+    }
+    let norm = 1.0 / (2 * r + 1) as f64;
+    img.pixels.par_chunks_mut(w).for_each(|row| {
+        let src = row.to_vec();
+        let at = |i: isize| src[i.clamp(0, w as isize - 1) as usize];
+        let mut acc = [0.0f64; 4];
+        for k in -(r as isize)..=r as isize {
+            for (a, v) in acc.iter_mut().zip(at(k)) {
+                *a += v as f64;
             }
-        });
+        }
+        for (x, out) in row.iter_mut().enumerate() {
+            *out = acc.map(|a| (a * norm) as f32);
+            let (add, sub) = (at(x as isize + r as isize + 1), at(x as isize - r as isize));
+            for c in 0..4 {
+                acc[c] += add[c] as f64 - sub[c] as f64;
+            }
+        }
+    });
 }
 
+/// [`box_pass_h`] down the columns (through a transpose, so rows stay
+/// contiguous).
 fn box_pass_v(img: &mut Image, r: usize) {
-    let w = img.width;
-    let h = img.height;
-    let src = img.pixels.clone();
-    let norm = 1.0 / (2 * r + 1) as f32;
-    img.pixels
-        .par_chunks_mut(w)
-        .enumerate()
-        .for_each(|(y, row)| {
-            for (x, out_px) in row.iter_mut().enumerate() {
-                let mut acc = [0.0f32; 4];
-                for k in 0..=(2 * r) {
-                    let sy = (y as isize + k as isize - r as isize).clamp(0, h as isize - 1) as usize;
-                    let s = src[sy * w + x];
-                    for ch in 0..4 {
-                        acc[ch] += s[ch];
-                    }
-                }
-                for ch in 0..4 {
-                    out_px[ch] = acc[ch] * norm;
-                }
-            }
-        });
+    let (w, h) = (img.width, img.height);
+    let mut cols = Image { width: h, height: w, pixels: transposed(&img.pixels, w, h), planes: Vec::new(), scene: None, ..*img };
+    box_pass_h(&mut cols, r);
+    img.pixels = transposed(&cols.pixels, h, w);
+}
+
+/// `w × h` pixels, row by row, as `h × w`.
+fn transposed(px: &[Rgba], w: usize, h: usize) -> Vec<Rgba> {
+    let mut out = vec![color::TRANSPARENT; w * h];
+    out.par_chunks_mut(h.max(1)).enumerate().for_each(|(x, col)| {
+        for (y, v) in col.iter_mut().enumerate() {
+            *v = px[y * w + x];
+        }
+    });
+    out
 }
 
 #[derive(Deserialize)]
-struct Exposure {
-    stops: f32,
+pub(crate) struct Exposure {
+    pub(crate) stops: f32,
 }
 
 fn exposure(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: Exposure = parse(params, "exposure")?;
+    Ok(mapped(input(inputs, 0, "exposure")?, exposure_pixel(&p)))
+}
+
+fn exposure_pixel(p: &Exposure) -> impl Fn(Rgba) -> Rgba + Sync + Send {
     let k = 2f32.powf(p.stops);
-    Ok(mapped(input(inputs, 0, "exposure")?, |px| [px[0] * k, px[1] * k, px[2] * k, px[3]]))
+    move |px| [px[0] * k, px[1] * k, px[2] * k, px[3]]
 }
 
 /// Light 2D: the light its params describe (see [`crate::light2d`]).
@@ -2525,38 +2555,51 @@ fn light_2d(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
 }
 
 /// Rec. 709 luminance weights.
-const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
+pub(crate) const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
 #[derive(Deserialize)]
-struct Saturation {
-    saturation: f32,
+pub(crate) struct Saturation {
+    pub(crate) saturation: f32,
 }
 
 /// Premultiplied color can be scaled about its luminance directly: both are
 /// linear in color, so the result equals doing it on straight color.
 fn saturation(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: Saturation = parse(params, "saturation")?;
+    Ok(mapped(input(inputs, 0, "saturation")?, saturation_pixel(&p)))
+}
+
+fn saturation_pixel(p: &Saturation) -> impl Fn(Rgba) -> Rgba + Sync + Send {
     let s = p.saturation;
-    Ok(mapped(input(inputs, 0, "saturation")?, |px| {
+    move |px| {
         let y = px[0] * LUMA[0] + px[1] * LUMA[1] + px[2] * LUMA[2];
         [y + (px[0] - y) * s, y + (px[1] - y) * s, y + (px[2] - y) * s, px[3]]
-    }))
+    }
 }
 
 #[derive(Deserialize)]
-struct Channels {
-    channels: String,
+pub(crate) struct Channels {
+    pub(crate) channels: String,
 }
 
 fn invert(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: Channels = parse(params, "invert")?;
-    let (rgb, alpha) = match p.channels.as_str() {
+    Ok(mapped(input(inputs, 0, "invert")?, invert_pixel(&p)?))
+}
+
+/// Which of (color, alpha) Invert's `channels` turns over.
+pub(crate) fn invert_channels(channels: &str) -> Result<(bool, bool)> {
+    Ok(match channels {
         "rgb" => (true, false),
         "alpha" => (false, true),
         "rgba" => (true, true),
         other => bail!("unknown channels '{other}'"),
-    };
-    Ok(mapped(input(inputs, 0, "invert")?, |px| {
+    })
+}
+
+fn invert_pixel(p: &Channels) -> Result<impl Fn(Rgba) -> Rgba + Sync + Send> {
+    let (rgb, alpha) = invert_channels(&p.channels)?;
+    Ok(move |px: Rgba| {
         // Transparent pixels unpremultiply to black.
         let mut s = color::unpremultiply(px);
         if rgb {
@@ -2566,24 +2609,28 @@ fn invert(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
         }
         s[3] = if alpha { 1.0 - px[3].clamp(0.0, 1.0) } else { px[3] };
         color::premultiply(s)
-    }))
+    })
 }
 
 #[derive(Deserialize)]
-struct Clamp {
-    min: f32,
-    max: f32,
-    channels: String,
+pub(crate) struct Clamp {
+    pub(crate) min: f32,
+    pub(crate) max: f32,
+    pub(crate) channels: String,
 }
 
 fn clamp(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     let p: Clamp = parse(params, "clamp")?;
+    Ok(mapped(input(inputs, 0, "clamp")?, clamp_pixel(&p)))
+}
+
+fn clamp_pixel(p: &Clamp) -> impl Fn(Rgba) -> Rgba + Sync + Send {
     let (lo, hi) = (p.min.min(p.max), p.max.max(p.min));
     let alpha = p.channels == "rgba";
-    Ok(mapped(input(inputs, 0, "clamp")?, |px| {
+    move |px| {
         let a = if alpha { px[3].clamp(lo.max(0.0), hi.min(1.0)) } else { px[3] };
         [px[0].clamp(lo, hi), px[1].clamp(lo, hi), px[2].clamp(lo, hi), a]
-    }))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2591,20 +2638,20 @@ fn clamp(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-struct ChannelSelect {
-    red: String,
-    green: String,
-    blue: String,
-    alpha: String,
+pub(crate) struct ChannelSelect {
+    pub(crate) red: String,
+    pub(crate) green: String,
+    pub(crate) blue: String,
+    pub(crate) alpha: String,
 }
 
 /// Where an output channel comes from: (input index, channel), or a constant.
-enum Source {
+pub(crate) enum Source {
     Channel(usize, usize),
     Value(f32),
 }
 
-fn channel_source(name: &str) -> Result<Source> {
+pub(crate) fn channel_source(name: &str) -> Result<Source> {
     if let Some(i) = CHANNEL_SOURCES.iter().position(|s| *s == name) {
         return Ok(match i {
             0..=7 => Source::Channel(i / 4, i % 4),
@@ -2680,8 +2727,8 @@ fn shuffle(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-struct Switch {
-    which: i64,
+pub(crate) struct Switch {
+    pub(crate) which: i64,
 }
 
 fn switch(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
@@ -2691,8 +2738,8 @@ fn switch(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
 }
 
 #[derive(Deserialize)]
-struct Dissolve {
-    amount: f32,
+pub(crate) struct Dissolve {
+    pub(crate) amount: f32,
 }
 
 fn dissolve(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
@@ -4218,6 +4265,42 @@ mod tests {
         let framed = eval("transform", &json!({ "scale": [2, 2], "center": [50, 25] }), &[Some(&red), None], &CTX).unwrap();
         assert_eq!(framed.at(12, 12)[3], 0.0);
         assert_eq!(framed.at(-24, 1), [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn blur_running_sums_match_summing_every_tap() {
+        // The old way: every tap summed, edge pixels repeated.
+        fn naive(img: &Image, r: usize, horizontal: bool) -> Vec<Rgba> {
+            let (w, h) = (img.width as isize, img.height as isize);
+            (0..w * h)
+                .map(|i| {
+                    let (x, y) = (i % w, i / w);
+                    let mut acc = [0.0f64; 4];
+                    for k in -(r as isize)..=r as isize {
+                        let (sx, sy) = if horizontal { ((x + k).clamp(0, w - 1), y) } else { (x, (y + k).clamp(0, h - 1)) };
+                        for (a, v) in acc.iter_mut().zip(img.pixels[(sy * w + sx) as usize]) {
+                            *a += v as f64;
+                        }
+                    }
+                    acc.map(|a| (a / (2 * r + 1) as f64) as f32)
+                })
+                .collect()
+        }
+        let img = crate::gpu::check::noise(Size { width: 61, height: 37 }, IRect::new(0, 0, 61, 37), false, 3);
+        for r in [1, 4, 30, 100] {
+            for horizontal in [true, false] {
+                let mut got = img.clone();
+                if horizontal { box_pass_h(&mut got, r) } else { box_pass_v(&mut got, r) }
+                let want = naive(&img, r, horizontal);
+                let err = got.pixels.iter().flatten().zip(want.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+                assert!(err < 1e-5, "r {r} horizontal {horizontal}: {err}");
+            }
+        }
+        // A flat plate stays exactly flat.
+        let mut flat = Image::filled(40, 9, [0.3, 0.6, 0.9, 1.0]);
+        box_pass_h(&mut flat, 7);
+        box_pass_v(&mut flat, 50);
+        assert!(flat.pixels.iter().all(|p| *p == [0.3, 0.6, 0.9, 1.0]));
     }
 
     #[test]
