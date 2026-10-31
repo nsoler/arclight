@@ -17,6 +17,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.2 — 2026-10-31
+
+- Node graph: drop a wire anywhere on a node (body or title) to connect
+  it, without aiming for the port: from an output it goes into the node's
+  first free input that takes it (else its first, replacing that wire),
+  from an input it takes the node's output. While hovering, the node
+  lights up and the wire's end snaps to the port it will take; nothing
+  connects if no input fits or it would make a cycle. Dropping on a port
+  works as before and wins.
+
 ## 0.13.1 — 2026-10-31
 
 - A selected object in the 3D view now shows the Move gizmo instead of

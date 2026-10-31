@@ -9,7 +9,7 @@ selected node in **Properties** on the right. On macOS, ⌘ stands for Ctrl.
 | Action | How |
 |---|---|
 | Add a node | Right-click (the node browser; type to search) |
-| Connect | Drag from an output (circle) to an input (square), or the other way |
+| Connect | Drag from an output (circle) to an input (square), or the other way; or drop the wire anywhere on a node: it takes the first free input that fits (or the node's output) |
 | Select a wire | Click it (it lights up); **⌫** disconnects it |
 | Wire menu | Right-click a wire: **Insert 3D Camera Setup**, **Insert Node…**, **Delete connection** |
 | Disconnect / reroute | Drag a connected input away |

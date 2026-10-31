@@ -1,10 +1,13 @@
 //! The node graph editor.
 //!
 //! Inputs sit on a node's left edge, its output on the right. Drag from an
-//! output to an input (or the reverse) to connect; drag a connected input away
-//! to reroute or disconnect. Drop a wire dragged from an output onto another
-//! wire to join the two with a new Merge (the dragged node into A, over
-//! the wire's source in B). Inputs are yellow squares, outputs green circles.
+//! output to an input (or the reverse) to connect, or drop the wire anywhere
+//! on a node: from an output it goes into the node's first free input that
+//! takes it (else its first that does), from an input it takes the node's
+//! output. Drag a connected input away to reroute or disconnect. Drop a
+//! wire dragged from an output onto another wire to join the two with a new
+//! Merge (the dragged node into A, over the wire's source in B). Inputs are
+//! yellow squares, outputs green circles.
 //! Right-click the canvas, or press Shift+E (or Shift+Tab over the graph) for a
 //! searchable node browser, to add nodes; over a wire, the new node goes into
 //! it. Over the graph Shift+R, Shift+T and Shift+M add a Media In, a
@@ -265,6 +268,26 @@ fn fits(doc: &Doc, src: &str, dst: &str, port: usize) -> bool {
 /// Whether `node` may go into the wire from `src` to input `port` of `dst`.
 fn fits_between(doc: &Doc, node: &str, src: &str, dst: &str, port: usize) -> bool {
     fits(doc, src, node, 0) && fits(doc, node, dst, port)
+}
+
+/// The input of `dst` a wire from `src`'s output dropped on `dst`'s body
+/// goes into: its first free input that takes it, else its first that
+/// takes it (that one's wire replaced). None when it would close a cycle
+/// (`src` itself included: a node is upstream of itself), or no input
+/// takes it.
+fn body_input(doc: &Doc, src: &str, dst: &str) -> Option<usize> {
+    if doc.is_upstream(dst, src) {
+        return None;
+    }
+    let n = doc.node(dst)?;
+    let takes: Vec<usize> = (0..n.inputs.len()).filter(|&i| fits(doc, src, dst, i)).collect();
+    takes.iter().find(|&&i| n.inputs[i].is_empty()).or(takes.first()).copied()
+}
+
+/// Whether input `port` of `dst`, dragged onto `src`'s body, takes `src`'s
+/// output (not when that closes a cycle, `dst` itself included).
+fn body_output(doc: &Doc, src: &str, dst: &str, port: usize) -> bool {
+    doc.node(src).is_some_and(|n| has_output(&n.op)) && fits(doc, src, dst, port) && !doc.is_upstream(dst, src)
 }
 
 /// Whether `node`'s output is a scene.
@@ -725,27 +748,47 @@ impl NodeEditor {
             }
         }
 
-        // An in-progress wire follows the pointer and connects on release.
-        // From an output, a wire under the pointer (away from any input) is
-        // lit as the drop target.
+        // An in-progress wire follows the pointer and connects on release:
+        // on a port, else on a node's body (the node lit, the wire's end
+        // snapped to the port it would take), else (from an output) on a
+        // wire, lit as the drop target.
+        let body = match (&self.wire, pointer) {
+            (Some(wire), Some(ptr)) => self.body_target(doc, &geo, wire, ptr),
+            _ => None,
+        };
+        let on_node = pointer.is_some_and(|p| Self::node_at(&geo, p).is_some());
         if let (Some(Wire::FromOutput(src)), Some(ptr)) = (&self.wire, pointer) {
-            let lit = self.input_at(&geo, ptr).is_none().then(|| self.wire_at(doc, ptr, Some(src))).flatten();
+            let lit = (self.input_at(&geo, ptr).is_none() && !on_node).then(|| self.wire_at(doc, ptr, Some(src))).flatten();
             if let Some(w) = lit {
                 if let (Some(from), Some(to)) = (rect_of(&w.src), geo.iter().find(|g| g.0 == w.dst)) {
                     painter.add(bezier(Self::out_port(from), Self::in_port(to.2, w.port, to.3), Stroke::new(3.0, Color32::from_rgb(250, 190, 70)), self.straight_wires));
                 }
             }
         }
+        let in_port = |dst: &str, i: usize| geo.iter().find(|g| g.0 == dst).map(|g| Self::in_port(g.2, i, g.3));
         if let (Some(wire), Some(ptr)) = (&self.wire, pointer) {
             let anchor = match wire {
                 Wire::FromOutput(src) => rect_of(src).map(Self::out_port),
-                Wire::FromInput(dst, i) => rect_of(dst).map(|r| Self::in_port(r, *i, geo.iter().find(|g| &g.0 == dst).map_or(1, |g| g.3))),
+                Wire::FromInput(dst, i) => in_port(dst, *i),
             };
+            let color = Color32::from_rgb(240, 170, 60);
+            // Over a node that takes it: lit, and the wire's end on the port.
+            let mut end = ptr;
+            if let Some((src, dst, i)) = &body {
+                let (node, port) = match wire {
+                    Wire::FromOutput(_) => (dst, in_port(dst, *i)),
+                    Wire::FromInput(..) => (src, rect_of(src).map(Self::out_port)),
+                };
+                if let Some(r) = rect_of(node) {
+                    painter.rect(r, 6.0 * self.zoom, color.gamma_multiply(0.15), Stroke::new(2.5, color), egui::StrokeKind::Outside);
+                }
+                end = port.unwrap_or(ptr);
+            }
             if let Some(a) = anchor {
-                let s = Stroke::new(2.0, Color32::from_rgb(240, 170, 60));
+                let s = Stroke::new(2.0, color);
                 match wire {
-                    Wire::FromOutput(_) => painter.add(bezier(a, ptr, s, self.straight_wires)),
-                    Wire::FromInput(..) => painter.add(bezier(ptr, a, s, self.straight_wires)),
+                    Wire::FromOutput(_) => painter.add(bezier(a, end, s, self.straight_wires)),
+                    Wire::FromInput(..) => painter.add(bezier(end, a, s, self.straight_wires)),
                 };
             }
         }
@@ -757,6 +800,10 @@ impl NodeEditor {
                             if fits(doc, &src, &dst, i) {
                                 doc.connect(&src, &dst, i);
                             }
+                        } else if on_node {
+                            if let Some((src, dst, i)) = body {
+                                doc.connect(&src, &dst, i);
+                            }
                         } else if let Some(w) = self.wire_at(doc, ptr, Some(&src)).filter(|w| !is_scene(doc, &src) && !is_scene(doc, &w.src)) {
                             // Onto a wire: a Merge joins the two there.
                             if let Some(m) = doc.merge_into_wire(&src, &w.src, &w.dst, w.port) {
@@ -764,17 +811,18 @@ impl NodeEditor {
                             }
                         }
                     }
-                    Wire::FromInput(dst, i) => {
-                        let hit = geo
-                            .iter()
-                            .filter(|(_, op, ..)| has_output(op))
-                            .map(|(id, _, r, _)| (id, Self::out_port(*r).distance(ptr)))
-                            .filter(|&(_, d)| d < PORT_R * 2.5)
-                            .min_by(|a, b| a.1.total_cmp(&b.1));
-                        if let Some((src, _)) = hit.filter(|(src, _)| fits(doc, src, &dst, i)) {
-                            doc.connect(src, &dst, i);
+                    Wire::FromInput(dst, i) => match Self::output_at(&geo, ptr) {
+                        Some(src) => {
+                            if fits(doc, &src, &dst, i) {
+                                doc.connect(&src, &dst, i);
+                            }
                         }
-                    }
+                        None => {
+                            if let Some((src, dst, i)) = body {
+                                doc.connect(&src, &dst, i);
+                            }
+                        }
+                    },
                 }
             }
         }
@@ -998,6 +1046,42 @@ impl NodeEditor {
 
     /// The input port in reach of screen point `p`: the nearest, not the
     /// first, since a Merge's ports sit closer together than the reach.
+    /// The output port within reach of screen point `p` (nearest first).
+    fn output_at(geo: &[(String, String, Rect, usize)], p: Pos2) -> Option<String> {
+        geo.iter()
+            .filter(|(_, op, ..)| has_output(op))
+            .map(|(id, _, r, _)| (id, Self::out_port(*r).distance(p)))
+            .filter(|&(_, d)| d < PORT_R * 2.5)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(id, _)| id.clone())
+    }
+
+    /// The node under screen point `p` (the topmost: drawn last).
+    fn node_at(geo: &[(String, String, Rect, usize)], p: Pos2) -> Option<&str> {
+        geo.iter().rev().find(|g| g.2.contains(p)).map(|g| g.0.as_str())
+    }
+
+    /// Where `wire` released at `p` would connect by the body rule, as
+    /// (output's node, input's node, input): over a node's body or title
+    /// and away from any port of the wire's kind (a port wins).
+    fn body_target(&self, doc: &Doc, geo: &[(String, String, Rect, usize)], wire: &Wire, p: Pos2) -> Option<(String, String, usize)> {
+        let node = Self::node_at(geo, p)?;
+        match wire {
+            Wire::FromOutput(src) => {
+                if self.input_at(geo, p).is_some() {
+                    return None;
+                }
+                body_input(doc, src, node).map(|i| (src.clone(), node.to_string(), i))
+            }
+            Wire::FromInput(dst, i) => {
+                if Self::output_at(geo, p).is_some() {
+                    return None;
+                }
+                body_output(doc, node, dst, *i).then(|| (node.to_string(), dst.clone(), *i))
+            }
+        }
+    }
+
     fn input_at(&self, geo: &[(String, String, Rect, usize)], p: Pos2) -> Option<(String, usize)> {
         geo.iter()
             .flat_map(|(id, _, r, n)| (0..*n).map(move |i| (id, i, Self::in_port(*r, i, *n).distance(p))))
@@ -1538,6 +1622,141 @@ mod tests {
         let out = NodeEditor::out_port(h.rect(&doc, &other));
         h.drag(&mut doc, out, to);
         assert_eq!(doc.node(&merge).unwrap().inputs[1], other, "output → B");
+    }
+
+    /// A wire dropped on a node's body (or title) goes into its first free
+    /// input that takes it, else its first that does; a port, if it's
+    /// dropped on one, wins. One undo step.
+    #[test]
+    fn a_wire_dropped_on_a_node_s_body_connects_it() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let c: Vec<String> = (0..4).map(|k| doc.add_node("constant", [0.0, 150.0 * k as f32])).collect();
+        let merge = doc.add_node("merge", [400.0, 200.0]);
+        // The setup is one undo step (the app records one each frame).
+        doc.commit(false);
+        let mut h = Harness::new();
+        h.frame(&mut doc, vec![]);
+        let inputs = |doc: &Doc| doc.node(&merge).unwrap().inputs.clone();
+        let body = |h: &Harness, doc: &Doc| h.rect(doc, &merge).center();
+        let title = |h: &Harness, doc: &Doc| h.rect(doc, &merge).center_top() + Vec2::new(0.0, 6.0);
+        // Free inputs in port order: A, B, then the mask; on the body or the title.
+        let (from, to) = (NodeEditor::out_port(h.rect(&doc, &c[0])), body(&h, &doc));
+        h.drag(&mut doc, from, to);
+        assert_eq!(inputs(&doc), [c[0].as_str(), "", ""]);
+        doc.undo();
+        assert_eq!(inputs(&doc), ["", "", ""], "one undo step");
+        doc.redo();
+        h.frame(&mut doc, vec![]);
+        let (from, to) = (NodeEditor::out_port(h.rect(&doc, &c[1])), title(&h, &doc));
+        h.drag(&mut doc, from, to);
+        let (from, to) = (NodeEditor::out_port(h.rect(&doc, &c[2])), body(&h, &doc));
+        h.drag(&mut doc, from, to);
+        assert_eq!(inputs(&doc), [c[0].as_str(), &c[1], &c[2]]);
+        // All taken: the first, its wire replaced.
+        let (from, to) = (NodeEditor::out_port(h.rect(&doc, &c[3])), body(&h, &doc));
+        h.drag(&mut doc, from, to);
+        assert_eq!(inputs(&doc), [c[3].as_str(), &c[1], &c[2]]);
+        // On a port: that port, though A is free.
+        doc.disconnect(&merge, 0);
+        h.frame(&mut doc, vec![]);
+        let (from, to) = (NodeEditor::out_port(h.rect(&doc, &c[0])), NodeEditor::in_port(h.rect(&doc, &merge), 1, 3));
+        h.drag(&mut doc, from, to);
+        assert_eq!(inputs(&doc), ["", c[0].as_str(), &c[2]]);
+    }
+
+    /// No input takes it (a scene into a 2D node), it's the node itself, or
+    /// it would close a cycle: nothing connects. A scene finds the scene
+    /// port.
+    #[test]
+    fn a_wire_dropped_on_a_node_that_cant_take_it_connects_nothing() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let c = doc.add_node("constant", [0.0, 0.0]);
+        let blur = doc.add_node("blur", [400.0, 0.0]);
+        let grade = doc.add_node("grade", [800.0, 0.0]);
+        let card = doc.add_node("card", [0.0, 300.0]);
+        let render = doc.add_node("scanline_render", [400.0, 300.0]);
+        doc.connect(&c, &blur, 0);
+        doc.connect(&blur, &grade, 0);
+        let mut h = Harness::new();
+        h.frame(&mut doc, vec![]);
+        let before = doc.graph.clone();
+        let out = |h: &Harness, doc: &Doc, id: &str| NodeEditor::out_port(h.rect(doc, id));
+        let body = |h: &Harness, doc: &Doc, id: &str| h.rect(doc, id).center();
+        let (from, to) = (out(&h, &doc, &card), body(&h, &doc, &blur));
+        h.drag(&mut doc, from, to);
+        assert_eq!(doc.graph, before, "a scene into a 2D node");
+        let (from, to) = (out(&h, &doc, &grade), body(&h, &doc, &blur));
+        h.drag(&mut doc, from, to);
+        assert_eq!(doc.graph, before, "a cycle (grade is downstream of blur)");
+        let geo: Vec<(String, String, Rect, usize)> = doc.graph.nodes.iter().map(|n| (n.id.clone(), n.op.clone(), h.rect(&doc, &n.id), n.inputs.len())).collect();
+        assert_eq!(h.ed.body_target(&doc, &geo, &Wire::FromOutput(grade.clone()), body(&h, &doc, &blur)), None, "nor shown as a target");
+        let (from, to) = (out(&h, &doc, &blur), body(&h, &doc, &blur));
+        h.drag(&mut doc, from, to);
+        assert_eq!(doc.graph, before, "itself");
+        let (from, to) = (out(&h, &doc, &card), body(&h, &doc, &render));
+        h.drag(&mut doc, from, to);
+        assert_eq!(doc.node(&render).unwrap().inputs[0], card, "the scene port");
+    }
+
+    /// A node lying over a wire takes the drop, not the wire (no Merge),
+    /// even when it can't take it.
+    #[test]
+    fn a_node_over_a_wire_takes_the_drop_not_the_wire() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let c = doc.add_node("constant", [0.0, 0.0]);
+        let grade = doc.add_node("grade", [800.0, 0.0]);
+        let blur = doc.add_node("blur", [400.0, 0.0]);
+        let d = doc.add_node("constant", [0.0, 300.0]);
+        doc.connect(&c, &grade, 0);
+        let mut h = Harness::new();
+        h.frame(&mut doc, vec![]);
+        let over = h.rect(&doc, &blur).center();
+        assert!(h.ed.wire_at(&doc, over, None).is_some(), "the wire runs under the blur");
+        let nodes = doc.graph.nodes.len();
+        let from = NodeEditor::out_port(h.rect(&doc, &blur));
+        h.drag(&mut doc, from, over);
+        assert_eq!((doc.graph.nodes.len(), doc.node(&grade).unwrap().inputs[0].as_str()), (nodes, c.as_str()), "itself: nothing");
+        let from = NodeEditor::out_port(h.rect(&doc, &d));
+        h.drag(&mut doc, from, over);
+        assert_eq!((doc.graph.nodes.len(), doc.node(&blur).unwrap().inputs[0].as_str()), (nodes, d.as_str()), "into the blur");
+    }
+
+    /// While a wire is dragged over a node it would go into, that's the
+    /// target the editor draws (the node lit, the end on the port); away
+    /// from nodes, none.
+    #[test]
+    fn hovering_a_node_with_a_wire_shows_where_it_lands() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let c = doc.add_node("constant", [0.0, 0.0]);
+        let merge = doc.add_node("merge", [400.0, 0.0]);
+        let mut h = Harness::new();
+        h.frame(&mut doc, vec![]);
+        let geo: Vec<(String, String, Rect, usize)> = doc.graph.nodes.iter().map(|n| (n.id.clone(), n.op.clone(), h.rect(&doc, &n.id), n.inputs.len())).collect();
+        let wire = Wire::FromOutput(c.clone());
+        let over = h.rect(&doc, &merge).center();
+        assert_eq!(h.ed.body_target(&doc, &geo, &wire, over), Some((c.clone(), merge.clone(), 0)));
+        assert_eq!(h.ed.body_target(&doc, &geo, &wire, over + Vec2::new(0.0, 200.0)), None, "off the node");
+        let port = NodeEditor::in_port(h.rect(&doc, &merge), 1, 3);
+        assert_eq!(h.ed.body_target(&doc, &geo, &wire, port), None, "on a port: the port's");
+    }
+
+    /// The other way: an input dragged onto a node's body takes its output
+    /// (not a Viewer's: it has none).
+    #[test]
+    fn an_input_dropped_on_a_node_s_body_takes_its_output() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let c = doc.add_node("constant", [0.0, 0.0]);
+        let viewer = doc.add_node("viewer", [0.0, 300.0]);
+        let blur = doc.add_node("blur", [400.0, 150.0]);
+        let mut h = Harness::new();
+        h.frame(&mut doc, vec![]);
+        let input = NodeEditor::in_port(h.rect(&doc, &blur), 0, 2);
+        let (from, to) = (input, h.rect(&doc, &viewer).center());
+        h.drag(&mut doc, from, to);
+        assert_eq!(doc.node(&blur).unwrap().inputs[0], "", "a Viewer has no output");
+        let (from, to) = (input, h.rect(&doc, &c).center());
+        h.drag(&mut doc, from, to);
+        assert_eq!(doc.node(&blur).unwrap().inputs[0], c);
     }
 
     #[test]

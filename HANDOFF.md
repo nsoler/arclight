@@ -24,6 +24,13 @@ done), `docs/help.md` (the in-app help) and
   user's two UI asks of the same day go first: drop a dragged wire on a
   node's body to connect it (Dev1) and the 3D gizmo starting as Move,
   switched by G / R / S (Dev2).
+- **0.13.2, drop a wire on a node's body** (Dev1): `node_editor.rs`
+  `body_input` (first free input whose kind fits, in port order, else the
+  first that fits; none on a cycle via `doc.is_upstream`) and
+  `body_output` (the reverse drag; not a Viewer); ports within reach win;
+  the drop-on-a-wire Merge doesn't fire under a node. Open question to
+  the user: a second image wire on a Blur/Grade goes into its mask (the
+  first free input that fits); maybe leave masks out of the free pass.
 - **0.13.1, gizmo starts as Move** (Dev2): `gizmo3d::Tool` defaults to
   `Move` (was `All` since 0.11.4); a plain G / R / S that starts its
   transform sets the tool (from Select or All too) and it stays after
