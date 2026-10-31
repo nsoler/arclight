@@ -17,6 +17,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.25 — 2026-10-31
+
+- New **Curve** node: a curve in 3D through its control points (polyline,
+  smooth or Bezier, open or closed), or along a node's path over frames (a
+  Camera Tracker's solved camera, an animated camera or locator); each
+  point carries its tangent, its place along the curve (u) and a frame
+  that twists as little as it can (N along the curve, up).
+- New **Resample** node: evenly spaced points along curves, by count or
+  length.
+
 ## 0.13.24 — 2026-10-31
 
 - Geometry: an **Attribute Transfer** node copies attributes (all, or

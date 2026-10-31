@@ -12,6 +12,8 @@ use crate::color::{self, Rgba};
 use crate::geo::glob;
 #[path = "geo_ops.rs"]
 pub mod geo_ops;
+#[path = "geo_curves.rs"]
+pub mod geo_curves;
 use crate::geom;
 use crate::render3d;
 use crate::scene::{self, Scene};
@@ -94,7 +96,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "attribute_set" | "instance_on_points" | "realize_instances" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1173,7 +1175,6 @@ pub static OPS: &[OpInfo] = &[
                alpha (float). Elements off the image, behind the camera or without uvs keep the attribute they have \
                (Outside keep), or take Fill.",
     },
-    // Fit Plane (geo_fit.rs; Dev1).
     OpInfo {
         name: "attribute_transfer",
         label: "Attribute Transfer",
@@ -1264,6 +1265,53 @@ pub static OPS: &[OpInfo] = &[
                point gets an id that stays put when the density or the mask changes (the points made before stay where they \
                were), its surface's normal (N), uv and point attributes; Seed gives another scatter. More than 5,000,000 \
                points is an error.",
+    },
+    OpInfo {
+        name: "curve",
+        label: "Curve",
+        category: Category::Scene,
+        inputs: &[],
+        params: &[
+            fixed!("source", "Source", ParamKind::Choice(&["drawn", "node path"]), "drawn"),
+            fixed!("kind", "Kind", ParamKind::Choice(&["polyline", "smooth", "bezier"]), "smooth"),
+            fixed!("closed", "Closed", ParamKind::Bool, false),
+            fixed!("detail", "Detail", ParamKind::Int { min: 1, max: 1000 }, 16),
+            p!("points", "Points", ParamKind::Points { stride: 9 }, [-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            fixed!("path_of", "Path of", ParamKind::Text, ""),
+            fixed!("start", "Start frame", ParamKind::Int { min: -100_000, max: 100_000 }, 1),
+            fixed!("end", "End frame", ParamKind::Int { min: -100_000, max: 100_000 }, 100),
+            fixed!("step", "Step", ParamKind::Float { min: 0.01, max: 1000.0 }, 1.0),
+            PLACE_T,
+            PLACE_R,
+            PLACE_S,
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "A curve in 3D: through its control points (Source drawn: drawn and edited in the 3D view), or along a node's \
+               path (node path: the position of the node named in Path of, at each frame from Start to End, every Step; a \
+               Camera Tracker's solved camera, else its translate: a camera, a locator, a card on a track). Kind: polyline \
+               (straight between the points), smooth (through them, smoothly) or bezier (along each point's own handles, \
+               edited in the 3D view). Closed joins the last point to the first. Detail: points a span on a smooth or bezier \
+               curve. Translate, Rotate and Scale place it. Each of its points gets its tangent, u (0 to 1 along it), cp (the \
+               control point before it), and a frame that twists as little as it can: N along the curve and up square to it \
+               (what Instance on Points turns copies by).",
+    },
+    OpInfo {
+        name: "resample",
+        label: "Resample",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN],
+        params: &[
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("by", "By", ParamKind::Choice(&["count", "length"]), "count"),
+            fixed!("count", "Count", ParamKind::Int { min: 2, max: 1_000_000 }, 20),
+            p!("length", "Length", ParamKind::Float { min: 0.0001, max: 10000.0 }, 0.1),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Gives each curve (of Group's node, a name or a pattern with *, or all) new points evenly along its length: \
+               Count of them, or one every Length. The ends stay; a closed curve stays closed. Its points' attributes are \
+               blended (whole numbers from the nearer), and tangent, u, N and up worked out again.",
     },
     OpInfo {
         name: "instance_on_points",
@@ -1865,7 +1913,32 @@ pub type Links<'a> = Option<&'a dyn Fn(&Value, f64) -> Value>;
 pub fn resolve_params_linked(op: &str, params: &Value, frame: i64, links: Links) -> Value {
     let mut out = resolve_linked(op, params, frame, links);
     add_formula_refs(op, &mut out, frame, links);
+    add_path(op, &mut out, links);
     out
+}
+
+/// A Curve following a node's path: that node's position at each of its
+/// frames (a Camera Tracker's solved camera, else its translate), worked
+/// out now through `links` (the graph's) as `_path`: in its cache key.
+fn add_path(op: &str, out: &mut Value, links: Links) {
+    let (Some(follow), Value::Object(map)) = (links, &mut *out) else { return };
+    if op != "curve" || map.get("source").and_then(Value::as_str) != Some("node path") {
+        return;
+    }
+    let node = map.get("path_of").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    if node.is_empty() {
+        return;
+    }
+    let solve = json!({ "link": { "node": node, "solve": "translate" } });
+    let translate = json!({ "link": { "expr": format!("\"{node}\".translate") } });
+    let path: Vec<Value> = geo_curves::path_frames(&Value::Object(map.clone()))
+        .into_iter()
+        .map(|t| {
+            let v = follow(&solve, t);
+            if v.is_array() { v } else { follow(&translate, t) }
+        })
+        .collect();
+    map.insert("_path".into(), Value::Array(path));
 }
 
 /// The params of geometry nodes that are per-element formulas (see
@@ -2229,6 +2302,8 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "read_splat" => read_splat(params),
         "splat_crop" => splat_crop(params, inputs),
         "delete_geo" => Ok(scene_output(DEFAULT_FORMAT, geo_ops::delete(params, input_scene(inputs), ctx.frame as f64)?)),
+        "curve" => Ok(scene_output(DEFAULT_FORMAT, geo_curves::curve(params)?)),
+        "resample" => Ok(scene_output(DEFAULT_FORMAT, geo_curves::resample(params, input_scene(inputs))?)),
         "instance_on_points" => {
             let protos = inputs.get(1).copied().flatten().and_then(|i| i.scene.as_deref());
             let camera = inputs.get(2).copied().flatten().and_then(|i| i.scene.as_deref());
@@ -4221,6 +4296,29 @@ mod tests {
         assert_eq!((d(&mut e, &g, 1), d(&mut e, &g, 7)), (1.0, 7.0));
         let missing = e.evaluate(&graph(0.0, "dist(@P, nobody.translate)"), "set", &EvalContext { frame: 1, write_outputs: false });
         assert!(missing.is_err());
+    }
+
+    /// A Curve following a node's path: an animated locator's positions,
+    /// or a Camera Tracker's solved camera, frame by frame, through the
+    /// graph.
+    #[test]
+    fn a_curve_follows_a_nodes_path() {
+        use crate::graph::{Evaluator, Graph};
+        let graph: Graph = serde_json::from_value(json!({ "nodes": [
+            { "id": "loc", "op": "locator", "params": { "translate": { "keys": [[1, [0, 0, 0]], [11, [10, 0, 0]]] } } },
+            { "id": "ct", "op": "camera_tracker", "params": { "solution": { "frames": [1, 2, 3], "cameras": [[0, 0, 0, 0, 0, 0], [0, 1, 0, 0, 0, 0], [0, 3, 0, 0, 0, 0]] } } },
+            { "id": "a", "op": "curve", "params": { "source": "node path", "path_of": "loc", "start": 1, "end": 11, "step": 2, "kind": "polyline" } },
+            { "id": "b", "op": "curve", "params": { "source": "node path", "path_of": "ct", "start": 1, "end": 3, "step": 0.5, "kind": "polyline" } },
+        ] }))
+        .unwrap();
+        let mut e = Evaluator::new();
+        let at = |e: &mut Evaluator, n: &str| e.evaluate(&graph, n, &EvalContext { frame: 1, write_outputs: false }).unwrap().scene.as_ref().unwrap().curves[0].positions.clone();
+        let a = at(&mut e, "a");
+        let keys = &graph.nodes[0].params["translate"];
+        let want: Vec<f64> = [1.0, 3.0, 5.0, 7.0, 9.0, 11.0].iter().map(|&t| anim::evaluate(keys, t)[0].as_f64().unwrap()).collect();
+        assert_eq!(a.iter().map(|p| p.x).collect::<Vec<_>>(), want, "where the locator is at each frame");
+        let b = at(&mut e, "b");
+        assert_eq!(b.iter().map(|p| p.y).collect::<Vec<_>>(), vec![0.0, 0.5, 1.0, 2.0, 3.0], "the solve, between its frames too");
     }
 
     /// Transform Geo moves its group's meshes, cards, point sets, curves

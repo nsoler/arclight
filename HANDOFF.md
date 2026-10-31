@@ -37,6 +37,15 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.25, P5 curves 1: Curve + Resample** (Dev2): `src/geo_curves.rs`
+  (a module of ops.rs via `#[path]`): points stride 9 (position, handle
+  in, handle out), polyline / smooth (Catmull-Rom) / bezier, closed,
+  detail; output Curves with tangent, u, cp, N (= tangent, Houdini's
+  convention) and up (rotation-minimizing, double reflection). Source
+  node path: `ops::add_path` samples a node's position per cook into
+  `params._path` (a tracker's solve, else translate). Resample by count /
+  length. Next: curve editing in the 3D view (Dev2), Curve to Mesh /
+  Points on Curve (Dev1).
 - **0.13.24, P3: Attribute Transfer** (Dev1): nearest / inverse-distance
   average within Radius through `geo_attr::KdTree`, ids from the nearest,
   falloff, missing keep / zero; source read without cloning. **P3 done.**

@@ -426,7 +426,13 @@ selected object.
   wired to its third input. The copies render with shadows and motion
   blur, and each gets its own number in the id pass. **Realize
   Instances** makes them ordinary objects when a later node needs to edit
-  them.
+  them. **Curve** makes a 3D curve: through points you place (straight,
+  smooth, or Bezier with handles), or along another node's path over a
+  range of frames, such as the camera a Camera Tracker solved. Each point
+  knows its direction (tangent, and N), how far along it is (u) and an up
+  direction that doesn't twist, so copies set along it with Instance on
+  Points stand upright and face along the curve. **Resample** spaces a
+  curve's points evenly, by count or by length.
 - **Example:** **Help ▸ Examples ▸ Geometry nodes** (or File ▸ Open
   `examples/geo-scatter.json`) opens it as a new project: a masked Scatter
   of rocks and bush cards, sized and colored by Attribute Set and copied
