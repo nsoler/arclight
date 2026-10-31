@@ -192,6 +192,40 @@ compute shaders when the counts are large (> 100k), the expression
 compiled to WGSL. Profiled before committing to it: CPU and rayon may be
 enough at compositor scale.
 
+**P8, Project 3D** (added 2026-10-31 at the user's request): camera
+projection as a texture, the classic set-extension and patch setup
+(Nuke's Project3D). What exists samples an image per point or vertex
+(Attribute from Image, Displace via camera, Scatter's mask); this
+projects it per rendered pixel, so a sharp plate lands on a 4-vertex card.
+- **Project 3D** node: inputs scene (what receives it), image (the plate
+  or a painted patch), projector (a scene with a camera). Output: the
+  scene with a projection attached to its meshes and cards (Group), each
+  a projector camera (its matrices and lens) and the image.
+- **Frame hold:** the projector camera taken at a fixed frame (the patch
+  painted on frame 1040 stays put while the shot camera moves), or live.
+- **Mode:** replace the surface's color or texture, over it (the plate's
+  alpha), or multiply; **Crop** to the projector's frame with a soft
+  **Edge** feather; outside the frame the surface keeps its own look.
+- **Occlusion:** only what the projector sees first receives it (no
+  smearing through to hidden surfaces), from a depth map rendered from
+  the projector: the shadow-map code (`render3d/shadow.rs`) already makes
+  exactly this. **Backfaces** (facing away from the projector) off by
+  default.
+- Several projections on one surface stack in order (a cleanup patch over
+  the plate). Instances take their prototype's projection unless the
+  node targets the instances themselves.
+- Renderers: the CPU shader and the GPU rasterizer project each shaded
+  sample's P through the projector (a texture lookup with the projector's
+  matrix and lens), with mip filtering by the projected footprint; the 3D
+  view's lit preview shows it. Motion blur: the projection follows the
+  surface (projected in the projector's frame, which is held or live).
+- **Bake** (later): write a projection into a uv texture (an image
+  output), to hand projected geometry to other tools or freeze it.
+- Tests: a card through the shot camera with the plate projected from the
+  same camera renders the plate exactly (to the pixel); a second card
+  hidden behind the first receives nothing with Occlusion on; frame hold
+  stays put as the shot camera moves; CPU vs GPU within D8.
+
 ## Risks and open questions
 
 - **Expression speed:** `expr.rs` is a tree-walking interpreter. For 1M
