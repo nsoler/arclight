@@ -15,6 +15,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.6 — 2026-10-31
+
+- GPU: **particle sprites render on the GPU** where they cover much of
+  the frame (big or many: smoke, dust): 20 000 big textured sprites at
+  4K in 0.3 s instead of a minute. Small ones stay on the CPU, which is
+  quicker for them. Motion-blurred sprites still render time by time
+  (next).
+- The CPU's sprite merge and background copy run in parallel.
+
 ## 0.12.5 — 2026-10-31
 
 - `arclight mcp --http` stops cleanly on Ctrl-C or SIGTERM: it finishes

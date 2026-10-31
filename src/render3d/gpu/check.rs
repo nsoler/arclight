@@ -72,6 +72,38 @@ pub(super) fn moving(graph: &str) -> String {
     graph.replace(r#""op": "sphere", "inputs": ["tex"], "params": {"#, r#""op": "sphere", "inputs": ["tex"], "params": {"translate": {"keys": [[1, [-0.6, 0, 0]], [10, [0.6, 0.2, 0]]]}, "#)
 }
 
+/// `n` particles scattered in front of the default camera, every size from
+/// sub-pixel up, turned, aged, in many colors (the same every time).
+pub(super) fn scattered(n: usize) -> Vec<crate::particles::Particle> {
+    let mut h = 12345u32;
+    let mut r = move || {
+        h ^= h << 13;
+        h ^= h >> 17;
+        h ^= h << 5;
+        (h % 100_000) as f64 / 100_000.0
+    };
+    (0..n)
+        .map(|i| {
+            let position = crate::geom::Vec3::new(r() * 4.0 - 2.0, r() * 2.4 - 1.2, -2.0 - r() * 6.0);
+            let a = (0.3 + 0.7 * r()) as f32;
+            crate::particles::Particle {
+                id: i as u64,
+                position,
+                velocity: crate::geom::Vec3::new(r() - 0.5, r(), 0.0),
+                accel: crate::geom::Vec3::zeros(),
+                age: r() * 40.0,
+                life: 50.0,
+                size: 0.005 + r() * 0.3,
+                color: [r() as f32 * a, r() as f32 * a, r() as f32 * a, a],
+                rotation: r() * 360.0,
+                spin: 0.0,
+                axis: crate::geom::Vec3::z(),
+                start_size: 0.1,
+            }
+        })
+        .collect()
+}
+
 pub(super) const PERSPECTIVE: &str = r#"{"id": "cam", "op": "camera", "params": {"translate": [0, 0.3, 3.5]}}"#;
 pub(super) const ORTHO: &str = r#"{"id": "cam", "op": "camera", "params": {"translate": [0, 0.3, 3.5], "projection": "orthographic", "ortho_width": 6.0}}"#;
 
@@ -145,6 +177,7 @@ pub(crate) fn rows(gpu: &Gpu) -> Vec<CheckRow> {
         row(gpu, "3D render, orthographic", &flat, &ortho, hd, 2, Passes::DEPTH, false),
         row(gpu, "3D render, shadows (4 lights)", &shaded, &cam, hd, 2, Passes::from_names(["depth", "shadow", "lights"]), false),
         blur_row(Size { width: 960, height: 540 }),
+        sprites_row(Size { width: 960, height: 540 }),
         row(gpu, "3D view, solid", &scene, &cam, hd, 1, Passes::DEPTH, true),
     ]
 }
@@ -182,6 +215,21 @@ fn blur_row(hd: Size) -> CheckRow {
     let (cpu, cpu_ms) = timed(|| crate::gpu::cpu_only(render));
     let (out, gpu_ms) = timed(render);
     judge("3D render, motion blur 6", format!("{}x{}", hd.width, hd.height), &cpu, Ok(Some(out)), cpu_ms, gpu_ms)
+}
+
+/// The sprites row: 2000 big textured particle sprites laid over each
+/// other, at `size` (where the CPU is slowest and the GPU takes them).
+fn sprites_row(size: Size) -> CheckRow {
+    use crate::particles_render::{render_sprites, Blend, Outline, Pick, Sprites, Texture};
+    let frames: Vec<Arc<Image>> = (0..3).map(|k| Arc::new(crate::gpu::check::noise(Size { width: 64, height: 64 }, crate::image::IRect::new(0, 0, 64, 64), false, 7 + k))).collect();
+    let sprites = Sprites { outline: Outline::Square, texture: Some(Texture { images: frames, pick: Pick::ByAge }), scale: 3.0, opacity: 0.6, opacity_end: 0.1, blend: Blend::Over };
+    let particles = scattered(2000);
+    let cam = Camera::default();
+    let render = || render_sprites(&particles, &sprites, &cam, size, None);
+    let _ = render();
+    let (cpu, cpu_ms) = timed(|| crate::gpu::cpu_only(render));
+    let (out, gpu_ms) = timed(render);
+    judge("particle sprites, big, textured", format!("{}x{}", size.width, size.height), &cpu, Ok(Some(out)), cpu_ms, gpu_ms)
 }
 
 /// A row from a CPU render and the GPU's (`out`), and their times.

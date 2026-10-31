@@ -30,6 +30,12 @@ done), `docs/help.md` (the in-app help) and
   "Dropped TexturesDelta with 1 unapplied deltas" (egui 0.37) now end
   `ctx.run_ui(..)` with `.drop_without_applying_deltas()` instead of
   `let _ =`; all GUI tests pass. **Tip:** do the same in new egui tests.
+- **0.12.6, GPU G5 part 2** (Dev2): `src/render3d/gpu/sprites.rs`:
+  sprites sorted and binned on the CPU, one GPU thread a pixel lays its
+  tile's sprites as the CPU does; used only when the sprites' boxes
+  cover more than 2× the frame (tiny sprites are faster on the CPU).
+  Next: sprites in the GPU motion-blur sum (before G6). Note: the
+  Supervisor's verification worktrees are `../.verify/sup-*`.
 - **0.12.4, GPU G3 + exit + crash handler** (Dev1): `ops::WarpMap` /
   `keyer_plan` / `resample_layout` are the single source for CPU and GPU
   maths; `gpu::ops::eval` takes a `CpuInput` closure for ops needing a

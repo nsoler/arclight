@@ -549,8 +549,19 @@ switch, the status and the tests' skip work end to end.
   met yet: the frame's own render (~120 ms, for depth and the other
   nearest-surface passes) and 32 sets of shadow maps (8 times × 4 jitter
   cells) remain; sharing maps between nearby times is the next step.
-- Particles: sprites (textured, sequences) and instanced meshes on the
-  GPU, motion blur included.
+- **Done (particles):** particle sprites on the GPU (`sprites.wgsl`):
+  sorted and binned in drawing order on the CPU, one thread a pixel lays
+  its tile's sprites as `particles_render` does (outlines, soft edges,
+  textures and sequences, over / additive, hidden behind the render's
+  depth), for Scanline Render, its motion pass and 2D particles. Taken
+  only where the sprites cover more than twice the frame: small ones are
+  cheaper on the CPU, which needn't send the frame across. Measured: 20 k
+  big textured sprites 1080p 85 ms against 15.8 s, 4K 297 ms against
+  61.7 s; 500 k dust-sized sprites stay on the CPU (~0.15–0.24 s).
+  Particle objects were already meshes on the GPU. Motion blur with
+  sprites still renders time by time (each time's sprites on the GPU
+  when big); adding sprites into the GPU's motion-blur sum is a
+  follow-up.
 - Target (4K, the measured scene): motion blur 8 + shadows from 28 s to
   under 0.3 s.
 

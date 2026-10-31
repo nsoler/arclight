@@ -1,7 +1,7 @@
 //! The GPU renderer against the CPU one on the same scenes (D8 of
 //! docs/gpu-plan.md): skipped without a GPU.
 
-use super::check::{busy, busy_shadowed, differences, moving, nearest_pass, scene_at, scene_of, ORTHO, PERSPECTIVE};
+use super::check::{busy, busy_shadowed, differences, moving, nearest_pass, scattered, scene_at, scene_of, ORTHO, PERSPECTIVE};
 use super::*;
 
 thread_local! {
@@ -258,4 +258,44 @@ fn motion_blur_adds_up_on_the_gpu_as_on_the_cpu() {
         let still = crate::gpu::cpu_only(|| super::super::render_passes(&s0, &cam, format, 2, None, passes));
         assert!(differences(&still, &out)[0].1 > 1e-3);
     }
+}
+
+/// Sprites drawn on the GPU match the CPU's: round and square, textured
+/// by a sequence, laid over or added, over a render whose depth hides
+/// some, and in 2D.
+#[test]
+fn sprites_match_the_cpu() {
+    use crate::particles_render::{render_sprites, render_sprites_2d, Blend, Outline, Pick, Sprites, Texture};
+    if crate::gpu::test_device().is_none() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let format = Size { width: 240, height: 130 };
+    let px = format.width * format.height;
+    // (They do go to the GPU where they cover over twice the frame.)
+    let big = || crate::particles_render::Splat { at: [120.0, 65.0], radius: 200.0, depth: 1.0, turn: 0.0, color: [0.5; 4], image: None };
+    assert!(with_gpu(|| crate::render3d::sprites_on_gpu(&[big(), big(), big()], &Sprites::default(), format, &vec![[0.0; 4]; px], &vec![0.0; px], true)).is_some());
+    let particles = scattered(3000);
+    let cam = Camera::default();
+    let frames: Vec<Arc<Image>> = (0..3).map(|k| Arc::new(crate::gpu::check::noise(Size { width: 16, height: 16 }, IRect::new(1, 0, 16, 15), false, 7 + k))).collect();
+    let textured = Sprites { outline: Outline::Square, texture: Some(Texture { images: frames, pick: Pick::ByAge }), scale: 1.5, opacity: 1.0, opacity_end: 0.2, blend: Blend::Over };
+    let (scene, scam) = scene_of(&busy(PERSPECTIVE));
+    let behind = crate::gpu::cpu_only(|| super::super::render_passes(&scene, &scam, format, 1, None, Passes::DEPTH));
+    for (sprites, background) in [
+        (Sprites::default(), None),
+        (textured.clone(), None),
+        (Sprites { blend: Blend::Additive, ..Sprites::default() }, Some(&behind)),
+        (textured, Some(&behind)),
+    ] {
+        let cpu = crate::gpu::cpu_only(|| render_sprites(&particles, &sprites, &cam, format, background));
+        let out = with_gpu(|| render_sprites(&particles, &sprites, &cam, format, background));
+        for (name, mean, off) in differences(&cpu, &out) {
+            assert!(mean <= 1e-4 && off <= 0.001, "{name}: mean {mean:.2e}, {:.3} % of values off", off * 100.0);
+        }
+    }
+    let flat: Vec<crate::particles::Particle> = particles.iter().map(|p| crate::particles::Particle { position: Vec3::new((p.position.x + 2.0) * 60.0, (p.position.y + 1.2) * 54.0, 0.0), size: p.size * 30.0, ..p.clone() }).collect();
+    let cpu = crate::gpu::cpu_only(|| render_sprites_2d(&flat, &Sprites::default(), format, None));
+    let out = with_gpu(|| render_sprites_2d(&flat, &Sprites::default(), format, None));
+    let (_, mean, off) = differences(&cpu, &out)[0].clone();
+    assert!(mean <= 1e-4 && off <= 0.001, "2D: mean {mean:.2e}, {:.3} % off", off * 100.0);
 }

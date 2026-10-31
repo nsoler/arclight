@@ -18,6 +18,7 @@ use crate::image::{Image, Size};
 use crate::mesh::Mesh;
 use crate::particles::Particle;
 use nalgebra::{Rotation3, Unit};
+use rayon::prelude::*;
 use std::sync::Arc;
 
 /// A sprite's outline.
@@ -82,16 +83,16 @@ impl Default for Sprites {
 }
 
 /// A sprite on the frame.
-struct Splat {
+pub(crate) struct Splat {
     /// Middle (frame pixels) and half its width (pixels).
-    at: [f64; 2],
-    radius: f64,
+    pub(crate) at: [f64; 2],
+    pub(crate) radius: f64,
     /// Distance in front of the camera (0 in 2D).
-    depth: f64,
+    pub(crate) depth: f64,
     /// Turn (radians, clockwise on screen).
-    turn: f64,
-    color: [f32; 4],
-    image: Option<usize>,
+    pub(crate) turn: f64,
+    pub(crate) color: [f32; 4],
+    pub(crate) image: Option<usize>,
 }
 
 impl Sprites {
@@ -184,20 +185,30 @@ fn draw(mut splats: Vec<Splat>, sprites: &Sprites, format: Size, background: Opt
     let mut out = Image::new(w, h);
     let mut depth = vec![0.0f32; w * h];
     if let Some(bg) = background {
-        for y in 0..h {
-            for x in 0..w {
-                out.pixels[y * w + x] = pixel(bg, x as i32, y as i32);
-                if with_depth {
-                    depth[y * w + x] = bg.plane_at("depth", x as i32, y as i32);
+        let bg_depth = bg.plane("depth").filter(|_| with_depth);
+        out.pixels.par_chunks_mut(w.max(1)).zip(depth.par_chunks_mut(w.max(1))).enumerate().for_each(|(y, (row, drow))| {
+            for (x, (px, d)) in row.iter_mut().zip(drow.iter_mut()).enumerate() {
+                *px = pixel(bg, x as i32, y as i32);
+                if let Some(p) = bg_depth {
+                    *d = bg.plane_value(p, x as i32, y as i32);
                 }
             }
-        }
+        });
     }
     // What the background puts in front, before sprites change `depth`.
     let wall = with_depth.then(|| depth.clone());
     if sprites.blend == Blend::Over {
         // Farthest first, so nearer ones go over them.
         splats.sort_by(|a, b| b.depth.total_cmp(&a.depth));
+    }
+    // On the GPU where it can (see render3d/gpu/sprites.rs).
+    #[cfg(feature = "gpu")]
+    if let Some((pixels, d)) = crate::render3d::sprites_on_gpu(&splats, sprites, format, &out.pixels, &depth, with_depth) {
+        out.pixels = pixels;
+        if with_depth {
+            *out.plane_mut("depth") = d;
+        }
+        return out;
     }
     let images: &[Arc<Image>] = sprites.texture.as_ref().map_or(&[], |t| &t.images);
     for s in &splats {

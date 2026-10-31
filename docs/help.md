@@ -673,10 +673,11 @@ defaults**.
   results match within a very small tolerance, not bit for bit;
   `arclight render --cpu` renders on the CPU only. On the GPU so far:
   Scanline Render and the 3D view's shaded meshes and cards (every light
-  and pass, anti-aliasing, see-through stacks, shadows, motion blur); a
-  frame where a shadow is cast by something see-through (a card less
-  than opaque, a texture with transparency), and Gaussian splats, still
-  render on the CPU.
+  and pass, anti-aliasing, see-through stacks, shadows, motion blur), and
+  particle sprites where they cover much of the frame (big or many:
+  smoke, dust; small ones are quicker on the CPU); a frame where a shadow
+  is cast by something see-through (a card less than opaque, a texture
+  with transparency), and Gaussian splats, still render on the CPU.
 
 ## GPU self-test
 

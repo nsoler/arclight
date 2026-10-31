@@ -9,6 +9,7 @@ use crate::particle_nodes::{Look, ParticleStream};
 use crate::particles::Particle;
 use crate::particles_render::{self, Blend, Sprites};
 use crate::scene::{Model, Scene};
+use rayon::prelude::*;
 
 /// `scene` with each object-look particle stream's objects as meshes (each
 /// tinted by its particle's color), or None when it has none.
@@ -43,21 +44,31 @@ pub(super) fn draw(scene: &Scene, cam: &Camera, format: Size, mut render: Image,
         let drawn = particles_render::render_sprites(&particles, &stream.sprites(), cam, format, Some(&render));
         // Back into the render (which may reach past the frame, and has
         // other planes): over the frame.
-        let window = render.window();
-        let depth = drawn.plane("depth").map(|p| p.data.clone());
+        let depth = drawn.plane("depth").map(|p| p.data.as_slice());
         let mut new_depth = render.plane("depth").map(|p| p.data.clone());
-        for y in 0..format.height {
-            for x in 0..format.width {
-                let (fx, fy) = (x as i32, y as i32);
-                if !window.contains(fx, fy) {
-                    continue;
-                }
-                let i = (fy - render.y0) as usize * render.width + (fx - render.x0) as usize;
-                render.pixels[i] = drawn.pixels[y * format.width + x];
-                if let (Some(d), Some(nd)) = (&depth, new_depth.as_mut()) {
-                    nd[i] = d[y * format.width + x];
+        // (Row by row of the render's window, the frame's part of each.)
+        let (w, rw) = (format.width, render.width.max(1));
+        let (x0, y0) = (render.x0, render.y0);
+        let frame_part = |ry: usize| {
+            let fy = y0 + ry as i32;
+            let (a, b) = (x0.max(0), (x0 + rw as i32).min(w as i32));
+            (fy >= 0 && fy < format.height as i32 && a < b).then_some((fy as usize, a, b))
+        };
+        render.pixels.par_chunks_mut(rw).enumerate().for_each(|(ry, row)| {
+            if let Some((fy, a, b)) = frame_part(ry) {
+                for fx in a..b {
+                    row[(fx - x0) as usize] = drawn.pixels[fy * w + fx as usize];
                 }
             }
+        });
+        if let (Some(d), Some(nd)) = (depth, new_depth.as_mut()) {
+            nd.par_chunks_mut(rw).enumerate().for_each(|(ry, row)| {
+                if let Some((fy, a, b)) = frame_part(ry) {
+                    for fx in a..b {
+                        row[(fx - x0) as usize] = d[fy * w + fx as usize];
+                    }
+                }
+            });
         }
         if let Some(nd) = new_depth {
             *render.plane_mut("depth") = nd;

@@ -34,6 +34,14 @@ mod particles;
 mod shadow;
 mod splats;
 
+/// Particle sprites drawn on the GPU (see gpu/sprites.rs): `splats`
+/// (sorted) as `sprites` into a frame of `format` starting as `color` and
+/// `depth`; None where it can't (then the CPU draws them).
+#[cfg(feature = "gpu")]
+pub(crate) fn sprites_on_gpu(splats: &[crate::particles_render::Splat], sprites: &crate::particles_render::Sprites, format: Size, color: &[Rgba], depth: &[f32], with_depth: bool) -> Option<(Vec<Rgba>, Vec<f32>)> {
+    gpu::sprites::draw(splats, sprites, format, color, depth, with_depth)
+}
+
 /// The 3D renderer's rows in the GPU self-test ([`crate::gpu::check`]).
 #[cfg(feature = "gpu")]
 pub fn gpu_checks(gpu: &crate::gpu::Gpu) -> Vec<crate::gpu::check::CheckRow> {

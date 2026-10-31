@@ -40,6 +40,7 @@ use std::sync::{Arc, Mutex, Weak};
 use wgpu::util::DeviceExt;
 
 pub(super) mod check;
+pub(super) mod sprites;
 #[cfg(test)]
 mod tests;
 
