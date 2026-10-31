@@ -215,6 +215,73 @@ pub fn line_points(params: &Value, mut scene: Scene) -> Result<Scene> {
     Ok(scene)
 }
 
+/// `m` with normals that are smooth across edges whose faces meet at less
+/// than `angle` degrees and sharp across the rest (vertices split there):
+/// each corner's normal is the angle-weighted mean of the faces around
+/// its point (welded by position) within `angle` of its own face.
+pub fn normals_by_angle(m: &Mesh, angle: f64) -> Mesh {
+    let (of, firsts) = weld(&m.positions);
+    let face_n: Vec<Vec3> = (0..m.triangles.len()).map(|t| m.face_normal(t).try_normalize(1e-300).unwrap_or_else(Vec3::y)).collect();
+    // The faces at each point, with the angle of their corner there.
+    let mut around: Vec<Vec<(usize, f64)>> = vec![Vec::new(); firsts.len()];
+    for (t, tri) in m.triangles.iter().enumerate() {
+        for k in 0..3 {
+            let (p, a, b) = (m.positions[tri[k] as usize], m.positions[tri[(k + 1) % 3] as usize], m.positions[tri[(k + 2) % 3] as usize]);
+            around[of[tri[k] as usize] as usize].push((t, (a - p).angle(&(b - p))));
+        }
+    }
+    let cos = angle.to_radians().cos();
+    let mut out = Mesh { face_attrs: m.face_attrs.clone(), ..Mesh::default() };
+    let mut made: HashMap<(u32, [u64; 3]), u32> = HashMap::new();
+    let mut sources = Vec::new();
+    let has_uv = m.uvs.len() == m.positions.len();
+    for (t, tri) in m.triangles.iter().enumerate() {
+        let corners = tri.map(|v| {
+            let n = around[of[v as usize] as usize]
+                .iter()
+                .filter(|(f, _)| face_n[*f].dot(&face_n[t]) >= cos - 1e-12)
+                .fold(Vec3::zeros(), |s, (f, w)| s + face_n[*f] * *w)
+                .try_normalize(1e-300)
+                .unwrap_or(face_n[t]);
+            *made.entry((v, [n.x.to_bits(), n.y.to_bits(), n.z.to_bits()])).or_insert_with(|| {
+                out.positions.push(m.positions[v as usize]);
+                out.normals.push(n);
+                if has_uv {
+                    out.uvs.push(m.uvs[v as usize]);
+                }
+                sources.push(v);
+                out.positions.len() as u32 - 1
+            })
+        });
+        out.triangles.push(corners);
+    }
+    out.point_attrs = m.point_attrs.gathered(&sources);
+    out
+}
+
+/// A Normals: the meshes' (Group's) normals made smooth (across seams),
+/// flat (faceted) or by angle (smooth where faces meet at less than
+/// Angle, sharp across the rest).
+pub fn normals(params: &Value, mut scene: Scene) -> Result<Scene> {
+    let group = params["group"].as_str().unwrap_or("").trim();
+    let take = |node: &str| group.is_empty() || geo::glob(group, node);
+    let mode = params["mode"].as_str().unwrap_or("smooth");
+    let angle = params["angle"].as_f64().unwrap_or(30.0).clamp(0.0, 180.0);
+    for m in scene.meshes.iter_mut().filter(|m| take(&m.node)) {
+        let mesh = match mode {
+            "flat" => m.mesh.flat(),
+            "by angle" => normals_by_angle(&m.mesh, angle),
+            _ => {
+                let mut s = (*m.mesh).clone();
+                s.smooth_normals();
+                s
+            }
+        };
+        m.mesh = std::sync::Arc::new(mesh);
+    }
+    Ok(scene)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,5 +383,68 @@ mod tests {
         // Added to the scene given.
         let both = line_points(&json!({}), out).unwrap();
         assert_eq!(both.point_sets.len(), 2);
+    }
+
+    fn mesh_of(op: &str, p: Value) -> Mesh {
+        let model = crate::scene::primitive_model(op, &p, None).unwrap();
+        (*model.mesh).clone()
+    }
+
+    fn one(m: Mesh) -> Scene {
+        Scene { meshes: vec![Model::new(Arc::new(m), crate::geom::Mat4::identity(), Default::default())], ..Scene::default() }
+    }
+
+    #[test]
+    fn normals_smooth_flat_or_by_angle() {
+        let cube = mesh_of("cube", json!({}));
+        // By 30°: the cube's faces meet at 90°, so every corner has its face's normal.
+        let sharp = normals_by_angle(&cube, 30.0);
+        assert_eq!(sharp.positions.len(), 24);
+        for (t, tri) in sharp.triangles.iter().enumerate() {
+            let f = sharp.face_normal(t).normalize();
+            assert!(tri.iter().all(|&v| (sharp.normals[v as usize] - f).norm() < 1e-9), "{t}");
+        }
+        // By 100°: all smooth, each corner's normal the diagonal.
+        let soft = normals_by_angle(&cube, 100.0);
+        assert!(soft.normals.iter().all(|n| (n.x.abs() - 1.0 / 3f64.sqrt()).abs() < 1e-9), "{:?}", &soft.normals[..3]);
+        // A cylinder by 30°: the side smooth (its normals level), the caps flat and split from it.
+        let cyl = normals_by_angle(&mesh_of("cylinder", json!({"segments": [16, 1]})), 30.0);
+        let level = cyl.normals.iter().filter(|n| n.y.abs() < 1e-9).count();
+        let caps = cyl.normals.iter().filter(|n| (n.y.abs() - 1.0).abs() < 1e-9).count();
+        assert!(level > 0 && caps > 0 && level + caps == cyl.normals.len(), "{level} {caps} of {}", cyl.normals.len());
+        // A tent: two faces at 90° sharing an edge's vertices; split by
+        // 30°, shared by 100°.
+        let tent = Mesh {
+            positions: vec![Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 1.0, 1.0), Vec3::new(-1.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)],
+            triangles: vec![[0, 2, 1], [0, 1, 3]],
+            ..Mesh::default()
+        };
+        assert_eq!((normals_by_angle(&tent, 30.0).positions.len(), normals_by_angle(&tent, 100.0).positions.len()), (6, 4));
+        // The node: smooth, flat (3 vertices a face), by angle; attributes carried.
+        let mut c = cube.clone();
+        let n = c.positions.len();
+        c.point_attrs.set("w", Attr::Float((0..n).map(|i| i as f32).collect()), n).unwrap();
+        let flat = normals(&json!({"mode": "flat"}), one(c.clone())).unwrap();
+        assert_eq!(flat.meshes[0].mesh.positions.len(), 36);
+        let smooth = normals(&json!({}), one(c.clone())).unwrap();
+        assert!(smooth.meshes[0].mesh.normals.iter().all(|n| (n.y.abs() - 1.0 / 3f64.sqrt()).abs() < 1e-9));
+        let by = normals(&json!({"mode": "by angle", "angle": 30}), one(c)).unwrap();
+        let m = &by.meshes[0].mesh;
+        let w = m.point_attrs.float("w").unwrap();
+        assert!((0..m.positions.len()).all(|i| cube.positions[w[i] as usize] == m.positions[i]), "each vertex's own attributes");
+    }
+
+    /// Evaluates `nodes` and returns `id`'s first mesh.
+    fn graph_mesh(nodes: Value, id: &str) -> Mesh {
+        let graph: crate::graph::Graph = serde_json::from_value(json!({ "nodes": nodes })).unwrap();
+        let ctx = crate::ops::EvalContext { frame: 1, write_outputs: false };
+        let out = crate::graph::Evaluator::new().evaluate(&graph, id, &ctx).unwrap_or_else(|e| panic!("{e}"));
+        (*out.scene.as_ref().unwrap().meshes[0].mesh).clone()
+    }
+
+    #[test]
+    fn normals_in_a_graph() {
+        let m = graph_mesh(json!([{"id": "c", "op": "cylinder"}, {"id": "n", "op": "normals", "inputs": ["c"], "params": {"mode": "flat"}}]), "n");
+        assert_eq!(m.positions.len(), m.triangles.len() * 3);
     }
 }

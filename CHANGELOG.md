@@ -17,6 +17,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.31 — 2026-10-31
+
+- Geometry: a **Normals** node shades meshes smooth, flat (faceted) or by
+  angle: smooth where faces meet gently and crisp across edges sharper
+  than the angle you set.
+
 ## 0.13.30 — 2026-10-31
 
 - New **Project 3D** node: projects an image from a camera onto meshes,

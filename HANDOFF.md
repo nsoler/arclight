@@ -37,6 +37,9 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.31, P5: Normals** (Dev1): `geo_mesh::normals` smooth / flat /
+  by angle (`normals_by_angle`: welded faces, angle-weighted within Angle
+  of a corner's own face, vertices split where corners differ).
 - **0.13.30, P8 A: Project 3D (CPU)** (Dev2): `src/project3d.rs`
   (Projection, the node, `held_inputs`), `src/render3d/project.rs`
   (applied per hit after the texture, before lighting); `Scene.projections`

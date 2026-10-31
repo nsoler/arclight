@@ -100,7 +100,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "points_from_geo" | "grid_points" | "line_points" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "curve_to_mesh" | "points_on_curve" | "project_3d" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "points_from_geo" | "grid_points" | "line_points" | "normals" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "curve_to_mesh" | "points_on_curve" | "project_3d" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1264,6 +1264,22 @@ pub static OPS: &[OpInfo] = &[
                ends included, or one every Spacing from Start (the last at End or short of it). Each has an id, uv (u \
                from 0 to 1 along) and N and tangent along the line, so Instance on Points turns copies' +Z along it \
                (posts of a fence, lamps along a road).",
+    },
+    OpInfo {
+        name: "normals",
+        label: "Normals",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN],
+        params: &[
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("mode", "Mode", ParamKind::Choice(&["smooth", "flat", "by angle"]), "smooth"),
+            fixed!("angle", "Angle", ParamKind::Float { min: 0.0, max: 180.0 }, 30.0),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Sets the meshes' (Group's, or all) normals, which shading follows: smooth (each point the mean of the \
+               faces around it, across seams), flat (each face its own, faceted), or by angle (smooth where faces meet at \
+               less than Angle, sharp across harder edges: a cylinder's side smooth and its caps crisp).",
     },
     // Fit Plane (geo_fit.rs; Dev1).
     OpInfo {
@@ -2490,6 +2506,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "points_from_geo" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_mesh::points_from_geo(params, input_scene(inputs))?)),
         "grid_points" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_mesh::grid_points(params, input_scene(inputs))?)),
         "line_points" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_mesh::line_points(params, input_scene(inputs))?)),
+        "normals" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_mesh::normals(params, input_scene(inputs))?)),
         "fit_plane" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_fit::fit_plane(params, input_scene(inputs), inputs.get(1).copied().flatten())?)),
         "scatter" => {
             let image = inputs.get(1).copied().flatten().filter(|i| i.scene.is_none());
