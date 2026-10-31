@@ -98,7 +98,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "points_from_geo" | "grid_points" | "line_points" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1202,6 +1202,66 @@ pub static OPS: &[OpInfo] = &[
                had (Missing keep) or get 0, and Falloff linear or smooth fades the copy toward what was there across the \
                radius. Paint colors on a coarse set and carry them to a dense one, or give scattered points the nearest \
                tracker point's attributes.",
+    },
+    // Point and mesh nodes (geo_mesh.rs; Dev1).
+    OpInfo {
+        name: "points_from_geo",
+        label: "Points from Geo",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN],
+        params: &[
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("from", "From", ParamKind::Choice(&["vertices", "face centers"]), "vertices"),
+            fixed!("merge_shared", "Merge shared", ParamKind::Bool, true),
+            fixed!("keep_meshes", "Keep meshes", ParamKind::Bool, false),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Turns the scene's meshes (Group's, or all) into point sets: a point at each vertex (Merge shared: one \
+               where several meet, as at a cube's corners, its N their mean) or at each face's center (N its normal). \
+               The points carry the vertices' attributes (faces: the face's, and its corners' averaged), N, uv and an \
+               id, and keep the mesh's place. The meshes go unless Keep meshes is on. Instance on Points can then put \
+               things at a model's corners or on its faces.",
+    },
+    OpInfo {
+        name: "grid_points",
+        label: "Grid Points",
+        category: Category::Scene,
+        inputs: &[scene_in("scene")],
+        params: &[
+            p!("size", "Size", ParamKind::Vec2, [4.0, 4.0]),
+            fixed!("count", "Count", ParamKind::Vec2, [10.0, 10.0]),
+            fixed!("plane", "Plane", ParamKind::Choice(&["xz", "xy", "yz"]), "xz"),
+            p!("center", "Center", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+            p!("rotate", "Rotate", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+            p!("jitter", "Jitter", ParamKind::Float { min: 0.0, max: 1.0 }, 0.0),
+            fixed!("seed", "Seed", ParamKind::Int { min: 0, max: 1_000_000 }, 0),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "A grid of points (a point set, added to the scene it's given): Count across a Size rectangle, edges \
+               included, in Plane (xz: on the ground), placed by Center and Rotate. Jitter moves each within its cell \
+               (the same for a Seed). Each point has an id from its cell (so ids stay put when the grid grows), N (the \
+               plane's normal) and uv (0 to 1 across). For arrays of copies with Instance on Points.",
+    },
+    OpInfo {
+        name: "line_points",
+        label: "Line Points",
+        category: Category::Scene,
+        inputs: &[scene_in("scene")],
+        params: &[
+            p!("start", "Start", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+            p!("end", "End", ParamKind::Vec3, [1.0, 0.0, 0.0]),
+            fixed!("mode", "By", ParamKind::Choice(&["count", "spacing"]), "count"),
+            fixed!("count", "Count", ParamKind::Int { min: 1, max: 5_000_000 }, 10),
+            p!("spacing", "Spacing", ParamKind::Float { min: 0.001, max: 100000.0 }, 0.5),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Points along a line (a point set, added to the scene it's given) from Start to End: Count of them, both \
+               ends included, or one every Spacing from Start (the last at End or short of it). Each has an id, uv (u \
+               from 0 to 1 along) and N and tangent along the line, so Instance on Points turns copies' +Z along it \
+               (posts of a fence, lamps along a road).",
     },
     // Fit Plane (geo_fit.rs; Dev1).
     OpInfo {
@@ -2336,6 +2396,9 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "attribute_transfer" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_attr::attribute_transfer(params, input_scene(inputs), inputs.get(1).copied().flatten().and_then(|i| i.scene.as_deref()))?)),
         "falloff" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_attr::falloff(params, input_scene(inputs), inputs.get(1).copied().flatten().and_then(|i| i.scene.as_deref()))?)),
         "attribute_noise" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_attr::attribute_noise(params, input_scene(inputs))?)),
+        "points_from_geo" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_mesh::points_from_geo(params, input_scene(inputs))?)),
+        "grid_points" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_mesh::grid_points(params, input_scene(inputs))?)),
+        "line_points" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_mesh::line_points(params, input_scene(inputs))?)),
         "fit_plane" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_fit::fit_plane(params, input_scene(inputs), inputs.get(1).copied().flatten())?)),
         "scatter" => {
             let image = inputs.get(1).copied().flatten().filter(|i| i.scene.is_none());

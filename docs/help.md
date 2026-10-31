@@ -395,6 +395,9 @@ selected object.
   it's dark. Raising the density or painting the mask keeps the points
   already there where they are, so what's placed on them doesn't jump.
   Min distance spreads them evenly; Seed gives another arrangement.
+  **Points from Geo**, **Grid Points** and **Line Points** make points to
+  put copies on: a model's corners or faces, a jittered grid, a row along
+  a line.
   **Delete Geo** removes points, faces or instances inside or outside a
   box or sphere you place in the 3D view (G moves it, S sizes it), or
   where an expression is true: `@P.y < 0` drops everything below the

@@ -37,6 +37,11 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.28, P2 rest: Points from Geo, Grid / Line Points** (Dev1):
+  `src/geo_mesh.rs` (`weld()` by position, for the mesh ops too). ops.rs
+  split from Dev2's Curve to Mesh block by the Supervisor. Next (Dev1):
+  Normals, Subdivide, Displace, Extrude, Write Geo (+ Read Geo reading
+  `_NAME` / COLOR_0 back).
 - **0.13.27, P6 part 1: particles <-> points** (Dev2):
   `src/geo_particles.rs` (Particles to Points); `particles.rs`
   `Shape::Points(Arc<PointSource>)`, `Emitter.each_once`,

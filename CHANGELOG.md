@@ -17,6 +17,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.28 — 2026-10-31
+
+- Geometry: **Points from Geo** turns meshes into points (at their
+  corners, one where faces meet, or their faces' centers, with normals,
+  uvs and attributes); **Grid Points** makes a grid of points (jittered
+  within cells, ids that stay put as it grows); **Line Points** puts
+  points along a line, facing along it. Instance on Points can put copies
+  on any of them.
+
 ## 0.13.27 — 2026-10-31
 
 - New **Particles to Points** node: a particle stream's particles at the
