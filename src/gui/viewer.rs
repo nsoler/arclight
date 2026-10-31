@@ -98,6 +98,8 @@ pub struct Viewer {
     pub viewport3d: crate::viewport3d::Viewport3d,
     /// G / R / S, or a gizmo drag, in progress in the 3D view.
     transforming: Option<Transforming>,
+    /// G / R / S on a Curve's picked points in progress.
+    points_transforming: Option<gizmo3d::PointsTransforming>,
     /// The 3D view's gizmo (toolbar tools) and axes (Global / Local).
     pub tool: Tool,
     pub space: Space,
@@ -159,6 +161,7 @@ impl Default for Viewer {
             sheet: false,
             viewport3d: Default::default(),
             transforming: None,
+            points_transforming: None,
             tool: Tool::default(),
             space: Space::default(),
             dragged: None,
@@ -201,6 +204,10 @@ impl Viewer {
 
     /// Delete the selected overlay vertices, if any (see [`Overlays::delete_points`]).
     pub fn delete_points(&mut self, doc: &mut Doc) -> bool {
+        // (In 3D: a Curve's picked points.)
+        if self.mode3d && self.viewport3d.delete_curve_points(doc) {
+            return true;
+        }
         self.overlays.delete_points(doc)
     }
 
@@ -227,7 +234,7 @@ impl Viewer {
     /// G / R / S is running: it takes the keys and the pointer, and its
     /// edits are one undo step.
     pub fn is_transforming(&self) -> bool {
-        self.transforming.is_some()
+        self.transforming.is_some() || self.points_transforming.is_some()
     }
 
     /// G / R / S over the 3D view (Blender's keys; see `gizmo3d`), each
@@ -236,6 +243,18 @@ impl Viewer {
     /// keys first; [`Viewer::transform_overlay`] draws the header after.
     fn transform_keys(&mut self, ui: &mut egui::Ui, resp: &egui::Response, doc: &mut Doc, frame: i64) {
         let view = self.viewport3d.projector();
+        if let Some(t) = &mut self.points_transforming {
+            let input = ui.input_mut(|i| gizmo3d::Input::take(i, false));
+            let outcome = match &view {
+                Some(v) => t.step(&input, v, doc),
+                None => gizmo3d::Outcome::Cancelled,
+            };
+            if outcome != gizmo3d::Outcome::Going {
+                self.points_transforming = None;
+            }
+            ui.ctx().request_repaint();
+            return;
+        }
         if let Some(t) = &mut self.transforming {
             let by_drag = t.by_drag;
             let input = ui.input_mut(|i| gizmo3d::Input::take(i, by_drag));
@@ -264,7 +283,13 @@ impl Viewer {
             if let Some((mode, reset)) = pressed {
                 let now = ui.input(|i| i.time);
                 let selection = doc.selection();
-                let result = if selection.is_empty() {
+                // A Curve's picked points: they move, not the curve.
+                let curve = if reset || self.viewport3d.curve_points.is_empty() { None } else { self.viewport3d.edited_curve(doc, frame) };
+                let result = if let (Some((node, world, _, _)), Some(at)) = (curve, resp.hover_pos()) {
+                    gizmo3d::PointsTransforming::start(doc, &node, &self.viewport3d.curve_points.clone(), &world, mode, at, frame).map(|t| {
+                        self.points_transforming = Some(t);
+                    })
+                } else if selection.is_empty() {
                     Err(format!("Select an object to {} it", mode.name().to_lowercase()))
                 } else if reset {
                     // Each that can be; the first refusal if none could.
@@ -380,8 +405,13 @@ impl Viewer {
     /// left), over the 3D view.
     fn transform_overlay(&mut self, ui: &egui::Ui, rect: Rect) {
         let painter = ui.painter_at(rect);
-        if let Some(t) = &self.transforming {
-            let text = format!("{}   ·   X / Y / Z axis, ⇧ to exclude, type a value, Ctrl snaps · Enter or click: done · Esc or right-click: cancel", t.gesture.describe(&t.now));
+        let header = match (&self.transforming, &self.points_transforming) {
+            (Some(t), _) => Some(t.gesture.describe(&t.now)),
+            (_, Some(t)) => Some(format!("{} {} point{}{}", t.gesture.mode.name(), t.which.len(), if t.which.len() == 1 { "" } else { "s" }, t.gesture.typed().map_or_else(String::new, |v| format!("  {v}  (typed)")))),
+            _ => None,
+        };
+        if let Some(h) = header {
+            let text = format!("{h}   ·   X / Y / Z axis, ⇧ to exclude, type a value, Ctrl snaps · Enter or click: done · Esc or right-click: cancel");
             let pos = rect.left_top() + Vec2::new(8.0, 8.0);
             let galley = painter.layout_no_wrap(text, FontId::proportional(13.0), Color32::from_gray(235));
             painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand(4.0), 3.0, Color32::from_black_alpha(170));
@@ -1151,6 +1181,63 @@ mod tests {
         doc.clear_selection();
         frame(&mut v, &mut doc, vec![key(egui::Key::S, egui::Modifiers::NONE)]);
         assert_eq!(v.tool, Tool::All);
+    }
+
+    /// G / R / S with some of a Curve's points picked move, turn or scale
+    /// those points (about their middle), not the curve; Esc puts them back.
+    #[test]
+    fn g_r_s_on_a_curves_picked_points() {
+        use crate::viewport3d::ViewCam;
+        use arclight::ops::geo_curves::controls;
+        let graph: Graph = serde_json::from_value(serde_json::json!({ "nodes": [
+            { "id": "road", "op": "curve", "params": { "kind": "polyline", "points": [-1, 0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0, 0,  1, 0, 0, 0, 0, 0, 0, 0, 0] } },
+        ] }))
+        .unwrap();
+        let mut doc = Doc::new(graph.clone(), None);
+        doc.select_only("road");
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let mut eval = arclight::graph::Evaluator::new();
+        let scene = crate::worker::scene_of(&mut eval, &graph, "road", 1).unwrap();
+        let mut v = Viewer::default();
+        v.viewport3d.show_for_test(scene, None, ViewCam::default().projector(rect));
+        assert!(v.viewport3d.edited_curve(&doc, 1).is_some());
+        let ctx = egui::Context::default();
+        let key = |key: egui::Key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        let frame = |v: &mut Viewer, doc: &mut Doc, events: Vec<egui::Event>| {
+            let mut events = events;
+            events.insert(0, egui::Event::PointerMoved(Pos2::new(300.0, 200.0)));
+            let raw = egui::RawInput { screen_rect: Some(rect), events, ..Default::default() };
+            ctx.run_ui(raw, |ui| {
+                let resp = ui.allocate_rect(rect, egui::Sense::click_and_drag());
+                v.transform_keys(ui, &resp, doc, 1);
+            })
+            .drop_without_applying_deltas();
+        };
+        let xs = |doc: &Doc| controls(&doc.param("road", "points")).iter().map(|c| c.at.x).collect::<Vec<f64>>();
+        frame(&mut v, &mut doc, vec![]);
+        // G X 2 Enter on the middle point: it alone moves 2 along X.
+        v.viewport3d.curve_points = vec![1];
+        frame(&mut v, &mut doc, vec![key(egui::Key::G)]);
+        assert!(v.is_transforming());
+        frame(&mut v, &mut doc, vec![key(egui::Key::X), key(egui::Key::Num2), key(egui::Key::Enter)]);
+        assert!(!v.is_transforming());
+        assert_eq!(xs(&doc), vec![-1.0, 2.0, 1.0]);
+        // S 2 on the outer two: twice as far from their middle (0).
+        v.viewport3d.curve_points = vec![0, 2];
+        frame(&mut v, &mut doc, vec![key(egui::Key::S)]);
+        frame(&mut v, &mut doc, vec![key(egui::Key::Num2), key(egui::Key::Enter)]);
+        assert_eq!(xs(&doc), vec![-2.0, 2.0, 2.0]);
+        // Esc: as before.
+        frame(&mut v, &mut doc, vec![key(egui::Key::G)]);
+        frame(&mut v, &mut doc, vec![key(egui::Key::X), key(egui::Key::Num5)]);
+        frame(&mut v, &mut doc, vec![key(egui::Key::Escape)]);
+        assert_eq!(xs(&doc), vec![-2.0, 2.0, 2.0]);
+        // Nothing picked: the curve itself (its translate) moves.
+        v.viewport3d.curve_points.clear();
+        frame(&mut v, &mut doc, vec![key(egui::Key::G)]);
+        frame(&mut v, &mut doc, vec![key(egui::Key::Y), key(egui::Key::Num1), key(egui::Key::Enter)]);
+        assert_eq!(doc.param("road", "translate"), serde_json::json!([0.0, 1.0, 0.0]));
+        assert_eq!(xs(&doc), vec![-2.0, 2.0, 2.0]);
     }
 
     #[test]

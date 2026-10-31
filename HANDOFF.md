@@ -37,6 +37,14 @@ done), `docs/help.md` (the in-app help) and
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
   Scanline Render ignores point sets and curves.
+- **0.13.26, P5 curves 2: editing in the 3D view** (Dev2):
+  `gizmo3d::PointsTransforming` (G / R / S on picked control points about
+  their median, handles turned / scaled with them, one `points` edit,
+  keyed when animated); viewport3d draws points / Bezier handles, picks,
+  drags, Ctrl/Cmd-click adds or inserts; viewer routes G/R/S and Delete to
+  picked points first (`delete_points`, two stay). Pointer drags of points
+  and handles aren't simulated in tests (same paths as gestures). **Not
+  tried by hand yet.**
 - **0.13.25, P5 curves 1: Curve + Resample** (Dev2): `src/geo_curves.rs`
   (a module of ops.rs via `#[path]`): points stride 9 (position, handle
   in, handle out), polyline / smooth (Catmull-Rom) / bezier, closed,

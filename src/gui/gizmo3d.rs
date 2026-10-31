@@ -825,6 +825,87 @@ impl Transforming {
     }
 }
 
+/// G / R / S (or a drag) on some of a Curve node's control points: the
+/// gesture's change applied to each selected point where it is in the
+/// scene (and to its handles' directions), written back to the node's
+/// `points` (keyed at the frame when they're animated), one undo step.
+pub struct PointsTransforming {
+    pub node: String,
+    pub gesture: Gesture,
+    /// The points as stored when it started (None: unset), and as they
+    /// were at the frame.
+    stored: Option<Value>,
+    start: Vec<arclight::ops::geo_curves::Control>,
+    /// The points it moves (by number), and the curve's place in the scene.
+    pub which: Vec<usize>,
+    world: Mat4,
+    frame: i64,
+    /// Started by dragging a point: releasing the button confirms.
+    pub by_drag: bool,
+}
+
+impl PointsTransforming {
+    /// Start `mode` on points `which` of Curve `node` (placed by `world`),
+    /// the pointer at `mouse`, about their median. Err: why not.
+    pub fn start(doc: &Doc, node: &str, which: &[usize], world: &Mat4, mode: Mode, mouse: Pos2, frame: i64) -> Result<PointsTransforming, String> {
+        let raw = doc.param(node, "points");
+        if arclight::link::is_link(&raw) {
+            return Err(format!("{node}'s points are linked: Unlink them in Properties to move them here"));
+        }
+        let start = arclight::ops::geo_curves::controls(&doc.param_at(node, "points", frame));
+        let which: Vec<usize> = which.iter().copied().filter(|&i| i < start.len()).collect();
+        if which.is_empty() {
+            return Err("Select a point of the curve first".into());
+        }
+        let pivot = which.iter().map(|&i| geom::transform_point(world, &start[i].at)).sum::<Vec3>() / which.len() as f64;
+        let gesture = Gesture::new(mode, Trs::default(), &Mat4::identity(), mouse).about(pivot);
+        let stored = doc.node(node).and_then(|n| n.params.get("points").cloned());
+        Ok(PointsTransforming { node: node.into(), gesture, stored, start, which, world: *world, frame, by_drag: false })
+    }
+
+    /// The points with `c` done to the selected ones about `pivot`.
+    fn changed(&self, c: &Change, pivot: Vec3) -> Vec<arclight::ops::geo_curves::Control> {
+        let inv = self.world.try_inverse().unwrap_or_else(Mat4::identity);
+        let lin = self.world.fixed_view::<3, 3>(0, 0).into_owned();
+        let lin_inv = inv.fixed_view::<3, 3>(0, 0).into_owned();
+        // A direction (a handle) through the change, in the curve's space.
+        let turn_dir = |h: Vec3, f: &dyn Fn(Vec3) -> Vec3| lin_inv * f(lin * h);
+        let mut out = self.start.clone();
+        for &i in &self.which {
+            let p = geom::transform_point(&self.world, &self.start[i].at);
+            let (to, dir): (Vec3, Box<dyn Fn(Vec3) -> Vec3>) = match *c {
+                Change::Move(d) => (p + d, Box::new(|v| v)),
+                Change::Turn(q, _) => (pivot + q * (p - pivot), Box::new(move |v| q * v)),
+                Change::Scale { factor, on, axes } => {
+                    let stretch = move |v: Vec3| v + (0..3).filter(|&k| on[k]).map(|k| axes[k] * (axes[k].dot(&v) * (factor - 1.0))).sum::<Vec3>();
+                    (pivot + stretch(p - pivot), Box::new(stretch))
+                }
+            };
+            out[i].at = geom::transform_point(&inv, &to);
+            out[i].before = turn_dir(self.start[i].before, &dir);
+            out[i].after = turn_dir(self.start[i].after, &dir);
+        }
+        out
+    }
+
+    /// One frame: handle `input`, write the points. Done or Cancelled ends
+    /// it.
+    pub fn step(&mut self, input: &Input, view: &dyn View, doc: &mut Doc) -> Outcome {
+        for k in &input.keys {
+            self.gesture.key(*k);
+        }
+        if input.cancel {
+            put_back(doc, &self.node, "points", &self.stored);
+            return Outcome::Cancelled;
+        }
+        let m = input.mouse.unwrap_or(self.gesture.from);
+        let c = self.gesture.change(view, m, input.snap);
+        let points = self.changed(&c, self.gesture.origin());
+        doc.edit_param(&self.node, "points", self.frame, arclight::ops::geo_curves::points_value(&points));
+        if input.confirm { Outcome::Done } else { Outcome::Going }
+    }
+}
+
 // ---- Gizmos ----
 
 /// Which gizmo the viewport shows on the selected object (the viewer

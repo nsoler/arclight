@@ -432,7 +432,15 @@ selected object.
   knows its direction (tangent, and N), how far along it is (u) and an up
   direction that doesn't twist, so copies set along it with Instance on
   Points stand upright and face along the curve. **Resample** spaces a
-  curve's points evenly, by count or by length.
+  curve's points evenly, by count or by length. With a Curve selected,
+  its points show as squares in the 3D view. Click one to pick it
+  (Shift-click for more), drag it, or press G, R or S to move, turn or
+  scale the picked points about their middle (with nothing picked, G, R
+  and S move the whole curve). A Bezier curve's picked points show their
+  handles: drag one to shape the curve, holding Alt to move it alone.
+  Ctrl-click (Cmd on a Mac) adds a point after the picked one, on
+  whatever is under the pointer; Ctrl-click on the curve itself inserts a
+  point there. Delete removes the picked points.
 - **Example:** **Help ▸ Examples ▸ Geometry nodes** (or File ▸ Open
   `examples/geo-scatter.json`) opens it as a new project: a masked Scatter
   of rocks and bush cards, sized and colored by Attribute Set and copied

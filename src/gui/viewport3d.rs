@@ -38,6 +38,7 @@ use arclight::particles::{Effect, Particle, Shape};
 use arclight::image::{Image, Size};
 use arclight::render3d::Preview;
 use arclight::scene::Scene;
+use arclight::ops::geo_curves::{self, Control, Kind};
 use arclight::shade::{Light, LightKind};
 use eframe::egui::{self, Align2, Color32, FontId, PointerButton, Pos2, Rect, Response, Sense, Stroke, TextureHandle, TextureOptions, Vec2};
 use nalgebra::Rotation3;
@@ -1205,6 +1206,15 @@ pub struct Viewport3d {
     /// pointer.
     light_drag: Option<(String, LightHandle)>,
     light_hot: Option<LightHandle>,
+    /// The selected Curve's control points picked (by number), and the
+    /// Curve they're of; a drag of some of them, or of a handle (point,
+    /// after or before, Alt: broken).
+    pub curve_points: Vec<usize>,
+    curve_of: Option<String>,
+    /// The frame last shown.
+    frame: i64,
+    curve_drag: Option<crate::gizmo3d::PointsTransforming>,
+    handle_drag: Option<(String, usize, bool, bool)>,
     /// How the mouse and trackpad navigate (Preferences ▸ 3D view).
     pub nav: Navigation,
     /// When a wheel last scrolled in line steps (seconds; see
@@ -1286,6 +1296,11 @@ impl Default for Viewport3d {
             format: Size { width: 1920, height: 1080 },
             light_drag: None,
             light_hot: None,
+            curve_points: Vec::new(),
+            curve_of: None,
+            frame: 0,
+            curve_drag: None,
+            handle_drag: None,
             nav: Navigation::default(),
             wheel_at: f64::NEG_INFINITY,
             pivot: None,
@@ -1334,6 +1349,8 @@ const MESH: Color32 = Color32::from_rgb(150, 170, 190);
 /// Meshes with more edges than this are outlined by their box.
 const MAX_EDGES: usize = 40_000;
 const POINT: Color32 = Color32::from_rgb(90, 175, 225);
+/// A Bezier curve's handles in the 3D view.
+const HANDLE_LINE: Color32 = Color32::from_rgb(200, 200, 120);
 /// A point set's points without a color (Cd), and curves.
 const GEO_POINT: Color32 = Color32::from_gray(175);
 const CURVE: Color32 = Color32::from_rgb(120, 200, 150);
@@ -1611,7 +1628,8 @@ impl Viewport3d {
             self.frame_all();
         }
         self.save(doc);
-        let on_handle = !blocked && self.pie.is_none() && self.light_handle_input(ui, resp, doc, frame, &p);
+        self.frame = frame;
+        let on_handle = !blocked && self.pie.is_none() && (self.light_handle_input(ui, resp, doc, frame, &p) || self.curve_input(ui, resp, doc, frame, &p));
         if self.pie.is_some() {
             self.pie_ui(ui, &painter, blocked);
         } else if !blocked && !on_handle {
@@ -1985,6 +2003,213 @@ impl Viewport3d {
         true
     }
 
+    /// The Curve being edited: the primary selection, a Curve drawn from
+    /// its own points; its node, place in the scene, points at `frame` and
+    /// kind. (A change of selection forgets the points picked.)
+    pub fn edited_curve(&mut self, doc: &Doc, frame: i64) -> Option<(String, Mat4, Vec<Control>, Kind)> {
+        let node = doc.selection().last().cloned();
+        if node != self.curve_of {
+            self.curve_points.clear();
+            self.curve_of = node.clone();
+        }
+        let node = node?;
+        let n = doc.node(&node)?;
+        if n.op != "curve" || n.params["source"].as_str() == Some("node path") {
+            return None;
+        }
+        let world = self.object_world(&node)?;
+        let points = geo_curves::controls(&doc.param_at(&node, "points", frame));
+        let kind = Kind::from_name(doc.param_at(&node, "kind", frame).as_str().unwrap_or("smooth"));
+        Some((node, world, points, kind))
+    }
+
+    /// Where a Curve's points and (the picked ones', for a Bezier) handles
+    /// are on screen: (point, handle: None, Some(after?)), position.
+    fn curve_handles(&self, world: &Mat4, points: &[Control], kind: Kind, p: &Projector) -> Vec<((usize, Option<bool>), Pos2)> {
+        let mut out = Vec::new();
+        for (i, c) in points.iter().enumerate() {
+            let at = geom::transform_point(world, &c.at);
+            if let Some((s, _)) = p.project(at) {
+                out.push(((i, None), s));
+            }
+            if kind == Kind::Bezier && self.curve_points.contains(&i) {
+                for (after, h) in [(false, c.before), (true, c.after)] {
+                    if let Some((s, _)) = p.project(geom::transform_point(world, &(c.at + h))) {
+                        out.push(((i, Some(after)), s));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Picking and dragging the edited Curve's points and handles; Ctrl /
+    /// Cmd-click adds a point (on a segment: inserts it there). True while
+    /// one is under the pointer, dragged, or a point is being added, so
+    /// the click doesn't also select.
+    fn curve_input(&mut self, ui: &egui::Ui, resp: &Response, doc: &mut Doc, frame: i64, p: &Projector) -> bool {
+        // A drag going on.
+        if let Some(t) = &mut self.curve_drag {
+            let input = crate::gizmo3d::Input { mouse: ui.input(|i| i.pointer.hover_pos()), confirm: !ui.input(|i| i.pointer.primary_down()), snap: ui.input(|i| i.modifiers.ctrl), ..Default::default() };
+            if t.step(&input, p, doc) != crate::gizmo3d::Outcome::Going {
+                self.curve_drag = None;
+            }
+            return true;
+        }
+        if let Some((node, i, after, broken)) = self.handle_drag.clone() {
+            if !ui.input(|i| i.pointer.primary_down()) {
+                self.handle_drag = None;
+                return true;
+            }
+            let (Some(world), Some(at)) = (self.object_world(&node), ui.input(|i| i.pointer.hover_pos())) else { return true };
+            let mut points = geo_curves::controls(&doc.param_at(&node, "points", frame));
+            let Some(c) = points.get(i).copied() else { return true };
+            // Where the pointer is on the plane through the handle's end,
+            // facing the view.
+            let end = geom::transform_point(&world, &(c.at + if after { c.after } else { c.before }));
+            let (o, d) = p.ray(at);
+            let n = p.view_dir();
+            let denom = d.dot(&n);
+            if denom.abs() < 1e-12 {
+                return true;
+            }
+            let hit = o + d * ((end - o).dot(&n) / denom);
+            let inv = world.try_inverse().unwrap_or_else(Mat4::identity);
+            let h = geom::transform_point(&inv, &hit) - c.at;
+            let other = if after { c.before } else { c.after };
+            // The other handle opposite it (its own length), unless broken.
+            let opposite = if broken { other } else { -h.try_normalize(1e-12).unwrap_or_default() * other.norm() };
+            points[i] = if after { Control { after: h, before: opposite, ..c } } else { Control { before: h, after: opposite, ..c } };
+            doc.edit_param(&node, "points", frame, geo_curves::points_value(&points));
+            return true;
+        }
+        let Some((node, world, points, kind)) = self.edited_curve(doc, frame) else { return false };
+        let Some(at) = resp.hover_pos() else { return false };
+        let (shift, alt, command) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt, i.modifiers.command || i.modifiers.ctrl));
+        let hot = self.curve_handles(&world, &points, kind, p).into_iter().map(|(h, s)| (h, s.distance(at))).filter(|(_, d)| *d <= HANDLE_PICK).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(h, _)| h);
+        let pressed = ui.input(|i| i.pointer.primary_pressed());
+        match hot {
+            Some((i, None)) if pressed => {
+                if shift {
+                    match self.curve_points.iter().position(|&k| k == i) {
+                        Some(k) => {
+                            self.curve_points.remove(k);
+                        }
+                        None => self.curve_points.push(i),
+                    }
+                } else if !self.curve_points.contains(&i) {
+                    self.curve_points = vec![i];
+                }
+                if self.curve_points.contains(&i) {
+                    match crate::gizmo3d::PointsTransforming::start(doc, &node, &self.curve_points, &world, crate::gizmo3d::Mode::Move, at, frame) {
+                        Ok(mut t) => {
+                            t.by_drag = true;
+                            self.curve_drag = Some(t);
+                        }
+                        Err(why) => self.message = Some(why),
+                    }
+                }
+                true
+            }
+            Some((i, Some(after))) if pressed => {
+                if arclight::link::is_link(&doc.param(&node, "points")) {
+                    self.message = Some(format!("{node}'s points are linked: Unlink them in Properties to change them here"));
+                } else {
+                    self.handle_drag = Some((node, i, after, alt));
+                }
+                true
+            }
+            Some(_) => true,
+            None if command => {
+                if resp.clicked_by(PointerButton::Primary) {
+                    self.add_curve_point(doc, frame, &node, &world, &points, kind, at, p);
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Add a point to Curve `node` where the pointer `at` is: on a segment
+    /// (within reach), between its two points; else after the picked
+    /// point (or the last), where the ray meets what's under it, or the
+    /// plane through that point facing the view.
+    #[allow(clippy::too_many_arguments)]
+    fn add_curve_point(&mut self, doc: &mut Doc, frame: i64, node: &str, world: &Mat4, points: &[Control], kind: Kind, at: Pos2, p: &Projector) {
+        if arclight::link::is_link(&doc.param(node, "points")) {
+            self.message = Some(format!("{node}'s points are linked: Unlink them in Properties to add to them"));
+            return;
+        }
+        let inv = world.try_inverse().unwrap_or_else(Mat4::identity);
+        let place = |i: usize| geom::transform_point(world, &points[i].at);
+        let closed = doc.param_at(node, "closed", frame).as_bool().unwrap_or(false);
+        let n = points.len();
+        let spans = if closed && n > 2 { n } else { n.saturating_sub(1) };
+        // On a segment: between its ends, where the pointer is along it.
+        let on_segment = (0..spans).filter_map(|i| {
+            let (a, b) = (place(i), place((i + 1) % n));
+            let (sa, sb) = p.segment(a, b)?;
+            let (off, t) = segment_distance(at, sa, sb);
+            (off <= LINE_PICK).then_some((off, i, a + (b - a) * t as f64))
+        });
+        let (after, world_at) = match on_segment.min_by(|x, y| x.0.total_cmp(&y.0)) {
+            Some((_, i, w)) => (i, w),
+            None => {
+                let after = self.curve_points.last().copied().filter(|&i| i < n).unwrap_or(n.saturating_sub(1));
+                let (o, d) = p.ray(at);
+                let anchor = if n > 0 { place(after) } else { geom::transform_point(world, &Vec3::zeros()) };
+                let on_surface = self.scene.as_deref().and_then(|s| {
+                    let meshes = s.meshes.iter().filter_map(|m| ray_mesh(m, &o, &d));
+                    meshes.min_by(f64::total_cmp)
+                });
+                let nrm = p.view_dir();
+                let t = on_surface.or_else(|| {
+                    let denom = d.dot(&nrm);
+                    (denom.abs() > 1e-12).then(|| (anchor - o).dot(&nrm) / denom)
+                });
+                let Some(t) = t.filter(|t| *t > 0.0) else { return };
+                (after, o + d * t)
+            }
+        };
+        let mut new = points.to_vec();
+        let k = (after + 1).min(n);
+        new.insert(k, Control { at: geom::transform_point(&inv, &world_at), before: Vec3::zeros(), after: Vec3::zeros() });
+        // A Bezier's new point gets smooth handles, then edits freely.
+        if kind == Kind::Bezier {
+            let hs = geo_curves::smooth_handles(&new.iter().map(|c| c.at).collect::<Vec<_>>(), closed);
+            (new[k].before, new[k].after) = hs[k];
+        }
+        doc.commit(false);
+        doc.edit_param(node, "points", frame, geo_curves::points_value(&new));
+        doc.commit(false);
+        self.curve_points = vec![k];
+    }
+
+    /// Delete the picked points of the edited Curve (at least two stay;
+    /// Delete or Backspace, through the viewer): true where it took the
+    /// key (so the node isn't deleted).
+    pub fn delete_curve_points(&mut self, doc: &mut Doc) -> bool {
+        let frame = self.frame;
+        let Some((node, _, points, _)) = self.edited_curve(doc, frame) else { return false };
+        if self.curve_points.is_empty() {
+            return false;
+        }
+        let kept: Vec<Control> = points.iter().enumerate().filter(|(i, _)| !self.curve_points.contains(i)).map(|(_, c)| *c).collect();
+        if kept.len() < 2 {
+            self.message = Some("A curve keeps two points at least".into());
+            return true;
+        }
+        if arclight::link::is_link(&doc.param(&node, "points")) {
+            self.message = Some(format!("{node}'s points are linked: Unlink them in Properties to delete them"));
+            return true;
+        }
+        doc.commit(false);
+        doc.edit_param(&node, "points", frame, geo_curves::points_value(&kept));
+        doc.commit(false);
+        self.curve_points.clear();
+        true
+    }
+
     /// Leave a look-through for the free camera, where that camera was.
     fn leave_camera(&mut self) {
         let Some(cam) = self.through_camera() else { return };
@@ -2329,6 +2554,27 @@ impl Viewport3d {
             if let Some((lo, hi)) = i.bounds() {
                 let corner = arclight::geo::corners(lo, hi);
                 BOX_EDGES.iter().for_each(|&(a, b)| line(corner[a], corner[b], stroke));
+            }
+        }
+        // The edited Curve's points (squares, the picked ones filled) and a
+        // Bezier's picked points' handles (lines to dots).
+        if let Some((_, world, points, kind)) = self.edited_curve(doc, frame) {
+            for (i, c) in points.iter().enumerate() {
+                let picked = self.curve_points.contains(&i);
+                let at = geom::transform_point(&world, &c.at);
+                if kind == Kind::Bezier && picked {
+                    for h in [c.before, c.after] {
+                        let end = geom::transform_point(&world, &(c.at + h));
+                        line(at, end, Stroke::new(1.2, HANDLE_LINE));
+                        if let Some((q, _)) = p.project(end) {
+                            painter.circle_filled(q, 3.5, HANDLE_LINE);
+                        }
+                    }
+                }
+                if let Some((q, _)) = p.project(at) {
+                    let r = Rect::from_center_size(q, Vec2::splat(7.0));
+                    painter.rect(r, 1.0, if picked { Color32::WHITE } else { SELECTED }, Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Outside);
+                }
             }
         }
         // Particle emitters, attractors, vortices and bounce planes; Splat
@@ -3159,6 +3405,56 @@ mod tests {
         let w = geo_dots(&s, &p, &none)[0].1;
         assert!(w > 2.0 && w < 8.0, "{w}: pscale seen at its depth");
         assert!(geo_dots(&s, &p, &|n: &str| n == "scatter").iter().all(|d| d.2 == SELECTED));
+    }
+
+    /// A Curve's points: added after the picked one (on the plane through
+    /// it facing the view), inserted on a segment, deleted (two stay); and
+    /// a Bezier's handles turn with their point.
+    #[test]
+    fn curve_points_are_added_inserted_deleted_and_turned() {
+        use arclight::graph::Graph;
+        use arclight::ops::geo_curves::controls;
+        let graph: Graph = serde_json::from_value(json!({ "nodes": [
+            { "id": "road", "op": "curve", "params": { "kind": "bezier", "points": [-2, 0, -8, 0, 0, 0, 0, 0, 0,  2, 0, -8, 0, 0, 0, 0, 0, 0] } },
+        ] }))
+        .unwrap();
+        let mut doc = Doc::new(graph.clone(), None);
+        doc.select_only("road");
+        let scene = crate::worker::scene_of(&mut arclight::graph::Evaluator::new(), &graph, "road", 1).unwrap();
+        let (_, p, _) = picking_scene();
+        let mut v = Viewport3d::default();
+        v.show_for_test(scene, None, p);
+        let (node, world, points, kind) = v.edited_curve(&doc, 1).unwrap();
+        assert_eq!((node.as_str(), points.len(), kind), ("road", 2, Kind::Bezier));
+        let at = |x: f64, y: f64, z: f64| p.project(Vec3::new(x, y, z)).unwrap().0;
+        // On the segment, in the middle: inserted between, with handles.
+        v.add_curve_point(&mut doc, 1, &node, &world, &points, kind, at(0.0, 0.0, -8.0), &p);
+        let now = controls(&doc.param("road", "points"));
+        assert_eq!(now.len(), 3);
+        assert!((now[1].at - Vec3::new(0.0, 0.0, -8.0)).norm() < 1e-6 && now[1].after.norm() > 0.0 && v.curve_points == vec![1]);
+        // Off it (above the last): after the last point picked, on the plane
+        // through it facing the view.
+        v.curve_points = vec![2];
+        v.add_curve_point(&mut doc, 1, &node, &world, &now, kind, at(2.0, 1.5, -8.0), &p);
+        let now = controls(&doc.param("road", "points"));
+        assert_eq!(now.len(), 4);
+        assert!((now[3].at - Vec3::new(2.0, 1.5, -8.0)).norm() < 1e-6, "{:?}", now[3].at);
+        // Deleted: the picked ones, but two stay.
+        v.curve_points = vec![1, 3];
+        assert!(v.delete_curve_points(&mut doc));
+        assert_eq!(controls(&doc.param("road", "points")).len(), 2);
+        v.curve_points = vec![0, 1];
+        assert!(v.delete_curve_points(&mut doc), "the key taken, with a message");
+        assert_eq!(controls(&doc.param("road", "points")).len(), 2);
+        // R Z 90 on a point with a handle along +X: the handle turns to +Y.
+        let pts = json!([0, 0, -8, -1, 0, 0, 1, 0, 0,  2, 0, -8, 0, 0, 0, 0, 0, 0]);
+        doc.edit_param("road", "points", 1, pts);
+        let mut t = crate::gizmo3d::PointsTransforming::start(&doc, "road", &[0], &world, crate::gizmo3d::Mode::Rotate, Pos2::new(400.0, 300.0), 1).unwrap();
+        let input = |keys: Vec<crate::gizmo3d::GestureKey>, confirm: bool| crate::gizmo3d::Input { mouse: Some(Pos2::new(400.0, 300.0)), keys, confirm, ..Default::default() };
+        use crate::gizmo3d::GestureKey::{Axis, Digit};
+        t.step(&input(vec![Axis(2, false), Digit('9'), Digit('0')], true), &p, &mut doc);
+        let c = controls(&doc.param("road", "points"))[0];
+        assert!((c.after - Vec3::y()).norm() < 1e-9 && (c.before + Vec3::y()).norm() < 1e-9 && (c.at - Vec3::new(0.0, 0.0, -8.0)).norm() < 1e-9, "{c:?}");
     }
 
     #[test]

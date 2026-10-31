@@ -175,7 +175,9 @@ number sets the amount exactly (`G X 2 Enter`, `R Z 90 Enter`,
 `S 0.5 Enter`; **-** negates, Backspace edits), **Ctrl** snaps (1 unit,
 15°, 0.1); **Enter** or a click confirms, **Esc** or a right-click
 cancels and puts everything back. **Alt + G / R / S** resets translate /
-rotate / scale. The viewer toolbar's **Select / Move / Rotate / Scale /
+rotate / scale. Curves: pick points (Shift for more), drag or G/R/S
+them, drag Bezier handles (Alt breaks), Ctrl/Cmd-click adds or inserts,
+Delete removes. The viewer toolbar's **Select / Move / Rotate / Scale /
 All** pick the gizmo on the selected object (**Move**, the default;
 **G / R / S** also pick Move / Rotate / Scale as they start, so the gizmo
 stays up for tweaks; **All** shows arrows, rings and cubes together): drag an arrow to move along

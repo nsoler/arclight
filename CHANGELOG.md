@@ -17,6 +17,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.26 — 2026-10-31
+
+- Curves are edited in the 3D view: select a Curve to see its points,
+  click or Shift-click to pick them, drag them or use G / R / S on them,
+  drag a Bezier point's handles (Alt to break them), Ctrl/Cmd-click to add
+  a point (on a segment: insert it), and Delete to remove the picked ones.
+
 ## 0.13.25 — 2026-10-31
 
 - New **Curve** node: a curve in 3D through its control points (polyline,
