@@ -160,7 +160,12 @@ a public release once tested.
 
 ## Later: 0.12.0
 
-- [ ] GPU acceleration (`wgpu` compute; CPU / rayon only today)
+- [ ] GPU acceleration (`wgpu`; CPU / rayon only today): phase 12,
+      0.12.x on `wip-ns-gpu`, plan `docs/gpu-plan.md` (G1–G7), approved
+      2026-10-30
+- [ ] Later (after GPU G3): a GPU-first, depth-aware **Defocus** node
+      (none exists today)
+- [ ] Not planned for now: particle simulation on the GPU
 - [ ] Tile-based / region-of-interest processing for very large images
 - [ ] Python plugins (custom nodes in Python)
 - [ ] Distro packages (deb / rpm / AUR) and signed, notarized macOS
