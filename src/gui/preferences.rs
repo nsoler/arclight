@@ -317,6 +317,9 @@ fn view3d(ui: &mut egui::Ui, p: &mut View3dPrefs) {
         ui.label("Mouse");
         ui.checkbox(&mut p.emulate_three_button, "Emulate 3-button mouse").on_hover_text("Alt + left-drag orbits, pans (⇧) and zooms (⌃), as the middle button does");
         ui.end_row();
+        ui.label("Orbit");
+        ui.checkbox(&mut p.orbit_selection, "Around the selection").on_hover_text("Orbiting turns about the selected objects, so they stay in place on screen; else about the middle of the view");
+        ui.end_row();
         ui.label("Two-finger scroll");
         ui.horizontal(|ui| {
             ui.radio_value(&mut p.trackpad, "orbit".to_string(), "Orbits").on_hover_text("⇧ pans");

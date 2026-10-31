@@ -48,6 +48,9 @@ const FOCAL: f64 = 35.0;
 const FILM: f64 = 36.0;
 /// Degrees of orbit per pixel dragged.
 const ORBIT_SPEED: f64 = 0.35;
+/// How long (seconds) after a wheel's line step fine scroll steps are
+/// still taken as the wheel (see [`Navigation::scroll`]).
+const WHEEL_SPELL: f64 = 1.0;
 /// Pitch is kept this far short of straight up or down while orbiting.
 const PITCH_LIMIT: f64 = 89.5;
 
@@ -145,6 +148,16 @@ impl ViewCam {
             self.ortho = false;
             self.auto_ortho = false;
         }
+    }
+
+    /// Orbit as [`ViewCam::orbit`], but about scene point `pivot` (the
+    /// selection): the camera swings round it rigidly, so what's selected
+    /// stays where it is on screen instead of sweeping across it.
+    pub fn orbit_about(&mut self, pivot: Vec3, dx: f64, dy: f64) {
+        let before = self.rotation();
+        self.orbit(dx, dy);
+        let turn = self.rotation() * before.inverse();
+        self.center = (pivot + turn * (self.center() - pivot)).into();
     }
 
     /// Slide the view by a drag of `d` pixels: what's at the orbit center
@@ -1035,11 +1048,13 @@ pub struct Navigation {
     pub zoom_to_pointer: bool,
     /// The wheel, ⌃ + scroll and ⌃ + middle-drag zoom the other way.
     pub invert_zoom: bool,
+    /// Orbit about the selected objects (else about the view's middle).
+    pub orbit_selection: bool,
 }
 
 impl Default for Navigation {
     fn default() -> Self {
-        Navigation { emulate_three_button: false, trackpad_pans: false, zoom_to_pointer: true, invert_zoom: false }
+        Navigation { emulate_three_button: false, trackpad_pans: false, zoom_to_pointer: true, invert_zoom: false, orbit_selection: true }
     }
 }
 
@@ -1055,13 +1070,15 @@ enum Scroll {
 impl Navigation {
     /// What a scroll of `delta` does: a wheel zooms; trackpad fingers (and
     /// their momentum) orbit, ⇧ pan, ⌃ zoom (orbit and pan swapped by
-    /// `trackpad_pans`). When the platform doesn't say, line steps mean a
-    /// wheel.
-    fn scroll(&self, unit: egui::MouseWheelUnit, delta: Vec2, source: egui::MouseWheelSource, mods: egui::Modifiers) -> Scroll {
+    /// `trackpad_pans`). When the platform doesn't say (Linux), line steps
+    /// mean a wheel, and so do fine steps soon after one (`wheel_recent`):
+    /// smooth-scrolling wheels send part-notches as fine steps, which
+    /// would otherwise orbit.
+    fn scroll(&self, unit: egui::MouseWheelUnit, delta: Vec2, source: egui::MouseWheelSource, mods: egui::Modifiers, wheel_recent: bool) -> Scroll {
         let wheel = match source {
             egui::MouseWheelSource::Wheel => true,
             egui::MouseWheelSource::Trackpad | egui::MouseWheelSource::Momentum => false,
-            egui::MouseWheelSource::Unknown => unit != egui::MouseWheelUnit::Point,
+            egui::MouseWheelSource::Unknown => unit != egui::MouseWheelUnit::Point || wheel_recent,
         };
         let turn = if self.invert_zoom { -1.0 } else { 1.0 };
         if wheel {
@@ -1124,6 +1141,12 @@ pub struct Viewport3d {
     light_hot: Option<LightHandle>,
     /// How the mouse and trackpad navigate (Preferences ▸ 3D view).
     pub nav: Navigation,
+    /// When a wheel last scrolled in line steps (seconds; see
+    /// [`Navigation::scroll`]).
+    wheel_at: f64,
+    /// What orbiting turns about this frame: the selection, when
+    /// `nav.orbit_selection` and it's in the view.
+    pivot: Option<Vec3>,
     /// The view a project without a saved one starts with (the saved view
     /// preferences), and the Solid / Lit for one that never chose.
     pub new_view: ViewCam,
@@ -1191,6 +1214,8 @@ impl Default for Viewport3d {
             light_drag: None,
             light_hot: None,
             nav: Navigation::default(),
+            wheel_at: f64::NEG_INFINITY,
+            pivot: None,
             new_view: ViewCam::default(),
             default_shading: None,
             worker: None,
@@ -1473,6 +1498,8 @@ impl Viewport3d {
         self.format = doc.graph.project.format;
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, Color32::from_gray(38));
+        let placed: Vec<Mat4> = doc.selection().iter().filter_map(|n| self.object_world(n)).collect();
+        self.pivot = self.nav.orbit_selection.then(|| crate::gizmo3d::median(&placed)).flatten();
         self.navigate(ui, rect, resp, blocked);
         if !blocked && resp.hovered() {
             self.keys(ui, doc);
@@ -1533,16 +1560,20 @@ impl Viewport3d {
                 self.view.zoom_at(self.nav.drag_zoom(d.y), at, &p);
             } else {
                 self.leave_camera();
-                self.view.orbit(d.x as f64, d.y as f64);
+                self.orbit(d.x as f64, d.y as f64);
             }
         }
         if !resp.hovered() {
             return;
         }
         let at = self.nav.zoom_toward(ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.center()), rect);
+        let now = ui.input(|i| i.time);
         for e in events {
             if let egui::Event::MouseWheel { unit, delta, source, modifiers, .. } = e {
-                match self.nav.scroll(unit, delta, source, modifiers) {
+                if unit != egui::MouseWheelUnit::Point && source == egui::MouseWheelSource::Unknown {
+                    self.wheel_at = now;
+                }
+                match self.nav.scroll(unit, delta, source, modifiers, now - self.wheel_at < WHEEL_SPELL) {
                     Scroll::Zoom(f) => self.view.zoom_at(f, at, &p),
                     Scroll::Pan(d) => {
                         self.leave_camera();
@@ -1550,7 +1581,7 @@ impl Viewport3d {
                     }
                     Scroll::Orbit(x, y) => {
                         self.leave_camera();
-                        self.view.orbit(x, y);
+                        self.orbit(x, y);
                     }
                 }
             }
@@ -1922,6 +1953,15 @@ impl Viewport3d {
         }
     }
 
+    /// Orbit by a drag of (`dx`, `dy`) pixels: about the selection (see
+    /// `pivot`), else the view's middle.
+    fn orbit(&mut self, dx: f64, dy: f64) {
+        match self.pivot {
+            Some(p) => self.view.orbit_about(p, dx, dy),
+            None => self.view.orbit(dx, dy),
+        }
+    }
+
     fn axis(&mut self, a: Axis) {
         self.look_through = None;
         self.view.view_axis(a);
@@ -1930,7 +1970,7 @@ impl Viewport3d {
     /// Orbit by whole degrees (the 2 / 4 / 6 / 8 keys).
     fn step(&mut self, yaw: f64, pitch: f64) {
         self.leave_camera();
-        self.view.orbit(-yaw / ORBIT_SPEED, -pitch / ORBIT_SPEED);
+        self.orbit(-yaw / ORBIT_SPEED, -pitch / ORBIT_SPEED);
     }
 
     /// Look through the scene's first camera, or back out.
@@ -2399,7 +2439,7 @@ impl Viewport3d {
         } else if ball.dragged() {
             let d = ball.drag_delta();
             self.leave_camera();
-            self.view.orbit(d.x as f64, d.y as f64);
+            self.orbit(d.x as f64, d.y as f64);
         }
         // The buttons: pan, zoom (drag them), camera, perspective.
         let p = self.view.projector(rect);
@@ -2538,18 +2578,23 @@ mod tests {
         let ctrl = Modifiers { ctrl: true, ..Modifiers::NONE };
         let n = Navigation::default();
         // As always: a wheel zooms, fingers orbit, ⇧ pan, ⌃ zoom.
-        assert_eq!(n.scroll(Unit::Line, d, Src::Wheel, Modifiers::NONE), Scroll::Zoom(0.85f64.powf(10.0)));
-        assert_eq!(n.scroll(Unit::Line, d, Src::Unknown, Modifiers::NONE), Scroll::Zoom(0.85f64.powf(10.0)), "line steps: a wheel");
-        assert_eq!(n.scroll(Unit::Point, d, Src::Trackpad, Modifiers::NONE), Scroll::Orbit(-3.0, -10.0));
-        assert_eq!(n.scroll(Unit::Point, d, Src::Momentum, shift), Scroll::Pan(-d));
-        assert_eq!(n.scroll(Unit::Point, d, Src::Trackpad, ctrl), Scroll::Zoom((-0.1f64).exp()));
+        assert_eq!(n.scroll(Unit::Line, d, Src::Wheel, Modifiers::NONE, false), Scroll::Zoom(0.85f64.powf(10.0)));
+        assert_eq!(n.scroll(Unit::Line, d, Src::Unknown, Modifiers::NONE, false), Scroll::Zoom(0.85f64.powf(10.0)), "line steps: a wheel");
+        // Fine steps from an unknown source orbit, unless a wheel just
+        // stepped (a smooth-scrolling wheel's part-notches, on Linux).
+        assert_eq!(n.scroll(Unit::Point, d, Src::Unknown, Modifiers::NONE, false), Scroll::Orbit(-3.0, -10.0));
+        assert_eq!(n.scroll(Unit::Point, d, Src::Unknown, Modifiers::NONE, true), Scroll::Zoom(0.85f64.powf(10.0 / 50.0)));
+        assert_eq!(n.scroll(Unit::Point, d, Src::Trackpad, Modifiers::NONE, true), Scroll::Orbit(-3.0, -10.0), "a trackpad said so");
+        assert_eq!(n.scroll(Unit::Point, d, Src::Trackpad, Modifiers::NONE, false), Scroll::Orbit(-3.0, -10.0));
+        assert_eq!(n.scroll(Unit::Point, d, Src::Momentum, shift, false), Scroll::Pan(-d));
+        assert_eq!(n.scroll(Unit::Point, d, Src::Trackpad, ctrl, false), Scroll::Zoom((-0.1f64).exp()));
         assert_eq!((n.drag_zoom(10.0), n.zoom_toward(Pos2::new(5.0, 6.0), rect())), (0.1f64.exp(), Pos2::new(5.0, 6.0)));
         // Fingers pan (⇧ orbits); zooms turned around, toward the middle.
         let p = Navigation { trackpad_pans: true, invert_zoom: true, zoom_to_pointer: false, ..n };
-        assert_eq!(p.scroll(Unit::Point, d, Src::Trackpad, Modifiers::NONE), Scroll::Pan(-d));
-        assert_eq!(p.scroll(Unit::Point, d, Src::Trackpad, shift), Scroll::Orbit(-3.0, -10.0));
-        assert_eq!(p.scroll(Unit::Line, d, Src::Wheel, Modifiers::NONE), Scroll::Zoom(0.85f64.powf(-10.0)));
-        assert_eq!(p.scroll(Unit::Point, d, Src::Trackpad, ctrl), Scroll::Zoom(0.1f64.exp()));
+        assert_eq!(p.scroll(Unit::Point, d, Src::Trackpad, Modifiers::NONE, false), Scroll::Pan(-d));
+        assert_eq!(p.scroll(Unit::Point, d, Src::Trackpad, shift, false), Scroll::Orbit(-3.0, -10.0));
+        assert_eq!(p.scroll(Unit::Line, d, Src::Wheel, Modifiers::NONE, false), Scroll::Zoom(0.85f64.powf(-10.0)));
+        assert_eq!(p.scroll(Unit::Point, d, Src::Trackpad, ctrl, false), Scroll::Zoom(0.1f64.exp()));
         assert_eq!((p.drag_zoom(10.0), p.zoom_toward(Pos2::new(5.0, 6.0), rect())), ((-0.1f64).exp(), rect().center()));
     }
 
@@ -2707,6 +2752,17 @@ mod tests {
             assert!(close(after, s), "ortho {ortho}: {after:?} vs {s:?}");
             assert!((v.distance - 6.0).abs() < 1e-9);
         }
+        // Orbiting about a pivot swings the camera rigidly round it: the
+        // pivot stays where it was on screen.
+        let mut v = ViewCam { center: [0.0; 3], distance: 10.0, ..ViewCam::default() };
+        let pivot = Vec3::new(3.0, 1.0, -2.0);
+        let (before, _) = v.projector(rect()).project(pivot).unwrap();
+        let eye_to_pivot = (v.eye() - pivot).norm();
+        v.orbit_about(pivot, 140.0, -45.0);
+        let (after, _) = v.projector(rect()).project(pivot).unwrap();
+        assert!(close(before, after), "{before:?} {after:?}");
+        assert!(((v.eye() - pivot).norm() - eye_to_pivot).abs() < 1e-9);
+        assert!(((Vec3::from(v.center) - v.eye()).norm() - 10.0).abs() < 1e-9, "same distance to the orbit center");
         // Pan: the orbit center follows the pointer.
         let mut v = ViewCam::default();
         let c = Vec3::from(v.center);

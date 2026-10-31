@@ -175,6 +175,8 @@ pub struct View3dPrefs {
     /// Zoom toward the pointer (else the middle of the view).
     pub zoom_to_pointer: bool,
     pub invert_zoom: bool,
+    /// Orbit about the selected objects (else about the view's middle).
+    pub orbit_selection: bool,
     /// How meshes shade in a project that hasn't chosen: "auto" (Lit when
     /// the scene has lights), "solid" or "lit".
     pub default_shading: String,
@@ -182,7 +184,7 @@ pub struct View3dPrefs {
 
 impl Default for View3dPrefs {
     fn default() -> Self {
-        View3dPrefs { emulate_three_button: false, trackpad: "orbit".into(), zoom_to_pointer: true, invert_zoom: false, default_shading: "auto".into() }
+        View3dPrefs { emulate_three_button: false, trackpad: "orbit".into(), zoom_to_pointer: true, invert_zoom: false, orbit_selection: true, default_shading: "auto".into() }
     }
 }
 

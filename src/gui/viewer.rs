@@ -322,7 +322,10 @@ impl Viewer {
             let placed: Vec<String> = doc.selection().into_iter().filter(|n| self.viewport3d.object_world(n).is_some()).collect();
             let objects = self.objects(doc, &placed, frame);
             match Transforming::drag_many(doc, &objects, h, self.space, at, frame) {
-                Ok(t) => {
+                Ok(mut t) => {
+                    if let Handle::Ring(k) = h {
+                        t.gesture = t.gesture.clone().along(layout.ring_tangent(k, at));
+                    }
                     self.transforming = Some(t);
                     self.dragged = Some(h);
                 }

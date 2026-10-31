@@ -7,6 +7,14 @@ they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
+- [ ] 0.11.4: the 3D view with a mouse (user found it hard and erratic in
+      0.11.3): select a Camera / Card / light and the All gizmo shows
+      (arrows, rings, cubes); drag each ring, including one seen nearly
+      edge-on, and it turns smoothly the way the pointer goes; R with the
+      pointer near the object doesn't swing it; middle-drag orbits around
+      the selection (it stays put); scroll only zooms. Also the frame rate
+      while orbiting a heavy scene (not measured)
+
 - [ ] 0.11.1–0.11.2 (before the beta): run `ARCLIGHT_CRASH_TEST=panic
       arclight-gui` (also `segv`, `abort`, and `worker`, which should only
       show an error): a report is saved, unsaved changes land in the

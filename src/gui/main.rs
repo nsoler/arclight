@@ -161,7 +161,7 @@ fn new_project_prefs(project: &arclight::graph::Project) -> arclight::config::Ne
 /// Set the 3D view's navigation and default shading as Preferences ▸ 3D
 /// view says.
 fn apply_view3d(p: &arclight::config::View3dPrefs, v: &mut viewport3d::Viewport3d) {
-    v.nav = viewport3d::Navigation { emulate_three_button: p.emulate_three_button, trackpad_pans: p.trackpad == "pan", zoom_to_pointer: p.zoom_to_pointer, invert_zoom: p.invert_zoom };
+    v.nav = viewport3d::Navigation { emulate_three_button: p.emulate_three_button, trackpad_pans: p.trackpad == "pan", zoom_to_pointer: p.zoom_to_pointer, invert_zoom: p.invert_zoom, orbit_selection: p.orbit_selection };
     v.default_shading = match p.default_shading.as_str() {
         "solid" => Some(viewport3d::Shading::Solid),
         "lit" => Some(viewport3d::Shading::Lit),
@@ -1828,8 +1828,8 @@ mod tests {
         let mut v = viewport3d::Viewport3d::default();
         apply_view3d(&View3dPrefs::default(), &mut v);
         assert_eq!((v.nav, v.default_shading), (viewport3d::Navigation::default(), None));
-        apply_view3d(&View3dPrefs { emulate_three_button: true, trackpad: "pan".into(), zoom_to_pointer: false, invert_zoom: true, default_shading: "lit".into() }, &mut v);
-        assert_eq!(v.nav, viewport3d::Navigation { emulate_three_button: true, trackpad_pans: true, zoom_to_pointer: false, invert_zoom: true });
+        apply_view3d(&View3dPrefs { emulate_three_button: true, trackpad: "pan".into(), zoom_to_pointer: false, invert_zoom: true, orbit_selection: false, default_shading: "lit".into() }, &mut v);
+        assert_eq!(v.nav, viewport3d::Navigation { emulate_three_button: true, trackpad_pans: true, zoom_to_pointer: false, invert_zoom: true, orbit_selection: false });
         assert_eq!(v.default_shading, Some(viewport3d::Shading::Lit));
     }
 

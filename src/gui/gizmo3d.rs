@@ -144,6 +144,10 @@ pub const SNAP_ANGLE: f64 = 15.0;
 pub const SNAP_SCALE: f64 = 0.1;
 /// Trackball degrees per screen point.
 const TRACKBALL_RATE: f64 = 0.5;
+/// Turning by the pointer's angle about the center: closer in than this
+/// (points), the turn is damped as though the pointer were this far out,
+/// so a pointer passing near the center doesn't swing the object round.
+const TURN_RADIUS: f64 = 60.0;
 
 /// A move, rotate or scale in progress.
 #[derive(Clone, Debug)]
@@ -162,6 +166,11 @@ pub struct Gesture {
     /// screen) and the pointer's last angle about the center.
     turned: f64,
     last_angle: Option<f64>,
+    /// A ring drag: the ring's direction on screen where it was grabbed
+    /// (unit, the way a positive turn moves it) and its radius in points.
+    /// The turn goes by how far the pointer moves along it, so a ring seen
+    /// edge-on turns smoothly too.
+    along: Option<(Vec2, f32)>,
     /// The pivot, when it isn't the object's origin (several objects).
     center: Option<Vec3>,
 }
@@ -183,13 +192,20 @@ impl Gesture {
     pub fn new(mode: Mode, start: Trs, world: &Mat4, from: Pos2) -> Gesture {
         let own = start.matrix();
         let parent = own.try_inverse().map_or_else(Mat4::identity, |inv| world * inv);
-        Gesture { mode, start, parent, from, constraint: Constraint::Free, typed: String::new(), negate: false, turned: 0.0, last_angle: None, center: None }
+        Gesture { mode, start, parent, from, constraint: Constraint::Free, typed: String::new(), negate: false, turned: 0.0, last_angle: None, along: None, center: None }
     }
 
     /// The same about pivot `c` (scene) instead of the object's origin: where
     /// the move's axis and plane go through, rotate and scale center.
     pub fn about(mut self, c: Vec3) -> Gesture {
         self.center = Some(c);
+        self
+    }
+
+    /// A ring drag: turn by the pointer's travel along the ring's screen
+    /// direction `along` (see [`Layout::ring_tangent`]).
+    pub fn along(mut self, along: Option<(Vec2, f32)>) -> Gesture {
+        self.along = along;
         self
     }
 
@@ -358,16 +374,21 @@ impl Gesture {
             Constraint::Axis(k, s) | Constraint::Plane(k, s) => (self.axis(k, s), Some((k, s))),
             _ => (toward_viewer, None),
         };
-        let angle = match self.typed() {
-            Some(v) => v,
-            None => {
+        let angle = match (self.typed(), self.along) {
+            (Some(v), _) => v,
+            (None, Some((dir, r))) if space.is_some() => {
+                let travel = (mouse - self.from).dot(dir) as f64;
+                snapped((travel / r.max(1.0) as f64).to_degrees(), SNAP_ANGLE, snap)
+            }
+            (None, _) => {
                 // The pointer's turn about the center, counter-clockwise on
                 // screen; about an axis pointing away from the viewer that's
                 // a clockwise turn.
                 let c = view.project(self.origin()).map_or(self.from, |(c, _)| c);
                 if let Some(a) = screen_angle(c, mouse) {
                     let last = *self.last_angle.get_or_insert(screen_angle(c, self.from).unwrap_or(a));
-                    self.turned += wrap_degrees(a - last);
+                    let damp = ((mouse - c).length() as f64 / TURN_RADIUS).min(1.0);
+                    self.turned += wrap_degrees(a - last) * damp;
                     self.last_angle = Some(a);
                 }
                 let sign = if axis.dot(&toward_viewer) < 0.0 { -1.0 } else { 1.0 };
@@ -810,11 +831,12 @@ impl Transforming {
 pub enum Tool {
     /// None: clicks only select.
     Select,
-    #[default]
     Move,
     Rotate,
     Scale,
-    /// Move, rotate and scale together.
+    /// Move, rotate and scale together (what a selected object shows
+    /// until another tool is picked).
+    #[default]
     All,
 }
 
@@ -978,6 +1000,23 @@ impl Layout {
             }
         }
         None
+    }
+
+    /// Ring `k`'s direction on screen nearest point `p` (unit, the way a
+    /// positive turn about its axis moves it) and the ring's radius on
+    /// screen, for [`Gesture::along`]. None where the ring runs toward
+    /// the viewer there (no direction to drag along).
+    pub fn ring_tangent(&self, k: usize, p: Pos2) -> Option<(Vec2, f32)> {
+        let ring = &self.rings[k];
+        // The nearest stretch; where the near and far halves overlap (seen
+        // edge-on), the near one.
+        let dist = |i: usize| segment_distance(ring[i].0, ring[i + 1].0, p) + if ring[i].1 && ring[i + 1].1 { 1.5 } else { 0.0 };
+        let i = (0..ring.len().saturating_sub(1)).min_by(|&a, &b| dist(a).total_cmp(&dist(b)))?;
+        // A few samples either side, so a foreshortened stretch still has
+        // a direction.
+        let d = ring[(i + 3).min(ring.len() - 1)].0 - ring[i.saturating_sub(2)].0;
+        let radius = if self.tool == Tool::All { 1.15 * GIZMO_SIZE } else { GIZMO_SIZE };
+        (d.length() > 2.0).then(|| (d.normalized(), radius))
     }
 
     /// Draw it; `hot` lit (hovered or dragged), all of it gray when
@@ -1275,6 +1314,45 @@ pub mod tests {
         // …with angles close to where it started.
         assert!(near(t.rotate, s.rotate, 10.0), "{:?}", t.rotate);
         assert_eq!(nearest_angles([-170.0, 0.0, 0.0], [175.0, 0.0, 0.0]), [190.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_ring_seen_edge_on_turns_by_the_drag_along_it() {
+        // From the front the Y ring is a flat line through the center: the
+        // pointer's angle about the center would flip 0° / 180° along it.
+        let view = front();
+        let s = Trs::default();
+        let axes = axes_of(&Mat4::identity(), Space::Global);
+        let lay = Layout::new(&view, Tool::Rotate, Vec3::zeros(), axes).unwrap();
+        let c = at(&view, [0.0; 3]);
+        let grab = c + eframe::egui::vec2(40.0, 0.0);
+        let along = lay.ring_tangent(1, grab).unwrap();
+        assert!(along.0.x > 0.99, "the near half, which a +Y turn moves right: {along:?}");
+        let mut g = Gesture::new(Mode::Rotate, s, &s.matrix(), grab).with_constraint(Constraint::Axis(1, Space::Global)).along(Some(along));
+        let mut last = 0.0;
+        // Steadily on past the center: the turn grows steadily.
+        for step in 1..=10 {
+            let t = g.apply(&view, grab + eframe::egui::vec2(-10.0 * step as f32, 0.0), false);
+            assert!(t.rotate[0].abs() < 1e-6 && t.rotate[2].abs() < 1e-6, "{:?}", t.rotate);
+            let want = -(10.0 * step as f64 / GIZMO_SIZE as f64).to_degrees();
+            assert!((t.rotate[1] - want).abs() < 1e-6 && t.rotate[1] < last, "{:?} vs {want}", t.rotate);
+            last = t.rotate[1];
+        }
+        // Snapping still rounds to 15°.
+        let t = g.apply(&view, grab + eframe::egui::vec2(30.0, 0.0), true);
+        assert!(near(t.rotate, [0.0, 15.0, 0.0], 1e-6), "{:?}", t.rotate);
+    }
+
+    #[test]
+    fn turning_close_to_the_center_is_damped() {
+        // A quarter turn 10 points from the center turns a sixth of it:
+        // no wild swings from a pointer near the object.
+        let view = front();
+        let s = Trs::default();
+        let c = at(&view, [0.0; 3]);
+        let mut g = Gesture::new(Mode::Rotate, s, &s.matrix(), c + eframe::egui::vec2(10.0, 0.0));
+        let t = g.apply(&view, c + eframe::egui::vec2(0.0, -10.0), false);
+        assert!(near(t.rotate, [0.0, 0.0, 15.0], 1e-6), "{:?}", t.rotate);
     }
 
     #[test]

@@ -137,7 +137,11 @@ project.
 - **Navigate:** middle-drag orbits, **⇧** + middle-drag pans, scroll or
   **Ctrl** + middle-drag zooms toward the pointer. Trackpad: two-finger
   scroll orbits, **⇧** pans, pinch or **Ctrl** zooms. Without a middle
-  button, turn on *Emulate 3-button mouse* (Alt + left-drag).
+  button, turn on *Emulate 3-button mouse* (Alt + left-drag). With
+  something selected, orbiting turns around it, so it stays in place on
+  screen (*Orbit around the selection* in Preferences, on by default).
+  Fine scroll steps from an unknown source (Linux) count as the wheel for
+  a second after it steps, so a smooth-scrolling wheel zooms, not orbits.
 - **Views:** numpad **1 / 3 / 7** front, right, top (**Ctrl**: the
   opposite sides), **5** perspective / orthographic, **0** (or **View ▸
   Look through selected**, or **Look through in 3D view** in a Camera's,
@@ -162,7 +166,8 @@ project.
 **Transforming in 3D** (Blender-style). With an object selected and the
 pointer over the 3D view: **G** moves, **R** rotates, **S** scales it,
 following the pointer (Move: in the view plane at the object's depth;
-Rotate: by how far the pointer turns about the object's center; Scale: by
+Rotate: by how far the pointer turns about the object's center, damped
+within 60 points of it so a pointer near the object doesn't swing it; Scale: by
 how much farther from its center the pointer is). Then **X / Y / Z**
 constrains to that world axis (press it again for the object's own axis,
 a third time to free it), **⇧ X / Y / Z** excludes that axis, typing a
@@ -171,9 +176,11 @@ number sets the amount exactly (`G X 2 Enter`, `R Z 90 Enter`,
 15°, 0.1); **Enter** or a click confirms, **Esc** or a right-click
 cancels and puts everything back. **Alt + G / R / S** resets translate /
 rotate / scale. The viewer toolbar's **Select / Move / Rotate / Scale /
-All** pick the gizmo on the selected object: drag an arrow to move along
+All** pick the gizmo on the selected object (**All**, the default, shows
+arrows, rings and cubes together): drag an arrow to move along
 an axis, a square to move in that plane, the center circle to move in the
-view plane; a colored ring to rotate about that axis, the white outer
+view plane; a colored ring to rotate about that axis (by how far the
+pointer moves along the ring, so it turns smoothly even seen edge-on), the white outer
 ring about the view, inside it like a trackball; a cube to scale along
 that axis, the center to scale evenly. **Global / Local** sets the
 gizmo's axes. Every move, rotate or scale sets a key when the param is

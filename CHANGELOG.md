@@ -15,6 +15,25 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.11.4 — 2026-10-30
+
+- **3D view: gizmos and smoother rotation.** A selected object now
+  shows the **All** gizmo by default (move arrows, rotate rings and scale
+  cubes together) rather than only the move arrows; the toolbar's Move /
+  Rotate / Scale / Select still pick one.
+- Dragging a rotate ring turns by how far the pointer moves along the
+  ring. It used to go by the pointer's angle about the object's center,
+  which flipped back and forth when the ring was seen edge-on or the
+  pointer crossed the center.
+- **R** (rotate by the mouse) is damped within 60 points of the object's
+  center, so small moves close to the object no longer swing it wildly.
+- Orbiting turns around the selected objects, which stay in place on
+  screen instead of sweeping across it (Preferences ▸ 3D view ▸ Orbit
+  around the selection; on by default). With nothing selected it turns
+  around the middle of the view, as before.
+- Linux: a smooth-scrolling mouse wheel's part-notch steps zoom instead
+  of being taken for a trackpad and orbiting.
+
 ## 0.11.3 — 2026-10-30
 
 - **Beta: Arclight is now ArclightVFX Compositor** (ArclightVFX for

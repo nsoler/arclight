@@ -233,6 +233,12 @@ front view down −Z.
 With **Emulate 3-button mouse** on, **⌥** + left-drag orbits, **⇧⌥** +
 left-drag pans and **⌘⌥** + left-drag zooms.
 
+With something selected, orbiting turns around the selection, so it stays
+put on screen while the view swings round it (turn this off in
+**Preferences ▸ 3D view ▸ Orbit around the selection**); with nothing
+selected it turns around the middle of the view. Press **F** to bring the
+selection into the middle first.
+
 The **navigation gizmo** in the top-right corner does the same with the
 mouse: click an axis of the ball to look along it, drag the ball to orbit,
 and drag the hand (pan) or magnifier (zoom) buttons; the camera button looks
@@ -296,10 +302,14 @@ or rotate it with G / R or the gizmo to aim it.
 | Right-click or **Esc** | Cancel |
 | **⌥G** / **⌥R** / **⌥S** | Reset translate / rotate / scale |
 
-The viewer's toolbar picks a gizmo for the selected object: **Move** (axis
+The viewer's toolbar picks a gizmo for the selected object: **All** (the
+default: arrows, rings and cubes together), **Move** (axis
 arrows, plane squares, a center circle), **Rotate** (axis rings, an outer
 view ring, a trackball inside), **Scale** (axis cubes, the center for all
-axes), **All**, or **Select** for none; **Global / Local** sets the axes. Gizmo
+axes), or **Select** for none; **Global / Local** sets the axes. Drag a
+ring along its length to turn about its axis (it turns the same way
+however the ring is seen, even edge-on); with **R**, start with the
+pointer away from the object: close to its center the turn is damped. Gizmo
 drags and G / R / S key animated parameters at the current frame and are
 one undo step each. A parameter linked to another node can't be moved
 until it's unlinked.
@@ -647,6 +657,7 @@ defaults**.
 - **New project:** the format, frame rate and frames File ▸ New starts
   with (or use **Save as defaults** in Project Settings).
 - **3D view:** **Emulate 3-button mouse** (Alt + left-drag navigates);
+  **Orbit around the selection** (on by default);
   two-finger scroll orbits (⇧ pans) or pans (⇧ orbits); zoom toward the
   pointer or the middle of the view; **Invert zoom** (wheel, ⌃ + scroll,
   ⌃ + middle-drag); **Shading** for projects without their own 3D view:

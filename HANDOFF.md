@@ -13,6 +13,23 @@ done), `docs/help.md` (the in-app help) and
 
 ## Start here (next session)
 
+- **Session 12, 0.11.4 (Supervisor, wD:p1, alone):** the user found the
+  3D view hard to use in 0.11.3 (no rotate / scale gizmos; rotating
+  "swung wildly back and forth and up and down"; mouse: Razer DeathAdder
+  V3 on Hyprland, no trackpad). Changes: `gizmo3d::Tool` defaults to
+  `All`; ring drags go by travel along the ring's screen direction
+  (`Layout::ring_tangent`, `Gesture::along`, set in
+  `viewer::gizmo_input`) instead of the angle about the center, which
+  flipped on edge-on rings; free / axis R damps the angle within
+  `TURN_RADIUS` (60 pt) of the center; `ViewCam::orbit_about` +
+  `Viewport3d::orbit` orbit about the selection's median
+  (`View3dPrefs.orbit_selection`, default on); Linux fine scroll steps
+  within `WHEEL_SPELL` (1 s) of a line step count as the wheel
+  (`Navigation::scroll`'s `wheel_recent`). Not tried by hand yet (TODO).
+  Note: 20 GUI tests (node_editor, help, …) fail on HEAD too with
+  epaint's "Dropped TexturesDelta with 1 unapplied deltas" panic (egui
+  0.37 test harness); not caused by this change, still to fix.
+
 - **`TODO.md`** (repo root, added 2026-10-29 at the user's request) is
   the running list of what's still wanted: hand checks, follow-ups,
   larger items. Keep it current: add items as they come up, tick or
