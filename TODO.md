@@ -7,7 +7,15 @@ they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
-- [ ] 0.10.20–0.10.22: a Camera set to Orthographic (Ortho width) through
+- [ ] 0.10.34–0.10.35: sound. Open a clip with sound in a Media In and
+      view it; L plays it in step (lips / claps against the picture);
+      K / Space / J / arrows / scrubbing are silent; a short loop restarts
+      it at the in point; a heavy node makes it drop out, then return in
+      step; the speaker button off / on, kept after a restart; with no
+      audio device playback still works and the status says sound is off.
+      Media Out to .mov / .mp4 keeps the sound in sync (Audio auto); the
+      DMG plays sound on the Mac
+- [X] 0.10.20–0.10.22: a Camera set to Orthographic (Ortho width) through
       Scanline Render, and the 3D view's 5 / axis views; a far-off
       textured card no longer shimmers; Read Geo an .abc from Blender /
       Maya / Houdini (animated, deforming, motion blur)

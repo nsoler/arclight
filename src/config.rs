@@ -258,7 +258,8 @@ impl RecentFiles {
 /// How the GUI's views were last set up, so the next run starts the same:
 /// the 2D viewer's frame size labels, and the 3D view's shading ("solid" or
 /// "lit"; None: Lit when a scene has lights), wireframe and Lit shadows,
-/// for projects that haven't chosen their own. Kept apart from projects.
+/// for projects that haven't chosen their own; and whether playback plays
+/// sound. Kept apart from projects.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct ViewPrefs {
@@ -266,11 +267,12 @@ pub struct ViewPrefs {
     pub shading: Option<String>,
     pub wireframe: bool,
     pub lit_shadows: bool,
+    pub sound: bool,
 }
 
 impl Default for ViewPrefs {
     fn default() -> Self {
-        ViewPrefs { show_frame_size: true, shading: None, wireframe: false, lit_shadows: false }
+        ViewPrefs { show_frame_size: true, shading: None, wireframe: false, lit_shadows: false, sound: true }
     }
 }
 
@@ -303,8 +305,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("arclight_view_prefs_{}", std::process::id()));
         let path = dir.join("state/view.json");
         assert_eq!(ViewPrefs::load(&path), ViewPrefs::default());
-        assert!(ViewPrefs::default().show_frame_size, "frame size labels on by default");
-        let p = ViewPrefs { show_frame_size: false, shading: Some("lit".into()), wireframe: true, lit_shadows: true };
+        assert!(ViewPrefs::default().show_frame_size && ViewPrefs::default().sound, "frame size labels and sound on by default");
+        let p = ViewPrefs { show_frame_size: false, shading: Some("lit".into()), wireframe: true, lit_shadows: true, sound: false };
         p.save(&path).unwrap();
         assert_eq!(ViewPrefs::load(&path), p);
         std::fs::write(&path, r#"{"wireframe": true}"#).unwrap();

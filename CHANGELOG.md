@@ -12,6 +12,18 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.10.35 — 2026-10-30
+
+- **Sound in playback**: playing forward plays the viewed node's audio
+  (a Media In's or Read's clip, through the nodes after it), in step
+  with the picture. It's silent while paused, stepping, scrubbing or
+  playing backward; a loop restarts it at the loop point; when frames
+  can't render in time the sound drops out rather than stutter or drift,
+  and comes back in step. The **speaker** button on the transport turns
+  it on or off (remembered; on by default). Without an output device,
+  sound is off and the status line says so. (Linux: the GUI now uses
+  `libasound.so.2` at run time and ALSA's development files to build.)
+
 ## 0.10.34 — 2026-10-30
 
 - Clips with sound: the Read and Media In panels (and MCP / Python

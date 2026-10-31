@@ -38,6 +38,9 @@ python/build.sh                                   # Python `arclt` module (needs
 ```
 
 Video input/output needs `ffmpeg` and `ffprobe` on `PATH` (e.g. `brew install ffmpeg`).
+On Linux the GUI's sound needs ALSA's development files to build (`alsa-lib`
+on Arch, `libasound2-dev` on Debian / Ubuntu); at run time it uses
+`libasound.so.2`, present on any desktop with PipeWire or PulseAudio.
 Image sequences and stills need nothing extra.
 
 ### App launcher (Linux)
@@ -67,7 +70,7 @@ The tarball holds `bin/arclight-gui`, `bin/arclight`, the example clip and
 icons. Unpack it and run `./install.sh` to put the binaries in
 `~/.local/bin` and Arclight in the app launcher (`PREFIX=… ./install.sh`
 for elsewhere; `./uninstall.sh` removes it), or run `bin/arclight-gui` in
-place. The binaries link only glibc, so they run on the distribution they
+place. The binaries link only glibc (and, for the GUI, `libasound.so.2`), so they run on the distribution they
 were built on (Arch / Omarchy for the published releases) and newer ones.
 Releases are on GitHub (`gh release list`), with the macOS DMG (universal:
 Apple Silicon and Intel) and the Python wheels beside the tarball.

@@ -125,6 +125,14 @@ choose in Properties:
 | **⌥←** / **⌥→** | Previous / next key |
 | **Home** / **End** | First / last frame |
 
+The **speaker** button on the transport plays the viewed clip's sound
+(a Media In's or Read's video, through the nodes after it) while playing
+forward, in step with the picture. It's silent while paused, stepping,
+scrubbing or playing backward; a loop restarts it at the loop point; if
+frames can't render in time the sound drops out and comes back in step.
+On by default and remembered; without an output device the status line
+says sound is off.
+
 ## Project settings
 
 Each project can have a **folder**: **File ▸ New** asks for the new

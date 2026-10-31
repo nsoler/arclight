@@ -9,8 +9,10 @@
 #
 # Run from anywhere: packaging/linux/build-tarball.sh
 # The binaries link only glibc (graphics and windowing libraries are loaded
-# at run time), so they run on the distribution they were built on and
-# newer ones. ffmpeg isn't bundled: install the distribution's package.
+# at run time), and the GUI libasound.so.2 (ALSA's library, for sound; any
+# desktop with PipeWire or PulseAudio has it), so they run on the
+# distribution they were built on and newer ones. ffmpeg isn't bundled:
+# install the distribution's package.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

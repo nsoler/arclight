@@ -16,6 +16,8 @@ pub struct Transport {
     pub frame: i64,
     pub play: Play,
     pub looping: bool,
+    /// Sound with forward playback (the speaker button).
+    pub sound: bool,
     /// Wall-clock time and frame at which playback (re)started.
     anchor: Option<(Instant, i64)>,
     /// Smoothed frames actually displayed per second while playing.
@@ -34,6 +36,7 @@ impl Default for Transport {
             frame: 1,
             play: Play::Stopped,
             looping: true,
+            sound: true,
             anchor: None,
             shown_fps: 0.0,
             last_shown: None,
@@ -52,6 +55,8 @@ enum Icon {
     PlayFwd,
     StepFwd,
     ToEnd,
+    /// A speaker: with sound waves, or (off) crossed out.
+    Sound(bool),
 }
 
 impl Transport {
@@ -105,6 +110,13 @@ impl Transport {
             }
         }
         self.frame = f;
+    }
+
+    /// Where forward playback is now: the frame and how far into it, for
+    /// sound to follow; None unless playing forward.
+    pub fn play_position(&self, project: &Project) -> Option<f64> {
+        let (t0, f0) = self.anchor.filter(|_| self.play == Play::Forward)?;
+        Some(forward_position(f0, t0.elapsed().as_secs_f64(), project, self.looping))
     }
 
     /// Call when a newly rendered frame reaches the screen during playback.
@@ -176,6 +188,10 @@ impl Transport {
                 .add(egui::DragValue::new(&mut project.fps).range(1.0..=240.0).speed(0.1).max_decimals(3))
                 .changed();
             ui.checkbox(&mut self.looping, "Loop");
+            let tip = if self.sound { "Sound on: plays the viewed clip's audio while playing forward (click to mute)" } else { "Sound off (click to hear the viewed clip's audio while playing forward)" };
+            if icon_button(ui, Icon::Sound(self.sound), self.sound, tip) {
+                self.sound = !self.sound;
+            }
             ui.separator();
             ui.label("Format").on_hover_text("The frame size of Constants, Checkerboards and shapes whose own width/height is 0 (the default)");
             project_changed |= ui.add(egui::DragValue::new(&mut project.format.width).range(1..=16384)).changed();
@@ -340,13 +356,62 @@ fn icon_button(ui: &mut egui::Ui, icon: Icon, active: bool, tip: &str) -> bool {
             p.add(tri(1.0, ctr.x - 1.0));
             p.rect_filled(bar(ctr.x + 6.0), 0.0, c);
         }
+        Icon::Sound(on) => {
+            let x = ctr.x - 4.0;
+            p.rect_filled(Rect::from_center_size(Pos2::new(x - 4.0, ctr.y), Vec2::new(4.0, 5.0)), 0.0, c);
+            let cone = vec![Pos2::new(x - 2.0, ctr.y - 2.5), Pos2::new(x + 3.0, ctr.y - 6.5), Pos2::new(x + 3.0, ctr.y + 6.5), Pos2::new(x - 2.0, ctr.y + 2.5)];
+            p.add(Shape::convex_polygon(cone, c, Stroke::NONE));
+            let stroke = Stroke::new(1.5, c);
+            if on {
+                for r in [4.0f32, 7.5] {
+                    let arc = (0..=8).map(|i| {
+                        let a = (i as f32 / 8.0 - 0.5) * 1.6;
+                        Pos2::new(x + 3.0 + r * a.cos(), ctr.y + r * a.sin())
+                    });
+                    p.add(Shape::line(arc.collect(), stroke));
+                }
+            } else {
+                let (a, b) = (Pos2::new(x + 6.0, ctr.y - 3.5), Pos2::new(x + 12.0, ctr.y + 3.5));
+                p.line_segment([a, b], stroke);
+                p.line_segment([Pos2::new(a.x, b.y), Pos2::new(b.x, a.y)], stroke);
+            }
+        }
     }
     resp.on_hover_text(tip).clicked()
+}
+
+/// Forward playback from frame `f0`, `secs` later: the frame and how far
+/// into it, wrapped when `looping` (as [`Transport::tick`] counts frames).
+fn forward_position(f0: i64, secs: f64, project: &Project, looping: bool) -> f64 {
+    let (first, last) = (project.first_frame as f64, project.last_frame.max(project.first_frame) as f64);
+    let f = f0 as f64 + secs * project.fps.max(0.1);
+    match f >= last + 1.0 {
+        true if looping => first + (f - first).rem_euclid(last + 1.0 - first),
+        true => last,
+        false => f,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_forward_position_is_the_frame_and_a_fraction_wrapping_as_the_playhead_does() {
+        let project = Project { first_frame: 1, last_frame: 10, fps: 24.0, ..Project::default() };
+        let at = |f0, secs| forward_position(f0, secs, &project, true);
+        assert!((at(1, 0.5 / 24.0) - 1.5).abs() < 1e-9);
+        assert!((at(9, 1.25 / 24.0) - 10.25).abs() < 1e-9);
+        // Past the out frame: back at the in, as tick() puts the playhead.
+        assert!((at(10, 1.5 / 24.0) - 1.5).abs() < 1e-9);
+        assert!((forward_position(10, 1.5 / 24.0, &project, false) - 10.0).abs() < 1e-9, "not looping: held at the end");
+        let mut t = Transport::default();
+        assert_eq!(t.play_position(&project), None, "stopped");
+        t.set_play(Play::Backward);
+        assert_eq!(t.play_position(&project), None, "backward: silent");
+        t.set_play(Play::Forward);
+        assert!(t.play_position(&project).is_some_and(|p| (1.0..1.5).contains(&p)));
+    }
 
     #[test]
     fn indent_centers_or_gives_up() {

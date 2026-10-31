@@ -17,6 +17,7 @@ mod preferences;
 mod project_settings;
 mod properties;
 mod script_jobs;
+mod sound;
 mod transport;
 mod viewer;
 mod viewport3d;
@@ -147,10 +148,10 @@ fn apply_view3d(p: &arclight::config::View3dPrefs, v: &mut viewport3d::Viewport3
 }
 
 /// The view preferences `viewer` shows now.
-fn view_prefs(viewer: &Viewer) -> ViewPrefs {
+fn view_prefs(viewer: &Viewer, transport: &Transport) -> ViewPrefs {
     let view = &viewer.viewport3d.view;
     let shading = view.shading.map(|s| if s == viewport3d::Shading::Lit { "lit" } else { "solid" }.to_string());
-    ViewPrefs { show_frame_size: viewer.show_frame_size, shading, wireframe: view.wireframe, lit_shadows: view.shadows }
+    ViewPrefs { show_frame_size: viewer.show_frame_size, shading, wireframe: view.wireframe, lit_shadows: view.shadows, sound: transport.sound }
 }
 
 /// Set `viewer` up as `prefs` say: its frame size labels now, and the 3D
@@ -193,6 +194,7 @@ struct App {
     tab: BottomTab,
     viewer: Viewer,
     transport: Transport,
+    sound: sound::Sound,
     props: Properties,
     worker: Worker,
     /// The last request sent to the worker.
@@ -270,6 +272,7 @@ impl App {
         let mut transport = Transport::default();
         transport.frame = doc.graph.project.first_frame;
         let prefs = ViewPrefs::load(&ViewPrefs::path());
+        transport.sound = prefs.sound;
         let screenshot_run = std::env::var_os("ARCLIGHT_SCREENSHOT").is_some();
         let recent_path = (!screenshot_run).then(RecentFiles::path);
         let mut recent = recent_path.as_deref().map(RecentFiles::load).unwrap_or_default();
@@ -293,6 +296,7 @@ impl App {
             tab: BottomTab::Graph,
             viewer,
             transport,
+            sound: sound::Sound::default(),
             props: Properties::sharing(eval.clone()),
             worker: Worker::spawn(ctx.clone(), eval.clone()),
             requested: None,
@@ -566,8 +570,9 @@ impl App {
             self.remember(&path);
         }
         self.autosaved = (std::time::Instant::now(), String::new());
+        let sound = self.transport.sound;
         self.transport = Transport::default();
-        self.transport.frame = doc.graph.project.first_frame;
+        (self.transport.frame, self.transport.sound) = (doc.graph.project.first_frame, sound);
         self.doc = doc;
         self.doc.undo_levels = self.settings.files.undo_levels;
         self.editor.fit();
@@ -1023,6 +1028,23 @@ impl App {
         }
     }
 
+    /// Play the viewed node's sound along with forward playback (see
+    /// [`sound`]): after [`App::sync_render`], which says what's shown.
+    fn sync_sound(&mut self) {
+        let project = &self.doc.graph.project;
+        let want = self.transport.play_position(project).filter(|_| self.transport.sound).and_then(|pos| {
+            let target = self.doc.view_target()?;
+            sound::Cue::at(&self.doc.graph, &target, pos, project.fps)
+        });
+        // How far the picture is behind the playhead (round a loop's wrap).
+        let (first, last) = (project.first_frame, project.last_frame.max(project.first_frame));
+        let behind = self.transport.frame - self.shown_frame;
+        let lag = if self.transport.looping { behind.rem_euclid(last - first + 1) } else { behind.max(0) };
+        if let Some(message) = self.sound.update(self.transport.sound, want.as_ref(), lag) {
+            self.status = Some(message);
+        }
+    }
+
     fn sync_render(&mut self) {
         let target = self.doc.view_target();
         match &target {
@@ -1081,7 +1103,7 @@ impl App {
     /// Save the view preferences when they've changed (also making them
     /// what a project without its own 3D view starts with).
     fn save_prefs(&mut self) {
-        let now = view_prefs(&self.viewer);
+        let now = view_prefs(&self.viewer, &self.transport);
         if now == self.prefs {
             return;
         }
@@ -1486,6 +1508,7 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
         self.sync_render();
+        self.sync_sound();
         self.update_title(&ctx);
         self.maybe_screenshot(&ctx);
         self.save_prefs();
@@ -1791,13 +1814,15 @@ mod tests {
     #[test]
     fn view_prefs_come_from_the_viewer_and_set_it_up() {
         let mut viewer = Viewer::default();
-        assert_eq!(view_prefs(&viewer), ViewPrefs::default(), "the defaults are the viewer's");
+        let mut transport = Transport::default();
+        assert_eq!(view_prefs(&viewer, &transport), ViewPrefs::default(), "the defaults are the viewer's and the transport's");
         viewer.show_frame_size = false;
         viewer.viewport3d.set_shading(viewport3d::Shading::Lit);
         viewer.viewport3d.view.wireframe = true;
         viewer.viewport3d.view.shadows = true;
-        let prefs = view_prefs(&viewer);
-        assert_eq!(prefs, ViewPrefs { show_frame_size: false, shading: Some("lit".into()), wireframe: true, lit_shadows: true });
+        transport.sound = false;
+        let prefs = view_prefs(&viewer, &transport);
+        assert_eq!(prefs, ViewPrefs { show_frame_size: false, shading: Some("lit".into()), wireframe: true, lit_shadows: true, sound: false });
         // Next run: the labels off, and a project without its own 3D view
         // starts Lit, wireframe, with shadows.
         let mut next = Viewer::default();
