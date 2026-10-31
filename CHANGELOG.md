@@ -17,6 +17,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.5 — 2026-10-31
+
+- Geometry (phase 13, P1): scenes can now carry point sets, instances and
+  curves with named attributes (Float, Vec3, Vec4, Int), and meshes gain
+  point and face attributes. Nothing makes them yet; this is the base for
+  the geometry nodes (`docs/geo-plan.md`). The 3D view frames and picks
+  them.
+
 ## 0.13.4 — 2026-10-31
 
 - GPU: soft shadows render faster again: lookups skip the parts of a

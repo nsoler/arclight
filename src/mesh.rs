@@ -9,6 +9,7 @@
 //! right and bottom to top (v = 0 at the bottom of the image), as OBJ and
 //! GL have them.
 
+use crate::geo::Attrs;
 use crate::geom::{self, Mat4, Vec3};
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashMap;
@@ -24,6 +25,10 @@ pub struct Mesh {
     /// Texture coordinates, one per position, or empty.
     pub uvs: Vec<[f64; 2]>,
     pub triangles: Vec<[u32; 3]>,
+    /// Named attributes per position and per triangle (see
+    /// [`crate::geo`]): positions and normals stay in their own lists.
+    pub point_attrs: Attrs,
+    pub face_attrs: Attrs,
 }
 
 /// How a material responds to light.
@@ -81,8 +86,11 @@ impl Mesh {
 
     /// Moved by `m`: positions as points, normals by the inverse transpose
     /// (so they stay at right angles to the surface under a non-uniform
-    /// scale), and the winding reversed if `m` mirrors.
+    /// scale), and the winding reversed if `m` mirrors; the attributes
+    /// that are directions too (see [`Attrs::transform`]).
     pub fn transform(&mut self, m: &Mat4) {
+        self.point_attrs.transform(m);
+        self.face_attrs.transform(m);
         for p in &mut self.positions {
             *p = geom::transform_point(m, p);
         }
@@ -99,7 +107,8 @@ impl Mesh {
     }
 
     /// All of `meshes` as one. Normals and texture coordinates are kept
-    /// when every mesh has them.
+    /// when every mesh has them; attributes are joined (see
+    /// [`Attrs::concat`]: zeros where a mesh hasn't one).
     pub fn merge(meshes: &[Mesh]) -> Mesh {
         let has = |f: &dyn Fn(&Mesh) -> bool| meshes.iter().all(|m| f(m) || m.positions.is_empty());
         let (normals, uvs) = (has(&|m| m.normals.len() == m.positions.len()), has(&|m| m.uvs.len() == m.positions.len()));
@@ -115,6 +124,8 @@ impl Mesh {
             }
             out.triangles.extend(m.triangles.iter().map(|t| t.map(|i| i + base)));
         }
+        out.point_attrs = Attrs::concat(&meshes.iter().map(|m| (&m.point_attrs, m.positions.len())).collect::<Vec<_>>());
+        out.face_attrs = Attrs::concat(&meshes.iter().map(|m| (&m.face_attrs, m.triangles.len())).collect::<Vec<_>>());
         out
     }
 
@@ -143,7 +154,7 @@ impl Mesh {
     }
 
     /// Faceted: every triangle gets its own three vertices, with its face
-    /// normal.
+    /// normal (and its points' attributes); the faces keep theirs.
     pub fn flat(&self) -> Mesh {
         let mut out = Mesh::default();
         let uvs = self.uvs.len() == self.positions.len();
@@ -159,6 +170,9 @@ impl Mesh {
             }
             out.triangles.push([base, base + 1, base + 2]);
         }
+        let corners: Vec<u32> = self.triangles.iter().flatten().copied().collect();
+        out.point_attrs = self.point_attrs.gathered(&corners);
+        out.face_attrs = self.face_attrs.clone();
         out
     }
 
@@ -524,6 +538,32 @@ pub fn parse_mtl(text: &str, folder: &Path) -> Vec<Material> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Attributes follow the mesh: merged (zeros where a mesh has none),
+    /// per corner when faceted, turned with it where they're directions.
+    #[test]
+    fn attributes_follow_merge_flat_and_transform() {
+        use crate::geo::{Attr, N};
+        let mut a = plane([1.0, 1.0], [1, 1]);
+        let (np, nf) = (a.positions.len(), a.triangles.len());
+        a.point_attrs.set("w", Attr::Float((0..np).map(|i| i as f32).collect()), np).unwrap();
+        a.point_attrs.set(N, Attr::Vec3(vec![[0.0, 0.0, 1.0]; np]), np).unwrap();
+        a.face_attrs.set("id", Attr::Int((0..nf as i32).collect()), nf).unwrap();
+        let b = cube([1.0; 3], [1; 3]);
+        let m = Mesh::merge(&[a.clone(), b.clone()]);
+        assert!(m.point_attrs.check(m.positions.len()).is_ok() && m.face_attrs.check(m.triangles.len()).is_ok());
+        assert_eq!(m.point_attrs.float("w").unwrap()[np], 0.0, "the cube's: zeros");
+        assert_eq!(m.face_attrs.int("id").unwrap()[..nf], (0..nf as i32).collect::<Vec<_>>()[..]);
+        let f = a.flat();
+        let corners: Vec<f32> = a.triangles.iter().flatten().map(|&i| i as f32).collect();
+        assert_eq!(f.point_attrs.float("w"), Some(&corners[..]));
+        assert_eq!(f.face_attrs, a.face_attrs);
+        let mut t = a.clone();
+        t.transform(&geom::trs([0.0; 3], [90.0, 0.0, 0.0], [1.0; 3]));
+        let n = t.point_attrs.vec3(N).unwrap()[0];
+        assert!((n[1] + 1.0).abs() < 1e-6, "{n:?}: +z turned 90° about x is -y");
+        assert_eq!(t.point_attrs.float("w"), a.point_attrs.float("w"));
+    }
 
     /// Signed volume (positive when the triangles face out of a closed
     /// mesh).

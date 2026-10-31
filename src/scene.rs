@@ -5,6 +5,7 @@
 //! the graph checks ports' kinds so a scene only goes where one is wanted
 //! (see [`crate::ops::Kind`]).
 
+use crate::geo::{Curves, Instances, PointSet};
 use crate::geom::{self, Camera, Mat4, Vec3};
 use crate::image::Image;
 use crate::mesh::{Material, Mesh};
@@ -39,6 +40,11 @@ pub struct Scene {
     /// Regions nodes act in (a Splat Crop's box or sphere), for the 3D
     /// view to show and move; nothing renders them.
     pub regions: Vec<Region>,
+    /// Geometry nodes' point sets, instances and curves (see
+    /// [`crate::geo`]; each knows its node).
+    pub point_sets: Vec<PointSet>,
+    pub instances: Vec<Instances>,
+    pub curves: Vec<Curves>,
 }
 
 /// A box or ball a node acts in: `world` takes the unit cube [-1, 1]³
@@ -145,6 +151,9 @@ impl Scene {
         self.particles.extend(other.particles.iter().cloned());
         self.splats.extend(other.splats.iter().cloned());
         self.regions.extend(other.regions.iter().cloned());
+        self.point_sets.extend(other.point_sets.iter().cloned());
+        self.instances.extend(other.instances.iter().cloned());
+        self.curves.extend(other.curves.iter().cloned());
         let mut other = other.clone();
         other.fill_nodes();
         self.camera_nodes.extend(other.camera_nodes);
@@ -168,8 +177,10 @@ impl Scene {
                 *n = id.to_string();
             }
         }
-        for r in self.regions.iter_mut().filter(|r| r.node.is_empty()) {
-            r.node = id.to_string();
+        for n in self.regions.iter_mut().map(|r| &mut r.node).chain(self.point_sets.iter_mut().map(|p| &mut p.node)).chain(self.instances.iter_mut().map(|i| &mut i.node)).chain(self.curves.iter_mut().map(|c| &mut c.node)) {
+            if n.is_empty() {
+                *n = id.to_string();
+            }
         }
         // (A copy of the struct only: the splats themselves stay shared.)
         for s in self.splats.iter_mut().filter(|s| s.node.is_empty()) {
@@ -202,6 +213,16 @@ impl Scene {
         }
         if !self.particles.is_empty() {
             parts.push(n(self.particles.len(), "particle stream", "particle streams"));
+        }
+        if !self.point_sets.is_empty() {
+            let count: usize = self.point_sets.iter().map(PointSet::len).sum();
+            parts.push(format!("{} ({})", n(self.point_sets.len(), "point set", "point sets"), n(count, "point", "points")));
+        }
+        if !self.instances.is_empty() {
+            parts.push(n(self.instances.iter().map(Instances::len).sum(), "instance", "instances"));
+        }
+        if !self.curves.is_empty() {
+            parts.push(n(self.curves.iter().map(Curves::len).sum(), "curve", "curves"));
         }
         if !self.splats.is_empty() {
             let count: usize = self.splats.iter().map(|s| s.len()).sum();
@@ -373,6 +394,10 @@ impl Scene {
             .or_else(|| self.cards.first().map(|c| origin(&c.world)))
             .or_else(|| self.meshes.first().map(|m| m.bounds().map_or_else(|| origin(&m.world), |(lo, hi)| (lo + hi) / 2.0)))
             .or_else(|| self.points.first().copied())
+            .or_else(|| {
+                let b = self.point_sets.iter().find_map(PointSet::bounds).or_else(|| self.curves.iter().find_map(Curves::bounds)).or_else(|| self.instances.iter().find_map(Instances::bounds));
+                b.map(|(lo, hi)| (lo + hi) / 2.0)
+            })
             .or_else(|| self.lights.first().map(Light::position))
     }
 
@@ -382,7 +407,10 @@ impl Scene {
     /// mesh's vertices, a camera's focal length, the points) goes from one
     /// to the other, where both list the same objects from the same nodes;
     /// otherwise it stays as here. Particles move on along their
-    /// velocities. Everything else is as here.
+    /// velocities. Point sets and instances move each element to its
+    /// match (see [`crate::geo::matched`]: by id, else by index); curves
+    /// move their points where both frames have as many. Everything else
+    /// is as here.
     pub fn at_time(&self, frames: &[(i64, &Scene)], t: f64) -> Scene {
         let mut out = self.clone();
         out.particles = self.particles.iter().map(|s| s.shifted(t)).collect();
@@ -436,6 +464,39 @@ impl Scene {
         if same_nodes(&out.lights, &a.lights, &b.lights, |l| &l.node) {
             for (l, (x, y)) in out.lights.iter_mut().zip(a.lights.iter().zip(&b.lights)) {
                 l.world = between(&x.world, &y.world, w);
+            }
+        }
+        if same_nodes(&out.point_sets, &a.point_sets, &b.point_sets, |p| &p.node) {
+            for (p, (x, y)) in out.point_sets.iter_mut().zip(a.point_sets.iter().zip(&b.point_sets)) {
+                p.world = between(&x.world, &y.world, w);
+                if let Some(to) = (p.len() == x.len()).then(|| crate::geo::matched((&x.attrs, x.len()), (&y.attrs, y.len()))).flatten() {
+                    for (i, j) in to.iter().enumerate() {
+                        if let Some(j) = j {
+                            p.positions[i] = x.positions[i] + (y.positions[*j] - x.positions[i]) * w;
+                        }
+                    }
+                }
+            }
+        }
+        if same_nodes(&out.instances, &a.instances, &b.instances, |i| &i.node) {
+            for (p, (x, y)) in out.instances.iter_mut().zip(a.instances.iter().zip(&b.instances)) {
+                if let Some(to) = (p.len() == x.len()).then(|| crate::geo::matched((&x.attrs, x.len()), (&y.attrs, y.len()))).flatten() {
+                    for (i, j) in to.iter().enumerate() {
+                        if let Some(j) = j {
+                            p.worlds[i] = between(&x.worlds[i], &y.worlds[*j], w);
+                        }
+                    }
+                }
+            }
+        }
+        if same_nodes(&out.curves, &a.curves, &b.curves, |c| &c.node) {
+            for (c, (x, y)) in out.curves.iter_mut().zip(a.curves.iter().zip(&b.curves)) {
+                c.world = between(&x.world, &y.world, w);
+                if c.positions.len() == x.positions.len() && x.positions.len() == y.positions.len() {
+                    for (p, (u, v)) in c.positions.iter_mut().zip(x.positions.iter().zip(&y.positions)) {
+                        *p = u + (v - u) * w;
+                    }
+                }
             }
         }
         if a.point_nodes == out.point_nodes && b.point_nodes == out.point_nodes {
@@ -647,5 +708,52 @@ mod tests {
         // Stats name what's in a scene.
         let stats = crate::session::image_stats(&out);
         assert_eq!(stats["scene"], "1 camera, 1 card");
+    }
+
+    /// Point sets, instances and curves join, get their node, and blur
+    /// between frames: by id (an element only one frame has stays put),
+    /// else by index; with other counts and no ids, they stay.
+    #[test]
+    fn geometry_joins_tags_and_blurs() {
+        use crate::geo::{Attr, Attrs, Curves, Instances, PointSet, ID};
+        let ids = |v: &[i32]| {
+            let mut a = Attrs::default();
+            a.set(ID, Attr::Int(v.to_vec()), v.len()).unwrap();
+            a
+        };
+        let set = |xs: &[f64], id: Option<&[i32]>| PointSet { positions: xs.iter().map(|&x| Vec3::new(x, 0.0, 0.0)).collect(), attrs: id.map(ids).unwrap_or_default(), ..PointSet::default() };
+        let mut curve = Curves::default();
+        curve.push(&[Vec3::zeros(), Vec3::x()], false);
+        let mut s = Scene { point_sets: vec![set(&[0.0, 1.0], None)], ..Scene::default() };
+        s.tag("scatter");
+        s.extend(&Scene { curves: vec![curve.clone()], instances: vec![Instances::default()], ..Scene::default() });
+        s.tag("more");
+        assert_eq!((s.point_sets[0].node.as_str(), s.curves[0].node.as_str(), s.instances[0].node.as_str()), ("scatter", "more", "more"));
+        assert_eq!(s.describe(), "0 cameras, 0 cards, 1 point set (2 points), 0 instances, 1 curve");
+        let blur = |a: PointSet, b: PointSet| {
+            let (mut a, mut b) = (Scene { point_sets: vec![a], ..Scene::default() }, Scene { point_sets: vec![b], ..Scene::default() });
+            a.tag("p");
+            b.tag("p");
+            a.at_time(&[(0, &a), (1, &b)], 0.5).point_sets[0].positions.iter().map(|p| p.x).collect::<Vec<f64>>()
+        };
+        // By id: 7 goes 0 -> 4, 3 goes 1 -> 2, 9 isn't in the next frame.
+        assert_eq!(blur(set(&[0.0, 1.0, 5.0], Some(&[7, 3, 9])), set(&[2.0, 4.0], Some(&[3, 7]))), vec![2.0, 1.5, 5.0]);
+        assert_eq!(blur(set(&[0.0, 1.0], None), set(&[2.0, 4.0], None)), vec![1.0, 2.5], "by index");
+        assert_eq!(blur(set(&[0.0, 1.0], None), set(&[2.0, 4.0, 6.0], None)), vec![0.0, 1.0], "can't match: still");
+        // Instances by id, curves by point.
+        let inst = |x: f64, id: i32| {
+            let mut i = Instances { worlds: vec![geom::trs([x, 0.0, 0.0], [0.0; 3], [1.0; 3])], which: vec![0], attrs: ids(&[id]), ..Instances::default() };
+            i.node = "inst".into();
+            i
+        };
+        let mut c2 = curve.clone();
+        c2.positions[1] = Vec3::new(3.0, 0.0, 0.0);
+        let mut a = Scene { instances: vec![inst(0.0, 1)], curves: vec![curve], ..Scene::default() };
+        let mut b = Scene { instances: vec![inst(2.0, 1)], curves: vec![c2], ..Scene::default() };
+        a.tag("c");
+        b.tag("c");
+        let mid = a.at_time(&[(0, &a), (1, &b)], 0.5);
+        assert_eq!(mid.instances[0].worlds[0][(0, 3)], 1.0);
+        assert_eq!(mid.curves[0].positions[1].x, 2.0);
     }
 }

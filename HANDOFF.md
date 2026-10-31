@@ -31,6 +31,17 @@ done), `docs/help.md` (the in-app help) and
   lookup (`MapAt`). 4K AA3 Quality 16: softness 1 22.9 → 15.8 s, 2 51.2 →
   31.4 s, layered bench 35.1 → 22.8 s. Test
   `many_sample_area_lights_shadow_as_on_the_cpu`.
+- **0.13.5, P1a: the geometry model** (Dev2): `src/geo.rs`: `Attr`
+  {Float, Vec3, Vec4, Int}, `Attrs` (length-checked, concat zero-fills,
+  kind clash dropped, `transform` turns N / up / orient), `PointSet`,
+  `Curves` (starts + closed), `Instances` (prototypes Model / Card /
+  Splats, `which`, `worlds`, attrs; tint = Cd attr), `geo::matched` (by
+  Int id, else index). `Mesh.point_attrs` / `face_attrs`. `Scene`
+  `point_sets` / `instances` / `curves` through extend, tag, describe,
+  at_time. The 3D view frames, picks and box-selects them (drawn in P1b).
+  **Release rule (user, 2026-10-31): release v0.13.x when P1 is done**
+  (P1a + P1b Transform Geo / drawing + Dev1's spreadsheet and `geometry`
+  query).
 - **0.13.4, area-light step 2** (Dev2): a `map_blocks` pass after each
   shadow map stores per 4×4 texels the nearest caster and the farthest
   opaque one (map table word 27, 2 words a block, counted in the maps'

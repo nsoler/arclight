@@ -23,6 +23,7 @@ pub mod crash;
 pub mod dpx;
 pub mod expr;
 pub mod features;
+pub mod geo;
 pub mod geom;
 pub mod gltf;
 pub mod gpu;

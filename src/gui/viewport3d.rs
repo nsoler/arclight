@@ -334,6 +334,12 @@ fn bounds(scene: &Scene, only: Option<&dyn Fn(&str) -> bool>) -> Option<(Vec3, f
     for (lo, hi) in scene.splats.iter().filter(|s| keep(&s.node)).filter_map(|s| s.bounds()) {
         pts.extend([lo, hi]);
     }
+    // Geometry nodes' point sets, curves and instances.
+    let geo = scene.point_sets.iter().filter(|g| keep(&g.node)).filter_map(|g| g.bounds());
+    let geo = geo.chain(scene.curves.iter().filter(|c| keep(&c.node)).filter_map(|c| c.bounds()));
+    for (lo, hi) in geo.chain(scene.instances.iter().filter(|i| keep(&i.node)).filter_map(|i| i.bounds())) {
+        pts.extend([lo, hi]);
+    }
     if pts.is_empty() {
         return None;
     }
@@ -711,12 +717,29 @@ pub fn pick_all(scene: &Scene, p: &Projector, aspect: f64, s: Pos2, is_locator: 
             }
         }
     }
+    // Point sets and instances: the nearest point or instance (only the
+    // node is picked).
+    for g in scene.point_sets.iter().filter(|g| !g.node.is_empty()) {
+        if let Some((d, depth)) = nearest_projected((0..g.len()).map(|i| g.placed(i)), p, s) {
+            if d <= PICK_RADIUS {
+                near.push((d, depth, Hit::Object(g.node.clone())));
+            }
+        }
+    }
+    for g in scene.instances.iter().filter(|g| !g.node.is_empty()) {
+        if let Some((d, depth)) = nearest_projected((0..g.len()).map(|i| g.center(i)), p, s) {
+            if d <= PICK_RADIUS {
+                near.push((d, depth, Hit::Object(g.node.clone())));
+            }
+        }
+    }
     near.sort_by(|a, b| (a.0, a.1).partial_cmp(&(b.0, b.1)).unwrap_or(std::cmp::Ordering::Equal));
     // Thin things by their lines, as far along the ray as where they pass
     // nearest it (as cards and meshes are below).
     let (o, d) = p.ray(s);
     let mut under: Vec<(f64, Hit)> = Vec::new();
-    for (node, lines) in object_lines(scene, icon_size(scene), aspect) {
+    let curves = scene.curves.iter().filter(|c| !c.node.is_empty()).map(|c| (c.node.clone(), c.segments()));
+    for (node, lines) in object_lines(scene, icon_size(scene), aspect).into_iter().chain(curves) {
         let nearest = lines
             .iter()
             .filter_map(|&(a, b)| {
@@ -765,10 +788,15 @@ pub fn pick_all(scene: &Scene, p: &Projector, aspect: f64, s: Pos2, is_locator: 
 /// The nearest of splat set `s`'s centers to screen point `at` seen
 /// through `p`: how far from it on screen, and its depth.
 fn nearest_splat(s: &arclight::splat::Splats, p: &Projector, at: Pos2) -> Option<(f32, f64)> {
-    s.positions
-        .iter()
+    nearest_projected(s.positions.iter().map(|c| geom::transform_point(&s.world, &Vec3::from(c.map(f64::from)))), p, at)
+}
+
+/// Of `points` (in the scene), the one nearest screen point `at` seen
+/// through `p`: how far from `at` it shows, and its depth.
+fn nearest_projected(points: impl Iterator<Item = Vec3>, p: &Projector, at: Pos2) -> Option<(f32, f64)> {
+    points
         .filter_map(|c| {
-            let (q, depth) = p.project(geom::transform_point(&s.world, &Vec3::from(c.map(f64::from))))?;
+            let (q, depth) = p.project(c)?;
             Some((q.distance(at), depth))
         })
         .min_by(|a, b| (a.0, a.1).partial_cmp(&(b.0, b.1)).unwrap_or(std::cmp::Ordering::Equal))
@@ -868,6 +896,16 @@ pub fn box_pick(scene: &Scene, p: &Projector, a: Pos2, b: Pos2, is_locator: &dyn
     }
     for s in scene.splats.iter().filter(|s| s.bounds().is_some_and(|(lo, hi)| inside((lo + hi) / 2.0))) {
         add(&s.node);
+    }
+    let middle = |b: Option<(Vec3, Vec3)>| b.is_some_and(|(lo, hi)| inside((lo + hi) / 2.0));
+    for g in scene.point_sets.iter().filter(|g| middle(g.bounds())) {
+        add(&g.node);
+    }
+    for c in scene.curves.iter().filter(|c| middle(c.bounds())) {
+        add(&c.node);
+    }
+    for i in scene.instances.iter().filter(|i| middle(i.bounds())) {
+        add(&i.node);
     }
     let mut points = Vec::new();
     for (i, pt) in scene.points.iter().enumerate() {
@@ -1346,6 +1384,7 @@ impl Viewport3d {
     pub fn ghosts(&self) -> (Vec<String>, &[(String, String)]) {
         let held: Vec<String> = self.ghosts.as_deref().map_or_else(Vec::new, |g| {
             let mut v: Vec<String> = g.cards.iter().map(|c| c.node.clone()).chain(g.meshes.iter().map(|m| m.node.clone())).chain(g.lights.iter().map(|l| l.node.clone())).collect();
+            v.extend(g.point_sets.iter().map(|p| p.node.clone()).chain(g.curves.iter().map(|c| c.node.clone())).chain(g.instances.iter().map(|i| i.node.clone())));
             v.extend((0..g.cameras.len()).map(|i| g.camera_node(i).to_string()).chain((0..g.points.len()).map(|i| g.point_node(i).to_string())));
             v.sort();
             v.dedup();
@@ -1396,6 +1435,12 @@ impl Viewport3d {
         }
         if let Some(g) = gadgets(s).into_iter().find(|g| g.node == node) {
             return Some(g.world);
+        }
+        if let Some(g) = s.point_sets.iter().find(|g| g.node == node) {
+            return Some(g.world);
+        }
+        if let Some(c) = s.curves.iter().find(|c| c.node == node) {
+            return Some(c.world);
         }
         let i = (0..s.points.len()).find(|&i| s.point_node(i) == node)?;
         Some(Mat4::new_translation(&s.points[i]))
@@ -3011,6 +3056,35 @@ mod tests {
         let mid = at(Vec3::new(-2.0, 2.0, -9.0));
         let (objects, _) = box_pick(&s, &p, mid - Vec2::splat(4.0), mid + Vec2::splat(4.0), &loc);
         assert_eq!(objects, ["capture"]);
+    }
+
+    /// Point sets and instances are picked by their nearest point or
+    /// instance, curves by their lines; all three framed, boxed and placed
+    /// (instances have no placement of their own).
+    #[test]
+    fn point_sets_curves_and_instances_are_picked_framed_and_boxed() {
+        use arclight::geo::{Curves, Instances, PointSet, Prototype};
+        let (mut s, p, _) = picking_scene();
+        let loc = |_: &str| false;
+        let at = |x: Vec3| p.project(x).unwrap().0;
+        let shift = geom::trs([0.0, 3.0, 0.0], [0.0; 3], [1.0; 3]);
+        s.point_sets.push(PointSet { positions: vec![Vec3::new(-3.0, 0.0, -9.0), Vec3::new(-1.0, 0.0, -9.0)], world: shift, node: "scatter".into(), ..PointSet::default() });
+        let mut c = Curves { world: shift, node: "path".into(), ..Curves::default() };
+        c.push(&[Vec3::new(1.0, 0.0, -9.0), Vec3::new(3.0, 0.0, -9.0)], false);
+        s.curves.push(c);
+        let model = arclight::scene::Model::new(Arc::new(arclight::mesh::cube([0.2; 3], [1; 3])), Mat4::identity(), arclight::mesh::Material::default());
+        s.instances.push(Instances { prototypes: vec![Prototype::Model(model)], which: vec![0], worlds: vec![geom::trs([0.0, -3.0, -9.0], [0.0; 3], [1.0; 3])], node: "copies".into(), ..Instances::default() });
+        assert_eq!(pick(&s, &p, ASPECT, at(Vec3::new(-1.0, 3.0, -9.0)) + Vec2::new(2.0, 1.0), &loc), Some(Hit::Object("scatter".into())), "near a point");
+        assert_eq!(pick(&s, &p, ASPECT, at(Vec3::new(2.0, 3.0, -9.0)), &loc), Some(Hit::Object("path".into())), "on a curve's line");
+        assert_eq!(pick(&s, &p, ASPECT, at(Vec3::new(0.0, -3.0, -9.0)), &loc), Some(Hit::Object("copies".into())), "at an instance");
+        let (c, _) = bounds(&s, Some(&|n: &str| n == "scatter")).unwrap();
+        assert!((c - Vec3::new(-2.0, 3.0, -9.0)).norm() < 1e-6, "{c:?}");
+        let (c, _) = bounds(&s, Some(&|n: &str| n == "copies")).unwrap();
+        assert!((c - Vec3::new(0.0, -3.0, -9.0)).norm() < 1e-6, "{c:?}");
+        let mid = at(Vec3::new(2.0, 3.0, -9.0));
+        assert_eq!(box_pick(&s, &p, mid - Vec2::splat(4.0), mid + Vec2::splat(4.0), &loc).0, ["path"]);
+        assert_eq!(Viewport3d::world_in(&s, "scatter"), Some(shift));
+        assert_eq!(Viewport3d::world_in(&s, "copies"), None);
     }
 
     #[test]
