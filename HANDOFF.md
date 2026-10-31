@@ -31,6 +31,13 @@ done), `docs/help.md` (the in-app help) and
   lookup (`MapAt`). 4K AA3 Quality 16: softness 1 22.9 → 15.8 s, 2 51.2 →
   31.4 s, layered bench 35.1 → 22.8 s. Test
   `many_sample_area_lights_shadow_as_on_the_cpu`.
+- **0.13.7, P1b: Transform Geo + drawing** (Dev2): `transform_geo`
+  (ops.rs; world' = T(t + pivot) R S T(-pivot) · world, nothing
+  re-baked; Group = node name or `*` glob; `cameras_lights` off by
+  default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
+  Cd or gray), curves as green lines, instances as a bounds box per node;
+  Scanline Render ignores point sets and curves. P1 left: Dev1's
+  spreadsheet + `geometry` query (P1c), then the v0.13 release.
 - **0.13.5, P1a: the geometry model** (Dev2): `src/geo.rs`: `Attr`
   {Float, Vec3, Vec4, Int}, `Attrs` (length-checked, concat zero-fills,
   kind clash dropped, `transform` turns N / up / orient), `PointSet`,

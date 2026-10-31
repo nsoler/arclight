@@ -17,6 +17,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.7 — 2026-10-31
+
+- New **Transform Geo** node: moves, turns and scales what's in a scene
+  (meshes, cards, point sets, curves, instances, splat captures) about a
+  pivot, all of it or one node's (Group, with `*` patterns); cameras and
+  lights stay unless asked.
+- The 3D view draws point sets as dots (sized by pscale, colored by Cd),
+  curves as lines and instances as boxes.
+
 ## 0.13.6 — 2026-10-31
 
 - Node graph: a wire dropped on a node's body no longer goes into its mask

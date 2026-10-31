@@ -91,7 +91,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1063,6 +1063,27 @@ pub static OPS: &[OpInfo] = &[
                is cropped; everything else passes through.",
     },
     OpInfo {
+        name: "transform_geo",
+        label: "Transform Geo",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN],
+        params: &[
+            PLACE_T,
+            PLACE_R,
+            PLACE_S,
+            p!("pivot", "Pivot", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("cameras_lights", "Cameras and lights", ParamKind::Bool, false),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Moves, turns and scales what's in a scene, in the scene's space about Pivot: meshes, cards, point sets, \
+               curves, instances, splat captures and regions (each placed anew; nothing is rebuilt). Group narrows it to \
+               what came from one node (its name), or from those whose names match a pattern with * (`tree*`); empty: \
+               everything. Cameras and lights stay where they are unless Cameras and lights is on, so moving the set \
+               doesn't move the shot.",
+    },
+    OpInfo {
         name: "splat_color",
         label: "Splat Color",
         category: Category::Scene,
@@ -1893,6 +1914,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "read_geo" => read_geo(params, ctx.frame),
         "read_splat" => read_splat(params),
         "splat_crop" => splat_crop(params, inputs),
+        "transform_geo" => Ok(scene_output(DEFAULT_FORMAT, transform_geo(params, input_scene(inputs)))),
         "splat_color" => splat_color(params, inputs),
         "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => {
             let target = inputs.first().copied().flatten().and_then(|t| t.scene.as_deref());
@@ -3474,6 +3496,56 @@ fn splat_crop(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     Ok(scene_output(DEFAULT_FORMAT, out))
 }
 
+/// A Transform Geo: `scene` with what's in its group moved by its
+/// placement (about its pivot, in scene space) before its own.
+fn transform_geo(params: &Value, mut scene: Scene) -> Scene {
+    let pivot = geom::Vec3::from(scene::numbers::<3>(&params["pivot"], 0.0));
+    let t = scene::numbers::<3>(&params["translate"], 0.0);
+    let m = geom::trs([t[0] + pivot.x, t[1] + pivot.y, t[2] + pivot.z], scene::numbers(&params["rotate"], 0.0), scene::numbers(&params["scale"], 1.0)) * geom::Mat4::new_translation(&-pivot);
+    let group = params["group"].as_str().unwrap_or("").trim().to_string();
+    let take = |node: &str| group.is_empty() || glob(&group, node);
+    let moved = |w: &mut geom::Mat4| *w = m * *w;
+    scene.meshes.iter_mut().filter(|o| take(&o.node)).for_each(|o| moved(&mut o.world));
+    scene.cards.iter_mut().filter(|o| take(&o.node)).for_each(|o| moved(&mut o.world));
+    scene.point_sets.iter_mut().filter(|o| take(&o.node)).for_each(|o| moved(&mut o.world));
+    scene.curves.iter_mut().filter(|o| take(&o.node)).for_each(|o| moved(&mut o.world));
+    scene.instances.iter_mut().filter(|o| take(&o.node)).for_each(|o| o.worlds.iter_mut().for_each(moved));
+    scene.regions.iter_mut().filter(|o| take(&o.node)).for_each(|o| moved(&mut o.world));
+    // (The struct copied only: the splats themselves stay shared.)
+    scene.splats.iter_mut().filter(|o| take(&o.node)).for_each(|o| moved(&mut std::sync::Arc::make_mut(o).world));
+    if params["cameras_lights"].as_bool().unwrap_or(false) {
+        let nodes = scene.camera_nodes.clone();
+        for (i, c) in scene.cameras.iter_mut().enumerate() {
+            if take(nodes.get(i).map_or("", String::as_str)) {
+                moved(&mut c.world);
+            }
+        }
+        scene.lights.iter_mut().filter(|o| take(&o.node)).for_each(|o| moved(&mut o.world));
+    }
+    scene
+}
+
+/// Whether `name` matches `pattern`, where each * stands for any run of
+/// characters (none too).
+fn glob(pattern: &str, name: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return pattern == name;
+    }
+    let (first, last) = (parts[0], parts[parts.len() - 1]);
+    if !name.starts_with(first) || !name[first.len()..].ends_with(last) || name.len() < first.len() + last.len() {
+        return false;
+    }
+    let mut rest = &name[first.len()..name.len() - last.len()];
+    for part in &parts[1..parts.len() - 1] {
+        match rest.find(part) {
+            Some(k) => rest = &rest[k + part.len()..],
+            None => return false,
+        }
+    }
+    true
+}
+
 /// The linear color transform a Splat Color's params describe: gain and
 /// exposure after saturation (by Rec. 709 luminance), row-major.
 fn splat_grade(params: &Value) -> [[f32; 3]; 3] {
@@ -3806,6 +3878,43 @@ mod tests {
     /// over 64 on the ground): a sphere round the ball keeps just it, a
     /// thin box (turned or not) just the ground; inverted, the rest; what
     /// keeps everything shares it; the rest of the scene passes through.
+    /// Transform Geo moves its group's meshes, cards, point sets, curves
+    /// and instances about the pivot; cameras and lights only when asked.
+    #[test]
+    fn transform_geo_moves_its_group() {
+        use crate::geo::{Curves, Instances, PointSet};
+        let cube = crate::scene::Model { node: "rock1".into(), ..crate::scene::Model::new(std::sync::Arc::new(crate::mesh::cube([1.0; 3], [1; 3])), geom::Mat4::identity(), crate::mesh::Material::default()) };
+        let other = crate::scene::Model { node: "tree".into(), ..cube.clone() };
+        let mut curves = Curves { node: "rock2".into(), ..Curves::default() };
+        curves.push(&[geom::Vec3::zeros(), geom::Vec3::x()], false);
+        let scene = Scene {
+            meshes: vec![cube, other],
+            point_sets: vec![PointSet { node: "rockpts".into(), positions: vec![geom::Vec3::x()], ..PointSet::default() }],
+            curves: vec![curves],
+            instances: vec![Instances { node: "rocks".into(), worlds: vec![geom::Mat4::identity()], which: vec![0], ..Instances::default() }],
+            cameras: vec![geom::Camera::default()],
+            camera_nodes: vec!["cam".into()],
+            ..Scene::default()
+        };
+        let plate = scene_output(DEFAULT_FORMAT, scene);
+        let run = |p: Value| eval("transform_geo", &p, &[Some(&plate)], &CTX).unwrap().scene.clone().unwrap();
+        assert_eq!(output_kind("transform_geo"), Kind::Scene);
+        // 90° about y around (1, 0, 0), then 2 up: the origin goes to (1, 2, 1).
+        let out = run(json!({ "translate": [0, 2, 0], "rotate": [0, 90, 0], "pivot": [1, 0, 0], "group": "rock*" }));
+        let at = |m: &geom::Mat4| geom::transform_point(m, &geom::Vec3::zeros());
+        assert!((at(&out.meshes[0].world) - geom::Vec3::new(1.0, 2.0, 1.0)).norm() < 1e-9, "{}", at(&out.meshes[0].world));
+        assert_eq!(out.meshes[1].world, geom::Mat4::identity(), "tree isn't rock*");
+        assert_eq!(out.point_sets[0].world, out.meshes[0].world);
+        assert_eq!(out.curves[0].world, out.meshes[0].world);
+        assert_eq!(out.instances[0].worlds[0], out.meshes[0].world);
+        assert_eq!(out.point_sets[0].positions, vec![geom::Vec3::x()], "placed anew, not rebuilt");
+        assert_eq!(out.cameras[0].world, geom::Mat4::identity(), "the camera stays");
+        let all = run(json!({ "translate": [0, 0, 5], "cameras_lights": true }));
+        assert_eq!(at(&all.cameras[0].world).z, 5.0);
+        assert_eq!(at(&all.meshes[1].world).z, 5.0, "no group: everything");
+        assert!(glob("tree", "tree") && !glob("tree", "trees") && glob("t*e*s", "trees") && glob("*", "") && !glob("a*b", "ab_c") && glob("*rock", "bigrock"));
+    }
+
     #[test]
     fn splat_crop_keeps_whats_inside() {
         let file = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/geo/splats.ply");

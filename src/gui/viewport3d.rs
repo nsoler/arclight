@@ -791,6 +791,34 @@ fn nearest_splat(s: &arclight::splat::Splats, p: &Projector, at: Pos2) -> Option
     nearest_projected(s.positions.iter().map(|c| geom::transform_point(&s.world, &Vec3::from(c.map(f64::from)))), p, at)
 }
 
+/// The point sets' points as the view draws them, seen through `p`: where
+/// on screen, how wide (Pscale seen there, 2 to 8 points; 3 without) and
+/// the color (Cd, else gray; selected ones `SELECTED`).
+fn geo_dots(scene: &Scene, p: &Projector, selected: &dyn Fn(&str) -> bool) -> Vec<(Pos2, f32, Color32)> {
+    let mut out = Vec::new();
+    for g in &scene.point_sets {
+        let on = selected(&g.node);
+        let sizes = g.attrs.float(arclight::geo::PSCALE);
+        let colors = g.attrs.vec4(arclight::geo::CD);
+        for i in 0..g.len() {
+            let Some((s, depth)) = p.project(g.placed(i)) else { continue };
+            if !p.rect.contains(s) {
+                continue;
+            }
+            let across = sizes.map_or(3.0, |k| (k[i] as f64 * p.pixels_per_unit(depth)).clamp(2.0, 8.0) as f32);
+            let color = if on { SELECTED } else { colors.map_or(GEO_POINT, |c| dot_color(c[i])) };
+            out.push((s, across, color));
+        }
+    }
+    out
+}
+
+/// A point's Cd (linear RGBA) as the view shows it, opaque.
+fn dot_color(c: [f32; 4]) -> Color32 {
+    let [r, g, b] = [c[0], c[1], c[2]].map(|v| v.clamp(0.0, 1.0));
+    Color32::from(egui::Rgba::from_rgb(r, g, b))
+}
+
 /// Of `points` (in the scene), the one nearest screen point `at` seen
 /// through `p`: how far from `at` it shows, and its depth.
 fn nearest_projected(points: impl Iterator<Item = Vec3>, p: &Projector, at: Pos2) -> Option<(f32, f64)> {
@@ -1306,6 +1334,9 @@ const MESH: Color32 = Color32::from_rgb(150, 170, 190);
 /// Meshes with more edges than this are outlined by their box.
 const MAX_EDGES: usize = 40_000;
 const POINT: Color32 = Color32::from_rgb(90, 175, 225);
+/// A point set's points without a color (Cd), and curves.
+const GEO_POINT: Color32 = Color32::from_gray(175);
+const CURVE: Color32 = Color32::from_rgb(120, 200, 150);
 /// The most particles drawn as dots per stream (past it, every so many).
 const MAX_PARTICLE_DOTS: usize = 20_000;
 /// A box's twelve edges, by corner (bit 0: x high, 1: y high, 2: z high).
@@ -2280,6 +2311,26 @@ impl Viewport3d {
                 painter.circle_filled(s, if on { 3.0 } else { 1.8 }, if on { SELECTED } else { color });
             }
         }
+        // Geometry: point sets as dots (as one mesh: there can be many),
+        // curves as lines, instances as the box round each node's.
+        let mut dots = egui::Mesh::default();
+        for (s, across, color) in geo_dots(&scene, p, &selected) {
+            dots.add_colored_rect(Rect::from_center_size(s, Vec2::splat(across)), color);
+        }
+        if !dots.is_empty() {
+            painter.add(egui::Shape::mesh(dots));
+        }
+        for c in &scene.curves {
+            let stroke = if selected(&c.node) { Stroke::new(2.0, SELECTED) } else { Stroke::new(1.2, CURVE) };
+            c.segments().into_iter().for_each(|(a, b)| line(a, b, stroke));
+        }
+        for i in &scene.instances {
+            let stroke = if selected(&i.node) { Stroke::new(2.0, SELECTED) } else { Stroke::new(1.0, GADGET) };
+            if let Some((lo, hi)) = i.bounds() {
+                let corner = arclight::geo::corners(lo, hi);
+                BOX_EDGES.iter().for_each(|&(a, b)| line(corner[a], corner[b], stroke));
+            }
+        }
         // Particle emitters, attractors, vortices and bounce planes; Splat
         // Crops' regions.
         for g in gadgets(&scene) {
@@ -2389,6 +2440,15 @@ impl Viewport3d {
                     for (lo, hi) in all.splats.iter().filter(|g| &g.node == n).filter_map(|g| g.bounds()) {
                         let corner = |i: usize| Vec3::new([lo.x, hi.x][i & 1], [lo.y, hi.y][(i >> 1) & 1], [lo.z, hi.z][(i >> 2) & 1]);
                         BOX_EDGES.iter().for_each(|&(a, b)| line(corner(a), corner(b), hover));
+                    }
+                    // Point sets and instances: their box; curves: their lines.
+                    let boxes = all.point_sets.iter().filter(|g| &g.node == n).filter_map(|g| g.bounds());
+                    for (lo, hi) in boxes.chain(all.instances.iter().filter(|g| &g.node == n).filter_map(|g| g.bounds())) {
+                        let corner = arclight::geo::corners(lo, hi);
+                        BOX_EDGES.iter().for_each(|&(a, b)| line(corner[a], corner[b], hover));
+                    }
+                    for c in all.curves.iter().filter(|c| &c.node == n) {
+                        c.segments().into_iter().for_each(|(a, b)| line(a, b, hover));
                     }
                 }
                 Hit::Point(_, i) => {
@@ -3067,24 +3127,38 @@ mod tests {
         let (mut s, p, _) = picking_scene();
         let loc = |_: &str| false;
         let at = |x: Vec3| p.project(x).unwrap().0;
-        let shift = geom::trs([0.0, 3.0, 0.0], [0.0; 3], [1.0; 3]);
+        let shift = geom::trs([0.0, 1.0, 0.0], [0.0; 3], [1.0; 3]);
         s.point_sets.push(PointSet { positions: vec![Vec3::new(-3.0, 0.0, -9.0), Vec3::new(-1.0, 0.0, -9.0)], world: shift, node: "scatter".into(), ..PointSet::default() });
         let mut c = Curves { world: shift, node: "path".into(), ..Curves::default() };
         c.push(&[Vec3::new(1.0, 0.0, -9.0), Vec3::new(3.0, 0.0, -9.0)], false);
         s.curves.push(c);
         let model = arclight::scene::Model::new(Arc::new(arclight::mesh::cube([0.2; 3], [1; 3])), Mat4::identity(), arclight::mesh::Material::default());
         s.instances.push(Instances { prototypes: vec![Prototype::Model(model)], which: vec![0], worlds: vec![geom::trs([0.0, -3.0, -9.0], [0.0; 3], [1.0; 3])], node: "copies".into(), ..Instances::default() });
-        assert_eq!(pick(&s, &p, ASPECT, at(Vec3::new(-1.0, 3.0, -9.0)) + Vec2::new(2.0, 1.0), &loc), Some(Hit::Object("scatter".into())), "near a point");
-        assert_eq!(pick(&s, &p, ASPECT, at(Vec3::new(2.0, 3.0, -9.0)), &loc), Some(Hit::Object("path".into())), "on a curve's line");
+        assert_eq!(pick(&s, &p, ASPECT, at(Vec3::new(-1.0, 1.0, -9.0)) + Vec2::new(2.0, 1.0), &loc), Some(Hit::Object("scatter".into())), "near a point");
+        assert_eq!(pick(&s, &p, ASPECT, at(Vec3::new(2.0, 1.0, -9.0)), &loc), Some(Hit::Object("path".into())), "on a curve's line");
         assert_eq!(pick(&s, &p, ASPECT, at(Vec3::new(0.0, -3.0, -9.0)), &loc), Some(Hit::Object("copies".into())), "at an instance");
         let (c, _) = bounds(&s, Some(&|n: &str| n == "scatter")).unwrap();
-        assert!((c - Vec3::new(-2.0, 3.0, -9.0)).norm() < 1e-6, "{c:?}");
+        assert!((c - Vec3::new(-2.0, 1.0, -9.0)).norm() < 1e-6, "{c:?}");
         let (c, _) = bounds(&s, Some(&|n: &str| n == "copies")).unwrap();
         assert!((c - Vec3::new(0.0, -3.0, -9.0)).norm() < 1e-6, "{c:?}");
-        let mid = at(Vec3::new(2.0, 3.0, -9.0));
+        let mid = at(Vec3::new(2.0, 1.0, -9.0));
         assert_eq!(box_pick(&s, &p, mid - Vec2::splat(4.0), mid + Vec2::splat(4.0), &loc).0, ["path"]);
         assert_eq!(Viewport3d::world_in(&s, "scatter"), Some(shift));
         assert_eq!(Viewport3d::world_in(&s, "copies"), None);
+        // Drawn: a dot a point, Pscale wide (within 2 to 8) and Cd's color,
+        // else 3 wide and gray; selected, the selection's color.
+        let none = |_: &str| false;
+        let dots = geo_dots(&s, &p, &none);
+        assert_eq!(dots.iter().map(|d| (d.1, d.2)).collect::<Vec<_>>(), vec![(3.0, GEO_POINT); 2]);
+        let g = &mut s.point_sets[0];
+        g.attrs.set(arclight::geo::PSCALE, arclight::geo::Attr::Float(vec![0.001, 100.0]), 2).unwrap();
+        g.attrs.set(arclight::geo::CD, arclight::geo::Attr::Vec4(vec![[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]]), 2).unwrap();
+        let dots = geo_dots(&s, &p, &none);
+        assert_eq!(dots.iter().map(|d| (d.1, d.2)).collect::<Vec<_>>(), vec![(2.0, Color32::RED), (8.0, Color32::BLUE)]);
+        s.point_sets[0].attrs.set(arclight::geo::PSCALE, arclight::geo::Attr::Float(vec![0.05, 0.05]), 2).unwrap();
+        let w = geo_dots(&s, &p, &none)[0].1;
+        assert!(w > 2.0 && w < 8.0, "{w}: pscale seen at its depth");
+        assert!(geo_dots(&s, &p, &|n: &str| n == "scatter").iter().all(|d| d.2 == SELECTED));
     }
 
     #[test]

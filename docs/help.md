@@ -373,6 +373,13 @@ selected object.
   exact from every viewing angle) and their **Opacity**; **View
   independent** drops the color's change with the angle (quicker, and
   steadier where reflections flicker).
+- Geometry nodes' point sets show as dots, sized by their pscale
+  attribute (2 to 8 pixels) and colored by Cd (gray without); curves as
+  green lines; instances as a box round each node's copies. Click one to
+  select the node that made it. **Transform Geo** moves, turns and scales
+  what's in a scene about a pivot, everything or one node's (Group: a name
+  or a pattern like rock*); cameras and lights stay put unless you tick
+  Cameras and lights.
 - **Read Geo** reads an OBJ file (with its MTL colors and textures), a
   glTF file (.gltf, .glb) or an Alembic cache (.abc): its meshes move and
   deform frame by frame. **Frame rate** (set to the project's when you
