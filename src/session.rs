@@ -24,6 +24,8 @@ const UNDO_LIMIT: usize = 200;
 pub const MAX_PARTICLES: usize = 100_000;
 /// The most splats one [`Session::splats`] page holds.
 pub const MAX_SPLATS: usize = 100_000;
+/// Rows a `geometry` page holds at most.
+pub const MAX_GEOMETRY: usize = 100_000;
 /// About how long [`Session::particles`] simulates at a time.
 const PARTICLE_RUN: std::time::Duration = std::time::Duration::from_millis(30);
 
@@ -863,6 +865,27 @@ impl Session {
             "colors": page.iter().map(|(_, p)| p.color).collect::<Vec<_>>(),
             "stream": page.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
         }))
+    }
+
+    /// A 3D node's geometry at `frame` as paged columns (see
+    /// [`crate::geo_table`]): `domain` (its key; default the first with
+    /// rows), one object's (`object`, a node) or all.
+    pub fn geometry(&mut self, id: &str, frame: i64, domain: Option<&str>, object: Option<&str>, offset: usize, limit: usize) -> Result<Value> {
+        use crate::geo_table::{counts, Domain, Filter, Table};
+        let img = self.render(id, frame)?;
+        let scene = img.scene.as_ref().ok_or_else(|| anyhow!("'{id}' outputs an image, not a 3D scene"))?;
+        let filter = Filter { object: object.map(str::to_string), nodes: None };
+        let counts = counts(scene, &filter);
+        let domain = match domain {
+            Some(key) => Domain::from_key(key).ok_or_else(|| anyhow!("no domain '{key}': {}", Domain::ALL.map(Domain::key).join(", ")))?,
+            None => counts.iter().find(|(_, n)| *n > 0).map_or(Domain::Points, |(d, _)| *d),
+        };
+        let mut page = Table::new(scene, domain, &filter).page(offset, limit.min(MAX_GEOMETRY));
+        page["node"] = json!(id);
+        page["frame"] = json!(frame);
+        page["offset"] = json!(offset.min(page["total"].as_u64().unwrap_or(0) as usize));
+        page["domains"] = counts.iter().map(|(d, n)| (d.key().to_string(), json!(n))).collect::<serde_json::Map<_, _>>().into();
+        Ok(page)
     }
 
     /// The Gaussian splats node `id`'s scene holds at `frame` (a Read

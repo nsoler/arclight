@@ -36,8 +36,14 @@ done), `docs/help.md` (the in-app help) and
   re-baked; Group = node name or `*` glob; `cameras_lights` off by
   default). 3D view: point sets as one dot mesh (pscale at depth, 2–8 px,
   Cd or gray), curves as green lines, instances as a bounds box per node;
-  Scanline Render ignores point sets and curves. P1 left: Dev1's
-  spreadsheet + `geometry` query (P1c), then the v0.13 release.
+  Scanline Render ignores point sets and curves.
+- **0.13.8, P1c: Geo Info** (Dev1): `src/geo_table.rs` (lib, read-only:
+  `Domain`, `Filter`, `Table` with row → (object, element) by prefix sums,
+  `page()` JSON) shared by the GUI sheet (`src/gui/spreadsheet.rs`, the
+  viewer's **Sheet** toggle, a strip under the view, `show_rows`, its own
+  SceneWorker on `doc.viewed()`), the MCP `geometry` tool and Python
+  `Node.geometry()` / `arclt.geometry()`. Not yet: per-point selection
+  filter, world-space values. **P1 done**: released as v0.13.8.
 - **0.13.5, P1a: the geometry model** (Dev2): `src/geo.rs`: `Attr`
   {Float, Vec3, Vec4, Int}, `Attrs` (length-checked, concat zero-fills,
   kind clash dropped, `transform` turns N / up / orient), `PointSet`,

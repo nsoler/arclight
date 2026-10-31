@@ -24,6 +24,7 @@ pub mod dpx;
 pub mod expr;
 pub mod features;
 pub mod geo;
+pub mod geo_table;
 pub mod geom;
 pub mod gltf;
 pub mod gpu;

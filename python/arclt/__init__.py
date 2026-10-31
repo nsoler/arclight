@@ -194,6 +194,27 @@ class Node:
             out["next_offset"] = page.get("next_offset")
         return out
 
+    def geometry(self, frame: int | None = None, domain: str | None = None, offset: int = 0,
+                 limit: int | None = None, object: "Node | str | None" = None) -> dict:
+        """This 3D node's geometry at ``frame`` as a table, one ``domain``
+        at a time (``points``, ``mesh_points``, ``faces``, ``instances``,
+        ``curve_points``; default the first with rows): ``columns`` by name
+        (``index``, ``P``, ``N``, ``uv``, each attribute; ``object`` indexes
+        ``objects`` when there are several), ``domains`` (every domain's
+        count) and ``total``. All rows by default, or ``limit`` from
+        ``offset``; ``object`` keeps one node's."""
+        args = dict(node=self._name, frame=frame, domain=domain, object=None if object is None else _name(object))
+        if limit is not None:
+            return _call("geometry", offset=offset, limit=limit, **args)
+        out = _call("geometry", offset=offset, limit=100_000, **args)
+        while out.get("next_offset") is not None:
+            page = _call("geometry", offset=out["next_offset"], limit=100_000, **args)
+            for name, values in page["columns"].items():
+                out["columns"][name].extend(values)
+            out["count"] += page["count"]
+            out["next_offset"] = page.get("next_offset")
+        return out
+
     def camera_points(self, frame: int | None = None) -> list[dict]:
         """For a solved Camera Tracker: its points (``index``,
         ``position`` in 3D, ``frame_position`` in ``frame`` or None)."""
@@ -267,6 +288,12 @@ class Node:
 
     def __hash__(self) -> int:
         return hash(self._name)
+
+
+def geometry(node: "Node | str", frame: int | None = None, domain: str | None = None, offset: int = 0,
+             limit: int | None = None) -> dict:
+    """``Node(node).geometry(...)``: a 3D node's geometry as a table."""
+    return Node(_name(node)).geometry(frame, domain, offset, limit)
 
 
 def create_node(op: str, *inputs: "Node | str | None", name: str | None = None, pos: list[float] | None = None,

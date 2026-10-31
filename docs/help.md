@@ -376,7 +376,10 @@ selected object.
 - Geometry nodes' point sets show as dots, sized by their pscale
   attribute (2 to 8 pixels) and colored by Cd (gray without); curves as
   green lines; instances as a box round each node's copies. Click one to
-  select the node that made it. **Transform Geo** moves, turns and scales
+  select the node that made it. **Geo Info:** the viewer's **Sheet**
+  toggle shows the viewed scene's geometry as a table under the view
+  (points, faces, instances, curves and their attributes); MCP / Python:
+  **geometry** (`node.geometry(frame, domain)`). **Transform Geo** moves, turns and scales
   what's in a scene about a pivot, everything or one node's (Group: a name
   or a pattern like rock*); cameras and lights stay put unless you tick
   Cameras and lights.

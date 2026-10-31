@@ -91,6 +91,9 @@ pub struct Viewer {
     /// Showing the viewed node's 3D scene instead of its image (the 2D / 3D
     /// toggle, or Tab over the viewer).
     pub mode3d: bool,
+    /// Geo Info: the viewed scene's spreadsheet, in a strip under the view
+    /// (see `spreadsheet.rs`).
+    pub sheet: bool,
     /// The 3D view (`mode3d`).
     pub viewport3d: crate::viewport3d::Viewport3d,
     /// G / R / S, or a gizmo drag, in progress in the 3D view.
@@ -153,6 +156,7 @@ impl Default for Viewer {
             fit_pending: true,
             overlays: Overlays::default(),
             mode3d: false,
+            sheet: false,
             viewport3d: Default::default(),
             transforming: None,
             tool: Tool::default(),
@@ -592,6 +596,7 @@ impl Viewer {
         if r.clicked() {
             self.mode3d = true;
         }
+        ui.toggle_value(&mut self.sheet, "▦ Sheet").on_hover_text("Geo Info: the viewed node's 3D scene as a table (points, faces, instances, curves and their attributes), under the view");
         let now = ui.input(|i| i.time);
         if self.pulse_until > now {
             // A glow breathing about once a second.

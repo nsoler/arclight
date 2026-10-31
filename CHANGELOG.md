@@ -17,6 +17,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.8 — 2026-10-31
+
+- Geometry: **Geo Info**, the viewer's **Sheet** toggle: the viewed
+  node's 3D scene as a spreadsheet under the view, as Blender's: point
+  sets' points, mesh points, faces, instances and curve points as tabs
+  with their counts, a row per element and a column per value (P, N, uv,
+  instances' rotation and scale, every attribute; colors with a swatch),
+  one object or the selected ones; a million rows scroll smoothly. The
+  same table for scripts: the MCP tool `geometry` and Python's
+  `node.geometry()` / `arclt.geometry()`, in pages of columns.
+
 ## 0.13.7 — 2026-10-31
 
 - New **Transform Geo** node: moves, turns and scales what's in a scene

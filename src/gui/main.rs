@@ -20,6 +20,7 @@ mod project_settings;
 mod properties;
 mod script_jobs;
 mod sound;
+mod spreadsheet;
 mod transport;
 mod viewer;
 mod viewport3d;
@@ -245,6 +246,8 @@ struct App {
     viewer: Viewer,
     transport: Transport,
     sound: sound::Sound,
+    /// Geo Info (the viewer's Sheet toggle).
+    sheet: spreadsheet::Spreadsheet,
     props: Properties,
     worker: Worker,
     /// The last request sent to the worker.
@@ -361,6 +364,7 @@ impl App {
             viewer,
             transport,
             sound: sound::Sound::default(),
+            sheet: spreadsheet::Spreadsheet::default(),
             props: Properties::sharing(eval.clone()),
             worker: Worker::spawn(ctx.clone(), eval.clone()),
             requested: None,
@@ -1739,6 +1743,13 @@ impl eframe::App for App {
                 }
                 ui.add_space(2.0);
             });
+            // Geo Info, between the transport and the view.
+            if self.viewer.sheet {
+                egui::Panel::bottom("geo_sheet").resizable(true).default_size(240.0).min_size(80.0).show(ui, |ui| {
+                    ui.add_space(4.0);
+                    self.sheet.ui(ui, &self.doc, self.transport.frame);
+                });
+            }
             egui::CentralPanel::no_frame().show(ui, |ui| {
                 let error = self.error.as_ref().map(|e| e.to_string());
                 let target = self.doc.view_target();

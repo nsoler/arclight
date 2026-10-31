@@ -36,6 +36,24 @@ class ArcltTest(unittest.TestCase):
         with self.assertRaises(arclt.ArcltError):
             arclt.create_node("constant").particles()
 
+    def test_geometry(self):
+        box = arclt.create_node("cube", name="box")
+        ball = arclt.create_node("sphere", name="ball")
+        both = arclt.create_node("scene", box, ball)
+        g = both.geometry()
+        self.assertEqual(g["domain"], "mesh_points")
+        self.assertEqual(len(g["columns"]["P"]), g["total"])
+        self.assertEqual(g["domains"]["mesh_points"], g["total"])
+        page = both.geometry(domain="mesh_points", offset=10, limit=5)
+        self.assertEqual((page["count"], page["columns"]["P"]), (5, g["columns"]["P"][10:15]))
+        faces = arclt.geometry(both, domain="faces")
+        self.assertEqual(len(faces["columns"]["N"]), faces["total"])
+        self.assertEqual(both.geometry(domain="faces", object=box)["total"], 12)
+        with self.assertRaises(arclt.ArcltError):
+            both.geometry(domain="edges")
+        with self.assertRaises(arclt.ArcltError):
+            arclt.create_node("constant").geometry()
+
     def test_splats(self):
         sample = os.path.join(os.path.dirname(__file__), "..", "..", "examples", "geo", "splats.ply")
         cap = arclt.create_node("read_splat", name="cap", file=os.path.abspath(sample), translate=[0, 0, -5])

@@ -107,6 +107,8 @@ static TOOLS: &[Tool] = &[
         {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 0}}, "required": ["node"]}),
     tool!("splats", "The Gaussian splats a 3D node's scene holds at 'frame' (default 1): a Read Splat's capture, or those a Scene or Scanline Render gathers. Columns: positions (in the scene), scales (1 sigma, linear) and rotations ([w, x, y, z]) in the capture's own space, opacities (0-1), colors (the view-independent color, linear RGB) and set (index into 'sets': node, count, sh_degree and world, the capture's placement as a row-major 4x4). Pages: 'limit' (default 1000, at most 100000) from 'offset' (default 0); 'total' counts all, 'next_offset' starts the next page.",
         {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}, "offset": {"type": "integer"}, "limit": {"type": "integer"}}, "required": ["node"]}),
+    tool!("geometry", "A 3D node's geometry at 'frame' (default 1) as a table, as the viewer's Geo Info sheet shows it, one domain at a time: 'points' (point sets), 'mesh_points', 'faces' (triangles: center and normal), 'instances' (prototype, position, rotation in degrees, scale) or 'curve_points' (curve, position); default the first with rows. Columns: index (within its object), object (index into 'objects': node, kind, count; only with several), P, then N and uv (mesh points), then each attribute by name (floats, ints, [x, y, z] vectors, [r, g, b, a] colors, [x, y, z, w] quaternions); null where an object lacks one. Values in each object's own space. 'domains' counts every domain's rows; 'object' (a node) keeps one object's rows. Pages: 'limit' (default 1000, at most 100000) from 'offset' (default 0); 'total' counts all, 'next_offset' starts the next page.",
+        {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}, "domain": {"type": "string", "enum": ["points", "mesh_points", "faces", "instances", "curve_points"]}, "object": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 0}}, "required": ["node"]}),
     tool!("camera_points", "A Camera Tracker's solved points: index, position in 3D, and where each lands in the frame at 'frame' (default: the first solved frame), to pick points for place_on_points or orient_camera; also the solve's mode ('free move' or 'tripod') and the frames placed by PnP.",
         {"type": "object", "properties": {"node": {"type": "string"}, "frame": {"type": "integer"}}, "required": ["node"]}),
     tool!("orient_camera", "Move a Camera Tracker's solve (arbitrary until then): 'ground' (3+ point indices) becomes level at height 0 with the camera above, 'origin' (a point index) goes to 0,0,0, and 'scale' ({points: [a, b], distance}) sets the distance between two points. Applied in that order; any may be left out.",
@@ -420,6 +422,11 @@ fn run_tool(s: &mut Session, tool: &str, args: &Value, progress: &Progress) -> R
         "particles" => {
             let n = |k: &str, d: u64| args.get(k).and_then(Value::as_u64).unwrap_or(d) as usize;
             s.particles(str_arg(args, "node")?, args.get("frame").and_then(Value::as_i64).unwrap_or(1), n("offset", 0), n("limit", 1000))?
+        }
+        "geometry" => {
+            let n = |k: &str, d: u64| args.get(k).and_then(Value::as_u64).unwrap_or(d) as usize;
+            let frame = args.get("frame").and_then(Value::as_i64).unwrap_or(1);
+            s.geometry(str_arg(args, "node")?, frame, opt_str(args, "domain"), opt_str(args, "object"), n("offset", 0), n("limit", 1000))?
         }
         "splats" => {
             let n = |k: &str, d: u64| args.get(k).and_then(Value::as_u64).unwrap_or(d) as usize;
@@ -1214,6 +1221,44 @@ mod tests {
 
     /// The particles query: a burst under gravity, in pages, the same for
     /// the same seed.
+    #[test]
+    fn geometry_is_listed_in_pages_by_domain() {
+        let mut s = Server::new(Session::default());
+        call(&mut s, "create_node", json!({"op": "cube", "name": "box"}));
+        call(&mut s, "create_node", json!({"op": "sphere", "name": "ball"}));
+        call(&mut s, "create_node", json!({"op": "scene", "name": "set", "inputs": ["box", "ball"]}));
+        let at = |s: &mut Server, args: Value| {
+            let r = call(s, "geometry", args);
+            assert_eq!(r["isError"], false, "{r}");
+            r["structuredContent"].clone()
+        };
+        // Mesh points first (no point sets); the counts of every domain.
+        let all = at(&mut s, json!({"node": "set", "limit": 100000}));
+        assert_eq!(all["domain"], "mesh_points");
+        let total = all["total"].as_u64().unwrap();
+        assert_eq!(all["domains"]["mesh_points"].as_u64(), Some(total));
+        assert_eq!(all["domains"]["points"], 0);
+        assert_eq!(all["objects"][0]["node"], "box");
+        assert_eq!(all["columns"]["P"].as_array().unwrap().len() as u64, total);
+        // Pages of 100 put back together are the whole list.
+        let mut p = Vec::new();
+        let mut offset = Some(0u64);
+        while let Some(o) = offset {
+            let page = at(&mut s, json!({"node": "set", "offset": o, "limit": 100}));
+            p.extend(page["columns"]["P"].as_array().unwrap().clone());
+            offset = page["next_offset"].as_u64();
+        }
+        assert_eq!(json!(p), all["columns"]["P"]);
+        // One object, faces; a domain that isn't one, an image node.
+        let faces = at(&mut s, json!({"node": "set", "domain": "faces", "object": "box"}));
+        assert_eq!((faces["total"].as_u64(), faces["objects"].as_array().map(Vec::len)), (Some(12), Some(1)));
+        assert_eq!(faces["columns"]["N"].as_array().unwrap().len(), 12);
+        let bad = call(&mut s, "geometry", json!({"node": "set", "domain": "edges"}));
+        assert!(bad["isError"] == true && bad.to_string().contains("mesh_points"), "{bad}");
+        call(&mut s, "create_node", json!({"op": "constant", "name": "plate"}));
+        assert_eq!(call(&mut s, "geometry", json!({"node": "plate"}))["isError"], true);
+    }
+
     #[test]
     fn particles_are_listed_in_pages() {
         let mut s = Server::new(Session::default());
