@@ -1,12 +1,20 @@
 # Arclight — TODO
 
-A running list of what's still wanted, as of 0.11.0 (2026-10-30). The
+A running list of what's still wanted, as of 0.12.17 (2026-10-31). The
 3D plan (`docs/phase-4-plan.md`, M1–M13) is done; this is what's left
 around it. `HANDOFF.md` has the details and history; add items here as
 they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
+- [ ] 0.12.17 (beta release v0.12.17): at the default window size the
+      viewer's toolbar wraps onto a second row (Fit and 1:1 visible) and
+      the 3D view's too; a long node error (a plugin crash, a missing
+      file) wraps in the viewer and the 3D view and can be selected and
+      copied (0.12.15)
+- [ ] 0.12.16 (layered shadows): a card below full opacity or a cutout
+      texture casts a soft-edged shadow that looks the same with the GPU
+      on and off, and renders much faster with it on; on the Macs too
 - [ ] 0.12.0 (GPU G1): Preferences ▸ Performance ▸ GPU acceleration off /
       on and the About line follows; `ARCLIGHT_GPU=0` greys it; Help ▸
       GPU self-test. On the **M4 Pro** and the **Intel Mac**: `arclight
@@ -183,14 +191,27 @@ a public release once tested.
 - [x] Plugin process isolation (0.11.2)
 - [ ] A new logo: `assets/arclight.png` and the full logo still draw the
       word ARCLIGHT (the About box, icons 128 px and up)
-- [ ] Long node errors (a plugin crash with its report path) are clipped
-      on one line in the viewer: wrap them
+- [x] Long node errors (a plugin crash with its report path) are clipped
+      on one line in the viewer: wrap them (0.12.15)
 
 ## Later: 0.12.0
 
-- [ ] GPU acceleration (`wgpu`; CPU / rayon only today): phase 12,
-      0.12.x on `wip-ns-gpu`, plan `docs/gpu-plan.md` (G1–G7), approved
-      2026-10-30
+- [x] GPU acceleration (`wgpu`: Vulkan, Metal): phase 12, 0.12.x on
+      `wip-ns-gpu`, plan `docs/gpu-plan.md`; G1–G7 done in 0.12.0–0.12.16
+      (pointwise ops, Blur, warps, Keyer, Shuffle, zmerge, Scanline
+      Render with shadows and motion blur, see-through shadows, particle
+      sprites, splats, zero-copy viewer and 3D view)
+- [ ] GPU frame cache for playback (Dev1, design approved 2026-10-31):
+      cached frames keep their color GPU-resident and play through the
+      zero-copy display; separate budget `gpu.frame_cache_mb` (1024)
+- [ ] Area-light shadows stay slow on the GPU too (16 samples: 20–34 s
+      a 4K frame): Dev2 profiling, proposal first
+- [ ] The transport bar's Out field is cut off at the default window
+      size (Dev1, in progress, `src/gui/transport.rs`)
+- [ ] Later: skip the target read-back during GPU playback, read back
+      lazily for the readout / picker (~5–10 ms a 1080p frame)
+- [ ] Macs: run `arclight gpu --check` and `cargo test --release` on the
+      M4 Pro and the Intel Mac (Metal) before the next release
 - [ ] Later (after GPU G3): a GPU-first, depth-aware **Defocus** node
       (none exists today)
 - [ ] Not planned for now: particle simulation on the GPU

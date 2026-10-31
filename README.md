@@ -262,10 +262,13 @@ and the like), and GPU acceleration off take the CPU's way, as before.
 compute rasterizer that follows the CPU renderer sample for sample):
 shadows, motion blur, Gaussian splats (prepared and blended there, so the
 3D view orbits a capture interactively) and big particle sprites
-included. A frame stays on the CPU where a shadow is cast by something
-see-through (a card less than opaque, a texture with transparency); small
-particle sprites are drawn on the CPU on purpose (quicker there). Results
-match the CPU renderer within the tolerances in `docs/gpu-plan.md` (D8).
+included. Shadows of see-through casters (a card less than opaque, a
+texture with transparency) render there too, up to 4 see-through layers a
+shadow-map texel (fewer on GPUs with less memory): pixels behind more,
+and frames that still won't fit the memory budget, are rendered on the
+CPU. Small particle sprites are drawn on the CPU on purpose (quicker
+there). Results match the CPU renderer within the tolerances in
+`docs/gpu-plan.md` (D8).
 
 ```sh
 arclight gpu                 # in use or not, and why; the adapter, backend, limits, transfer path

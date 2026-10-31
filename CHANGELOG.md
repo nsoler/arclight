@@ -15,6 +15,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.17 — 2026-10-31
+
+- The viewer's toolbar wraps onto a second row when the view is narrow,
+  instead of cutting off its last controls (Fit, 1:1, the zoom) and
+  pushing the image past the view's edge; the 3D view's toolbar too.
+- README: shadows of see-through casters render on the GPU too.
+
 ## 0.12.16 — 2026-10-31
 
 - GPU: **shadows cast by see-through casters** (cards below full opacity,

@@ -1,8 +1,10 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-30, session 12: **phase 11 (engine and platform:
-crash reporting, plugin process isolation, then a beta for a public
-release) on branch `wip-ns-engine`, 0.11.x**; phase 10 (Gaussian splats
+Last updated 2026-10-31, session 12: **phase 12 (GPU acceleration,
+`docs/gpu-plan.md`) on branch `wip-ns-gpu`, 0.12.x; beta release
+v0.12.17**; phase 11 (engine and platform: crash reporting, plugin
+process isolation, beta v0.11.3) ended at 0.11.5 on `wip-ns-engine`,
+now frozen; phase 10 (Gaussian splats
 and follow-ups) ended at 0.10.37 (v0.10.37) on `wip-ns-splats`, now
 frozen; phase 9 ended at 0.9.68 (v0.9.68) on `wip-ns-3dwork`, also frozen (herdr multi-agent sessions:
 one Supervisor (formerly "master") + workers; see "Several agent sessions" below). Read this,
@@ -13,6 +15,24 @@ done), `docs/help.md` (the in-app help) and
 
 ## Start here (next session)
 
+- **In flight (2026-10-31, after v0.12.17):** Dev1 (wD:p9): the
+  transport bar's Out field cut off at the default window size
+  (`src/gui/transport.rs`), then the **GPU frame cache for playback**
+  (design approved: each `FrameCache` entry in `src/gui/worker.rs` keeps
+  an optional `Arc<gpu::Resident>` of the color only, so cache hits set
+  `Response.gpu` and draw zero-copy; its own LRU under
+  `gpu.frame_cache_mb`, default 1024, separate from `gpu.cache_mb`;
+  evicting drops the resident, the CPU image always stays; residents
+  dropped when the GPU is turned off; no-gpu builds unchanged). Dev2:
+  profiling many-sample area-light shadows (20–34 s a 4K frame at 16
+  samples, even on the GPU), proposal before code. Macs: `arclight gpu
+  --check` / `cargo test --release` on Metal not yet run (TODO).
+- **0.12.17, toolbars wrap** (Dev1): `Viewer::toolbar` and `toolbar_3d`
+  use `horizontal_wrapped`; an overflowing row also widened everything
+  under it (status row, canvas). Test `the_toolbars_wrap_in_a_narrow_view`.
+  README's Scanline Render paragraph updated for see-through shadows.
+  Released as the beta **v0.12.17** (Linux tarball + wheel + sdist;
+  macOS DMG built by the user while Actions is billing-blocked).
 - **Session 12, 0.11.4 (Supervisor, wD:p1, alone):** the user found the
   3D view hard to use in 0.11.3 (no rotate / scale gizmos; rotating
   "swung wildly back and forth and up and down"; mouse: Razer DeathAdder
@@ -704,7 +724,10 @@ done), `docs/help.md` (the in-app help) and
   `~/Projects/arclight-compound/arclight/`. The planning docs (C++/Qt
   "Linux port" plans that session 4 implemented in Rust) are in
   `~/Projects/arclight-compound/Archlight-Development-Documentationm/`.
-- **Branches:** since 2026-10-29 (phase 9) work happens on
+- **Branches:** since 2026-10-30 (phase 12) work happens on
+  **`wip-ns-gpu`** (phases 9–11 used `wip-ns-3dwork`, `wip-ns-splats`,
+  `wip-ns-engine`, all frozen; the text below names the phase-9 one).
+  Before that, from 2026-10-29 (phase 9), on
   **`wip-ns-3dwork`** (made from `main` at v0.8.4, tracks
   `origin/wip-ns-3dwork`); `wip-ns-effects` is the finished phase-8
   branch and stays at v0.8.4 (`aa04861`), not updated any more. **Standing instruction from the user:** when a

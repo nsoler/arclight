@@ -611,7 +611,9 @@ impl Viewer {
     }
 
     fn toolbar_3d(&mut self, ui: &mut egui::Ui, d: &Display<'_>) {
-        ui.horizontal(|ui| {
+        // Wrapped: a narrow view takes the controls onto more rows rather
+        // than cutting them off (and widening everything under them).
+        ui.horizontal_wrapped(|ui| {
             self.mode_switch(ui);
             for (tool, label, tip) in Tool::ALL {
                 ui.selectable_value(&mut self.tool, tool, label).on_hover_text(tip);
@@ -637,7 +639,8 @@ impl Viewer {
 
     fn toolbar(&mut self, ui: &mut egui::Ui, d: &Display<'_>) {
         let mut fits = true;
-        ui.horizontal(|ui| {
+        // Wrapped, as the 3D one.
+        ui.horizontal_wrapped(|ui| {
             self.mode_switch(ui);
             for (ch, label) in Channel::ALL {
                 ui.selectable_value(&mut self.channel, ch, label);
@@ -1154,6 +1157,34 @@ mod tests {
         // Beside the text (below it): the view pans. On the text: it selects.
         assert!(drag(Pos2::new(200.0, 250.0)), "a drag beside the message reaches the view");
         assert!(!drag(Pos2::new(20.0, 14.0)), "a drag on the text selects it instead");
+    }
+
+    #[test]
+    fn the_toolbars_wrap_in_a_narrow_view() {
+        use arclight::image::{IRect, Size};
+        let img = Arc::new(Image::blank(Size { width: 1920, height: 1080 }, IRect::new(0, 0, 1920, 1080)));
+        let d = Display { image: Some(&img), gpu: None, error: None, target: Some("v"), returns_to: None, frame: 1, millis: 56.2, input: None };
+        for mode3d in [false, true] {
+            for width in [360.0, 520.0, 1400.0] {
+                let ctx = egui::Context::default();
+                let mut v = Viewer::default();
+                let mut right = 0.0;
+                // Twice: the status's width is known from the first.
+                for _ in 0..2 {
+                    let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 600.0))), ..Default::default() };
+                    ctx.run_ui(raw, |ui| {
+                        if mode3d {
+                            v.toolbar_3d(ui, &d);
+                        } else {
+                            v.toolbar(ui, &d);
+                        }
+                        right = ui.min_rect().right();
+                    })
+                    .drop_without_applying_deltas();
+                }
+                assert!(right <= width, "3D {mode3d}, {width} wide: the controls reach {right}");
+            }
+        }
     }
 
     #[test]
