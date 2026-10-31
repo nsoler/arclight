@@ -153,6 +153,7 @@ fn main() -> eframe::Result {
             }
             let mut app = App::new(cc.egui_ctx.clone(), doc);
             app.viewer.wgpu = cc.wgpu_render_state.clone();
+            app.viewer.viewport3d.wgpu = cc.wgpu_render_state.clone();
             Ok(Box::new(app))
         }),
     );

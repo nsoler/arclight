@@ -1174,6 +1174,13 @@ pub struct Viewport3d {
     /// The textured cards, and where on screen they go.
     texture: Option<TextureHandle>,
     texture_rect: Option<Rect>,
+    /// The window's wgpu (eframe's): a render left on the GPU is drawn from
+    /// there when it is the engine's device (see `gpu::for_window`).
+    pub wgpu: Option<eframe::egui_wgpu::RenderState>,
+    /// The texture such a render was displayed into, and whether the
+    /// render shown now is in it (else in `texture`).
+    native: Option<(egui::TextureId, eframe::wgpu::Texture)>,
+    native_shown: bool,
     /// The texture has the splats in it (the view has settled): their
     /// centers aren't drawn over it.
     splats_shown: bool,
@@ -1230,6 +1237,9 @@ impl Default for Viewport3d {
             paths: Vec::new(),
             texture: None,
             texture_rect: None,
+            wgpu: None,
+            native: None,
+            native_shown: false,
             splats_shown: false,
             error: None,
             points: Vec::new(),
@@ -1417,27 +1427,33 @@ impl Viewport3d {
             if Some(&r.node) != self.node.as_ref() {
                 continue;
             }
-            match r.scene {
+            match r.scene.clone() {
                 Ok(s) => {
                     self.scene = s;
                     self.error = None;
                 }
                 Err(e) => self.error = Some(e),
             }
-            self.render_ms = r.millis;
-            self.ghosts = r.ghosts;
-            self.ghost_errors = r.ghost_errors;
-            self.splats_shown = r.splats;
-            self.blur_times = r.blur_times;
-            if let Some(img) = r.render {
+            // Left on the GPU: drawn from there when the window shares its
+            // device; else (or rendered on the CPU) uploaded as before.
+            if r.render.is_none() && r.gpu_render.as_ref().is_some_and(|g| self.display_on_gpu(g)) {
+                self.native_shown = true;
+                self.texture_rect = r.rect;
+            } else if let Some(img) = r.image() {
                 let size = [img.format.width, img.format.height];
                 let ci = egui::ColorImage::from_rgba_premultiplied(size, &premultiplied_bytes(&img));
                 match &mut self.texture {
                     Some(t) => t.set(ci, TextureOptions::LINEAR),
                     None => self.texture = Some(ctx.load_texture("viewport3d", ci, TextureOptions::LINEAR)),
                 }
+                self.native_shown = false;
                 self.texture_rect = r.rect;
             }
+            self.render_ms = r.millis;
+            self.ghosts = r.ghosts;
+            self.ghost_errors = r.ghost_errors;
+            self.splats_shown = r.splats;
+            self.blur_times = r.blur_times;
         }
         let node = doc.viewed();
         if node != self.node {
@@ -2111,9 +2127,14 @@ impl Viewport3d {
         line(Vec3::zeros(), Vec3::new(0.0, step * 2.0, 0.0), Stroke::new(1.5, Y_COLOR));
         // The textured cards, under the outlines (the newest render, which
         // may lag the view by a frame while it moves).
-        if let (Some(tex), Some(r)) = (&self.texture, self.texture_rect) {
+        let shown = match (&self.native, &self.texture) {
+            (Some((id, _)), _) if self.native_shown => Some(*id),
+            (_, Some(tex)) => Some(tex.id()),
+            _ => None,
+        };
+        if let (Some(id), Some(r)) = (shown, self.texture_rect) {
             if self.scene.as_ref().is_some_and(|s| !s.cards.is_empty() || (!self.view.wireframe && !s.meshes.is_empty()) || (self.splats_shown && !s.splats.is_empty())) {
-                painter.image(tex.id(), r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+                painter.image(id, r, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
             }
         }
         let Some(scene) = self.scene.clone() else { return };
@@ -2487,6 +2508,51 @@ pub fn error_color(e: f32) -> Color32 {
     let (g, y, r) = ([80.0, 220.0, 90.0], [240.0, 210.0, 60.0], [235.0, 70.0, 60.0]);
     let mix = |a: [f32; 3], b: [f32; 3], u: f32| Color32::from_rgb((a[0] + (b[0] - a[0]) * u) as u8, (a[1] + (b[1] - a[1]) * u) as u8, (a[2] + (b[2] - a[2]) * u) as u8);
     if t < 0.43 { mix(g, y, t / 0.43) } else { mix(y, r, (t - 0.43) / 0.57) }
+}
+
+impl Viewport3d {
+    /// Display render `r` (left on the GPU) into the native texture with
+    /// `gpu::display`'s 3D view mode (the bytes [`premultiplied_bytes`]
+    /// makes); false (shown the CPU's way) when the window's device isn't
+    /// the one it lives on, or on a GPU error.
+    #[cfg(feature = "gpu")]
+    fn display_on_gpu(&mut self, r: &Arc<arclight::gpu::Resident>) -> bool {
+        use arclight::gpu::display;
+        let Some(rs) = &self.wgpu else { return false };
+        let gpu = r.gpu();
+        if rs.device != gpu.device {
+            return false;
+        }
+        let (format, _) = r.shape();
+        let (w, h) = (format.width.max(1) as u32, format.height.max(1) as u32);
+        if !self.native.as_ref().is_some_and(|(_, t)| t.width() == w && t.height() == h) {
+            let texture = display::texture(gpu, w, h);
+            let view = display::view(&texture);
+            let mut renderer = rs.renderer.write();
+            let id = match self.native.take() {
+                Some((id, _)) => {
+                    renderer.update_egui_texture_from_wgpu_texture(&rs.device, &view, eframe::wgpu::FilterMode::Linear, id);
+                    id
+                }
+                None => renderer.register_native_texture(&rs.device, &view, eframe::wgpu::FilterMode::Linear),
+            };
+            self.native = Some((id, texture));
+        }
+        let Some((_, texture)) = &self.native else { return false };
+        match display::draw(gpu, &r.image, arclight::image::IRect::frame(format), display::Channel::Premultiplied, 0.0, 1, texture) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("arclight-gui: GPU display: {e:#}");
+                false
+            }
+        }
+    }
+
+    /// Built without GPU support: always the CPU's way.
+    #[cfg(not(feature = "gpu"))]
+    fn display_on_gpu(&mut self, _r: &Arc<arclight::gpu::Resident>) -> bool {
+        false
+    }
 }
 
 /// `img`'s frame as premultiplied 8-bit sRGB bytes (egui blends
@@ -3432,5 +3498,31 @@ mod tests {
         let turned = gadgets(&scene(&doc));
         assert!((turned[0].world.fixed_view::<3, 3>(0, 0) * Vec3::x() - Vec3::new(0.0, 0.0, -1.0)).norm() < 1e-9, "turned 90° about Y");
         assert_eq!(at(&turned[1]), Vec3::new(4.0, 1.0, -8.0));
+    }
+
+    /// A render left on the GPU displays as the CPU's
+    /// `premultiplied_bytes` makes it: straight color sRGB-encoded,
+    /// premultiplied in 8 bits, alpha kept (a byte apart at most, where the
+    /// GPU's `pow` rounds the other way).
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn a_render_on_the_gpu_displays_as_on_the_cpu() {
+        use arclight::gpu::display;
+        let Some(gpu) = arclight::gpu::test_device() else { return eprintln!("skipped: no GPU adapter") };
+        let format = Size { width: 97, height: 61 };
+        let mut img = arclight::gpu::check::noise(format, arclight::image::IRect::frame(format), false, 5);
+        // Some fully transparent pixels too.
+        for px in img.pixels.iter_mut().step_by(7) {
+            *px = [0.0; 4];
+        }
+        let up = arclight::gpu::GpuImage::upload(&gpu, &img).unwrap();
+        let texture = display::texture(&gpu, 97, 61);
+        display::draw(&gpu, &up, arclight::image::IRect::frame(format), display::Channel::Premultiplied, 0.0, 1, &texture).unwrap();
+        let got = display::read_texture(&gpu, &texture).unwrap();
+        let want = premultiplied_bytes(&img);
+        assert_eq!(got.len(), want.len());
+        let worst = got.iter().zip(&want).map(|(g, w)| g.abs_diff(*w)).max().unwrap();
+        let off = got.iter().zip(&want).filter(|(g, w)| g != w).count();
+        assert!(worst <= 1 && off * 1000 <= want.len(), "{off} bytes off, by up to {worst}");
     }
 }

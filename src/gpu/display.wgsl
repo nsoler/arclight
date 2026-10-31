@@ -12,7 +12,8 @@ struct Display {
     // The frame's width and height; frame pixels per texel; the texture's size.
     frame: vec2<i32>,
     step: i32,
-    // 0 RGB, 1 red, 2 green, 3 blue, 4 alpha.
+    // 0 RGB, 1 red, 2 green, 3 blue, 4 alpha; 5 the 3D view's (see
+    // `premultiplied`).
     channel: u32,
     size: vec2<u32>,
     // 2^exposure.
@@ -47,6 +48,20 @@ fn byte(v: f32) -> f32 {
     return min(floor(v * 255.0 + 0.5), 255.0);
 }
 
+// The 3D view's bytes (its `premultiplied_bytes`): the straight color
+// sRGB-encoded, then premultiplied in 8 bits, alpha kept, so the render
+// blends over the view's background. Rounding as Rust's `round` does
+// (halves up, the values being positive).
+fn premultiplied(px: vec4<f32>) -> vec4<f32> {
+    var s = vec3<f32>(0.0);
+    if px.a > 0.0 {
+        s = px.rgb / px.a;
+    }
+    let a = clamp(px.a, 0.0, 1.0);
+    let enc = floor(vec3<f32>(linear_to_srgb(max(s.r, 0.0)), linear_to_srgb(max(s.g, 0.0)), linear_to_srgb(max(s.b, 0.0))) * 255.0 + 0.5);
+    return vec4<f32>(floor(enc * a + 0.5), floor(a * 255.0 + 0.5));
+}
+
 @compute @workgroup_size(16, 16)
 fn display(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= d.size.x || id.y >= d.size.y {
@@ -66,6 +81,10 @@ fn display(@builtin(global_invocation_id) id: vec3<u32>) {
         }
         let n = f32(max((end.x - q.x) * (end.y - q.y), 1));
         px = sum / n;
+    }
+    if d.channel == 5u {
+        textureStore(out, vec2<i32>(id.xy), premultiplied(at(q)) / 255.0);
+        return;
     }
     var gain = d.gain;
     if q.x < 0 || q.y < 0 || q.x >= d.frame.x || q.y >= d.frame.y {

@@ -407,3 +407,30 @@ fn splats_blend_on_the_gpu_as_on_the_cpu() {
         assert!(id.data.iter().filter(|v| **v > 0.0).count() > format.width * format.height / 10);
     }
 }
+
+/// The 3D view's picture left on the GPU (render_preview_gpu) is
+/// render_preview's: Solid, Lit with shadows, and splats; motion blur goes
+/// the other way (None); each call a fresh image.
+#[test]
+fn the_3d_view_stays_on_the_gpu_and_matches() {
+    use super::super::{render_preview, render_preview_gpu, Preview};
+    if crate::gpu::test_device().is_none() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let format = Size { width: 240, height: 140 };
+    let (busy_scene, cam) = scene_of(&busy_shadowed(PERSPECTIVE));
+    let (lizard, lcam) = lizard();
+    for (scene, cam, look) in [(&busy_scene, &cam, Preview::Solid), (&busy_scene, &cam, Preview::Lit { shadows: true }), (&lizard, &lcam, Preview::Solid)] {
+        let cpu = crate::gpu::cpu_only(|| render_preview(scene, cam, format, look));
+        let resident = with_gpu(|| render_preview_gpu(scene, cam, format, look, None)).expect("on the GPU");
+        let out = resident.cpu().expect("read back");
+        assert_eq!((out.format, out.window()), (format, IRect::frame(format)));
+        let (_, mean, off) = differences(&cpu, &out)[0].clone();
+        assert!(mean <= 1e-3 && off <= 0.005, "{look:?}: mean {mean:.2e}, {:.3} % off", off * 100.0);
+        let again = with_gpu(|| render_preview_gpu(scene, cam, format, look, None)).unwrap();
+        assert!(again.image.rgba != resident.image.rgba, "a fresh image each call");
+    }
+    let blur = super::super::Blur { times: vec![0.0, 0.5], frames: vec![(0, &*busy_scene, cam.clone())], jitter: false };
+    assert!(with_gpu(|| render_preview_gpu(&busy_scene, &cam, format, Preview::Solid, Some(&blur))).is_none(), "motion blur: the other path");
+}

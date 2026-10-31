@@ -234,7 +234,10 @@ pub struct SceneResponse {
     /// The node's scene: None when it shows none (an image node).
     pub scene: Result<Option<Arc<arclight::scene::Scene>>, String>,
     pub render: Option<Arc<Image>>,
-    /// Whether `render` has the splats in it.
+    /// The render left on the GPU instead (`render` is then None): the 3D
+    /// view draws it from there; [`SceneResponse::image`] reads it back.
+    pub gpu_render: Option<Arc<arclight::gpu::Resident>>,
+    /// Whether the render has the splats in it.
     pub splats: bool,
     pub rect: Option<eframe::egui::Rect>,
     pub millis: f32,
@@ -245,6 +248,14 @@ pub struct SceneResponse {
     /// The asked-for ghosts not in the scene, and why any couldn't be made.
     pub ghosts: Option<Arc<arclight::scene::Scene>>,
     pub ghost_errors: Vec<(String, String)>,
+}
+
+impl SceneResponse {
+    /// The render on the CPU, read back from the GPU if it's there (for
+    /// whatever reads its pixels; the 3D view only shows it).
+    pub fn image(&self) -> Option<Arc<Image>> {
+        self.render.clone().or_else(|| self.gpu_render.as_ref()?.cpu().ok())
+    }
 }
 
 /// The 3D viewport's own background thread (so orbiting doesn't queue
@@ -277,6 +288,8 @@ impl SceneWorker {
                         // Only cards, solid meshes and (settled) splats are
                         // rendered; the viewport draws the rest.
                         let splats = req.splats && matches!(&scene, Ok(Some(s)) if !s.splats.is_empty());
+                        #[allow(unused_mut)]
+                        let mut gpu_render = None;
                         let render = match (&scene, &req.render) {
                             (Ok(Some(s)), Some((cam, format))) if !s.cards.is_empty() || (req.solid && !s.meshes.is_empty()) || splats => {
                                 let lit = matches!(req.preview, arclight::render3d::Preview::Lit { .. });
@@ -292,20 +305,25 @@ impl SceneWorker {
                                 // Jittered as the render is (Jitter shutter).
                                 let jitter = req.graph.node(&viewed).is_none_or(|n| arclight::ops::blur_jitter(&n.params));
                                 let blur = arclight::render3d::Blur { times, frames: std::iter::once((0, &now, cam.clone())).chain(then.iter().map(|(k, s, c)| (*k, s, c.clone()))).collect(), jitter };
-                                Some(Arc::new(arclight::render3d::render_preview_blurred(&now, cam, *format, req.preview, Some(&blur))))
+                                // Left on the GPU when it can be drawn there.
+                                #[cfg(feature = "gpu")]
+                                if let Some(r) = arclight::render3d::render_preview_gpu(&now, cam, *format, req.preview, Some(&blur)) {
+                                    gpu_render = Some(Arc::new(r));
+                                }
+                                gpu_render.is_none().then(|| Arc::new(arclight::render3d::render_preview_blurred(&now, cam, *format, req.preview, Some(&blur))))
                             }
                             _ => None,
                         };
-                        let splats = splats && render.is_some();
+                        let splats = splats && (render.is_some() || gpu_render.is_some());
                         let in_scene = scene.as_ref().ok().cloned().flatten();
                         let (ghosts, ghost_errors) = ghosts_of(&mut eval, &req.graph, in_scene.as_deref(), &req.ghosts, req.frame);
-                        (scene, render, splats, blur_times, ghosts, ghost_errors)
+                        (scene, render, gpu_render, splats, blur_times, ghosts, ghost_errors)
                     }));
-                    let (scene, render, splats, blur_times, ghosts, ghost_errors) = done.unwrap_or_else(|payload| {
+                    let (scene, render, gpu_render, splats, blur_times, ghosts, ghost_errors) = done.unwrap_or_else(|payload| {
                         eval = Evaluator::new();
-                        (Err(arclight::crash::caught(&*payload)), None, false, Vec::new(), None, Vec::new())
+                        (Err(arclight::crash::caught(&*payload)), None, None, false, Vec::new(), None, Vec::new())
                     });
-                    let resp = SceneResponse { node: req.node, scene, render, splats, rect: req.rect, millis: t0.elapsed().as_secs_f32() * 1000.0, blur_times, ghosts, ghost_errors };
+                    let resp = SceneResponse { node: req.node, scene, render, gpu_render, splats, rect: req.rect, millis: t0.elapsed().as_secs_f32() * 1000.0, blur_times, ghosts, ghost_errors };
                     if resp_tx.send(resp).is_err() {
                         break;
                     }
@@ -652,10 +670,10 @@ mod tests {
             }
         };
         let moving = ask(false);
-        assert!(moving.render.is_none() && !moving.splats);
+        assert!(moving.image().is_none() && !moving.splats);
         let settled = ask(true);
         assert!(settled.splats, "says it has them");
-        let img = settled.render.expect("a render");
+        let img = settled.image().expect("a render");
         assert!(img.pixels.iter().any(|p| p[3] > 0.5), "the capture shows");
     }
 

@@ -11,7 +11,7 @@ use wgpu::util::DeviceExt;
 const SHADER: &str = include_str!("display.wgsl");
 
 /// Which channels are shown (the viewer's, less its planes view, which
-/// stays on the CPU).
+/// stays on the CPU), or the 3D view's picture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Channel {
     Rgb,
@@ -19,6 +19,9 @@ pub enum Channel {
     Green,
     Blue,
     Alpha,
+    /// The 3D view's render: its color sRGB-encoded and premultiplied in 8
+    /// bits, alpha kept (no exposure, nothing dimmed).
+    Premultiplied,
 }
 
 /// A texture to display into, `width` × `height` texels, `Rgba8Unorm`
@@ -68,6 +71,7 @@ pub fn draw(gpu: &Gpu, img: &GpuImage, region: IRect, channel: Channel, exposure
             Channel::Green => 2,
             Channel::Blue => 3,
             Channel::Alpha => 4,
+            Channel::Premultiplied => 5,
         },
         size[0],
         size[1],

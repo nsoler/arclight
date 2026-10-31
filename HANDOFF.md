@@ -30,6 +30,18 @@ done), `docs/help.md` (the in-app help) and
   "Dropped TexturesDelta with 1 unapplied deltas" (egui 0.37) now end
   `ctx.run_ui(..)` with `.drop_without_applying_deltas()` instead of
   `let _ =`; all GUI tests pass. **Tip:** do the same in new egui tests.
+- **0.12.13, 3D view zero-copy** (Dev1 + Dev2):
+  `render3d::render_preview_gpu` → `Option<gpu::Resident>` (a fresh
+  `GpuImage::blank` per call; None for motion blur, see-through shadow
+  casters, overflowed pixels, GPU off); `SceneResponse.gpu_render`, and
+  `SceneResponse::image()` reads back on demand for anything needing
+  pixels; `gpu::display::Channel::Premultiplied` is the 3D view's mode.
+  One unexplained failure of
+  `render3d::gpu::tests::motion_blur_adds_up_on_the_gpu_as_on_the_cpu`
+  (line 255, a plane over tolerance) in a full lib run under heavy load
+  (363 s instead of ~33); not reproduced in 14 + 4 runs, margins ~1000×.
+  If it recurs, read its message (Dev2 is adding `gpu::last_error()` and
+  the path taken to it).
 - **0.12.10, GPU G6** (Dev2): `src/render3d/gpu/splat_view.rs` +
   `splat_view.wgsl` prepare the view on the GPU and keep it there (only
   the pair count comes back); `raster.wgsl` blends it, a tile's

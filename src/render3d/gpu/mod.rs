@@ -100,6 +100,71 @@ pub(super) fn draw_passes(surfs: &[Surface], lights: &[Light], points: &[Vec3], 
     }
 }
 
+/// [`super::render_preview`] left on the GPU, for the 3D view to show
+/// without reading it back (see [`super::render_preview_gpu`]); None
+/// where the GPU can't take it.
+pub(super) fn preview(scene: &Scene, cam: &Camera, format: Size, look: super::Preview, blur: Option<&super::Blur>) -> Option<crate::gpu::Resident> {
+    #[cfg(test)]
+    if !tests::GPU_ON.with(|on| on.get()) {
+        return None;
+    }
+    // (Motion blur: the CPU path's, for now.)
+    if blur.is_some_and(|b| b.times.len() > 1) || format.width == 0 || format.height == 0 {
+        return None;
+    }
+    let gpu = crate::gpu::get()?;
+    // As `preview_cell`: Lit by the scene's lights (their shadows if asked
+    // for), else Solid, the meshes lit from the camera.
+    let mut surfs = super::surfaces(scene);
+    let lights: Vec<Light> = match look {
+        super::Preview::Lit { shadows } if !scene.lights.is_empty() => scene.lights.iter().map(|l| Light { shadows: l.shadows && shadows, ..l.clone() }).collect(),
+        _ => {
+            for s in surfs.iter_mut().skip(scene.cards.len()) {
+                s.headlight = true;
+            }
+            Vec::new()
+        }
+    };
+    let splats = splats::prepare_upto(&scene.splats, cam, format, super::PREVIEW_SH);
+    if splats.as_ref().is_some_and(|sp| sp.gpu().is_none()) || (surfs.is_empty() && splats.is_none()) {
+        return None;
+    }
+    match preview_on(&gpu, &surfs, &lights, cam, format, splats.as_ref()) {
+        Ok(r) => r,
+        Err(e) => {
+            crate::gpu::report_error(format!("3D view: {e:#}"), false);
+            None
+        }
+    }
+}
+
+fn preview_on(gpu: &Arc<Gpu>, surfs: &[Surface], lights: &[Light], cam: &Camera, format: Size, splats: Option<&splats::Prepared>) -> Result<Option<crate::gpu::Resident>> {
+    let Some(prep) = prepare(gpu, surfs, lights, cam, format, Passes::default(), None, splats) else { return Ok(None) };
+    let maps = gpu.scoped(|| Ok(draw_maps(gpu, &prep.tables, &prep.textures)))?;
+    let image = gpu.scoped(|| {
+        let frame = Frame::take(gpu, format.width, format.height, prep.layout.slots.stride);
+        frame.clear(gpu);
+        dispatch(gpu, &prep, &maps, &frame, cam, format, 1, None, false, splats);
+        // (Only the depths come back: an overflowed pixel sends the view
+        // to the other path.)
+        let depth = frame.read_depth(gpu);
+        let image = match depth {
+            Ok(d) if !d.iter().any(|v| v.to_bits() == OVERFLOWED) => {
+                let image = crate::gpu::image::GpuImage::blank(gpu, format, IRect::frame(format), &[])?;
+                let mut encoder = gpu.device.create_command_encoder(&Default::default());
+                encoder.copy_buffer_to_buffer(&frame.color, 0, &image.rgba, 0, (format.width * format.height * 16) as u64);
+                gpu.queue.submit([encoder.finish()]);
+                Ok(Some(image))
+            }
+            Ok(_) => Ok(None),
+            Err(e) => Err(e),
+        };
+        frame.give_back();
+        image
+    })?;
+    Ok(image.map(|img| crate::gpu::Resident::new(gpu.clone(), img)))
+}
+
 /// Which object and light node each surface and light counts for, and
 /// where the passes' channels are.
 struct Layout {
@@ -706,6 +771,28 @@ impl Frame {
         while kept.len() > 2 {
             kept.remove(0);
         }
+    }
+
+    /// Wait for the render and copy only its depths out.
+    fn read_depth(&self, gpu: &Gpu) -> Result<Vec<f32>> {
+        let px = self.key.0 * self.key.1;
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(&self.hits, (4 * px * 16) as u64, &self.staging, 0, (px * 4) as u64);
+        gpu.queue.submit([encoder.finish()]);
+        let slice = self.staging.slice(..(px * 4) as u64);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        gpu.wait()?;
+        rx.recv().map_err(|_| anyhow!("reading the depths back: no answer"))?.map_err(|e| anyhow!("reading the depths back: {e}"))?;
+        let mut depth = vec![0.0f32; px];
+        {
+            let bytes = slice.get_mapped_range().map_err(|e| anyhow!("reading the depths back: {e:?}"))?;
+            copy_out(&bytes[..px * 4], bytemuck::cast_slice_mut(&mut depth));
+        }
+        self.staging.unmap();
+        Ok(depth)
     }
 
     /// Wait for the render and copy its results out.

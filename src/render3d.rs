@@ -743,6 +743,17 @@ pub fn render_preview_blurred(scene: &Scene, cam: &Camera, format: Size, preview
     }
 }
 
+/// [`render_preview_blurred`] left on the GPU, for the 3D view to show
+/// straight from there (nothing read back): the frame's final color
+/// (premultiplied, linear) as a fresh image on the device it was drawn on,
+/// no planes. None where the GPU can't take it (it's off, motion blur, a
+/// see-through shadow caster, more see-through layers than it keeps at a
+/// pixel, ...): then [`render_preview_blurred`] as before.
+#[cfg(feature = "gpu")]
+pub fn render_preview_gpu(scene: &Scene, cam: &Camera, format: Size, preview: Preview, blur: Option<&Blur>) -> Option<crate::gpu::Resident> {
+    gpu::preview(scene, cam, format, preview, blur)
+}
+
 /// [`render_preview`], only `cell`'s pixels drawn, or all of them, with
 /// `splats` (the scene's, prepared for `cam`).
 fn preview_cell(scene: &Scene, cam: &Camera, format: Size, preview: Preview, cell: Option<Cell>, splats: Option<&splats::Prepared>) -> Image {

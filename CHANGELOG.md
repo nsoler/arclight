@@ -15,6 +15,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.13 — 2026-10-31
+
+- GPU: **the 3D view draws its shaded picture straight from the GPU**:
+  the render stays there and is made into its 8-bit form there, no
+  read-back while orbiting. At 1080p a settled render reaches the screen
+  every display frame (16.7 ms) instead of every 65–70 ms, the render
+  takes ~8 ms instead of ~31 for the lizard sample, and the interface
+  thread no longer spends ~30 ms on each. Motion-blurred previews,
+  see-through shadow casters and GPU acceleration off use the old path.
+
 ## 0.12.12 — 2026-10-31
 
 - GPU: anti-aliased renders of Gaussian splats blend the splats once a
