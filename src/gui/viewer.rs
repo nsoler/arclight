@@ -418,8 +418,12 @@ impl Viewer {
         }
 
         let Some(img) = d.image else {
-            let msg = d.error.unwrap_or("Nothing to view — connect a node to a Viewer, or select one.");
-            painter.text(rect.center(), Align2::CENTER_CENTER, msg, FontId::proportional(14.0), Color32::GRAY);
+            match d.error {
+                Some(err) => view_message(ui, rect, Align2::CENTER_CENTER, err, ERROR_COLOR, 14.0),
+                None => {
+                    painter.text(rect.center(), Align2::CENTER_CENTER, "Nothing to view — connect a node to a Viewer, or select one.", FontId::proportional(14.0), Color32::GRAY);
+                }
+            }
             return;
         };
         self.upload(ui.ctx(), img, d.gpu);
@@ -529,8 +533,7 @@ impl Viewer {
             p.shown = Color32::from_rgb(enc(p.px[0]), enc(p.px[1]), enc(p.px[2]));
         }
         if let Some(err) = d.error {
-            let pos = rect.left_top() + Vec2::new(8.0, 8.0);
-            painter.text(pos, Align2::LEFT_TOP, err, FontId::proportional(13.0), Color32::from_rgb(255, 110, 100));
+            view_message(ui, rect, Align2::LEFT_TOP, err, ERROR_COLOR, 13.0);
         }
     }
 
@@ -845,6 +848,28 @@ impl Viewer {
 /// premultiplied, i.e. over black; overscan (past the frame) is dimmed.
 /// With `step` > 1, each texel is the mean of a `step`×`step` block, for
 /// images larger than a texture can be.
+/// An error's color over a view.
+pub const ERROR_COLOR: Color32 = Color32::from_rgb(255, 110, 100);
+
+/// A message over a view (a node's error, say, with a crash report's
+/// path): wrapped to the part of `area` that shows, on a dark backing,
+/// placed in it by `align` (a corner, or the middle), and selectable, so
+/// it can be copied. Only the text takes the pointer (to select it); the
+/// view around it keeps its clicks, drags and scrolls.
+pub fn view_message(ui: &mut egui::Ui, area: Rect, align: Align2, text: &str, color: Color32, size: f32) {
+    let room = area.intersect(ui.clip_rect()).shrink(10.0);
+    // Laid out once, and the label given that very layout, so its text is
+    // where the backing is (a label laid out again could wrap otherwise).
+    let galley = ui.painter().layout(text.to_string(), FontId::proportional(size), color, room.width().max(40.0));
+    let rect = align.anchor_size(align.pos_in_rect(&room), galley.size());
+    ui.painter().rect_filled(rect.expand(4.0), 3.0, Color32::from_black_alpha(170));
+    // (A plain layout: `Ui::put`'s centered and justified one would spread
+    // the text.)
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
+        ui.add(egui::Label::new(galley).selectable(true));
+    });
+}
+
 /// The frame's size labels (Nuke's): "0,0" just below its bottom-left
 /// corner and "W,H" just above its top-right one (each within the frame's
 /// width), for a frame of `format` drawn at `frame` on screen; each a
@@ -1093,6 +1118,44 @@ mod tests {
     /// Tab over the viewer (main.rs) must not also move keyboard focus:
     /// egui reads Tab when the frame starts and focuses the first widget
     /// that wants focus, unless the move is called off before any widget.
+    /// A long error over a view wraps within it, and only its text takes
+    /// the pointer: a drag beside it still reaches the view underneath.
+    #[test]
+    fn a_long_error_wraps_and_leaves_the_view_its_drags() {
+        let err = "soft: plugin /home/someone/plugins/libarclight_plugin_crashy.so crashed: killed by SIGSEGV; its crash report: /home/someone/.local/state/arclight/crashes/plugin-host-20261031-030000-12345-native.txt";
+        let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0));
+        let press = |at: Pos2, down: bool| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: down, modifiers: egui::Modifiers::NONE };
+        // Whether the view under the message takes a drag from `from`.
+        let drag = |from: Pos2| {
+            let ctx = egui::Context::default();
+            let mut dragged = false;
+            let to = from + Vec2::new(40.0, 0.0);
+            for events in [vec![egui::Event::PointerMoved(from)], vec![press(from, true)], vec![egui::Event::PointerMoved(from + Vec2::new(20.0, 0.0))], vec![egui::Event::PointerMoved(to)], vec![press(to, false)]] {
+                let raw = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+                ctx.run_ui(raw, |ui| {
+                    let rect = ui.max_rect();
+                    let view = ui.allocate_rect(rect, Sense::click_and_drag());
+                    view_message(ui, rect, Align2::LEFT_TOP, err, ERROR_COLOR, 13.0);
+                    dragged |= view.dragged();
+                })
+                .drop_without_applying_deltas();
+            }
+            dragged
+        };
+        let font = FontId::proportional(13.0);
+        let one_line = egui::Context::default();
+        let mut line_h = 0.0;
+        one_line.run_ui(egui::RawInput::default(), |ui| line_h = ui.painter().layout_no_wrap("x".into(), font.clone(), ERROR_COLOR).size().y).drop_without_applying_deltas();
+        // Wrapped: several lines within the view's width.
+        let ctx = egui::Context::default();
+        let mut size = Vec2::ZERO;
+        ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| size = ui.painter().layout(err.into(), font.clone(), ERROR_COLOR, 400.0 - 20.0).size()).drop_without_applying_deltas();
+        assert!(size.x <= 380.0 && size.y >= 3.0 * line_h, "{size:?}");
+        // Beside the text (below it): the view pans. On the text: it selects.
+        assert!(drag(Pos2::new(200.0, 250.0)), "a drag beside the message reaches the view");
+        assert!(!drag(Pos2::new(20.0, 14.0)), "a drag on the text selects it instead");
+    }
+
     #[test]
     fn calling_off_the_focus_move_keeps_tab_from_focusing_a_field() {
         let tab = egui::Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };

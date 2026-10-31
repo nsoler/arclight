@@ -1456,7 +1456,8 @@ impl App {
             });
             if let Some(s) = &self.status {
                 ui.separator();
-                ui.colored_label(egui::Color32::from_rgb(235, 100, 90), s);
+                // As much as fits the bar; all of it on hover.
+                ui.add(egui::Label::new(egui::RichText::new(s).color(egui::Color32::from_rgb(235, 100, 90))).truncate().selectable(true)).on_hover_text(s);
             }
             if dialogs::busy() {
                 ui.separator();

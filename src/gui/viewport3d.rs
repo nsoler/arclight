@@ -1554,7 +1554,7 @@ impl Viewport3d {
             painter.text(rect.left_top() + Vec2::new(10.0, 10.0), Align2::LEFT_TOP, m, FontId::proportional(13.0), Color32::from_rgb(110, 200, 120));
         }
         if let Some(e) = &self.error {
-            painter.text(rect.left_bottom() + Vec2::new(10.0, -10.0), Align2::LEFT_BOTTOM, e, FontId::proportional(13.0), Color32::from_rgb(255, 110, 100));
+            crate::viewer::view_message(ui, rect, Align2::LEFT_BOTTOM, e, crate::viewer::ERROR_COLOR, 13.0);
         } else if self.scene.is_none() {
             painter.text(rect.center(), Align2::CENTER_CENTER, "No 3D scene here: view a Camera, Card, mesh, Scene, Camera Tracker or Scanline Render", FontId::proportional(14.0), Color32::GRAY);
         }

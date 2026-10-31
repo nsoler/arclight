@@ -15,6 +15,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.12.15 — 2026-10-31
+
+- Long node errors (a plugin crash with its report path, a missing file's
+  full path) wrap in the viewer and the 3D view instead of running off
+  the edge, and can be selected and copied. The status line shows as much
+  as fits, all of it on hover.
+
 ## 0.12.14 — 2026-10-31
 
 - GPU: **motion blur over Gaussian splats adds up on the GPU too**, each

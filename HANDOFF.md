@@ -30,6 +30,10 @@ done), `docs/help.md` (the in-app help) and
   "Dropped TexturesDelta with 1 unapplied deltas" (egui 0.37) now end
   `ctx.run_ui(..)` with `.drop_without_applying_deltas()` instead of
   `let _ =`; all GUI tests pass. **Tip:** do the same in new egui tests.
+- **0.12.15, error wrapping** (Dev1): long node errors wrap and are
+  selectable in the viewer and the 3D view; the status line truncates
+  to fit with the full text on hover. Known: the viewer toolbar's Fit
+  and 1:1 buttons are cut off at the default window size (Dev1, next).
 - **0.12.13, 3D view zero-copy** (Dev1 + Dev2):
   `render3d::render_preview_gpu` → `Option<gpu::Resident>` (a fresh
   `GpuImage::blank` per call; None for motion blur, see-through shadow
