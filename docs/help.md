@@ -51,6 +51,26 @@ other project's folder is.
 
 Renaming a node (its name in Properties) now reaches all of those too.
 
+### Templates
+
+A template is a set of nodes kept to use again: a grade you like, a
+keying setup, a 3D rig. Select the nodes (or a backdrop, which brings
+the nodes inside it) and choose **Insert ▸ Save selection as
+template…**, then give it a name. **Insert ▸ Templates** puts one into
+the project, in the middle of the Node Graph, selected, as one **⌘Z**
+step. In the node browser (**⇧Tab**) templates are listed after the
+nodes, found by the same search, and go in where the browser opened.
+Names that clash are renamed, as when importing a project, and the
+template's Reads keep reading the same files. **File ▸ New from
+template** starts a new, unsaved project from one, with its format,
+frame rate and range.
+
+The examples in **Help ▸ Examples** are listed too, as built-in
+templates. **Insert ▸ Manage templates…** renames and deletes your own
+and shows their folder: `templates` in Arclight's data folder (on Linux
+`~/.local/share/arclight/templates`), one project file each, so
+templates can be copied to another machine.
+
 ### On a second monitor
 
 The **⧉** button at the right of the Node Graph's tab (or **View ▸ Node

@@ -22,6 +22,7 @@ mod project_settings;
 mod properties;
 mod script_jobs;
 mod sound;
+mod templates;
 mod spreadsheet;
 mod transport;
 mod viewer;
@@ -253,6 +254,8 @@ enum BottomTab {
 struct App {
     doc: Doc,
     editor: NodeEditor,
+    /// Save selection as template… and Manage templates… (Insert menu).
+    template_dialogs: templates::Dialogs,
     curves: CurveEditor,
     tab: BottomTab,
     viewer: Viewer,
@@ -385,6 +388,7 @@ impl App {
         let mut app = App {
             doc,
             editor: NodeEditor::default(),
+            template_dialogs: templates::Dialogs::default(),
             curves: CurveEditor::default(),
             tab: BottomTab::Graph,
             viewer,
@@ -442,6 +446,7 @@ impl App {
             pane_rects: Default::default(),
             gesture_out: false,
         };
+        app.editor.builtin_templates = builtin_templates();
         app.apply_settings(&ctx_for_settings);
         app
     }
@@ -830,6 +835,16 @@ impl App {
         }
     }
 
+    /// Template `t` put into the project at the middle of the Node
+    /// Graph's view (Insert ▸ Templates), selected, one undo step.
+    fn insert_template(&mut self, t: &arclight::templates::Template, ctx: &egui::Context) {
+        let at = self.editor.view_center();
+        match templates::insert(&mut self.doc, t, at) {
+            Ok(n) => self.notice = Some((format!("Inserted {n} node{} from template {}", if n == 1 { "" } else { "s" }, t.name), ctx.input(|i| i.time))),
+            Err(e) => self.status = Some(format!("Template {}: {e:#}", t.name)),
+        }
+    }
+
     /// Help ▸ Examples: open the example at `path` as a new, unsaved
     /// project (Save asks where, so the shipped file stays as it is),
     /// asking about unsaved changes first.
@@ -842,7 +857,9 @@ impl App {
     }
 
     fn load_example(&mut self, path: &Path) {
-        match Graph::from_file(path) {
+        // (As a merge reads it: a template's paths whole even from a
+        // project without a folder.)
+        match arclight::graph_merge::read(path) {
             Ok(g) => self.load(Doc::new(g, None)),
             Err(e) => self.status = Some(format!("{e:#}")),
         }
@@ -1699,6 +1716,12 @@ impl App {
                     ui.close();
                     self.new_doc();
                 }
+                ui.menu_button("New from template", |ui| {
+                    // (A new, unsaved project from it, as Help ▸ Examples.)
+                    if let Some(t) = templates::menu(ui, &templates::all(&self.editor.builtin_templates)) {
+                        self.open_example(t.path);
+                    }
+                });
                 if ui.add(egui::Button::new("Open…").shortcut_text(ui.ctx().format_shortcut(&OPEN))).clicked() {
                     ui.close();
                     self.open();
@@ -1828,6 +1851,24 @@ impl App {
                 ui.separator();
                 if ui.add(egui::Button::new("Preferences…").shortcut_text(ui.ctx().format_shortcut(&PREFERENCES))).clicked() {
                     self.preferences.show(&self.settings);
+                    ui.close();
+                }
+            });
+            ui.menu_button("Insert", |ui| {
+                ui.menu_button("Templates", |ui| {
+                    if let Some(t) = templates::menu(ui, &templates::all(&self.editor.builtin_templates)) {
+                        let ctx = ui.ctx().clone();
+                        self.insert_template(&t, &ctx);
+                    }
+                });
+                ui.separator();
+                let any = !self.doc.selection().is_empty() || self.doc.selected_backdrop.is_some();
+                if ui.add_enabled(any, egui::Button::new("Save selection as template…")).clicked() {
+                    self.template_dialogs.open_save();
+                    ui.close();
+                }
+                if ui.button("Manage templates…").clicked() {
+                    self.template_dialogs.open_manage();
                     ui.close();
                 }
             });
@@ -2122,6 +2163,12 @@ impl eframe::App for App {
         }
         self.help.ui(&ctx);
         self.gpu_test.ui(&ctx);
+        if let Some(note) = self.template_dialogs.ui(&ctx, &self.doc) {
+            self.notice = Some((note, ctx.input(|i| i.time)));
+        }
+        if let Some(e) = self.editor.template_error.take() {
+            self.status = Some(e);
+        }
         self.project_settings.ui(&ctx, &mut self.doc);
         if let Some(project) = self.project_settings.take_defaults() {
             let settings = Settings { new_project: new_project_prefs(&project), ..self.settings.clone() };
@@ -2155,6 +2202,12 @@ fn bundled(rel: &str) -> PathBuf {
         .flat_map(|d| ["../Resources", "../share/arclight"].map(|r| d.join(r).join(rel)))
         .find(|p| p.exists())
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel))
+}
+
+/// The examples (Help ▸ Examples) as built-in templates.
+fn builtin_templates() -> Vec<arclight::templates::Template> {
+    let shipped: Vec<(&str, PathBuf)> = EXAMPLES.iter().map(|(label, file)| (*label, bundled(&format!("examples/{file}")))).collect();
+    arclight::templates::builtin(&shipped)
 }
 
 /// Help ▸ Examples: the example projects shipped with the app (menu
@@ -2512,6 +2565,72 @@ mod tests {
         app.undo();
         assert!(app.doc.node(&gone).is_some());
         drop(app);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Templates: the selection saved by name (the dialog, Enter), a
+    /// clash asking to replace; listed before the built-in examples;
+    /// inserted mid-graph, selected; a new unsaved project from one.
+    #[test]
+    fn templates_save_insert_and_start_projects() {
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("arclight-gui-templates-test-{}", std::process::id()));
+        std::env::set_var("XDG_RUNTIME_DIR", &dir);
+        std::env::set_var("XDG_DATA_HOME", &dir);
+        let ctx = egui::Context::default();
+        let mut app = App::new(ctx.clone(), Doc::new(starter_graph(), None));
+        app.panels = Panels::default();
+        let all = app.doc.graph.nodes.len();
+        let two: Vec<String> = app.doc.graph.nodes.iter().take(2).map(|n| n.id.clone()).collect();
+        app.doc.select_nodes(&two, false);
+        let frame = |app: &mut App, events: Vec<egui::Event>| {
+            let raw = egui::RawInput { events, ..Default::default() };
+            ctx.run_ui(raw, |ui| {
+                if let Some(note) = app.template_dialogs.ui(ui.ctx(), &app.doc) {
+                    app.notice = Some((note, 0.0));
+                }
+            })
+            .drop_without_applying_deltas();
+        };
+        let enter = egui::Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+        let save = |app: &mut App, name: &str| {
+            frame(app, vec![]);
+            frame(app, vec![egui::Event::Text(name.into())]);
+            frame(app, vec![enter.clone()]);
+            frame(app, vec![]);
+        };
+        app.template_dialogs.open_save();
+        save(&mut app, "Starter bits");
+        let kept = arclight::templates::list();
+        assert_eq!(kept.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Starter bits"], "{:?}", app.notice);
+        assert_eq!(kept[0].load().unwrap().nodes.len(), 2);
+        assert!(app.notice.as_ref().is_some_and(|(n, _)| n == "Saved template Starter bits"));
+        // The same name again: not saved over, Replace offered.
+        app.notice = None;
+        app.template_dialogs.open_save();
+        save(&mut app, "Starter bits");
+        assert!(app.notice.is_none(), "not replaced without asking");
+        // Listed first, then the examples.
+        let listed = templates::all(&app.editor.builtin_templates);
+        assert_eq!(listed[0].name, "Starter bits");
+        assert_eq!(listed.iter().filter(|t| t.builtin).count(), EXAMPLES.len());
+        // Inserted mid-graph: two more nodes, selected, renamed.
+        app.insert_template(&kept[0], &ctx);
+        assert_eq!(app.doc.graph.nodes.len(), all + 2);
+        let sel = app.doc.selection();
+        assert_eq!(sel.len(), 2);
+        assert!(sel.iter().all(|id| !two.contains(id)), "renamed: {sel:?}");
+        assert_eq!(app.doc.node(&sel[0]).unwrap().pos, Some(app.editor.view_center()));
+        // New from template: unsaved changes asked about first; then a new,
+        // unsaved project of just its nodes.
+        app.open_example(kept[0].path.clone());
+        assert!(matches!(app.ask, Some(Ask::Discard(Then::Example(_)))));
+        app.ask = None;
+        app.doc.dirty = false;
+        app.open_example(kept[0].path.clone());
+        assert_eq!((app.doc.graph.nodes.len(), app.doc.path.clone()), (2, None));
+        drop(app);
+        std::env::remove_var("XDG_DATA_HOME");
         std::fs::remove_dir_all(&dir).ok();
     }
 

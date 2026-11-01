@@ -129,6 +129,12 @@ pub struct NodeEditor {
     pub snap_to_grid: bool,
     /// Wires drawn straight rather than curved (Preferences ▸ Interface).
     pub straight_wires: bool,
+    /// The examples shipped with the app, listed in the browser as
+    /// built-in templates after the user's own.
+    pub builtin_templates: Vec<arclight::templates::Template>,
+    /// Why the last template chosen in the browser couldn't be put in
+    /// (for the app's status line).
+    pub template_error: Option<String>,
 }
 
 /// The zoom and pan framing `bounds` (graph coordinates) centered in a
@@ -189,6 +195,16 @@ struct Browser {
     sel: usize,
     /// Focus the search field on the first frame only.
     just_opened: bool,
+    /// The templates (the user's, then the built-in ones), read when it
+    /// opened: listed after the nodes, by the same search.
+    templates: Vec<arclight::templates::Template>,
+}
+
+/// What the browser lists: nodes, then templates.
+#[derive(Clone, Copy)]
+enum Pick<'a> {
+    Op(&'static OpInfo),
+    Template(&'a arclight::templates::Template),
 }
 
 impl Default for NodeEditor {
@@ -211,6 +227,8 @@ impl Default for NodeEditor {
             rect: Rect::NOTHING,
             snap_to_grid: false,
             straight_wires: false,
+            builtin_templates: Vec::new(),
+            template_error: None,
         }
     }
 }
@@ -298,6 +316,15 @@ fn is_scene(doc: &Doc, node: &str) -> bool {
 /// Ops matching `query`, in category order. Every word of the query must
 /// appear in the op's label, name or category; label-prefix matches sort
 /// first within the list.
+/// Templates among `list` whose names have every word of `query` in them.
+fn browse_templates<'a>(list: &'a [arclight::templates::Template], query: &str) -> Vec<&'a arclight::templates::Template> {
+    let q = query.trim().to_lowercase();
+    list.iter().filter(|t| {
+        let name = t.name.to_lowercase();
+        q.split_whitespace().all(|w| name.contains(w))
+    }).collect()
+}
+
 fn browse(query: &str) -> Vec<&'static OpInfo> {
     let q = query.trim().to_lowercase();
     let words: Vec<&str> = q.split_whitespace().collect();
@@ -350,7 +377,8 @@ impl NodeEditor {
     /// is elsewhere.
     pub fn open_browser(&mut self, pointer: Option<Pos2>) {
         let at = pointer.filter(|p| self.rect.contains(*p)).unwrap_or(self.rect.center());
-        self.browser = Some(Browser { query: String::new(), at, sel: 0, just_opened: true });
+        let templates = crate::templates::all(&self.builtin_templates);
+        self.browser = Some(Browser { query: String::new(), at, sel: 0, just_opened: true, templates });
     }
 
     /// Add `op` at graph position `at`. Into the target wire when there is
@@ -442,7 +470,8 @@ impl NodeEditor {
     fn browser_ui(&mut self, ctx: &egui::Context, doc: &mut Doc) {
         let into = self.target_wire.as_ref().map(|w| format!("Insert between {} and {}", w.src, w.dst));
         let Some(b) = &mut self.browser else { return };
-        let hits = browse(&b.query);
+        let templates = std::mem::take(&mut b.templates);
+        let hits: Vec<Pick> = browse(&b.query).into_iter().map(Pick::Op).chain(browse_templates(&templates, &b.query).into_iter().map(Pick::Template)).collect();
         let (down, up, enter, esc) = ctx.input_mut(|i| {
             (
                 i.consume_key(Modifiers::NONE, Key::ArrowDown),
@@ -457,7 +486,7 @@ impl NodeEditor {
         if up {
             b.sel = b.sel.saturating_sub(1);
         }
-        let mut chosen = enter.then(|| hits.get(b.sel).copied()).flatten();
+        let mut chosen: Option<Pick> = enter.then(|| hits.get(b.sel).copied()).flatten();
         let mut close = esc || enter;
 
         // Grow upward in the lower half of the screen so the list fits; as
@@ -492,7 +521,28 @@ impl NodeEditor {
                     }
                     egui::ScrollArea::vertical().max_height(list_height).min_scrolled_height(list_height).show(ui, |ui| {
                         let mut last_cat = None;
-                        for (i, op) in hits.iter().enumerate() {
+                        let mut templates_heading = false;
+                        for (i, pick) in hits.iter().enumerate() {
+                            let op = match pick {
+                                Pick::Op(op) => *op,
+                                Pick::Template(t) => {
+                                    if !templates_heading {
+                                        templates_heading = true;
+                                        ui.label(egui::RichText::new("Templates").small().weak());
+                                    }
+                                    let tip = if t.builtin { "A built-in template (Help ▸ Examples): its nodes put in here" } else { "Your template: its nodes put in here" };
+                                    let label = if t.builtin { format!("{}   (built in)", t.name) } else { t.name.clone() };
+                                    let resp = ui.selectable_label(i == b.sel, egui::RichText::new(label).size(14.0)).on_hover_text(tip);
+                                    if i == b.sel && (down || up) {
+                                        resp.scroll_to_me(None);
+                                    }
+                                    if resp.clicked() {
+                                        chosen = Some(*pick);
+                                        close = true;
+                                    }
+                                    continue;
+                                }
+                            };
                             if last_cat != Some(op.category) {
                                 last_cat = Some(op.category);
                                 ui.label(egui::RichText::new(category_name(op.category)).small().color(category_color(op.category).gamma_multiply(1.8)));
@@ -507,7 +557,7 @@ impl NodeEditor {
                                 resp.scroll_to_me(None);
                             }
                             if resp.clicked() {
-                                chosen = Some(op);
+                                chosen = Some(*pick);
                                 close = true;
                             }
                         }
@@ -519,15 +569,29 @@ impl NodeEditor {
             close = true;
         }
         let at = b.at;
+        let chosen = chosen.map(|p| match p {
+            Pick::Op(op) => Ok(op),
+            Pick::Template(t) => Err(t.clone()),
+        });
         if close {
             self.browser = None;
-            if chosen.is_none() {
+            if !matches!(chosen, Some(Ok(_))) {
                 self.target_wire = None;
             }
+        } else if let Some(b) = &mut self.browser {
+            b.templates = templates;
         }
-        if let Some(op) = chosen {
-            let bare = ctx.input(|i| i.modifiers.shift);
-            self.place(doc, op, self.to_graph(at), bare);
+        match chosen {
+            Some(Ok(op)) => {
+                let bare = ctx.input(|i| i.modifiers.shift);
+                self.place(doc, op, self.to_graph(at), bare);
+            }
+            Some(Err(t)) => {
+                if let Err(e) = crate::templates::insert(doc, &t, self.graph_point(at)) {
+                    self.template_error = Some(format!("Template {}: {e:#}", t.name));
+                }
+            }
+            None => {}
         }
     }
 
@@ -2135,6 +2199,42 @@ mod tests {
 
     fn key(key: Key, modifiers: Modifiers) -> egui::Event {
         egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+    }
+
+    /// The browser lists templates after the nodes, by the same search;
+    /// one chosen with the keys goes in at the browser's spot, selected.
+    #[test]
+    fn the_browser_inserts_templates() {
+        use arclight::templates::{self, Template};
+        let dir = std::env::temp_dir().join(format!("arclight-browser-templates-{}", std::process::id()));
+        let mut src = Doc::new(Graph::default(), None);
+        let a = src.add_node("checkerboard", [0.0, 0.0]);
+        let b = src.add_node("blur", [0.0, 100.0]);
+        src.connect(&a, &b, 0);
+        let t = templates::save_in(&dir, "zqx look", &templates::excerpt(&src.graph, None, &[a, b], &[]), true).unwrap();
+        let shipped = Template { builtin: true, ..t };
+        let listed = [shipped.clone(), Template { name: "Other".into(), ..shipped.clone() }];
+        assert_eq!(browse_templates(&listed, "ZQX").len(), 1);
+        assert_eq!(browse_templates(&listed, "").len(), 2);
+        assert!(browse_templates(&listed, "zqx nope").is_empty());
+
+        let mut doc = Doc::new(Graph::default(), None);
+        doc.add_node("grade", [0.0, 0.0]);
+        let mut h = Harness::new();
+        h.ed.builtin_templates = vec![shipped];
+        h.frame(&mut doc, vec![]);
+        let at = Pos2::new(400.0, 300.0);
+        h.ed.open_browser(Some(at));
+        h.frame(&mut doc, vec![]);
+        h.frame(&mut doc, vec![egui::Event::Text("zqx".into())]);
+        h.frame(&mut doc, vec![key(Key::Enter, Modifiers::NONE)]);
+        assert!(!h.ed.browser_open());
+        assert_eq!(doc.graph.nodes.len(), 3, "{:?}", h.ed.template_error);
+        let sel = doc.selection();
+        assert_eq!(sel.len(), 2);
+        assert_eq!(doc.node(&sel[0]).unwrap().pos, Some(h.ed.graph_point(at)), "at the browser's spot");
+        assert_eq!(doc.node(&sel[1]).unwrap().inputs[0], sel[0], "wired as saved");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -339,7 +339,13 @@ after it. `ROADMAP.md` is the public summary of this list.
       running ArclightVFX: Reads still load. In the graph's own window
       too. ⌘C / ⌘V inside a text field stay the field's. Paste text
       from elsewhere: nothing happens
-- [ ] **Import project, copy / paste, templates** (phase 14, after the
+- [ ] Templates (0.14.7): select a few nodes, Insert ▸ Save selection as
+      template… (a name; the same name offers Replace); Insert ▸
+      Templates puts it in; ⇧Tab and type its name: it's listed after
+      the nodes, Enter inserts it there; File ▸ New from template starts
+      an untitled project; the examples are listed as built-in; Manage
+      templates: rename, delete, Show the folder
+- [X] **Import project, copy / paste, templates** (0.14.5–0.14.7) (phase 14, after the
       panels; user, 2026-10-31): File ▸ Import project… merges a saved
       .json into the current graph (nodes renamed on a clash with wires,
       links and expressions following; placed beside the work and

@@ -18,6 +18,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.7 — 2026-10-31
+
+- **Templates:** Insert ▸ Save selection as template… keeps nodes by
+  name (in the user data folder); Insert ▸ Templates and the node
+  browser (⇧Tab) put one in like a paste; File ▸ New from template
+  starts a project from one; Help ▸ Examples' projects are listed as
+  built-in templates; Insert ▸ Manage templates… renames, deletes and
+  shows the folder.
+
 ## 0.14.6 — 2026-10-31
 
 - **Copy, cut, paste and duplicate nodes and backdrops** (⌘C ⌘X ⌘V ⌘D,

@@ -50,6 +50,13 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.14.7, templates** (Dev2): `src/gui/templates.rs` (Save selection
+  as template… with Replace on a clash, Manage templates: rename,
+  delete, show the folder; `insert()` = load + `clipboard::put`); a new
+  top-level Insert menu; File ▸ New from template; the node browser
+  lists templates after nodes; `load_example` reads through
+  `graph_merge::read`. Template names are checked (no `/`, `..`, leading
+  dot). Import / copy-paste / templates done.
 - **0.14.6, copy / paste** (Dev2): `src/templates.rs` (`excerpt()`: a
   selection as a standalone project, absolute paths, outside inputs cut,
   backdrops whose nodes are all taken; `parse()`: only our JSON; the
