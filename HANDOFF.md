@@ -57,8 +57,8 @@ done), `docs/help.md` (the in-app help) and
   flicker); `PanelWindow.pos` removed (egui can't list monitors to
   check a saved place; an old `pos` is ignored and dropped); View ▸ Dock
   all panels; a detached pane keeps a greyed tab in the main window.
-  Every pane detachable, Full screen / F11. **Needs the user's check on
-  the Mac** (Wayland never showed the bug).
+  Every pane detachable, Full screen / F11. **Checked on the Mac by the
+  user (works).** Next: Import project, copy / paste, templates.
 - **0.14.3, instanced occluders in projector maps** (Dev2):
   `instances::Plan::plan_maps` (was `plan_shadows`) lists the copies
   crossing the near plane for every occluding projector's map after the

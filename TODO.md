@@ -290,7 +290,7 @@ a public release once tested.
 Phase 13 ends with a pause for the user's hand testing; these come
 after it. `ROADMAP.md` is the public summary of this list.
 
-- [ ] **Detachable panels for dual monitors** (built: 0.14.2, 0.14.4; the OS places windows; done once the Mac hand tests below pass) (first UI item after the
+- [X] **Detachable panels for dual monitors** (0.14.2, 0.14.4; the OS places windows; checked on the Mac by the user, 2026-10-31) (first UI item after the
       pause; Dev1): the Node Graph in its own OS window (egui immediate
       viewport: `editor.ui(ui, &mut doc, …)` drawn in it), docked back
       when closed, state and size in settings.json (Wayland: the
@@ -299,7 +299,7 @@ after it. `ROADMAP.md` is the public summary of this list.
       Tab, undo / redo / save), popups and file drops in that window.
       Built generic, so the Viewer (full screen on a second monitor),
       Curve Editor and Properties can detach too. About two reports.
-- [ ] **On the Mac first** (0.14.4): detach the Node Graph: it opens on
+- [X] **On the Mac first** (0.14.4): detach the Node Graph: it opens on
       screen, no flicker, takes clicks; Dock, closing it and View ▸ Dock
       all panels each put it back; its greyed tab in the main window
       docks it too
