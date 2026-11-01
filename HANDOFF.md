@@ -1,10 +1,14 @@
 # Arclight — handoff notes
 
 Last updated 2026-11-01, session 12: **PAUSED for the user's hand
-testing of v0.14.14 (2026-11-01): no new work until the user reports
+testing of v0.14.15 (2026-11-01): no new work until the user reports
 bugs or answers phase 15's Q1–Q5; Dev1 and Dev2 standing by.** **Phase 14 (workspace and UI) on
-branch `wip-ns-ui`, 0.14.x, from 0.14.0; at 0.14.14, released as
-v0.14.14** (all five assets, the DMG posted by the user). Done in phase 14 so far: detachable panels (Mac-checked),
+branch `wip-ns-ui`, 0.14.x, from 0.14.0; at 0.14.15, released as
+v0.14.15** (Linux, Windows, wheel + sdist; the user builds and posts the
+macOS DMG). 0.14.15 fixes the user's hand-test bug: a loaded project
+showed the previous one in the 3D view (every Doc started at revision
+1; revisions now come from a process-wide counter, `doc.rs`
+`next_revision`). Done in phase 14 so far: detachable panels (Mac-checked),
 Import project, copy / paste, templates, Project 3D GPU follow-ups,
 Bake Projection (+ texture) with two projection examples, the
 stand-alone Camera, Scanline Render's Camera param, the Cube's atlas uv
