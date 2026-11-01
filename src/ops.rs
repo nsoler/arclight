@@ -1872,6 +1872,7 @@ pub static OPS: &[OpInfo] = &[
         category: Category::Scene,
         inputs: &[scene_in("scene"), scene_in("camera"), opt("background")],
         params: &[
+            fixed!("camera", "Camera", ParamKind::Text, ""),
             p!("width", "Width", FRAME_SIZE, 0),
             p!("height", "Height", FRAME_SIZE, 0),
             fixed!("samples", "Anti-aliasing", ParamKind::Int { min: 1, max: 8 }, 3),
@@ -1884,7 +1885,8 @@ pub static OPS: &[OpInfo] = &[
         overlay: Overlay::None,
         mask_base: None,
         help: "Draws a scene's cards and meshes (and points, as dots) through a camera: the one on the camera input, \
-               else the scene's first. Over the background, in its frame, else Width × Height (0: the project's). \
+               else the scene's first; or, with Camera set, the camera from the node of that name (on the camera input, \
+               else in the scene; none of that name is an error listing those there are). Over the background, in its frame, else Width × Height (0: the project's). \
                Anti-aliasing takes that many samples across each pixel and down (3: nine). \
                Passes adds planes next to the picture: depth (each pixel's distance in front of the camera, 0 where \
                nothing is), P (scene position), N (normal), uv (texture coordinates), motion (pixels each pixel moves by \
@@ -3991,6 +3993,9 @@ fn scene_output(format: Size, scene: Scene) -> Image {
 
 #[derive(Deserialize)]
 struct ScanlineRender {
+    /// The camera's node ("": the camera input's first, else the scene's).
+    #[serde(default)]
+    camera: String,
     width: usize,
     height: usize,
     samples: usize,
@@ -4087,11 +4092,12 @@ pub fn other_frames(op: &str, params: &Value) -> Vec<i64> {
 }
 
 /// A Scanline Render's scene (its scene input's, with the scenes or
-/// particles on its extra inputs joined) and camera (the camera input's,
-/// else the scene's first), from `inputs`.
-fn render_scene(inputs: &[Option<&Image>]) -> (Option<std::sync::Arc<Scene>>, Option<crate::geom::Camera>) {
+/// particles on its extra inputs joined) and camera, from `inputs`: the
+/// camera input's first, else the scene's; with `name`, the one from the
+/// node of that name (the camera input's, else the scene's), an error
+/// naming those there are if none is.
+fn render_scene(inputs: &[Option<&Image>], name: &str) -> Result<(Option<std::sync::Arc<Scene>>, Option<crate::geom::Camera>)> {
     let port = |i: usize| inputs.get(i).copied().flatten();
-    let camera = port(1).and_then(|img| img.scene.as_ref()?.cameras.first().cloned()).or_else(|| port(0)?.scene.as_ref()?.cameras.first().cloned());
     let extra: Vec<&Scene> = inputs.iter().skip(3).flatten().filter_map(|i| i.scene.as_deref()).collect();
     let scene = match port(0).and_then(|img| img.scene.clone()) {
         Some(s) if extra.is_empty() => Some(s),
@@ -4101,7 +4107,24 @@ fn render_scene(inputs: &[Option<&Image>]) -> (Option<std::sync::Arc<Scene>>, Op
             Some(std::sync::Arc::new(all))
         }
     };
-    (scene, camera)
+    let name = name.trim();
+    if name.is_empty() {
+        let camera = port(1).and_then(|img| img.scene.as_ref()?.cameras.first().cloned()).or_else(|| port(0)?.scene.as_ref()?.cameras.first().cloned());
+        return Ok((scene, camera));
+    }
+    let places: Vec<&Scene> = port(1).and_then(|img| img.scene.as_deref()).into_iter().chain(scene.as_deref()).collect();
+    let found = places.iter().find_map(|s| (0..s.cameras.len()).find(|&i| s.camera_node(i) == name).map(|i| s.cameras[i].clone()));
+    match found {
+        Some(c) => Ok((scene, Some(c))),
+        None => {
+            let mut there: Vec<&str> = places.iter().flat_map(|s| (0..s.cameras.len()).map(|i| s.camera_node(i))).filter(|n| !n.is_empty()).collect();
+            there.dedup();
+            if there.is_empty() {
+                bail!("no camera named {name}: there are no cameras on the camera input or in the scene");
+            }
+            bail!("no camera named {name}: the cameras there are {}", there.join(", "))
+        }
+    }
 }
 
 /// A Scanline Render, given also its inputs at `others` frames (offset,
@@ -4109,7 +4132,7 @@ fn render_scene(inputs: &[Option<&Image>]) -> (Option<std::sync::Arc<Scene>>, Op
 /// round the shutter for motion blur (unconnected or missing: as now).
 pub fn scanline_render_frames(params: &Value, inputs: &[Option<&Image>], others: &[(i64, Vec<Option<&Image>>)]) -> Result<Image> {
     let p: ScanlineRender = parse(params, "scanline_render")?;
-    let (scene, camera) = render_scene(inputs);
+    let (scene, camera) = render_scene(inputs, &p.camera)?;
     let camera = camera.context("no camera: connect a Camera to the camera input, or put one in the scene")?;
     let bg = inputs.get(2).copied().flatten();
     let format = bg.map_or(source_size(p.width, p.height), |b| b.format);
@@ -4119,7 +4142,9 @@ pub fn scanline_render_frames(params: &Value, inputs: &[Option<&Image>], others:
     let then: Vec<(i64, Option<std::sync::Arc<Scene>>, crate::geom::Camera)> = others
         .iter()
         .map(|(k, ins)| {
-            let (s, c) = render_scene(ins);
+            // (The named camera missing then: this frame's, as when none is
+            // wired then.)
+            let (s, c) = render_scene(ins, &p.camera).unwrap_or_else(|_| (render_scene(ins, "").ok().and_then(|r| r.0), None));
             (*k, s, c.unwrap_or_else(|| camera.clone()))
         })
         .collect();

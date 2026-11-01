@@ -339,6 +339,10 @@ after it. `ROADMAP.md` is the public summary of this list.
       running ArclightVFX: Reads still load. In the graph's own window
       too. ⌘C / ⌘V inside a text field stay the field's. Paste text
       from elsewhere: nothing happens
+- [ ] Scanline Render's Camera (0.14.11): two Cameras in one Scene into
+      a Scanline Render: its Camera menu lists both; picking one renders
+      through it; rename that Camera: the setting follows; a wrong name:
+      the error names the cameras; empty: as before
 - [ ] Camera alone (0.14.10): ⇧Tab, type "camera": Camera and 3D Camera
       Setup listed; Camera with a Project 3D selected becomes its
       projector; with a Scanline Render selected, its camera (if empty);

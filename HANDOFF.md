@@ -50,6 +50,13 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.14.11, Scanline Render's Camera param** (Dev2, user request):
+  `ScanlineRender.camera` (serde default ""); `render_scene(inputs,
+  name)`: "" = the old path exactly; a name = the camera input's scene
+  first, then the scene, by `Scene::camera_node`; at other frames
+  (blur / motion) a missing named camera falls back to this frame's.
+  `graph_merge::rename_refs` covers it. Properties: the text-suggestion
+  combo over the Camera nodes upstream (static, no evaluation).
 - **0.14.10, stand-alone Camera** (Dev2, user request): node_editor.rs
   browser entries Camera (alone; into a selected Project 3D's projector
   or a Scanline Render's empty camera input) and 3D Camera Setup

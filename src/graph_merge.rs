@@ -162,7 +162,8 @@ fn offset(target: &Graph, nodes: &[&NodeSpec], backdrops: &[&Backdrop], place: P
 
 /// Point every reference to node `old` in node params `params` (of op
 /// `op`) at `new`: links and link formulas, geometry formulas
-/// (`loc.translate`), a Curve's Path of, a Media Out's Audio, and a Group
+/// (`loc.translate`), a Curve's Path of, a Media Out's Audio, a Scanline
+/// Render's Camera, and a Group
 /// or Source group naming exactly that node (a pattern such as rock* is
 /// left as written: it matches by name).
 pub fn rename_refs(op: &str, params: &mut Value, old: &str, new: &str) {
@@ -181,6 +182,7 @@ pub fn rename_refs(op: &str, params: &mut Value, old: &str, new: &str) {
     }
     match op {
         "curve" => set("path_of", &exact),
+        "scanline_render" => set("camera", &exact),
         // ("auto" and "none" aren't nodes.)
         "media_out" => set("audio", &|s: &str| (s != "auto" && s != "none").then(|| exact(s)).flatten()),
         _ => {}
@@ -223,7 +225,7 @@ mod tests {
             { "id": "del", "op": "delete_geo", "params": { "mode": "expression", "expression": "@P.y < loc.translate.y", "group": "loc*" } },
             { "id": "path", "op": "curve", "params": { "source": "node path", "path_of": "loc" } },
             { "id": "out", "op": "media_out", "inputs": ["blur1"], "params": { "audio": "grade1" } },
-            { "id": "render", "op": "scanline_render", "inputs": ["set", "", "", "loc", "grade1"] },
+            { "id": "render", "op": "scanline_render", "inputs": ["set", "", "", "loc", "grade1"], "params": { "camera": "loc" } },
         ]));
         let added = merge(&mut target, &source, &Merge { only: None, place: Place::Beside });
         assert_eq!(added.renamed, BTreeMap::from([("grade1".into(), "grade2".into()), ("loc".into(), "loc1".into())]));
@@ -239,6 +241,7 @@ mod tests {
         assert_eq!(node(&target, "path").params["path_of"], "loc1");
         assert_eq!(node(&target, "out").params["audio"], "grade2");
         assert_eq!(node(&target, "render").inputs, ["set", "", "", "loc1", "grade2"]);
+        assert_eq!(node(&target, "render").params["camera"], "loc1", "the camera it renders through");
         // The target's own nodes and project are untouched.
         assert_eq!(node(&target, "grade1").pos, Some([0.0, 0.0]));
         assert_eq!(target.project.fps, 25.0);

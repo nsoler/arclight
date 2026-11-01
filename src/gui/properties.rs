@@ -751,7 +751,11 @@ impl Properties {
                 let mut buf = self.text_edit.remove(&key).unwrap_or_else(|| current.clone());
                 let mut out = None;
                 let layers = self.input_layers.as_ref().filter(|(n, _)| n == id).map(|(_, l)| l.as_slice());
-                let offered = if op == "media_out" && spec.name == "audio" { audio_suggestions(doc) } else { text_suggestions(op, spec.name, layers) };
+                let offered = match (op, spec.name) {
+                    ("media_out", "audio") => audio_suggestions(doc),
+                    ("scanline_render", "camera") => camera_suggestions(doc, id),
+                    _ => text_suggestions(op, spec.name, layers),
+                };
                 ui.horizontal(|ui| {
                     let resp = ui.add(egui::TextEdit::singleline(&mut buf).desired_width(150.0));
                     if resp.has_focus() {
@@ -761,7 +765,9 @@ impl Properties {
                     }
                     egui::ComboBox::from_id_salt(("text", id, spec.name)).selected_text("").width(20.0).show_ui(ui, |ui| {
                         for o in &offered {
-                            if ui.selectable_label(*o == current, o).clicked() {
+                            // ("": a Scanline Render's default camera.)
+                            let label = if o.is_empty() { "(the first camera)" } else { o.as_str() };
+                            if ui.selectable_label(*o == current, label).clicked() {
                                 out = Some(json!(o));
                             }
                         }
@@ -1319,6 +1325,13 @@ fn audio_suggestions(doc: &Doc) -> Vec<String> {
     ["auto".to_string(), "none".to_string()].into_iter().chain(clips.map(|n| n.id.clone())).collect()
 }
 
+/// Scanline Render `id`'s Camera menu: "" (the camera input's first,
+/// else the scene's), then the Camera nodes upstream of it.
+fn camera_suggestions(doc: &Doc, id: &str) -> Vec<String> {
+    let cameras = doc.graph.nodes.iter().filter(|n| n.op == "camera" && doc.is_upstream(&n.id, id));
+    std::iter::once(String::new()).chain(cameras.map(|n| n.id.clone())).collect()
+}
+
 /// Whether a Media Out writing `path` shows param `name`: the codec and
 /// frame rate for a video, the DPX settings for a .dpx sequence;
 /// everything until the path names a format.
@@ -1668,6 +1681,21 @@ mod tests {
         }
     }
     use arclight::graph::{Graph, NodeSpec};
+
+    /// A Scanline Render's Camera menu: the default, then the Camera nodes
+    /// upstream of it (not one wired elsewhere).
+    #[test]
+    fn the_camera_menu_lists_the_cameras_reaching_the_render() {
+        let g: Graph = serde_json::from_value(serde_json::json!({ "nodes": [
+            { "id": "head", "op": "camera" },
+            { "id": "side", "op": "camera" },
+            { "id": "elsewhere", "op": "camera" },
+            { "id": "all", "op": "scene", "inputs": ["head", "", "", ""] },
+            { "id": "render", "op": "scanline_render", "inputs": ["all", "side", ""] },
+        ] })).unwrap();
+        let doc = Doc::new(g, None);
+        assert_eq!(camera_suggestions(&doc, "render"), ["", "head", "side"]);
+    }
 
     #[test]
     fn a_browse_answer_arriving_later_sets_the_param() {

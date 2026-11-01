@@ -2692,6 +2692,49 @@ mod tests {
         assert!(e.message.contains("no camera"), "{}", e.message);
     }
 
+    /// Scanline Render's Camera: empty, the scene's first camera as ever;
+    /// a name, that node's camera (on the camera input before the scene);
+    /// none of that name, an error naming those there are; a camera renamed
+    /// (a merge's clash) still picked.
+    #[test]
+    fn the_scanline_render_picks_its_camera_by_name() {
+        use crate::graph::{Evaluator, Graph};
+        use crate::ops::EvalContext;
+        use serde_json::json;
+        let graph = |render_camera: &str, wired: &str| -> Graph {
+            serde_json::from_value(json!({
+                "project": { "first_frame": 1, "last_frame": 1, "fps": 24, "format": { "width": 64, "height": 32 } },
+                "nodes": [
+                    { "id": "plate", "op": "checkerboard", "params": { "width": 64, "height": 32, "size": 4 } },
+                    { "id": "card1", "op": "card", "inputs": ["plate"], "params": { "translate": [0, 0, -5], "scale": [10, 10, 1] } },
+                    { "id": "head", "op": "camera", "params": { "focal": 18 } },
+                    { "id": "side", "op": "camera", "params": { "focal": 18, "translate": [3, 0, 0] } },
+                    { "id": "side_too", "op": "camera", "params": { "focal": 18, "translate": [-3, 0, 0] } },
+                    { "id": "all", "op": "scene", "inputs": ["card1", "head", "side", ""] },
+                    { "id": "render", "op": "scanline_render", "inputs": ["all", wired, ""], "params": { "samples": 1, "camera": render_camera } },
+                ] }))
+            .unwrap()
+        };
+        let render = |g: &Graph| Evaluator::new().evaluate(g, "render", &EvalContext { frame: 1, write_outputs: false });
+        let pixels = |g: &Graph| render(g).unwrap().pixels.clone();
+        let default = pixels(&graph("", ""));
+        assert_eq!(default, pixels(&graph("head", "")), "empty: the first, head");
+        let side = pixels(&graph("side", ""));
+        assert_ne!(side, default);
+        assert_eq!(side, pixels(&graph("", "side")), "as with side wired to the camera input");
+        // The camera input before the scene: side_too wired, named.
+        assert_eq!(pixels(&graph("side_too", "side_too")), pixels(&graph("", "side_too")));
+        let e = render(&graph("nope", "")).err().unwrap();
+        assert!(e.message.contains("no camera named nope") && e.message.contains("head, side"), "{}", e.message);
+        // Merged into a project that has a "side" already: renamed, and
+        // the render's Camera follows.
+        let mut target: Graph = serde_json::from_value(json!({ "nodes": [{ "id": "side", "op": "camera" }] })).unwrap();
+        let added = crate::graph_merge::merge(&mut target, &graph("side", ""), &crate::graph_merge::Merge { only: None, place: crate::graph_merge::Place::Beside });
+        let new = added.renamed.get("side").expect("side renamed").clone();
+        let r = added.renamed.get("render").cloned().unwrap_or_else(|| "render".into());
+        assert_eq!(target.node(&r).unwrap().params["camera"], new.as_str());
+    }
+
     #[test]
     fn renders_over_a_background_and_draws_points() {
         let mut bg = Image::filled(64, 32, [0.0, 0.5, 0.0, 1.0]);

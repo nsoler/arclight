@@ -18,6 +18,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.11 — 2026-10-31
+
+- **Scanline Render: a Camera param** picks which camera renders, by its
+  node name: a menu of the cameras wired in (any name can be typed);
+  renaming the camera follows; a name that isn't there is an error
+  listing the cameras there are. Empty renders as before (the camera
+  input's, else the scene's first).
+
 ## 0.14.10 — 2026-10-31
 
 - **Camera on its own:** in the node browser, Camera adds just the

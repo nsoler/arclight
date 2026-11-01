@@ -126,6 +126,13 @@ For a Camera on its own, choose **Camera** in the node browser (or
 projection's projector; with a Scanline Render selected it goes into the
 render's camera input if that's empty; otherwise it's left unwired.
 
+Which camera a **Scanline Render** draws through: the one on its camera
+input, else the scene's first. With several cameras in the scene, pick
+one with its **Camera** param: the menu beside it lists the Camera nodes
+wired into the render (one on the camera input is looked for first).
+Renaming that Camera keeps the render on it; a name that matches no
+camera is an error saying which cameras there are.
+
 To see the scene as a Camera sees it, click **Look through in 3D view** in
 its Properties (spot and area lights have it too): the viewer switches to
 3D through that lens; click again to come back out. The **0** key does the
