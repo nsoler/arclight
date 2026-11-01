@@ -85,9 +85,10 @@ pub fn set_host_command(command: Vec<OsString>) {
 }
 
 /// The host command, unless plugins load in-process (none was set, or
-/// `ARCLIGHT_PLUGINS_IN_PROCESS` is, or there's no host on this system).
+/// `ARCLIGHT_PLUGINS_IN_PROCESS` is). Hosts run on Unix only.
+#[cfg(unix)]
 pub(crate) fn host_command() -> Option<Vec<OsString>> {
-    if !cfg!(unix) || std::env::var_os("ARCLIGHT_PLUGINS_IN_PROCESS").is_some_and(|v| !v.is_empty() && v != "0") {
+    if std::env::var_os("ARCLIGHT_PLUGINS_IN_PROCESS").is_some_and(|v| !v.is_empty() && v != "0") {
         return None;
     }
     HOST_COMMAND.read().unwrap().clone()

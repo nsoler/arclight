@@ -8,14 +8,20 @@
 //! [`crate::session::Session`] over its document (off its UI thread, sharing
 //! its viewer's evaluator), so edits land in its undo history like any other.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::mpsc::{Receiver, Sender};
+#[cfg(unix)]
+use {
+    anyhow::Context,
+    serde_json::json,
+    std::io::{BufRead, BufReader, Write},
+    std::os::unix::net::{UnixListener, UnixStream},
+    std::sync::mpsc,
+    std::time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 /// A running GUI, as recorded in the registry.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -26,12 +32,14 @@ pub struct Instance {
     pub started: u64,
 }
 
+#[cfg(unix)]
 fn registry_dir() -> PathBuf {
     crate::config::runtime_dir().join("instances")
 }
 
 /// Live GUI instances, oldest first. Entries whose socket no longer accepts
 /// connections (a crashed GUI) are removed.
+#[cfg(unix)]
 pub fn list_instances() -> Vec<Instance> {
     let Ok(entries) = std::fs::read_dir(registry_dir()) else { return Vec::new() };
     let mut out: Vec<Instance> = Vec::new();
@@ -53,6 +61,14 @@ pub fn list_instances() -> Vec<Instance> {
     out
 }
 
+/// Without Unix sockets there is no bridge, so no instances: std has none
+/// on Windows, and a loopback TCP port would let any local web page drive
+/// the GUI.
+#[cfg(not(unix))]
+pub fn list_instances() -> Vec<Instance> {
+    Vec::new()
+}
+
 /// The instance with `pid`, or the most recently started one.
 pub fn find_instance(pid: Option<u32>) -> Result<Instance> {
     let all = list_instances();
@@ -63,6 +79,13 @@ pub fn find_instance(pid: Option<u32>) -> Result<Instance> {
 }
 
 /// Call `tool` on a running instance.
+#[cfg(not(unix))]
+pub fn call(inst: &Instance, _tool: &str, _arguments: &Value) -> Result<Value> {
+    bail!("no scripting bridge on this platform (pid {})", inst.pid)
+}
+
+/// Call `tool` on a running instance.
+#[cfg(unix)]
 pub fn call(inst: &Instance, tool: &str, arguments: &Value) -> Result<Value> {
     let mut stream = UnixStream::connect(&inst.socket)
         .with_context(|| format!("connecting to the ArclightVFX window (pid {})", inst.pid))?;
@@ -102,8 +125,15 @@ pub struct Server {
 }
 
 impl Server {
+    /// Listen for clients: not on this platform (see [`list_instances`]).
+    #[cfg(not(unix))]
+    pub fn start(_wake: impl Fn() + Send + Sync + 'static) -> Result<Server> {
+        bail!("not available on this platform")
+    }
+
     /// Listen for clients. `wake` is called whenever a request arrives so the
     /// GUI can repaint and pick it up via [`Server::poll`].
+    #[cfg(unix)]
     pub fn start(wake: impl Fn() + Send + Sync + 'static) -> Result<Server> {
         let dir = crate::config::runtime_dir();
         std::fs::create_dir_all(registry_dir()).with_context(|| format!("creating {}", dir.display()))?;
@@ -140,6 +170,7 @@ impl Drop for Server {
     }
 }
 
+#[cfg(unix)]
 fn serve_client(stream: UnixStream, tx: Sender<Pending>, wake: &(dyn Fn() + Send + Sync)) {
     let Ok(mut writer) = stream.try_clone() else { return };
     for line in BufReader::new(stream).lines() {
@@ -173,7 +204,7 @@ fn serve_client(stream: UnixStream, tx: Sender<Pending>, wake: &(dyn Fn() + Send
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

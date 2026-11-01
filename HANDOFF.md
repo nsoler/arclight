@@ -48,6 +48,16 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.13.35, Windows x64** (Supervisor, user request): `bridge` and
+  `mcp` build everywhere (bridge: non-unix stubs, `Server::start` errs,
+  no instances; deliberately no loopback-TCP bridge, any local web page
+  could drive the GUI; mcp: the SIGINT handler is unix-only).
+  `packaging/windows/build-zip.sh` cross-builds with zig (wrappers for
+  the linker, ar and dlltool; `-lgcc_eh` → LLVM libunwind, panics unwind)
+  into `dist/arclightvfx-<ver>-windows-x86_64.zip`. Releases carry it from
+  now on; v0.13.34's was built from the tag plus this patch. Tested under
+  wine only (CLI, demo render, GPU via Vulkan, GUI starts and finds its
+  bundled clip); not yet on real Windows.
 - **0.13.34, fix + ROADMAP.md** (Dev2 fix, Supervisor docs): Project 3D
   treats an empty image (an unconnected input) as missing and errors.
   `ROADMAP.md` (public: status by phase, Now / Next / Later, How to help);
@@ -1132,7 +1142,9 @@ done), `docs/help.md` (the in-app help) and
   repos/nsoler/arclight/releases/tags/v<ver>`) before editing the notes:
   one upload silently didn't. No macOS wheel until Actions works.
 - **Release rule (user, 2026-10-29):** every release carries the Linux
-  x86_64 tarball, the **macOS universal DMG** (Apple Silicon *and*
+  x86_64 tarball, the **Windows x64 zip** (since v0.13.34, built in the
+  same clean worktree with `ZIG=… packaging/windows/build-zip.sh`; zig
+  from the release venv's `ziglang`), the **macOS universal DMG** (Apple Silicon *and*
   Intel; `Arclight-<ver>-universal.dmg`, since v0.8.4; before that only
   `-arm64.dmg`), and the `arclt` wheels (Linux manylinux2014 x86_64,
   macOS universal2) plus sdist. Tag from `main` after the milestone is

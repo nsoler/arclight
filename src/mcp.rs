@@ -716,6 +716,7 @@ static STOP: AtomicBool = AtomicBool::new(false);
 
 /// SIGINT / SIGTERM: stop after the request in progress; a second one
 /// ends the process at once (a render not worth waiting for).
+#[cfg(unix)]
 extern "C" fn on_stop(sig: libc::c_int) {
     // SAFETY: async-signal-safe calls only.
     unsafe {
@@ -734,6 +735,8 @@ pub fn serve_http(server: Server, addr: &str) -> Result<()> {
     let listener = TcpListener::bind(addr).with_context(|| format!("binding {addr}"))?;
     eprintln!("arclight: MCP server on http://{}/mcp", listener.local_addr()?);
     // SAFETY: installs a handler that only touches an atomic and writes.
+    // (Elsewhere Ctrl-C ends the process the default way.)
+    #[cfg(unix)]
     unsafe {
         let mut act: libc::sigaction = std::mem::zeroed();
         act.sa_sigaction = on_stop as *const () as libc::sighandler_t;

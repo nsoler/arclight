@@ -13,7 +13,7 @@ compositing product.
 **Download the latest release:**
 [github.com/nsoler/arclight/releases/latest](https://github.com/nsoler/arclight/releases/latest)
 (Linux x86_64 tarball, macOS universal DMG for Apple Silicon and Intel,
-Python wheels). All releases: [Releases](https://github.com/nsoler/arclight/releases).
+Windows x64 zip, Python wheels). All releases: [Releases](https://github.com/nsoler/arclight/releases).
 
 ## Design
 
@@ -76,6 +76,18 @@ place. The binaries link only glibc (and, for the GUI, `libasound.so.2`), so the
 were built on (Arch / Omarchy for the published releases) and newer ones.
 Releases are on GitHub (`gh release list`), with the macOS DMG (universal:
 Apple Silicon and Intel) and the Python wheels beside the tarball.
+
+### Windows x64 (cross-built on Linux)
+
+```sh
+rustup target add x86_64-pc-windows-gnu
+ZIG=/path/to/zig packaging/windows/build-zip.sh   # -> dist/arclightvfx-<version>-windows-x86_64.zip
+```
+
+zig (on PATH, or pip's `ziglang`) links in place of MinGW. Unzip and run
+`bin\arclight-gui.exe`; it needs Windows 10 or 11. The scripting bridge
+(Python or `arclight mcp --attach` driving a running window) uses Unix
+sockets and is off on Windows; the MCP server itself works.
 
 ### macOS (Apple Silicon and Intel)
 

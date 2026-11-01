@@ -17,6 +17,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.35 — 2026-10-31
+
+- Windows x64: the code builds for Windows, and
+  `packaging/windows/build-zip.sh` cross-builds it on Linux with zig into
+  `dist/arclightvfx-<version>-windows-x86_64.zip` (first published as an
+  extra asset of v0.13.34). On Windows the scripting bridge (Python or
+  `arclight mcp --attach` driving a running window) is off, and Ctrl-C
+  stops `arclight mcp --http` at once instead of after the request in
+  progress.
+
 ## 0.13.34 — 2026-10-31
 
 - Fixed: Project 3D with nothing connected to its image input says so,
