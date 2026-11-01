@@ -56,7 +56,8 @@ done), `docs/help.md` (the in-app help) and
   top-level Insert menu; File ▸ New from template; the node browser
   lists templates after nodes; `load_example` reads through
   `graph_merge::read`. Template names are checked (no `/`, `..`, leading
-  dot). Import / copy-paste / templates done.
+  dot). Import / copy-paste / templates done. Released as v0.14.7
+  (Linux, Windows, wheel + sdist; the user posts the DMG).
 - **0.14.6, copy / paste** (Dev2): `src/templates.rs` (`excerpt()`: a
   selection as a standalone project, absolute paths, outside inputs cut,
   backdrops whose nodes are all taken; `parse()`: only our JSON; the
