@@ -731,10 +731,38 @@ them as they go. Press play.
   sees a wall straight on takes over there. **Frames** (as `1001, 1040,
   1080`) projects one tracked camera's plate from each frame listed,
   blended: a set covered from three moments of a camera move, with one
-  node (it overrides Frame hold). **Help ▸ Examples ▸ Projection** (or
-  `examples/multi-projection.json`): two
+  node (it overrides Frame hold). **Help ▸ Examples ▸ Projection: a
+  plate on a card from the shot camera** (`examples/projection-basic.json`)
+  is the classic setup: the shot camera, held at frame 1, projects a plate
+  onto a wall and a block; frame 1 renders the plate exactly, and as the
+  camera moves the block's parallax (and its unseen sides) show. **Projection:
+  two cameras blended on one set** (`examples/multi-projection.json`): two
   checkerboards projected from left and right onto a block and a wall,
   blended.
+- **Bake Projection** freezes what Project 3D puts on cards and meshes
+  into their textures and takes the projections off them, so the scene
+  renders the same without the projectors, and **Write Geo** can hand
+  the projected set to other tools with its textures (a .glb). **Group**
+  picks the surfaces (a node name or a pattern; empty: every one a
+  projection lands on). Each is baked in its uv space at **Width** ×
+  **Height** (2048 square by default), unlit (lights shade it after, as
+  before), with everything the render does: Mix, Crop / Edge, the
+  facing fade, occlusion, blending, at the frame shown (Frame hold and
+  Frames on the Project 3D still apply). **Padding** grows the bake a few
+  texels into the empty uv space round it, so seams don't show a dark
+  line. Surfaces baked by one node share one texture, so where their uvs
+  overlap the later wins: bake them one node each (Group) unless their
+  uvs are laid out apart. A mesh needs uvs; a primitive **Cube**'s six
+  faces each use the whole uv square, so a cube can't be baked to one
+  texture (leave it projected). Instances aren't baked (Realize Instances
+  first). **Bake Projection Texture** gives the texture itself, for a
+  Write (an EXR or PNG) or another node: the projections' part only,
+  alpha where they landed, so laid **Over** the surface's own texture it
+  gives the bake. **Help ▸ Examples ▸ Projection: baked to a texture**
+  (`examples/projection-bake.json`): the two-camera set's wall and ground
+  baked, rendered beside the live projection, the wall's texture in a
+  second Viewer, and a Write Geo that writes `bake/set.glb` when the
+  project is rendered.
 - **Scanline Render** takes any number of scenes or particle streams:
   connect to its last (empty) input and a new one appears. With a Scanline
   Render selected, a Particle Emitter added from the node browser goes

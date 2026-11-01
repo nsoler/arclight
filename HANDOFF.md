@@ -50,6 +50,16 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.14.9, Bake Projection nodes + examples** (Dev1): `bake_projection`
+  (Scene -> Scene: texture set, material color white, projections
+  stripped) and `bake_texture` (Scene -> Image, `Baked::texture()`), two
+  ops sharing params since an op's output kind is static; Group empty =
+  every surface a projection lands on; instances error ("Realize
+  Instances first"). A primitive Cube's faces share one uv square, so it
+  can't bake to one texture (documented; a cube "uv layout: atlas" would
+  fix it). Examples `projection-basic.json` and `projection-bake.json`
+  in Help ▸ Examples (five entries). Next: Dev2's stand-alone Camera,
+  then Scanline Render's Camera param.
 - **0.14.8, bake core** (Dev2): `src/render3d/bake.rs` (`Baked {
   surface, base, coverage }`, `bake(scene, take, size, padding)`,
   `Baked::texture()` = surface - base·(1-c), alpha c; a uv-space

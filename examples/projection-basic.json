@@ -1,0 +1,43 @@
+{
+  "project": { "folder": ".", "format": { "width": 960, "height": 540 },
+               "fps": 24.0, "first_frame": 1, "last_frame": 48 },
+  "nodes": [
+    { "id": "checker", "op": "checkerboard",
+      "params": { "width": 960, "height": 540, "size": 60, "color_a": [0.85, 0.45, 0.2, 1], "color_b": [0.95, 0.85, 0.65, 1] },
+      "pos": [40, 60] },
+    { "id": "plate", "op": "ellipse", "inputs": ["checker"],
+      "params": { "width": 960, "height": 540, "center": [480, 270], "size": [300, 300], "color": [0.15, 0.55, 0.7, 1], "feather": 12 },
+      "pos": [40, 140] },
+
+    { "id": "gray", "op": "constant",
+      "params": { "width": 64, "height": 64, "color": [0.5, 0.5, 0.5, 1] },
+      "pos": [40, 300] },
+    { "id": "wall", "op": "card", "inputs": ["gray"],
+      "params": { "size": [16, 9], "translate": [0, 0, -10] },
+      "pos": [40, 380] },
+    { "id": "block", "op": "cube",
+      "params": { "size": [2, 2, 2], "translate": [0, -0.5, -5], "rotate": [0, 30, 0], "color": [0.5, 0.5, 0.5, 1], "shading": "unlit" },
+      "pos": [40, 460] },
+    { "id": "set", "op": "scene", "inputs": ["wall", "block", "", ""],
+      "pos": [230, 420] },
+
+    { "id": "cam", "op": "camera",
+      "params": { "focal": 35,
+                  "translate": { "keys": [[1, [0, 0, 0]], [48, [1.0, 0.25, 0]]], "interp": "smooth" },
+                  "rotate": { "keys": [[1, [0, 0, 0]], [48, [-1, 5, 0]]], "interp": "smooth" } },
+      "pos": [230, 560] },
+    { "id": "project", "op": "project_3d", "inputs": ["set", "plate", "cam"],
+      "params": { "hold": true, "hold_frame": 1 },
+      "pos": [420, 420] },
+    { "id": "render", "op": "scanline_render", "inputs": ["project", "cam", ""],
+      "params": { "width": 960, "height": 540 },
+      "pos": [610, 420] },
+    { "id": "viewer", "op": "viewer", "inputs": ["render"], "pos": [800, 420] }
+  ],
+  "backdrops": [
+    { "id": "bd_plate", "title": "The plate: made in the graph (no file needed)", "pos": [20, 20], "size": [360, 190], "color": [0.35, 0.3, 0.2] },
+    { "id": "bd_set", "title": "The set: a wall and a block standing in for the plate's world", "pos": [20, 260], "size": [380, 270], "color": [0.2, 0.3, 0.35] },
+    { "id": "bd_cam", "title": "One camera: it shot the plate at frame 1, then moves", "pos": [200, 530], "size": [380, 100], "color": [0.3, 0.25, 0.35] },
+    { "id": "bd_project", "title": "Project 3D from that camera, held at frame 1; render through it: frame 1 is the plate, play to see the parallax", "pos": [400, 370], "size": [560, 120], "color": [0.25, 0.35, 0.25] }
+  ]
+}

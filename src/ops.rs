@@ -100,7 +100,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "points_from_geo" | "grid_points" | "line_points" | "normals" | "subdivide" | "displace" | "extrude" | "write_geo" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "curve_to_mesh" | "points_on_curve" | "project_3d" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "points_from_geo" | "grid_points" | "line_points" | "normals" | "subdivide" | "displace" | "extrude" | "write_geo" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "curve_to_mesh" | "points_on_curve" | "project_3d" | "bake_projection" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1529,6 +1529,49 @@ pub static OPS: &[OpInfo] = &[
                camera and image from each frame listed, blended (one tracked camera covering a set from several \
                frames); it overrides Frame hold.",
     },
+    // Bake Projection (project3d.rs; Dev1), on render3d::bake (Dev2): the
+    // same params and core, a scene out or the texture out.
+    OpInfo {
+        name: "bake_projection",
+        label: "Bake Projection",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN],
+        params: &[
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("width", "Width", ParamKind::Int { min: 1, max: 16384 }, 2048),
+            fixed!("height", "Height", ParamKind::Int { min: 1, max: 16384 }, 2048),
+            fixed!("padding", "Padding", ParamKind::Int { min: 0, max: 1024 }, 4),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Freezes what Project 3D puts on the scene's cards and meshes (of Group's nodes, a name or a pattern with *; \
+               empty: those a projection lands on) into their textures, and takes the projections off them: the scene renders \
+               the same without the projectors, and Write Geo hands the projected set to other tools with its textures. Each \
+               surface is baked in its uv space at Width × Height, unlit (lights shade it after, as before), the projection's \
+               Mix, Crop / Edge, fade, occlusion and blending as the render has them, at this frame (Frame hold and Frames \
+               on the Project 3D still apply). Padding grows the baked texels into the empty uv space round them, against \
+               seams. Surfaces chosen together share one texture (where their uvs overlap, the later wins). A mesh needs uvs; \
+               instances aren't baked (Realize Instances first). Bake Projection Texture gives the image itself.",
+    },
+    OpInfo {
+        name: "bake_texture",
+        label: "Bake Projection Texture",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN],
+        params: &[
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("width", "Width", ParamKind::Int { min: 1, max: 16384 }, 2048),
+            fixed!("height", "Height", ParamKind::Int { min: 1, max: 16384 }, 2048),
+            fixed!("padding", "Padding", ParamKind::Int { min: 0, max: 1024 }, 4),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "What Project 3D puts on the scene's cards and meshes (Group as Bake Projection's), as an image in their uv \
+               space, Width × Height: the projections' part only, over the surface's own color by their modes, unlit; alpha \
+               is how much of them landed (0 where none did), so laid Over the surface's own texture it gives the bake. \
+               Padding grows it into the empty uv space round it. For Write (an EXR or PNG for another tool), a Card, or a \
+               primitive's texture.",
+    },
     OpInfo {
         name: "particles_to_points",
         label: "Particles to Points",
@@ -2586,6 +2629,8 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
             let shots: Vec<_> = std::iter::once(1).chain((3..inputs.len()).step_by(2)).map(shot).collect();
             Ok(scene_output(DEFAULT_FORMAT, project3d::project_shots(params, input_scene(inputs), &shots)?))
         }
+        "bake_projection" => Ok(scene_output(DEFAULT_FORMAT, project3d::bake_projection(params, input_scene(inputs))?)),
+        "bake_texture" => project3d::bake_texture(params, &input_scene(inputs)),
         "particles_to_points" => Ok(scene_output(DEFAULT_FORMAT, geo_particles::particles_to_points(params, input_scene(inputs))?)),
         "resample" => Ok(scene_output(DEFAULT_FORMAT, geo_curves::resample(params, input_scene(inputs))?)),
         "instance_on_points" => {

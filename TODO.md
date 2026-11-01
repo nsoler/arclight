@@ -303,7 +303,7 @@ after it. `ROADMAP.md` is the public summary of this list.
       screen, no flicker, takes clicks; Dock, closing it and View ▸ Dock
       all panels each put it back; its greyed tab in the main window
       docks it too
-- [ ] Node Graph in its own window (0.14.2): View ▸ Node Graph in its
+- [X] Node Graph in its own window (0.14.2): View ▸ Node Graph in its
       own window (and ⧉): a second window shows the graph, the bottom
       panel keeps the Curve Editor; move it to the other monitor and
       resize. There: right-click / ⇧Tab / ⇧E browser, wire and node menus
@@ -339,6 +339,15 @@ after it. `ROADMAP.md` is the public summary of this list.
       running ArclightVFX: Reads still load. In the graph's own window
       too. ⌘C / ⌘V inside a text field stay the field's. Paste text
       from elsewhere: nothing happens
+- [ ] Projection examples (0.14.9): Help ▸ Examples ▸ Projection: a
+      plate on a card from the shot camera: frame 1 shows the plate
+      exactly; play: the block slides against the wall, its unseen sides
+      grey. Projection: baked to a texture: render_baked looks like
+      render_live; the second Viewer shows the wall's texture, clear
+      where nothing landed; `arclight render` writes bake/set.glb; in
+      Blender the ground and wall are textured, the block grey. Bake
+      Projection on a Read Geo mesh without uvs: a clear error; Group
+      naming an Instance on Points: "Realize Instances first"
 - [ ] Templates (0.14.7): select a few nodes, Insert ▸ Save selection as
       template… (a name; the same name offers Replace); Insert ▸
       Templates puts it in; ⇧Tab and type its name: it's listed after
@@ -370,7 +379,9 @@ after it. `ROADMAP.md` is the public summary of this list.
 - [ ] Particles to Points ids pack emitter (8 bits) and birth count (24
       bits): past ~16.7 M births ids wrap (only Instance on Points'
       random pick by id cares) (Dev2)
-- [ ] Project 3D: bake a projection to a uv texture (P8's "later")
+- [X] Project 3D: bake a projection to a uv texture (0.14.8, 0.14.9)
+- [ ] A primitive Cube "uv layout: atlas" option, so a cube can be
+      baked to one texture (its six faces share one uv square today)
 - [ ] Geo Info: per-point selection in the sheet's filter; world-space
       values
 - [ ] Scanline Render's Width / Height are ignored when a background is

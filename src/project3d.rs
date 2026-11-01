@@ -16,6 +16,7 @@ use crate::image::Image;
 use crate::scene::Scene;
 use anyhow::{bail, Result};
 use serde_json::Value;
+use crate::render3d::bake;
 use std::sync::Arc;
 
 /// How a projection's image goes onto a surface's color.
@@ -220,6 +221,66 @@ pub fn project_shots(params: &Value, mut scene: Scene, shots: &[(Option<&Image>,
         }
     }
     scene.projections.extend(projections);
+    Ok(scene)
+}
+
+/// Bake Projection's and Bake Projection Texture's choice of surfaces:
+/// the scene's cards and meshes of Group's nodes (a name or a pattern), or
+/// with Group empty those a projection lands on. Instances aren't baked
+/// (each copy would need a texture of its own): a Group naming only
+/// instances is an error that says so.
+fn bake_choice(params: &Value, scene: &Scene) -> Result<impl Fn(&str) -> bool + use<>> {
+    let group = params["group"].as_str().unwrap_or("").trim().to_string();
+    let targeted: Vec<String> = scene.projections.iter().flat_map(|p| p.targets.iter().cloned()).collect();
+    let take = move |node: &str| if group.is_empty() { targeted.iter().any(|t| t == node) } else { geo::glob(&group, node) };
+    let surfaces = || scene.cards.iter().map(|c| c.node.as_str()).chain(scene.meshes.iter().map(|m| m.node.as_str()));
+    if !surfaces().any(&take) {
+        let what = params["group"].as_str().unwrap_or("").trim();
+        if !what.is_empty() && scene.instances.iter().any(|g| take(&g.node)) {
+            bail!("Bake Projection: Group '{what}' names instances, which aren't baked (each copy would need its own texture): Realize Instances first");
+        }
+        if what.is_empty() {
+            bail!("Bake Projection: no card or mesh in its scene has a projection on it (a Project 3D upstream)");
+        }
+        bail!("Bake Projection: Group '{what}' matches no card or mesh in its scene");
+    }
+    Ok(take)
+}
+
+/// The size and padding Bake Projection's params ask for.
+fn bake_size(params: &Value) -> (crate::image::Size, u32) {
+    let side = |k: &str| params[k].as_u64().unwrap_or(2048).clamp(1, 16384) as usize;
+    (crate::image::Size { width: side("width"), height: side("height") }, params["padding"].as_u64().unwrap_or(4).min(1024) as u32)
+}
+
+/// Bake Projection Texture: what the projections put on the chosen
+/// surfaces, as an image in their uv space (alpha: how much landed).
+pub fn bake_texture(params: &Value, scene: &Scene) -> Result<Image> {
+    let take = bake_choice(params, scene)?;
+    let (size, padding) = bake_size(params);
+    Ok(bake::bake(scene, take, size, padding)?.texture())
+}
+
+/// Bake Projection: `scene` with the chosen surfaces' projections baked
+/// into their texture (a card's image; a mesh's texture, its color white,
+/// as the bake holds it) and taken off them, so it renders the same
+/// without the projectors.
+pub fn bake_projection(params: &Value, mut scene: Scene) -> Result<Scene> {
+    let take = bake_choice(params, &scene)?;
+    let (size, padding) = bake_size(params);
+    let baked = Arc::new(bake::bake(&scene, &take, size, padding)?.surface);
+    for card in scene.cards.iter_mut().filter(|c| take(&c.node)) {
+        card.image = baked.clone();
+    }
+    for model in scene.meshes.iter_mut().filter(|m| take(&m.node)) {
+        model.texture = Some(baked.clone());
+        model.material.color = [1.0; 3];
+        model.material.texture = None;
+    }
+    for p in &mut scene.projections {
+        p.targets.retain(|t| !take(t));
+    }
+    scene.projections.retain(|p| !p.targets.is_empty());
     Ok(scene)
 }
 
@@ -501,6 +562,63 @@ mod tests {
         // Start past end: a hard edge at end.
         let hard = super::Projection { fade_start: 70.0, fade_end: 50.0, ..p.clone() };
         assert_eq!((hard.facing(49f32.to_radians().cos()), hard.facing(51f32.to_radians().cos())), (1.0, 0.0));
+    }
+
+    /// The mean and largest difference between two renders, over pixels
+    /// both cover.
+    fn differ(a: &Image, b: &Image) -> (f32, f32) {
+        let d: Vec<f32> = a.pixels.iter().zip(&b.pixels).map(|(p, q)| (0..4).map(|c| (p[c] - q[c]).abs()).fold(0.0, f32::max)).collect();
+        (d.iter().sum::<f32>() / d.len() as f32, d.iter().copied().fold(0.0, f32::max))
+    }
+
+    /// Baked, then rendered through the shot camera without the
+    /// projectors, a card and a mesh look as the live projection does (to
+    /// the bake's filtering); the projections are gone from them, and the
+    /// texture op's alpha is where the projection landed.
+    #[test]
+    fn baking_then_rendering_matches_the_live_projection() {
+        let shot = camera_at(0.0, 0.0);
+        // From the side, cropped with a soft edge: part of the wall gets
+        // none, which must stay the wall's own gray.
+        let projector = camera_at(4.0, 2.0);
+        let params = json!({ "edge": 3.0, "mix": 0.8 });
+        // A smooth plate: a bake resamples it into texels and the render
+        // filters those again, so per-pixel noise would soften (that's
+        // the bake's resolution, not a difference in what lands where).
+        let mut smooth = plate();
+        for (i, p) in smooth.pixels.iter_mut().enumerate() {
+            let (x, y) = ((i % FMT.width) as f32 / 47.0, (i / FMT.width) as f32 / 31.0);
+            *p = [x, y, 1.0 - x * y, 1.0];
+        }
+        let projected = |scene: Scene, params: serde_json::Value| {
+            let at = Scene { cameras: vec![projector.clone()], ..Scene::default() };
+            super::project_3d(&params, scene, Some(&smooth), Some(&at)).unwrap()
+        };
+        let live = projected(Scene { cards: vec![card("wall", -10.0, 30.0)], ..Scene::default() }, params.clone());
+        let bake_params = json!({ "width": 512, "height": 512 });
+        let baked = super::bake_projection(&bake_params, live.clone()).unwrap();
+        assert!(baked.projections.is_empty(), "taken off the wall");
+        assert_eq!(baked.cards[0].image.format.width, 512);
+        let (mean, _) = differ(&render(&live, &shot), &render(&baked, &shot));
+        assert!(mean < 0.01, "card: mean difference {mean}");
+        // Only the projection's part, alpha where it landed.
+        let tex = super::bake_texture(&bake_params, &live).unwrap();
+        let alphas: Vec<f32> = tex.pixels.iter().map(|p| p[3]).collect();
+        assert!(alphas.iter().any(|a| *a > 0.79) && alphas.contains(&0.0), "landed (mix 0.8) and not");
+        // A mesh (a plane with uvs), lit or not, the same way; a Group
+        // naming another node is an error, as is nothing projected.
+        let plane = crate::ops::eval("plane", &json!({ "size": [30, 30], "translate": [0, 0, -10], "color": [0.5, 0.6, 0.7, 1] }), &[], &EvalContext { frame: 1, write_outputs: false }).unwrap();
+        let mut set = plane.scene.as_deref().unwrap().clone();
+        set.tag("ground");
+        let live = projected(set, params);
+        let baked = super::bake_projection(&json!({ "group": "ground", "width": 512, "height": 512 }), live.clone()).unwrap();
+        assert!(baked.projections.is_empty() && baked.meshes[0].texture.is_some() && baked.meshes[0].material.color == [1.0; 3]);
+        let (mean, _) = differ(&render(&live, &shot), &render(&baked, &shot));
+        assert!(mean < 0.01, "mesh: mean difference {mean}");
+        let err = super::bake_projection(&json!({ "group": "nothing*" }), live).err().unwrap().to_string();
+        assert!(err.contains("matches no card or mesh"), "{err}");
+        let err = super::bake_texture(&json!({}), &Scene { cards: vec![card("wall", -10.0, 30.0)], ..Scene::default() }).err().unwrap().to_string();
+        assert!(err.contains("no card or mesh in its scene has a projection"), "{err}");
     }
 
     /// With motion blur the projection rides on a moving card: projected

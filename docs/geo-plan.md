@@ -221,8 +221,14 @@ projects it per rendered pixel, so a sharp plate lands on a 4-vertex card.
   matrix and lens), with mip filtering by the projected footprint; the 3D
   view's lit preview shows it. Motion blur: the projection follows the
   surface (projected in the projector's frame, which is held or live).
-- **Bake** (later): write a projection into a uv texture (an image
-  output), to hand projected geometry to other tools or freeze it.
+- **Bake** (done, phase 14): **Bake Projection** (the scene with the
+  projections baked into the surfaces' textures and taken off them) and
+  **Bake Projection Texture** (the uv texture itself, alpha = coverage),
+  on `render3d::bake` (Dev2: the renderer's own per-sample projection
+  code, in uv space, padded). Two ops, not an Output switch, as an op's
+  output kind is fixed. Instances aren't baked; a primitive cube's faces
+  share one uv square. Examples: `projection-basic.json`,
+  `projection-bake.json`.
 - Tests: a card through the shot camera with the plate projected from the
   same camera renders the plate exactly (to the pixel); a second card
   hidden behind the first receives nothing with Occlusion on; frame hold

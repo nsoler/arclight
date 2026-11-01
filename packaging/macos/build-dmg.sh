@@ -52,7 +52,7 @@ for bin in arclight-gui arclight; do
 done
 install -m644 "$repo/examples/media/testsrc.mp4" "$app/Contents/Resources/examples/media/"
 # Help ▸ Examples (the list is EXAMPLES in src/gui/main.rs).
-install -m644 "$repo/examples/geo-scatter.json" "$repo/examples/particledirectionalforce.json" "$repo/examples/multi-projection.json" "$app/Contents/Resources/examples/"
+install -m644 "$repo/examples/geo-scatter.json" "$repo/examples/particledirectionalforce.json" "$repo/examples/projection-basic.json" "$repo/examples/multi-projection.json" "$repo/examples/projection-bake.json" "$app/Contents/Resources/examples/"
 
 # The icon: the logo without lettering at small sizes, where the word can't
 # be read, the full logo from 128 px up.

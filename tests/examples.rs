@@ -130,3 +130,58 @@ fn the_multi_projection_example_blends_its_two_projectors() {
     let stacked = warm(&graph);
     assert!(blended > 4 * stacked.max(1) && blended > 200, "warm pixels: {blended} blended, {stacked} stacked");
 }
+
+/// The mean largest-channel difference between two images of one size.
+fn mean_difference(a: &Image, b: &Image) -> f32 {
+    assert_eq!((a.width, a.height), (b.width, b.height));
+    let sum: f32 = a.pixels.iter().zip(&b.pixels).map(|(p, q)| (0..4).map(|c| (p[c] - q[c]).abs()).fold(0.0, f32::max)).sum();
+    sum / a.pixels.len() as f32
+}
+
+/// projection-basic.json: the plate projected from the shot camera, held
+/// at frame 1, onto a wall and a block: through that camera at frame 1 the
+/// render is the plate; as the camera moves, the block's parallax shows.
+#[test]
+fn the_basic_projection_example_gives_back_its_plate() {
+    let graph = example("projection-basic.json");
+    let plate = eval(&graph, "plate");
+    let first = eval_at(&graph, "render", 1);
+    let d = mean_difference(&first, &plate);
+    assert!(d < 0.01, "frame 1 is the plate: mean difference {d}");
+    let last = eval_at(&graph, "render", 48);
+    let d = mean_difference(&last, &plate);
+    assert!(d > 0.05, "frame 48 shows the parallax: mean difference {d}");
+}
+
+/// projection-bake.json: the two-camera set with the wall and the ground
+/// baked: rendered from the baked scene it looks as the live projection
+/// does (to the bake's filtering), the baked surfaces carry no projection,
+/// and the wall's texture is only where the projections landed. Write Geo
+/// writes nothing unless rendered.
+#[test]
+fn the_bake_example_renders_as_the_live_projection() {
+    let mut graph = example("projection-bake.json");
+    for n in graph.nodes.iter_mut() {
+        match n.op.as_str() {
+            "scanline_render" | "constant" if n.id != "gray" => {
+                n.params["width"] = 480.into();
+                n.params["height"] = 270.into();
+            }
+            "bake_projection" | "bake_texture" => {
+                n.params["width"] = 512.into();
+                n.params["height"] = 512.into();
+            }
+            _ => {}
+        }
+    }
+    let live = eval(&graph, "render_live");
+    let baked = eval(&graph, "render_baked");
+    let d = mean_difference(&live, &baked);
+    assert!(d < 0.02, "baked renders as live: mean difference {d}");
+    let scene = eval(&graph, "bake_wall").scene.clone().expect("a scene");
+    assert!(scene.projections.iter().all(|p| p.targets == ["block"]), "only the block keeps its projections");
+    let tex = eval(&graph, "wall_texture");
+    assert!(tex.pixels.iter().any(|p| p[3] == 0.0) && tex.pixels.iter().any(|p| p[3] > 0.9), "alpha: where the projections landed");
+    let glb = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/bake/set.glb");
+    assert!(!glb.exists(), "Write Geo writes only when rendered");
+}

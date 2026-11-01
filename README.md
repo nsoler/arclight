@@ -431,6 +431,7 @@ applies everywhere and `mask_invert` does nothing.
 | `curve_to_mesh` | 1 (scene), 2 profile (optional scene) | `group`, `profile` (circle, ribbon, curve), `radius`, `sides`, `width`, `scale`, `caps`, `keep_curves`, color and shading as primitives | 3D: a profile swept along each curve, square to it and upright by its frame, sized by pscale; caps, uv along (u) and around (v); the curves' attributes on the mesh's points |
 | `points_on_curve` | 1 (scene) | `group`, `by` (count, length, points), `count`, `length`, `keep_curves` | 3D: a point set along curves with tangent, N, up, u, curve and the curves' attributes |
 | `project_3d` | 1 (scene), 2 image, 3 projector (scene with a camera) | `group`, `mode` (replace, over, multiply), `mix`, `crop`, `edge`, `occlusion`, `backfaces`, `fade_start` / `fade_end` (degrees), `blend`, `hold`, `hold_frame`, `frames` ("1001, 1040") | 3D: the image projected from the projector's camera onto the meshes, cards and instances, per rendered pixel, before lighting; Blend with others mixes overlapping projections by Mix, Edge and facing; Frames projects from each frame listed, blended |
+| `bake_projection` / `bake_texture` | 1 (scene) | `group` (a node name or pattern; empty: the surfaces a projection lands on), `width`, `height` (2048), `padding` (texels, 4) | 3D: bakes what Project 3D puts on cards and meshes into their uv-space texture, unlit: `bake_projection` sets it as their texture and takes the projections off (renders the same without the projectors; for Write Geo), `bake_texture` outputs the image (alpha = where the projections landed, Over the surface's own texture it gives the bake); surfaces baked together share one texture; meshes need uvs (a primitive cube's faces share one uv square); instances aren't baked |
 | `particles_to_points` | 1 (scene with particles) | `group`, `keep_particles` | 3D: each particle stream's particles at the frame as a point set: id, v, age, life, pscale, Cd, orient, spin, and the attributes of the points they were born at |
 | `light_ambient` / `light_directional` / `light_point` / `light_spot` / `light_area` | 0–1 (`look at`, a scene; not ambient) | `enabled`, `color`, `intensity`, `exposure` (stops), `shadows` (cast shadows, off by default) and `shadow_softness` (texels; not ambient); `translate` (not ambient), `rotate` (directional, spot, area), `decay` (point, spot, area), `radius` soft size (point, spot), `cone`, `penumbra`, `falloff` (spot), `shape` rectangle/disk, `size`, `two_sided`, `quality` (area: a quality × quality sample grid) | 3D: a light shining down its −Z (point: every way; ambient: from everywhere; area: from a rectangle or disk), aimed at what's in `look at` if wired; outputs a scene |
 | `scene` | 4 scenes | — | 3D: gathers up to four cameras, cards, meshes, lights or scenes into one scene |
@@ -447,7 +448,11 @@ applies everywhere and `mask_invert` does nothing.
 
 `examples/particledirectionalforce.json` (**Help ▸ Examples ▸ Particles**) has two streams off one card, each pushed its own way by its own force.
 
-`examples/multi-projection.json` (**Help ▸ Examples ▸ Projection**) projects two checkerboards from two cameras onto a block and a wall, blended where they overlap (Project 3D's Blend with others and Fade).
+`examples/projection-basic.json` (**Help ▸ Examples ▸ Projection: a plate on a card from the shot camera**) projects a plate made in the graph from the shot camera, held at frame 1, onto a wall and a block: frame 1 renders the plate, and as the camera moves the block's parallax shows.
+
+`examples/multi-projection.json` (**Help ▸ Examples ▸ Projection: two cameras blended on one set**) projects two checkerboards from two cameras onto a block and a wall, blended where they overlap (Project 3D's Blend with others and Fade).
+
+`examples/projection-bake.json` (**Help ▸ Examples ▸ Projection: baked to a texture**) bakes that set's wall and ground with Bake Projection and renders them without the projectors beside the live render, shows the wall's texture alone (Bake Projection Texture), and writes the baked set to `bake/set.glb` with Write Geo when rendered.
 
 In the 3D view, emitters (shape and direction), attractors, vortices and bounce planes are drawn, picked and moved with G / R / S and the gizmos (forces move only); in 2D, an emitter feeding a viewed Particles 2D shows box or point handles in the viewer.
 
@@ -760,7 +765,9 @@ examples/
   basic.json        a small sample graph
   geo-scatter.json  geometry nodes end to end: Scatter with a mask, Attribute Set, Instance on Points (rocks, cards facing the camera), sun shadows
   particledirectionalforce.json  two particle streams, each pushed its own way by its own force (translated from a Nuke example script)
+  projection-basic.json  Project 3D from the shot camera (held at frame 1) onto a wall and a block: the plate at frame 1, parallax as it moves
   multi-projection.json  Project 3D from two cameras onto a block and a wall, blended where they overlap
+  projection-bake.json   that set's wall and ground baked to textures (Bake Projection), rendered beside the live one, written to a .glb
   media/testsrc.mp4 5 s test clip used by the GUI starter project
 ```
 

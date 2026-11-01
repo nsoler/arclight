@@ -18,6 +18,22 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.9 — 2026-10-31
+
+- **Bake Projection** and **Bake Projection Texture**: freeze what
+  Project 3D puts on cards and meshes into their uv textures. Bake
+  Projection sets the bake as their texture and takes the projections
+  off, so the scene renders the same without the projectors and Write
+  Geo hands the projected set to other tools (a .glb with its
+  textures); Bake Projection Texture gives the image itself, alpha where
+  the projections landed. Group picks the surfaces (empty: those a
+  projection lands on); Width / Height (2048) and Padding against
+  seams; unlit, with the render's Mix, Crop / Edge, facing fade,
+  occlusion and blending. Meshes need uvs; instances aren't baked.
+- **Help ▸ Examples:** Projection: a plate on a card from the shot
+  camera (the classic setup), and Projection: baked to a texture,
+  beside Projection: two cameras blended on one set.
+
 ## 0.14.8 — 2026-10-31
 
 - Bake Projection's core (the node follows): Project 3D's result on
