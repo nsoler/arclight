@@ -18,6 +18,20 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.2 — 2026-10-31
+
+- **The Node Graph on a second monitor**: the ⧉ at the right of its tab
+  (or View ▸ Node Graph in its own window) opens it in a window of its
+  own; closing that window (or its Dock button) puts it back. It
+  reopens as you left it, out or docked, at its size (and except on
+  Wayland, where the desktop places windows, in its place, so on the
+  same monitor). Keys work in the window they're pressed in: in the
+  graph's window F frames the graph, ⌘A selects every node, Delete
+  deletes, ⇧E / ⇧Tab / right-click open the node browser there, and D,
+  V, Tab, undo, redo and save work as in the main window; ⇧E in the
+  main window opens the browser in the graph's window. Popups and
+  dropped files land in the window they came from.
+
 ## 0.14.1 — 2026-10-31
 
 - **Project 3D under motion blur renders on the GPU** (the image riding

@@ -84,6 +84,10 @@ pub struct Settings {
     /// Ask at the next start after a crash ("ArclightVFX closed
     /// unexpectedly"); off with its "Don't ask again".
     pub crash_dialog: bool,
+    /// The GUI's panels that have their own window (View ▸ Detach…), by
+    /// name ("graph", "viewer", "curves", "properties"): whether they're
+    /// out, and where. A panel not listed is docked.
+    pub panels: std::collections::BTreeMap<String, PanelWindow>,
     /// Keys this version doesn't know, kept as they are.
     #[serde(flatten)]
     pub other: serde_json::Map<String, serde_json::Value>,
@@ -101,9 +105,24 @@ impl Default for Settings {
             view3d: View3dPrefs::default(),
             gpu: GpuPrefs::default(),
             crash_dialog: true,
+            panels: std::collections::BTreeMap::new(),
             other: serde_json::Map::new(),
         }
     }
+}
+
+/// A GUI panel's own window: out of the main window or docked, and the
+/// size (points) it had, and on X11 / macOS / Windows its position
+/// (points, across the monitors: which one it was on) and whether it
+/// filled its screen. Wayland gives no positions (the compositor places
+/// windows), so there `pos` stays as it was.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct PanelWindow {
+    pub detached: bool,
+    pub size: Option<[f32; 2]>,
+    pub pos: Option<[f32; 2]>,
+    pub fullscreen: bool,
 }
 
 /// How the GUI looks and handles.
@@ -387,6 +406,19 @@ mod tests {
         std::fs::write(&path, "{ broken").unwrap();
         assert_eq!(Settings::load_from(&path), Settings::default());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Detached panels' windows: none by default (all docked, as before);
+    /// what's kept comes back; a part fills in the rest.
+    #[test]
+    fn panel_windows_round_trip() {
+        assert!(Settings::default().panels.is_empty());
+        let mut s = Settings::default();
+        s.panels.insert("graph".into(), PanelWindow { detached: true, size: Some([900.0, 500.0]), pos: Some([2000.0, 40.0]), fullscreen: false });
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back, s);
+        let part: Settings = serde_json::from_str(r#"{"panels": {"viewer": {"detached": true}}}"#).unwrap();
+        assert_eq!(part.panels["viewer"], PanelWindow { detached: true, ..PanelWindow::default() });
     }
 
     #[test]

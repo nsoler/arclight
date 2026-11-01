@@ -299,6 +299,16 @@ after it. `ROADMAP.md` is the public summary of this list.
       Tab, undo / redo / save), popups and file drops in that window.
       Built generic, so the Viewer (full screen on a second monitor),
       Curve Editor and Properties can detach too. About two reports.
+- [ ] Node Graph in its own window (0.14.2): View ▸ Node Graph in its
+      own window (and ⧉): a second window shows the graph, the bottom
+      panel keeps the Curve Editor; move it to the other monitor and
+      resize. There: right-click / ⇧Tab / ⇧E browser, wire and node menus
+      open there; F, ⌘A, ⌫, D, V, ⌘Z / ⇧⌘Z, ⌘S work; a node drag is one
+      undo step. ⇧E in the main window opens the browser in the graph
+      window and raises it. Drop an image on it: a Media In. Close it
+      (or Dock): back in the panel. Quit with it out and restart: out
+      again, same size (X11 / macOS: same place and monitor). Edit ▸
+      Preferences ▸ OK while it's out: it stays out
 - [ ] **Import project, copy / paste, templates** (phase 14, after the
       panels; user, 2026-10-31): File ▸ Import project… merges a saved
       .json into the current graph (nodes renamed on a clash with wires,

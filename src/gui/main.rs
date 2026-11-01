@@ -15,6 +15,7 @@ mod gpu_check;
 mod help;
 mod node_editor;
 mod overlay;
+mod panels;
 mod preferences;
 mod project_settings;
 mod properties;
@@ -34,6 +35,7 @@ use curve_editor::CurveEditor;
 use doc::Doc;
 use eframe::egui::{self, Key, KeyboardShortcut, Modifiers};
 use node_editor::NodeEditor;
+use panels::{Here, Pane, Panels};
 use properties::Properties;
 use bridge_calls::{BridgeCalls, Call};
 use script_jobs::ScriptJobs;
@@ -326,6 +328,18 @@ struct App {
     logo: Option<(egui::TextureHandle, egui::Rect)>,
     /// File ▸ New's question: the new project's name and folder.
     starting: Option<NewProjectAsk>,
+    /// Panels in windows of their own (see `panels`), and whether that's
+    /// changed and not yet saved to settings.json.
+    panels: Panels,
+    panels_unsaved: bool,
+    /// Where each pane was last drawn, in its window's points (for which
+    /// one the pointer is over).
+    pane_rects: std::collections::BTreeMap<Pane, egui::Rect>,
+    /// A drag or typing going on in a panel's own window this frame (one
+    /// undo step per finished gesture, as in the main window).
+    gesture_out: bool,
+    /// Windows can't place themselves (Wayland).
+    wayland: bool,
 }
 
 impl App {
@@ -356,6 +370,7 @@ impl App {
         // read as a change and save the defaults over them).
         viewer.viewport3d.view = viewer.viewport3d.fresh_view();
         let crash = crash_dialog::CrashDialog::at_start(settings.crash_dialog && !screenshot_run);
+        let settings_panels = settings.panels.clone();
         let mut app = App {
             doc,
             editor: NodeEditor::default(),
@@ -409,6 +424,12 @@ impl App {
             project_settings: Default::default(),
             logo: None,
             starting: None,
+            // (Screenshot runs: everything in the main window.)
+            panels: if screenshot_run { Panels::default() } else { Panels::from_settings(&settings_panels) },
+            panels_unsaved: false,
+            pane_rects: Default::default(),
+            gesture_out: false,
+            wayland: panels::on_wayland(),
         };
         app.apply_settings(&ctx_for_settings);
         app
@@ -447,6 +468,10 @@ impl App {
     /// Settings from the Preferences window: kept, saved and applied.
     fn set_settings(&mut self, ctx: &egui::Context, settings: Settings) {
         self.settings = settings;
+        // (Preferences holds a copy from when it opened: the panels'
+        // windows as they are now.)
+        self.settings.panels = self.panels.to_settings();
+        self.panels_unsaved = false;
         if let Some(path) = &self.settings_path {
             if let Err(e) = self.settings.save_to(path) {
                 self.status = Some(format!("saving {}: {e}", path.display()));
@@ -970,9 +995,14 @@ impl App {
         self.props.invalidate();
     }
 
-    fn shortcuts(&mut self, ctx: &egui::Context) {
-        // First, so Esc closes the help rather than deselecting.
-        self.help.shortcuts(ctx);
+    /// The app's keys, in the window `ctx` is drawing now (the main one or
+    /// a panel's own): `here` says what's in it and under the pointer.
+    fn shortcuts(&mut self, ctx: &egui::Context, here: &Here) {
+        // First, so Esc closes the help rather than deselecting (the help
+        // is in the main window).
+        if ctx.viewport_id() == egui::ViewportId::ROOT {
+            self.help.shortcuts(ctx);
+        }
         if ctx.input_mut(|i| i.consume_shortcut(&SAVE_AS)) {
             self.save(true);
         }
@@ -1008,7 +1038,7 @@ impl App {
         // Tab anywhere in the window switches the viewer between 2D and 3D
         // (in text fields, which returned above, Tab keeps its usual job).
         // Plain Tab only: Shift+Tab is the node browser's, over the graph.
-        let over_viewer = ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| self.viewer.rect.contains(p));
+        let over_viewer = here.over(Pane::Viewer);
         if ctx.input_mut(|i| consume_plain(i, Key::Tab)) {
             self.viewer.toggle_3d();
             // egui read the Tab already, to move keyboard focus this frame:
@@ -1020,14 +1050,15 @@ impl App {
                 }
             });
         }
-        // ⌘A: every node, over the node graph; else every vertex of the
-        // selected shape.
-        let over_graph = self.tab == BottomTab::Graph && ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| self.editor.rect.contains(p));
+        // ⌘A: every node, over the node graph (or in its own window); else
+        // every vertex of the selected shape.
         if ctx.input_mut(|i| i.consume_shortcut(&SELECT_ALL)) {
-            if over_graph {
-                self.doc.select_all();
-            } else {
-                self.viewer.select_all_points(&self.doc);
+            match here.select_all_target() {
+                Some(Pane::Graph) => self.doc.select_all(),
+                Some(Pane::Viewer) => {
+                    self.viewer.select_all_points(&self.doc);
+                }
+                _ => {}
             }
         }
         // Ungroup first: shortcut matching ignores an extra Shift.
@@ -1044,9 +1075,15 @@ impl App {
             self.doc.clear_selection();
         }
         // Shift+E before any plain-E binding: shortcut matching ignores Shift.
+        // (In the graph's own window when it has one, brought to the front.)
         if ctx.input_mut(|i| i.consume_shortcut(&NODE_BROWSER)) {
-            self.tab = BottomTab::Graph;
-            self.editor.open_browser(ctx.input(|i| i.pointer.hover_pos()));
+            if here.has(Pane::Graph) || !self.panels.detached(Pane::Graph) {
+                self.tab = BottomTab::Graph;
+                self.editor.open_browser(ctx.input(|i| i.pointer.hover_pos()));
+            } else {
+                self.editor.open_browser(None);
+                ctx.send_viewport_cmd_to(Pane::Graph.viewport_id(), egui::ViewportCommand::Focus);
+            }
         }
         let project = self.doc.graph.project.clone();
         let over_3d = over_viewer && self.viewer.mode3d;
@@ -1099,9 +1136,9 @@ impl App {
         if pressed(Key::Delete) || pressed(Key::Backspace) {
             // Selected keys in the curve editor, or selected shape points in
             // the viewer, are deleted rather than the node.
-            if self.tab == BottomTab::Curves && self.curves.has_selection() {
+            if here.has(Pane::Curves) && self.curves.has_selection() {
                 self.curves.delete_selected(&mut self.doc);
-            } else if self.viewer.delete_points(&mut self.doc) {
+            } else if here.has(Pane::Viewer) && self.viewer.delete_points(&mut self.doc) {
             } else {
                 self.doc.delete_selection();
             }
@@ -1112,12 +1149,11 @@ impl App {
             }
         }
         if pressed(Key::F) {
-            if over_viewer {
-                self.viewer.fit();
-            } else if self.tab == BottomTab::Curves {
-                self.curves.fit();
-            } else {
-                self.editor.fit();
+            match here.fit_target() {
+                Some(Pane::Viewer) => self.viewer.fit(),
+                Some(Pane::Curves) => self.curves.fit(),
+                Some(Pane::Graph) => self.editor.fit(),
+                _ => {}
             }
         }
     }
@@ -1307,6 +1343,211 @@ impl App {
         }
     }
 
+    /// The panes in the main window, as [`Here`] orders them: the bottom
+    /// panel's tab, the viewer, Properties (those not out in their own).
+    fn main_panes(&self) -> Vec<Pane> {
+        let tab = match self.tab {
+            BottomTab::Graph => Pane::Graph,
+            BottomTab::Curves => Pane::Curves,
+        };
+        [tab, Pane::Viewer, Pane::Properties].into_iter().filter(|p| !self.panels.detached(*p)).collect()
+    }
+
+    /// The main window's panels: Properties at the right, the Node Graph
+    /// and Curve Editor's tabs at the bottom, the viewer in the middle;
+    /// those out in their own windows left out.
+    fn main_panels(&mut self, ui: &mut egui::Ui) {
+        if !self.panels.detached(Pane::Properties) {
+            egui::Panel::right("properties").default_size(380.0).min_size(280.0).show(ui, |ui| {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.heading("Properties");
+                    self.detach_button(ui, Pane::Properties);
+                });
+                ui.separator();
+                self.pane_ui(ui, Pane::Properties);
+            });
+        }
+        let bottom: Vec<Pane> = [Pane::Graph, Pane::Curves].into_iter().filter(|p| !self.panels.detached(*p)).collect();
+        // The tab shown is one still here.
+        match (self.tab, bottom.as_slice()) {
+            (BottomTab::Graph, [Pane::Curves]) => self.tab = BottomTab::Curves,
+            (BottomTab::Curves, [Pane::Graph]) => self.tab = BottomTab::Graph,
+            _ => {}
+        }
+        if !bottom.is_empty() {
+            egui::Panel::bottom("graph")
+                .resizable(true)
+                .default_size(340.0)
+                .min_size(140.0)
+                .frame(egui::Frame::NONE.fill(ui.visuals().panel_fill))
+                .show(ui, |ui| {
+                    let shown = ui.horizontal(|ui| {
+                        ui.add_space(6.0);
+                        if bottom.contains(&Pane::Graph) {
+                            ui.selectable_value(&mut self.tab, BottomTab::Graph, "Node Graph");
+                        }
+                        if bottom.contains(&Pane::Curves) {
+                            let animated = self.doc.selected.as_ref().is_some_and(|id| self.doc.is_node_animated(id));
+                            let label = if animated { "Curve Editor ◆" } else { "Curve Editor" };
+                            ui.selectable_value(&mut self.tab, BottomTab::Curves, label).on_hover_text("Keyframe curves of the selected node");
+                        }
+                        let shown = if self.tab == BottomTab::Graph { Pane::Graph } else { Pane::Curves };
+                        self.detach_button(ui, shown);
+                        shown
+                    });
+                    self.pane_ui(ui, shown.inner);
+                });
+        }
+        egui::CentralPanel::default_margins().show(ui, |ui| {
+            if self.panels.detached(Pane::Viewer) {
+                ui.centered_and_justified(|ui| ui.weak("The viewer is in its own window (View ▸ Viewer in its own window)"));
+            } else {
+                self.pane_ui(ui, Pane::Viewer);
+            }
+        });
+    }
+
+    /// A pane's insides, in the main window or its own.
+    fn pane_ui(&mut self, ui: &mut egui::Ui, pane: Pane) {
+        let area = ui.available_rect_before_wrap();
+        match pane {
+            Pane::Graph => {
+                let error_node = self.error.as_ref().and_then(|e| e.node.clone());
+                self.editor.ui(ui, &mut self.doc, error_node.as_deref());
+            }
+            Pane::Curves => {
+                if let Some(f) = self.curves.ui(ui, &mut self.doc, self.transport.frame) {
+                    self.transport.set_play(Play::Stopped);
+                    self.transport.seek(f, &self.doc.graph.project);
+                }
+            }
+            Pane::Properties => self.properties_ui(ui),
+            Pane::Viewer => self.viewer_ui(ui),
+        }
+        self.pane_rects.insert(pane, area);
+    }
+
+    /// The Properties panel's insides (under its heading).
+    fn properties_ui(&mut self, ui: &mut egui::Ui) {
+        self.props.layer = self.probe.as_ref().map(|(n, img)| (n.clone(), img.window(), img.format));
+        self.props.input_layers = self.probe.as_ref().map(|(n, img)| (n.clone(), img.layers()));
+        self.props.looking_through = self.viewer.viewport3d.looking_through().filter(|_| self.viewer.mode3d);
+        if let Some(f) = self.props.ui(ui, &mut self.doc, self.transport.frame) {
+            self.transport.set_play(Play::Stopped);
+            self.transport.seek(f, &self.doc.graph.project);
+        }
+        // A Look through button: into the 3D view through that
+        // camera or light, or back out of it.
+        if let Some(n) = self.props.look_through.take() {
+            let vp = &mut self.viewer.viewport3d;
+            if self.props.looking_through.as_ref() == Some(&n) {
+                vp.stop_looking_through();
+            } else {
+                self.viewer.mode3d = true;
+                vp.look_through_node(&n);
+            }
+        }
+    }
+
+    /// The viewer, with the transport and Geo Info below it.
+    fn viewer_ui(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::bottom("transport").show(ui, |ui| {
+            ui.add_space(4.0);
+            let selected = self.doc.selected.as_ref().and_then(|id| self.doc.node(id));
+            let keys = self.doc.selected.as_ref().map(|id| self.doc.node_key_frames(id)).unwrap_or_default();
+            let weak = selected.filter(|n| n.op == "tracker").map(|n| arclight::track::weak_frames(&n.params)).unwrap_or_default();
+            if self.transport.ui(ui, &mut self.doc.graph.project, &self.cached, &keys, &weak) {
+                self.doc.changed();
+            }
+            ui.add_space(2.0);
+        });
+        // Geo Info, between the transport and the view.
+        if self.viewer.sheet {
+            egui::Panel::bottom("geo_sheet").resizable(true).default_size(240.0).min_size(80.0).show(ui, |ui| {
+                ui.add_space(4.0);
+                self.sheet.ui(ui, &self.doc, self.transport.frame);
+            });
+        }
+        egui::CentralPanel::no_frame().show(ui, |ui| {
+            let error = self.error.as_ref().map(|e| e.to_string());
+            let target = self.doc.view_target();
+            let returns_to = self.doc.overridden().and_then(|_| self.doc.viewer());
+            self.viewer.ui(
+                ui,
+                Display {
+                    image: self.image.as_ref(),
+                    gpu: self.image_gpu.as_ref(),
+                    error: error.as_deref(),
+                    target: target.as_deref(),
+                    returns_to: returns_to.as_deref(),
+                    frame: self.shown_frame,
+                    millis: self.millis,
+                    input: self.probe.as_ref(),
+                },
+                &mut self.doc,
+                self.transport.frame,
+            );
+        });
+    }
+
+    /// The button at a panel's header that opens it in a window of its
+    /// own (only for those that can go yet).
+    fn detach_button(&mut self, ui: &mut egui::Ui, pane: Pane) {
+        if !panels::DETACHABLE.contains(&pane) {
+            return;
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(6.0);
+            let tip = format!("Open the {} in a window of its own (for a second monitor); close that window to put it back", pane.title());
+            if ui.small_button("⧉").on_hover_text(tip).clicked() {
+                self.panels.set_detached(pane, true);
+            }
+        });
+    }
+
+    /// `pane` in its own window (an egui immediate viewport): drawn as in
+    /// the main window, with its own keys and drops; docked back when the
+    /// window closes (or Dock is clicked).
+    fn pane_window(&mut self, ctx: &egui::Context, pane: Pane) {
+        let builder = self.panels.builder(pane, self.wayland);
+        ctx.show_viewport_immediate(pane.viewport_id(), builder, |ui, _class| {
+            let ctx = ui.ctx().clone();
+            let here = Here::new(vec![pane], &self.pane_rects, ctx.input(|i| i.pointer.hover_pos()));
+            self.handle_drops(&ctx);
+            self.shortcuts(&ctx, &here);
+            let mut dock = false;
+            egui::Panel::top(egui::Id::unique(("pane_header", pane.key()))).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.strong(pane.title());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        dock = ui.small_button("Dock").on_hover_text("Put it back in the main window (closing this window does too)").clicked();
+                    });
+                });
+            });
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(ui.visuals().panel_fill)).show(ui, |ui| self.pane_ui(ui, pane));
+            let (content, outer, full, close) = ctx.input(|i| (i.content_rect(), i.viewport().outer_rect, i.viewport().fullscreen.unwrap_or(false), i.viewport().close_requested()));
+            self.gesture_out |= ctx.input(|i| i.pointer.any_down()) || ctx.text_edit_focused();
+            self.panels.track(pane, content, outer, full, close || dock);
+        });
+    }
+
+    /// The panels' windows into settings.json once they've stopped
+    /// changing (not on every frame of a drag that resizes one).
+    fn save_panels(&mut self, ctx: &egui::Context) {
+        self.panels_unsaved |= self.panels.take_changed();
+        if !self.panels_unsaved || ctx.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        self.panels_unsaved = false;
+        self.settings.panels = self.panels.to_settings();
+        if let Some(path) = &self.settings_path {
+            if let Err(e) = self.settings.save_to(path) {
+                self.status = Some(format!("saving {}: {e}", path.display()));
+            }
+        }
+    }
+
     fn update_title(&mut self, ctx: &egui::Context) {
         let name = self
             .doc
@@ -1447,6 +1688,15 @@ impl App {
                 }
                 ui.checkbox(&mut self.viewer.show_frame_size, "Show frame size")
                     .on_hover_text("Label the viewed frame's corners with its size: 0,0 bottom-left, width,height top-right");
+                ui.separator();
+                for pane in panels::DETACHABLE {
+                    let mut out = self.panels.detached(*pane);
+                    let tip = format!("The {} in a window of its own, for a second monitor (closing that window puts it back)", pane.title());
+                    if ui.checkbox(&mut out, format!("{} in its own window", pane.title())).on_hover_text(tip).changed() {
+                        self.panels.set_detached(*pane, out);
+                        ui.close();
+                    }
+                }
                 ui.separator();
                 let scene = self.viewer.viewport3d.has_scene();
                 let look = egui::Button::new("Look through selected").shortcut_text("0");
@@ -1660,7 +1910,8 @@ impl eframe::App for App {
         self.handle_close(&ctx);
         self.handle_bridge(&ctx);
         self.handle_drops(&ctx);
-        self.shortcuts(&ctx);
+        let here = Here::new(self.main_panes(), &self.pane_rects, ctx.input(|i| i.pointer.hover_pos()));
+        self.shortcuts(&ctx, &here);
         // A first 3D setup in this project: show it in the 3D view.
         if let Some(render) = self.doc.show_3d.take() {
             self.doc.view_node(&render);
@@ -1716,98 +1967,13 @@ impl eframe::App for App {
         self.new_ui(&ctx);
         // File dialogs start in this project's folder (or its file's).
         dialogs::set_folders(dialogs::Folders { project: self.doc.graph.project.folder_for(self.doc.path.as_deref()), projects: self.settings.files.project_dir.clone() });
-        egui::Panel::right("properties")
-            .default_size(380.0)
-            .min_size(280.0)
-            .show(ui, |ui| {
-                ui.add_space(4.0);
-                ui.heading("Properties");
-                ui.separator();
-                self.props.layer = self.probe.as_ref().map(|(n, img)| (n.clone(), img.window(), img.format));
-                self.props.input_layers = self.probe.as_ref().map(|(n, img)| (n.clone(), img.layers()));
-                self.props.looking_through = self.viewer.viewport3d.looking_through().filter(|_| self.viewer.mode3d);
-                if let Some(f) = self.props.ui(ui, &mut self.doc, self.transport.frame) {
-                    self.transport.set_play(Play::Stopped);
-                    self.transport.seek(f, &self.doc.graph.project);
-                }
-                // A Look through button: into the 3D view through that
-                // camera or light, or back out of it.
-                if let Some(n) = self.props.look_through.take() {
-                    let vp = &mut self.viewer.viewport3d;
-                    if self.props.looking_through.as_ref() == Some(&n) {
-                        vp.stop_looking_through();
-                    } else {
-                        self.viewer.mode3d = true;
-                        vp.look_through_node(&n);
-                    }
-                }
-            });
-        let error_node = self.error.as_ref().and_then(|e| e.node.clone());
-        egui::Panel::bottom("graph")
-            .resizable(true)
-            .default_size(340.0)
-            .min_size(140.0)
-            .frame(egui::Frame::NONE.fill(ui.visuals().panel_fill))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.add_space(6.0);
-                    ui.selectable_value(&mut self.tab, BottomTab::Graph, "Node Graph");
-                    let animated = self.doc.selected.as_ref().is_some_and(|id| self.doc.is_node_animated(id));
-                    let label = if animated { "Curve Editor ◆" } else { "Curve Editor" };
-                    ui.selectable_value(&mut self.tab, BottomTab::Curves, label)
-                        .on_hover_text("Keyframe curves of the selected node");
-                });
-                match self.tab {
-                    BottomTab::Graph => self.editor.ui(ui, &mut self.doc, error_node.as_deref()),
-                    BottomTab::Curves => {
-                        if let Some(f) = self.curves.ui(ui, &mut self.doc, self.transport.frame) {
-                            self.transport.set_play(Play::Stopped);
-                            self.transport.seek(f, &self.doc.graph.project);
-                        }
-                    }
-                }
-            });
-        egui::CentralPanel::default_margins().show(ui, |ui| {
-            egui::Panel::bottom("transport").show(ui, |ui| {
-                ui.add_space(4.0);
-                let selected = self.doc.selected.as_ref().and_then(|id| self.doc.node(id));
-                let keys = self.doc.selected.as_ref().map(|id| self.doc.node_key_frames(id)).unwrap_or_default();
-                let weak = selected.filter(|n| n.op == "tracker").map(|n| arclight::track::weak_frames(&n.params)).unwrap_or_default();
-                if self.transport.ui(ui, &mut self.doc.graph.project, &self.cached, &keys, &weak) {
-                    self.doc.changed();
-                }
-                ui.add_space(2.0);
-            });
-            // Geo Info, between the transport and the view.
-            if self.viewer.sheet {
-                egui::Panel::bottom("geo_sheet").resizable(true).default_size(240.0).min_size(80.0).show(ui, |ui| {
-                    ui.add_space(4.0);
-                    self.sheet.ui(ui, &self.doc, self.transport.frame);
-                });
-            }
-            egui::CentralPanel::no_frame().show(ui, |ui| {
-                let error = self.error.as_ref().map(|e| e.to_string());
-                let target = self.doc.view_target();
-                let returns_to = self.doc.overridden().and_then(|_| self.doc.viewer());
-                self.viewer.ui(
-                    ui,
-                    Display {
-                        image: self.image.as_ref(),
-                        gpu: self.image_gpu.as_ref(),
-                        error: error.as_deref(),
-                        target: target.as_deref(),
-                        returns_to: returns_to.as_deref(),
-                        frame: self.shown_frame,
-                        millis: self.millis,
-                        input: self.probe.as_ref(),
-                    },
-                    &mut self.doc,
-                    self.transport.frame,
-                );
-            });
-        });
+        self.main_panels(ui);
+        for pane in self.panels.out() {
+            self.pane_window(&ctx, pane);
+        }
+        self.save_panels(&ctx);
         // One undo step per finished gesture (drag, typing, click).
-        let gesture = ctx.input(|i| i.pointer.any_down()) || ctx.text_edit_focused() || self.props.is_tracking() || self.viewer.is_transforming();
+        let gesture = ctx.input(|i| i.pointer.any_down()) || ctx.text_edit_focused() || self.props.is_tracking() || self.viewer.is_transforming() || std::mem::take(&mut self.gesture_out);
         self.doc.commit(gesture);
     }
 }
@@ -1990,7 +2156,8 @@ mod tests {
                     let mut text = String::new();
                     ui.text_edit_singleline(&mut text).request_focus();
                 }
-                app.shortcuts(ui.ctx());
+                let here = Here::new(app.main_panes(), &app.pane_rects, ui.input(|i| i.pointer.hover_pos()));
+                app.shortcuts(ui.ctx(), &here);
             }).drop_without_applying_deltas();
         };
         let start = app.viewer.mode3d;
@@ -2010,6 +2177,49 @@ mod tests {
         press(&mut app, vec![], true);
         press(&mut app, vec![tab(Modifiers::NONE)], true);
         assert_eq!(app.viewer.mode3d, before, "not while typing");
+        drop(app);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// With the Node Graph in its own window, keys go by window: ⌘A there
+    /// selects every node wherever the pointer is, in the main window it's
+    /// the viewer's; Delete deletes the selected nodes from either.
+    #[test]
+    fn graph_keys_follow_the_graphs_window() {
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("arclight-gui-panes-test-{}", std::process::id()));
+        std::env::set_var("XDG_RUNTIME_DIR", &dir);
+        let ctx = egui::Context::default();
+        let mut app = App::new(ctx.clone(), Doc::new(starter_graph(), None));
+        app.panels = Panels::default();
+        app.panels.set_detached(Pane::Graph, true);
+        let all = app.doc.graph.nodes.len();
+        assert!(all > 1);
+        let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+        let cmd_a = egui::Event::Key { key: Key::A, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND };
+        let press = |app: &mut App, event: egui::Event, panes: Vec<Pane>| {
+            let raw = egui::RawInput { events: vec![egui::Event::PointerMoved(egui::pos2(5.0, 5.0)), event], ..Default::default() };
+            ctx.run_ui(raw, |ui| {
+                let here = Here::new(panes.clone(), &app.pane_rects, ui.input(|i| i.pointer.hover_pos()));
+                app.shortcuts(ui.ctx(), &here);
+            })
+            .drop_without_applying_deltas();
+        };
+        assert_eq!(app.main_panes(), [Pane::Viewer, Pane::Properties], "the graph isn't in the main window");
+        app.doc.clear_selection();
+        let main = app.main_panes();
+        press(&mut app, cmd_a.clone(), main);
+        assert!(app.doc.selection().is_empty(), "⌘A in the main window: not the nodes");
+        press(&mut app, cmd_a, vec![Pane::Graph]);
+        assert_eq!(app.doc.selection().len(), all, "⌘A in the graph's window: every node");
+        app.doc.clear_selection();
+        let first = app.doc.graph.nodes[0].id.clone();
+        app.doc.selected = Some(first.clone());
+        press(&mut app, key(Key::Delete), vec![Pane::Graph]);
+        assert!(app.doc.node(&first).is_none() && app.doc.graph.nodes.len() == all - 1, "Delete in the graph's window");
+        // Docked again: the bottom panel's tab comes first in the main window.
+        app.panels.set_detached(Pane::Graph, false);
+        assert_eq!(app.main_panes(), [Pane::Graph, Pane::Viewer, Pane::Properties]);
         drop(app);
         std::fs::remove_dir_all(&dir).ok();
     }

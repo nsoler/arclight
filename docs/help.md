@@ -34,6 +34,24 @@ Media Out that's off writes nothing. Handy for troubleshooting a chain.
 A node's inputs are yellow squares (hollow when optional); a **mask**
 input is violet and labelled **mask**.
 
+### On a second monitor
+
+The **⧉** button at the right of the Node Graph's tab (or **View ▸ Node
+Graph in its own window**) opens the graph in a window of its own, to put
+on another screen; the bottom panel keeps the Curve Editor. Close that
+window (or click its **Dock**) to put the graph back. The next start opens
+it the way you left it: out or docked, at the same size (and, except on
+Wayland, where the desktop places windows, in the same place).
+
+Keys work in the window they're pressed in: in the graph's window, **F**
+frames the graph, **⌘A** selects every node, **⌫** deletes, **⇧E** /
+**⇧Tab** / right-click open the node browser there, and **D**, **V**,
+undo, redo and save work as in the main window (so do **Tab**, which
+switches the viewer between 2D and 3D, and the player's keys). **⇧E** in
+the main window opens the browser in the graph's window and brings it to
+the front. Files dropped on the graph's window become Media In nodes as in
+the main window.
+
 ### 3D camera setup
 
 To put a picture into 3D, use **Edit ▸ Add 3D Camera Setup** (or choose

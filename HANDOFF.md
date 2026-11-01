@@ -50,6 +50,16 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.14.2, detachable Node Graph** (Dev1): `src/gui/panels.rs`
+  (generic `Pane` Graph / Curves / Viewer / Properties, `Panels` <->
+  `Settings.panels` (`config::PanelWindow`: detached, size, pos,
+  fullscreen), viewport builder, `Here` = a window's panes for shortcut
+  routing; `DETACHABLE` = [Graph] for now); main.rs split into
+  `main_panels` / `pane_ui` / `properties_ui` / `viewer_ui`,
+  `pane_window()` = `show_viewport_immediate` per detached pane with its
+  own drops and shortcuts. A child window's close arrives as
+  `ViewportEvent::Close` and docks it. Next (Dev1): Viewer (full
+  screen), Curve Editor, Properties.
 - **0.14.1, Project 3D under blur on the GPU** (Dev2): the gate in
   `render_blurred` is gone; a surface's projection list carries an
   offset into a per-triangle rest-corner table (9 words a triangle,
