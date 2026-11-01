@@ -49,7 +49,7 @@ on the Macs (the DMG), from the release builds.
       cylinder), Subdivide (Loop on a cube) (0.13.28–0.13.33)
 - [ ] Area-light shadows at Quality 16 render in ~7 s at 4K with the GPU
       on (0.13.3, 0.13.4)
-- [ ] On the Macs: `arclight gpu --check` (68 rows now, including
+- [ ] On the Macs: `arclight gpu --check` (69 rows now, including
       instancing, instanced shadows and Project 3D) and
       `cargo test --release` on Metal
 - [ ] Extrude a cube's faces: individual with Inset, region on faces
@@ -309,15 +309,18 @@ after it. `ROADMAP.md` is the public summary of this list.
       Templates: Save selection as template… into the user data folder;
       Insert ▸ Templates and the node browser; File ▸ New from
       template; Help ▸ Examples as built-in templates.
-- [ ] Project 3D under motion blur renders on the CPU (the GPU path
-      skips projections under blur); each projector's depth map is now
-      drawn once, not per time sample (0.13.38) (Dev2)
+- [X] Project 3D under motion blur renders on the GPU (0.14.1); each
+      projector's depth map is drawn once, not per time sample (0.13.38)
 - [ ] Project 3D occlusion on the GPU: an instanced copy straddling the
       projector's near plane isn't in its depth map (lights' maps split
       those out; projectors don't). Rare (Dev2)
 - [ ] Project 3D targets are node names fixed at the node: a mesh renamed
-      or merged under another node downstream would lose its projection
-      (none does that today) (Dev2)
+      or merged under another node downstream would lose its projection.
+      Checked 2026-10-31 (Dev2): none does today (`Scene::tag` only fills
+      empty names; Subdivide, Displace, Normals, merge, Realize keep the
+      node). Fix only if an op that renames or merges under a new node
+      is added: carry projections on Card / Model as Instances do
+      (`project_3d` pushes onto them; `render3d::attach` reads them).
 - [ ] Particles to Points ids pack emitter (8 bits) and birth count (24
       bits): past ~16.7 M births ids wrap (only Instance on Points'
       random pick by id cares) (Dev2)

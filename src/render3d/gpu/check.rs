@@ -278,7 +278,10 @@ pub(crate) fn rows(gpu: &Gpu) -> Vec<CheckRow> {
         row(gpu, "3D render, see-through shadows", &see, &see_cam, hd, 2, Passes::from_names(["depth", "shadow"]), false),
         row(gpu, "3D render, projections (Project 3D)", &thrown, &cam, hd, 2, Passes::DEPTH, false),
         row(gpu, "3D render, projections blended by facing", &mixed, &cam, hd, 2, Passes::DEPTH, false),
-        blur_row(Size { width: 960, height: 540 }),
+        // (No shadows: slow on the CPU at every time; the shadows row has
+        // them, and the tests blur with shadows.)
+        blur_row(Size { width: 960, height: 540 }, "3D render, motion blur 6", &moving(&busy(PERSPECTIVE))),
+        blur_row(Size { width: 960, height: 540 }, "3D render, motion blur 6, projections", &moving(&projected(PERSPECTIVE))),
         sprites_row(Size { width: 960, height: 540 }),
         splats_row(hd),
         instances_row(gpu, hd, false),
@@ -309,17 +312,16 @@ fn row(gpu: &Gpu, case: &str, scene: &Scene, cam: &Camera, format: Size, samples
 /// The motion-blur row: the busy scene, its sphere moving, 6
 /// times jittered, at `size` (small: the CPU takes a while), through
 /// Scanline Render's own entry point (which adds the times up on the GPU).
-fn blur_row(hd: Size) -> CheckRow {
-    // (No shadows: slow on the CPU at every time; the shadows row has them,
-    // and the tests blur with shadows.)
-    let graph = moving(&busy(PERSPECTIVE));
-    let ((s0, cam), (s1, _)) = (scene_at(&graph, 4), scene_at(&graph, 5));
+/// Motion blur over 6 times of `graph` (its sphere moving) at `hd`, as row
+/// `case`.
+fn blur_row(hd: Size, case: &str, graph: &str) -> CheckRow {
+    let ((s0, cam), (s1, _)) = (scene_at(graph, 4), scene_at(graph, 5));
     let blur = super::super::Blur { times: super::super::Blur::times(0.0, 0.5, 6), frames: vec![(0, &*s0, cam.clone()), (1, &*s1, cam.clone())], jitter: true };
     let render = || super::super::render_blurred(&s0, &cam, hd, 2, None, Passes::DEPTH, None, Some(&blur));
     let _ = render();
     let (cpu, cpu_ms) = timed(|| crate::gpu::cpu_only(render));
     let (out, gpu_ms) = timed(render);
-    judge("3D render, motion blur 6", format!("{}x{}", hd.width, hd.height), &cpu, Ok(Some(out)), cpu_ms, gpu_ms)
+    judge(case, format!("{}x{}", hd.width, hd.height), &cpu, Ok(Some(out)), cpu_ms, gpu_ms)
 }
 
 /// The sprites row: 2000 big textured particle sprites laid over each

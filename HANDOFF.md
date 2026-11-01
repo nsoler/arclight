@@ -50,6 +50,13 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.14.1, Project 3D under blur on the GPU** (Dev2): the gate in
+  `render_blurred` is gone; a surface's projection list carries an
+  offset into a per-triangle rest-corner table (9 words a triangle,
+  built only for surfaces with a rest) so the shader projects from the
+  surface at the frame; projector depth maps drawn from
+  `project::at_frame`. gpu --check 69 rows. Dev2 checked Project 3D's
+  node-name targets: nothing loses a projection today; left in TODO.
 - **0.14.0, phase 14 begins** (Supervisor, user's call): branch
   `wip-ns-ui` from 0.13.41 (5d35db7). Dev1: detachable panels (TODO.md's
   first item: Node Graph first, built generic). Dev2: Project 3D

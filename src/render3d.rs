@@ -778,8 +778,7 @@ pub fn render_blurred(scene: &Scene, cam: &Camera, format: Size, samples: usize,
     // goes over the mean: the same as over each time; particle sprites
     // go over each time's render there too).
     #[cfg(feature = "gpu")]
-    // (Projections under motion blur: on the CPU, for now.)
-    if background.is_none_or(|b| b.planes.is_empty()) && !scene.has_projections() {
+    if background.is_none_or(|b| b.planes.is_empty()) {
         if let Some(mean) = gpu::blurred(scene, cam, format, samples, mixed, blur, &frames, background.is_some()) {
             let mean = match background {
                 Some(bg) => over_background(mean, bg),

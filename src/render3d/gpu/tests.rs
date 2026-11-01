@@ -577,7 +577,8 @@ fn instances_near_the_camera_deep_stacks_and_the_3d_view() {
 }
 
 /// Motion blur added up on the GPU (each pixel's times jittered by its
-/// cell, or not; with shadows; the light passes and mattes too) matches
+/// cell, or not; with shadows; with projections; the light passes and
+/// mattes too) matches
 /// the CPU's render of each time, averaged.
 #[test]
 fn motion_blur_adds_up_on_the_gpu_as_on_the_cpu() {
@@ -590,6 +591,8 @@ fn motion_blur_adds_up_on_the_gpu_as_on_the_cpu() {
         (moving(&busy(PERSPECTIVE)), Passes::from_names(["depth", "mattes", "diffuse", "specular", "lights"]), true),
         (moving(&busy(PERSPECTIVE)), Passes::DEPTH, false),
         (moving(&busy_shadowed(PERSPECTIVE)), Passes::from_names(["depth", "shadow"]), true),
+        // (Projections riding on the moving sphere, occluded by it.)
+        (moving(&projected(PERSPECTIVE)), Passes::from_names(["depth", "diffuse"]), true),
     ] {
         let ((s0, cam), (s1, _)) = (scene_at(&graph, 4), scene_at(&graph, 5));
         let blur = super::super::Blur { times: super::super::Blur::times(0.0, 0.5, 6), frames: vec![(0, &*s0, cam.clone()), (1, &*s1, cam.clone())], jitter };

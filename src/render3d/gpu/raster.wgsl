@@ -573,6 +573,18 @@ fn layer_put(l: Layer, color: vec4<f32>) -> vec4<f32> {
     return color;
 }
 
+// Where barycentric b of triangle t (hit surface s) is at the frame:
+// from the corners at `rest` in the tables (rest positions, 9 words a
+// triangle: motion blur's) unless NONE, else where it is now.
+fn tri_rest(t: u32, s: u32, b: vec3<f32>, rest: u32) -> vec3<f32> {
+    if (rest == NONE || is_inst(s)) { return tri_world(t, s, b); }
+    let at = P.tables.z + rest + t * 9u;
+    let v = array<vec3<f32>, 3>(vf3(at), vf3(at + 3u), vf3(at + 6u));
+    return v[0] * b.x + v[1] * b.y + v[2] * b.z;
+}
+
+fn vf3(at: u32) -> vec3<f32> { return vec3<f32>(bitcast<f32>(words[at]), bitcast<f32>(words[at + 1u]), bitcast<f32>(words[at + 2u])); }
+
 // Surface s's color at a hit (triangle t, hit surface hs, barycentric b,
 // at q with the next sample `step` on) with its projections put on, in
 // order, consecutive ones with Blend on as one layer
@@ -580,17 +592,18 @@ fn layer_put(l: Layer, color: vec4<f32>) -> vec4<f32> {
 fn projected(s: u32, t: u32, hs: u32, b: vec3<f32>, q: vec2<f32>, step: f32, color: vec4<f32>) -> vec4<f32> {
     let list = su(s, 11u);
     if (list == NONE) { return color; }
-    let p = tri_world(t, hs, b);
-    let n = unit_or(tri_normal(t, hs, b), vec3<f32>(0.0, 0.0, 1.0));
-    let c = tri_at(t, hs);
-    let px = tri_world(t, hs, correct(c, plain_bary(c, q + vec2<f32>(step, 0.0))));
-    let py = tri_world(t, hs, correct(c, plain_bary(c, q + vec2<f32>(0.0, step))));
     let at = P.tables.z + P.splat.w + list;
     let count = words[at];
+    let rest = words[at + 1u];
+    let p = tri_rest(t, hs, b, rest);
+    let n = unit_or(tri_normal(t, hs, b), vec3<f32>(0.0, 0.0, 1.0));
+    let c = tri_at(t, hs);
+    let px = tri_rest(t, hs, correct(c, plain_bary(c, q + vec2<f32>(step, 0.0))), rest);
+    let py = tri_rest(t, hs, correct(c, plain_bary(c, q + vec2<f32>(0.0, step))), rest);
     var out = color;
     var layer = Layer(NONE, vec4<f32>(0.0), 0.0, vec4<f32>(0.0), 0.0, 0u);
     for (var i = 0u; i < count; i++) {
-        let j = words[at + 1u + i];
+        let j = words[at + 2u + i];
         let blend = (jw(j, 19u) & PJ_BLEND) != 0u;
         if (!(blend && layer.first != NONE)) {
             if (layer.first != NONE) { out = layer_put(layer, out); }

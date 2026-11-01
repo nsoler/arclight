@@ -337,16 +337,14 @@ fn prepare(gpu: &Gpu, surfs: &[Surface], plan: Option<&instances::Plan>, lights:
     let tris = super::triangles(surfs, cam, format, next_world.as_deref());
     let px = format.width * format.height;
     // The projections on the surfaces, each once (their images among the
-    // textures, their depth maps among the shadow maps); under motion
-    // blur (a surface at another time than its frame), on the CPU.
+    // textures, their depth maps among the shadow maps). Under motion
+    // blur a surface at another time than its frame takes them where it
+    // is at the frame (its rest), and their maps are drawn from there.
     let mut projs: Vec<&Projection> = Vec::new();
     for p in surfs.iter().flat_map(|s| s.projections.iter()) {
         if !projs.iter().any(|q| std::ptr::eq(*q, *p)) {
             projs.push(p);
         }
-    }
-    if surfs.iter().any(|s| s.rest.is_some()) {
-        return None;
     }
     // (A projector's map with see-through surfaces in it: on the CPU,
     // which keeps their layers.)
@@ -372,14 +370,15 @@ fn prepare(gpu: &Gpu, surfs: &[Surface], plan: Option<&instances::Plan>, lights:
     let mut tables = Tables { tris: tri_table(&tris), bins, levels_at, tables: surf_table(surfs, &textures.base, &layout, &see), at: [0; 4], maps: Vec::new(), map_words: 0 };
     let projector_views: Vec<shadow::View> = projs.iter().filter(|p| p.occlusion).map(|p| shadow::Projector::view(&p.camera, p.image.format)).collect();
     let light_maps = map_views(&shadows).len();
-    tables.add_lights(surfs, plan, lights, &layout, &shadows, &projector_views, &textures.levels, &see);
+    let then = (surfs.iter().any(|s| s.rest.is_some()) && !projector_views.is_empty()).then(|| super::project::at_frame(surfs));
+    tables.add_lights(surfs, then.as_deref(), plan, lights, &layout, &shadows, &projector_views, &textures.levels, &see);
     // Each splat set's object (+ 1) and whether it's a holdout.
     let splat_table = tables.tables.len();
     for (k, n) in splat_nodes.iter().enumerate() {
         let object = layout.nodes.iter().position(|o| o == n).filter(|_| !n.is_empty()).map_or(0, |o| o as u32 + 1);
         tables.tables.extend_from_slice(&[object, splats.is_some_and(|sp| sp.holdout(k)) as u32]);
     }
-    let proj_at = tables.add_projections(surfs, &projs, &textures.plates, light_maps);
+    let proj_at = tables.add_projections(surfs, &tris, &projs, &textures.plates, light_maps);
     // The maps within a binding; with layers, within a budget too (else
     // the CPU renders the frame, as it does all of a light's layers).
     let room = if tables.maps.iter().any(|m| m.layered) { layer_room(gpu).min(limit) } else { limit };
@@ -725,8 +724,9 @@ impl Tables {
     /// sets up its own).
     #[allow(clippy::too_many_arguments)]
     /// After the lights' maps, `projectors`' (the projections' depth maps,
-    /// every surface but holdouts drawing into them).
-    fn add_lights(&mut self, surfs: &[Surface], inst: Option<&instances::Plan>, lights: &[Light], layout: &Layout, plan: &[Option<shadow::LightView>], projectors: &[shadow::View], levels: &[u32], see: &[bool]) {
+    /// every surface but holdouts drawing into them, from `then` where
+    /// given: the surfaces at the frame, under motion blur).
+    fn add_lights(&mut self, surfs: &[Surface], then: Option<&[Surface]>, inst: Option<&instances::Plan>, lights: &[Light], layout: &Layout, plan: &[Option<shadow::LightView>], projectors: &[shadow::View], levels: &[u32], see: &[bool]) {
         self.at[0] = self.tables.len();
         self.tables.extend(light_table(lights, layout));
         // Each map, with its light (a projector's: one past the lights).
@@ -797,7 +797,7 @@ impl Tables {
             .enumerate()
             .map(|(m, &(light, v))| {
                 let size = Size { width: v.res, height: v.res };
-                let mut tris = super::triangles(surfs, &v.cam, size, None);
+                let mut tris = super::triangles(then.filter(|_| m >= light_maps).unwrap_or(surfs), &v.cam, size, None);
                 // The instances this map draws as surfaces of their own:
                 // their triangles (clipped by its near plane) here alone.
                 let own = inst.map_or(&[][..], |p| p.map_own.get(m).map_or(&[][..], Vec::as_slice));
@@ -828,9 +828,11 @@ impl Tables {
     /// The projections `projs` (PJ_WORDS each: as raster.wgsl reads them;
     /// their images at `plates`, their depth maps, those with Occlusion,
     /// after the lights' `light_maps`), then each surface's list of them
-    /// (how many, then which), its place in its surface's words; where
-    /// the projections start.
-    fn add_projections(&mut self, surfs: &[Surface], projs: &[&Projection], plates: &[(u32, u32)], light_maps: usize) -> usize {
+    /// (how many, where its triangles' rest corners are, then which), its
+    /// place in its surface's words; then, where a surface has a rest
+    /// (under motion blur), every triangle's corners at the frame (3 × 3
+    /// words, by triangle number `tris`); where the projections start.
+    fn add_projections(&mut self, surfs: &[Surface], tris: &[Tri], projs: &[&Projection], plates: &[(u32, u32)], light_maps: usize) -> usize {
         let at = self.tables.len();
         let f = |v: f64| (v as f32).to_bits();
         let mut map = light_maps as u32;
@@ -871,12 +873,23 @@ impl Tables {
             w[30] = p.fade_end.to_bits();
             self.tables.extend_from_slice(&w);
         }
+        let mut rests = Vec::new();
         for (si, s) in surfs.iter().enumerate().filter(|(_, s)| !s.projections.is_empty()) {
             self.tables[si * SURF_WORDS + 11] = (self.tables.len() - at) as u32;
             self.tables.push(s.projections.len() as u32);
+            rests.extend(s.rest.is_some().then_some(self.tables.len()));
+            self.tables.push(NONE);
             for p in &s.projections {
                 self.tables.push(projs.iter().position(|q| std::ptr::eq(*q, *p)).unwrap_or(0) as u32);
             }
+        }
+        if !rests.is_empty() {
+            let rest_at = self.tables.len() as u32;
+            for k in rests {
+                self.tables[k] = rest_at;
+            }
+            let f = |v: f64| (v as f32).to_bits();
+            self.tables.extend(tris.iter().flat_map(|t| t.v.iter().flat_map(|v| [f(v.rest.x), f(v.rest.y), f(v.rest.z)])));
         }
         at
     }

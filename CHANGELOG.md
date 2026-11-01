@@ -18,6 +18,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.1 — 2026-10-31
+
+- **Project 3D under motion blur renders on the GPU** (the image riding
+  on moving surfaces, occluded from where they are at the frame), about
+  30× faster than the CPU in the new `arclight gpu --check` row.
+
 ## 0.14.0 — 2026-10-31
 
 - Phase 14 begins: workspace and UI. First, detachable panels for two

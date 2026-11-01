@@ -45,10 +45,7 @@ impl<'a> Projectors<'a> {
             return Projectors { list: Vec::new() };
         }
         let then: Vec<Surface> = if found.iter().any(|p| p.occlusion) {
-            surfs.iter().map(|s| match &s.rest {
-                Some(r) => Surface { world: Mat4::identity(), positions: Cow::Borrowed(&r[..]), ..s.view() },
-                None => s.view(),
-            }).collect()
+            at_frame(surfs)
         } else {
             Vec::new()
         };
@@ -144,6 +141,19 @@ impl Layer<'_> {
             _ => color,
         }
     }
+}
+
+/// `surfs` where they are at the frame itself (those with a
+/// [`rest`](Surface::rest) placed there): what projectors' depth maps are
+/// drawn from.
+pub(super) fn at_frame<'a>(surfs: &'a [Surface]) -> Vec<Surface<'a>> {
+    surfs
+        .iter()
+        .map(|s| match &s.rest {
+            Some(r) => Surface { world: Mat4::identity(), positions: Cow::Borrowed(&r[..]), ..s.view() },
+            None => s.view(),
+        })
+        .collect()
 }
 
 /// What a projector's depth map is drawn from: its image (by identity:
