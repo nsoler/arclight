@@ -7,6 +7,11 @@ they come up and strike them (or delete them) when they ship.
 
 ## To check by hand (user)
 
+Phase 14 (v0.14.7, v0.14.11): the hand tests for panels, Import
+project, copy / paste, templates, the projection examples, the Camera
+alone and Scanline Render's Camera are under "After the phase 13
+pause" below, each with its version; on Linux and on the Mac (the DMG).
+
 Phase 13 (v0.13.34, the pause after 2026-10-31): try these on Linux and
 on the Macs (the DMG), from the release builds.
 

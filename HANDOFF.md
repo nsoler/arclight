@@ -1,9 +1,16 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-31, session 12: **phase 14 (workspace and UI:
-detachable panels first, then project import / copy-paste / templates;
-TODO.md "After the phase 13 pause") on branch `wip-ns-ui`, 0.14.x, from
-0.14.0**; phase 13 (procedural geometry, `docs/geo-plan.md`) ended at
+Last updated 2026-11-01, session 12: **phase 14 (workspace and UI) on
+branch `wip-ns-ui`, 0.14.x, from 0.14.0; at 0.14.11, released as
+v0.14.11** (Linux, Windows, wheel + sdist; the user builds and posts the
+macOS DMG). Done in phase 14 so far: detachable panels (Mac-checked),
+Import project, copy / paste, templates, Project 3D GPU follow-ups,
+Bake Projection (+ texture) with two projection examples, the
+stand-alone Camera, Scanline Render's Camera param. Dev1 and Dev2 are
+standing by; the next items are the user's call (TODO.md "After the
+phase 13 pause": a Cube atlas uv layout for baking, Geo Info
+selection, Scanline Render's Width / Height with a background, the
+remaining Project 3D note); phase 13 (procedural geometry, `docs/geo-plan.md`) ended at
 0.13.41 (v0.13.41) on `wip-ns-geo`, now frozen; phase 12 (GPU acceleration, `docs/gpu-plan.md`)
 ended at 0.12.19 (beta v0.12.19, with the macOS DMG) on `wip-ns-gpu`,
 now frozen; phase 11 (engine and platform: crash reporting, plugin
@@ -50,6 +57,7 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **Released v0.14.11** (2026-11-01): 0.14.8–0.14.11 since v0.14.7.
 - **0.14.11, Scanline Render's Camera param** (Dev2, user request):
   `ScanlineRender.camera` (serde default ""); `render_scene(inputs,
   name)`: "" = the old path exactly; a name = the camera input's scene
