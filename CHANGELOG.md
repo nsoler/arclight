@@ -17,6 +17,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.37 — 2026-10-31
+
+- **Displace** (Scene): moves meshes' points (all, or Group's) along
+  their normals by Amount × a height: smooth 3-D noise (Frequency,
+  Offset, Octaves, Seed), a float point attribute, or an image's
+  brightness less Midlevel, read at the uvs or through a camera input.
+  Seams stay closed (heights and normals are averaged per welded point);
+  Recompute normals shades the new shape. Subdivide first for detail.
+
 ## 0.13.36 — 2026-10-31
 
 - **Help ▸ Examples ▸ Particles: two streams pushed apart**

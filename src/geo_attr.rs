@@ -169,7 +169,7 @@ fn smooth(t: f64) -> f64 {
 
 /// Fractal noise at `p`: `octaves` of noise3, each twice the frequency
 /// and half the weight of the last, in -1..1.
-fn fbm(p: Vec3, octaves: usize, seed: f64) -> f64 {
+pub(crate) fn fbm(p: Vec3, octaves: usize, seed: f64) -> f64 {
     let (mut sum, mut weight, mut total, mut f) = (0.0, 1.0, 0.0, 1.0);
     for _ in 0..octaves.max(1) {
         sum += weight * crate::expr::noise3([p.x * f, p.y * f, p.z * f], seed);

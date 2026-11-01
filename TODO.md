@@ -10,15 +10,15 @@ they come up and strike them (or delete them) when they ship.
 Phase 13 (v0.13.34, the pause after 2026-10-31): try these on Linux and
 on the Macs (the DMG), from the release builds.
 
-- [ ] Tab switches 2D / 3D with the pointer over the node graph, the
+- [X] Tab switches 2D / 3D with the pointer over the node graph, the
       viewer or Properties; not while typing in a field (0.13.14)
-- [ ] Help ▸ Examples ▸ Geometry nodes opens geo-scatter as an untitled
+- [X] Help ▸ Examples ▸ Geometry nodes opens geo-scatter as an untitled
       project and renders (rocks, bush cards, sun shadows); Save asks
       where (0.13.21)
-- [ ] Help ▸ Examples ▸ Particles opens particledirectionalforce as an
+- [X] Help ▸ Examples ▸ Particles opens particledirectionalforce as an
       untitled project; playing it, the teal stream drifts right and the
       orange one left (0.13.36)
-- [ ] A wire dropped anywhere on a node connects to its first free input
+- [X] A wire dropped anywhere on a node connects to its first free input
       (the node lights up, the wire's end snaps); never into a mask; the
       other way from an input (0.13.2, 0.13.6)
 - [ ] Scatter on a Plane with a painted / keyed mask: raise the density
@@ -32,7 +32,7 @@ on the Macs (the DMG), from the release builds.
       counts (100k cards) stay quick with the GPU on (0.13.13–0.13.23)
 - [ ] Delete Geo's box / sphere moved with G and sized with S in the 3D
       view; an expression like random(@id) < 0.3 (0.13.10)
-- [ ] Fit Plane from the camera tracker's point picker (Fit plane, Use
+- [X] Fit Plane from the camera tracker's point picker (Fit plane, Use
       picked points); as a shadow catcher (0.13.12)
 - [ ] Curves in the 3D view: pick points (Shift), drag, G / R / S, Bezier
       handles (Alt breaks), Ctrl/Cmd-click adds or inserts, Delete; a
@@ -53,24 +53,24 @@ on the Macs (the DMG), from the release builds.
       instancing, instanced shadows and Project 3D) and
       `cargo test --release` on Metal
 
-- [ ] 0.12.17 (beta release v0.12.17): at the default window size the
+- [X] 0.12.17 (beta release v0.12.17): at the default window size the
       viewer's toolbar wraps onto a second row (Fit and 1:1 visible) and
       the 3D view's too; a long node error (a plugin crash, a missing
       file) wraps in the viewer and the 3D view and can be selected and
       copied (0.12.15)
-- [ ] 0.12.16 (layered shadows): a card below full opacity or a cutout
+- [X] 0.12.16 (layered shadows): a card below full opacity or a cutout
       texture casts a soft-edged shadow that looks the same with the GPU
       on and off, and renders much faster with it on; on the Macs too
-- [ ] 0.12.0 (GPU G1): Preferences ▸ Performance ▸ GPU acceleration off /
+- [X] 0.12.0 (GPU G1): Preferences ▸ Performance ▸ GPU acceleration off /
       on and the About line follows; `ARCLIGHT_GPU=0` greys it; Help ▸
       GPU self-test. On the **M4 Pro** and the **Intel Mac**: `arclight
       gpu` names the GPU (Metal; "unified memory" on the M4 Pro), `arclight
       gpu --check` passes, and `cargo test --release` there (the GPU tests
       run on Metal)
-- [ ] 0.12.10 (GPU G6): `examples/hornedlizard.json` in the 3D view
+- [X] 0.12.10 (GPU G6): `examples/hornedlizard.json` in the 3D view
       orbits smoothly with the GPU on; its render looks the same with
       `ARCLIGHT_GPU=0`; on the Macs too
-- [ ] 0.12.9 (GPU G7): view a 4K GPU chain (blurs, grade): it looks the
+- [X] 0.12.9 (GPU G7): view a 4K GPU chain (blurs, grade): it looks the
       same as with `ARCLIGHT_GPU=0`, and scrubbing is smooth; pixel
       readout values unchanged. On the M4 Pro and the Intel Mac too
       (eframe on Metal sharing the engine's device)
@@ -81,7 +81,7 @@ on the Macs (the DMG), from the release builds.
 - [ ] 0.12.3 (GPU G5 part 1): a Scanline Render with shadows and motion
       blur renders in about a second at 4K with the GPU on (it took
       30 s) and looks the same as with it off; on the Macs too
-- [ ] 0.12.2 (GPU G4): a Scanline Render without shadows renders much
+- [X] 0.12.2 (GPU G4): a Scanline Render without shadows renders much
       faster with the GPU on, and looks the same as with it off (toggle
       in Preferences); the 3D view orbits more smoothly (Lit and Solid);
       on the Macs too
@@ -89,7 +89,7 @@ on the Macs (the DMG), from the release builds.
       Grade / Merge / Blur rows (Metal's fast math against the
       tolerances); a 2D chain with big blurs feels quicker with the GPU on
 
-- [ ] 0.11.4: the 3D view with a mouse (user found it hard and erratic in
+- [X] 0.11.4: the 3D view with a mouse (user found it hard and erratic in
       0.11.3; since 0.13.1 the Move gizmo by default, G / R / S switch it:
       the user found it good, 2026-10-31): select a Camera / Card / light and the All gizmo shows
       (arrows, rings, cubes); drag each ring, including one seen nearly
@@ -98,7 +98,7 @@ on the Macs (the DMG), from the release builds.
       the selection (it stays put); scroll only zooms. Also the frame rate
       while orbiting a heavy scene (not measured)
 
-- [ ] 0.11.1–0.11.2 (before the beta): run `ARCLIGHT_CRASH_TEST=panic
+- [x] 0.11.1–0.11.2 (before the beta): run `ARCLIGHT_CRASH_TEST=panic
       arclight-gui` (also `segv`, `abort`, and `worker`, which should only
       show an error): a report is saved, unsaved changes land in the
       autosave, and the next start shows "Arclight closed unexpectedly"
@@ -133,7 +133,7 @@ on the Macs (the DMG), from the release builds.
       3D view mouse / trackpad / shading); File ▸ New's project folder;
       media dialogs start there; move a saved project folder (or copy it
       to the Mac) and it opens with its plates
-- [ ] 0.9.62–0.9.64: Particle Render texture sequences (play / loop /
+- [X] 0.9.62–0.9.64: Particle Render texture sequences (play / loop /
       random start); an emitter on a moving card leaves a trail and plays
       fast; MCP / Python calls to a running GUI share its caches
       and stay responsive

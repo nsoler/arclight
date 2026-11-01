@@ -412,6 +412,88 @@ pub fn subdivide(params: &Value, mut scene: Scene) -> Result<Scene> {
     Ok(scene)
 }
 
+/// A Displace: the meshes' (Group's) points moved along their normals by
+/// Amount × a height: a float point attribute (Source attribute), 3-D
+/// noise at their place in the scene (noise, as Attribute Noise's), or an
+/// image's luminance less Midlevel (image: at their uv, or where the
+/// camera input's camera sees them). Heights and normals are taken per
+/// point welded by position (the mean of its vertices'), so seams stay
+/// closed. Normals are made smooth again after, unless Recompute normals
+/// is off.
+pub fn displace(params: &Value, mut scene: Scene, image: Option<&crate::image::Image>, camera: Option<&Scene>) -> Result<Scene> {
+    let group = params["group"].as_str().unwrap_or("").trim();
+    let take = |node: &str| group.is_empty() || geo::glob(group, node);
+    let num = |k: &str, d: f64| params[k].as_f64().filter(|v| v.is_finite()).unwrap_or(d);
+    let amount = num("amount", 0.1);
+    let source = params["source"].as_str().unwrap_or("noise");
+    let attr = params["attribute"].as_str().unwrap_or("height").trim();
+    let (freq, octaves, seed) = (num("frequency", 1.0), params["octaves"].as_u64().unwrap_or(1).clamp(1, 8) as usize, num("seed", 0.0));
+    let offset = Vec3::from(scene::numbers::<3>(&params["offset"], 0.0));
+    let midlevel = num("midlevel", 0.5);
+    let via_camera = params["via"].as_str() == Some("camera");
+    let cam = camera.and_then(|s| s.cameras.first()).cloned();
+    if source == "image" {
+        if image.is_none() {
+            bail!("Displace: Source is image, but nothing is connected to its image input");
+        }
+        if via_camera && cam.is_none() {
+            bail!("Displace: Via is camera, but nothing with a camera is connected to its camera input");
+        }
+    }
+    let recompute = params["recompute_normals"].as_bool().unwrap_or(true);
+    for model in scene.meshes.iter_mut().filter(|m| take(&m.node)) {
+        let m = &*model.mesh;
+        if source == "attribute" && m.point_attrs.float(attr).is_none() {
+            bail!("Displace: {} has no float point attribute '{attr}' (set one with Attribute Set or Attribute Noise)", model.node);
+        }
+        let (of, firsts) = weld(&m.positions);
+        let normals = if m.normals.len() == m.positions.len() {
+            m.normals.clone()
+        } else {
+            let mut s = m.clone();
+            s.smooth_normals();
+            s.normals
+        };
+        // Per welded point: the mean normal and height of its vertices.
+        let mut sum_n = vec![Vec3::zeros(); firsts.len()];
+        let mut sum_h = vec![0.0; firsts.len()];
+        let mut count = vec![0.0; firsts.len()];
+        for (i, g) in of.iter().enumerate() {
+            let g = *g as usize;
+            sum_n[g] += normals[i];
+            count[g] += 1.0;
+            let placed = geom::transform_point(&model.world, &m.positions[i]);
+            sum_h[g] += match source {
+                "attribute" => m.point_attrs.float(attr).map_or(0.0, |v| v[i] as f64),
+                "image" => {
+                    let img = image.expect("checked");
+                    let f = img.format;
+                    let q = match &cam {
+                        Some(c) if via_camera => c.project(&placed, f).map(|(q, _)| q),
+                        _ => m.uvs.get(i).map(|[u, v]| [u * f.width as f64, (1.0 - v) * f.height as f64]),
+                    };
+                    q.map_or(midlevel, |[x, y]| {
+                        let p = crate::geo_attr::sample(img, x.clamp(0.5, f.width as f64 - 0.5), y.clamp(0.5, f.height as f64 - 0.5));
+                        0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]
+                    }) - midlevel
+                }
+                _ => crate::geo_attr::fbm(placed * freq + offset, octaves, seed),
+            };
+        }
+        let mut out = m.clone();
+        for (i, g) in of.iter().enumerate() {
+            let g = *g as usize;
+            let n = sum_n[g].try_normalize(1e-300).unwrap_or_else(Vec3::y);
+            out.positions[i] = m.positions[firsts[g] as usize] + n * (amount * sum_h[g] / count[g]);
+        }
+        if recompute {
+            out.smooth_normals();
+        }
+        model.mesh = std::sync::Arc::new(out);
+    }
+    Ok(scene)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -634,5 +716,49 @@ mod tests {
     fn subdivide_in_a_graph() {
         let m = graph_mesh(json!([{"id": "c", "op": "cube"}, {"id": "s", "op": "subdivide", "inputs": ["c"], "params": {"iterations": 2}}]), "s");
         assert_eq!(m.triangles.len(), 12 * 16);
+    }
+
+    #[test]
+    fn displace_by_an_attribute_noise_or_an_image() {
+        // A 2 × 2 plane in 4 × 4 squares, facing +z, its height x + 1.
+        let mut plane = mesh_of("plane", json!({"size": [2, 2], "segments": [4, 4]}));
+        let n = plane.positions.len();
+        let h: Vec<f32> = plane.positions.iter().map(|p| p.x as f32 + 1.0).collect();
+        plane.point_attrs.set("height", Attr::Float(h), n).unwrap();
+        let out = displace(&json!({"source": "attribute", "amount": 0.5}), one(plane.clone()), None, None).unwrap();
+        let m = &out.meshes[0].mesh;
+        assert!(m.positions.iter().zip(&plane.positions).all(|(q, p)| (q.z - 0.5 * (p.x + 1.0)).abs() < 1e-9 && q.x == p.x), "along +z by it");
+        assert!(m.normals.iter().all(|n| n.z < 0.99), "normals made again: tilted");
+        assert!(displace(&json!({"source": "attribute", "attribute": "nope"}), one(plane.clone()), None, None).is_err());
+        // Noise: the formulas' noise at each point.
+        let noisy = displace(&json!({"amount": 0.3, "frequency": 2.0, "seed": 1}), one(plane.clone()), None, None).unwrap();
+        for (q, p) in noisy.meshes[0].mesh.positions.iter().zip(&plane.positions) {
+            let want = 0.3 * crate::expr::noise3([p.x * 2.0, p.y * 2.0, 0.0], 1.0);
+            assert!((q.z - want).abs() < 1e-9, "{q:?}");
+        }
+        // An image by uv: white is up (1 - midlevel), black down.
+        let mut img = crate::image::Image::blank(crate::image::Size { width: 2, height: 1 }, crate::image::IRect::new(0, 0, 2, 1));
+        img.pixels = vec![[0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]];
+        let shown = displace(&json!({"source": "image", "amount": 1.0, "recompute_normals": false}), one(plane.clone()), Some(&img), None).unwrap();
+        let m = &shown.meshes[0].mesh;
+        let at = |x: f64| m.positions.iter().zip(&plane.positions).find(|(_, p)| (p.x - x).abs() < 1e-9).unwrap().0.z;
+        assert!((at(-1.0) + 0.5).abs() < 1e-9 && (at(1.0) - 0.5).abs() < 1e-9 && at(0.0).abs() < 1e-9, "{} {} {}", at(-1.0), at(0.0), at(1.0));
+        assert!(displace(&json!({"source": "image"}), one(plane), None, None).is_err(), "no image");
+    }
+
+    #[test]
+    fn displaced_seams_stay_closed() {
+        // A cube's faces have their own vertices: displaced by noise along
+        // the (welded) mean normal, its corners stay one point each.
+        let cube = mesh_of("cube", json!({"size": [2, 2, 2], "segments": [2, 2, 2]}));
+        let before = weld(&cube.positions).1.len();
+        let out = displace(&json!({"amount": 0.4, "frequency": 1.3}), one(cube), None, None).unwrap();
+        assert_eq!(weld(&out.meshes[0].mesh.positions).1.len(), before);
+    }
+
+    #[test]
+    fn displace_in_a_graph() {
+        let m = graph_mesh(json!([{"id": "p", "op": "plane", "params": {"segments": [8, 8]}}, {"id": "d", "op": "displace", "inputs": ["p", "", ""], "params": {"amount": 0.5}}]), "d");
+        assert!(m.positions.iter().any(|p| p.z.abs() > 1e-3), "moved off the plane");
     }
 }

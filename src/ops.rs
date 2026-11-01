@@ -100,7 +100,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "points_from_geo" | "grid_points" | "line_points" | "normals" | "subdivide" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "curve_to_mesh" | "points_on_curve" | "project_3d" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "points_from_geo" | "grid_points" | "line_points" | "normals" | "subdivide" | "displace" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "curve_to_mesh" | "points_on_curve" | "project_3d" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1297,6 +1297,32 @@ pub static OPS: &[OpInfo] = &[
                toward a rounded limit (a cube becomes a blob; open edges stay as smooth curves), linear keeps it as it is \
                but finer (for Displace). Seams stay closed; uvs and point attributes are blended onto the new points, and \
                each new face keeps its face's attributes. More than 5,000,000 triangles is an error.",
+    },
+    OpInfo {
+        name: "displace",
+        label: "Displace",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN, opt("image"), scene_in("camera")],
+        params: &[
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("source", "Source", ParamKind::Choice(&["noise", "attribute", "image"]), "noise"),
+            p!("amount", "Amount", ParamKind::Float { min: -1000.0, max: 1000.0 }, 0.1),
+            fixed!("attribute", "Attribute", ParamKind::Text, "height"),
+            p!("frequency", "Frequency", ParamKind::Float { min: 0.0, max: 1000.0 }, 1.0),
+            p!("offset", "Offset", ParamKind::Vec3, [0.0, 0.0, 0.0]),
+            fixed!("octaves", "Octaves", ParamKind::Int { min: 1, max: 8 }, 1),
+            fixed!("seed", "Seed", ParamKind::Int { min: 0, max: 1_000_000 }, 0),
+            fixed!("via", "Image via", ParamKind::Choice(&["uv", "camera"]), "uv"),
+            p!("midlevel", "Midlevel", ParamKind::Float { min: 0.0, max: 1.0 }, 0.5),
+            fixed!("recompute_normals", "Recompute normals", ParamKind::Bool, true),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Moves the meshes' points (Group's, or all) along their normals by Amount × a height: 3-D noise at their \
+               place (Source noise: Frequency, Offset to drift, Octaves, Seed, as Attribute Noise), a float point \
+               attribute (attribute: Attribute, e.g. from Attribute Noise or Attribute from Image), or the image input's \
+               brightness less Midlevel (image: at the points' uvs, or where the camera input's camera sees them). Seams \
+               stay closed. Subdivide first for detail; Recompute normals shades the new shape.",
     },
     // Fit Plane (geo_fit.rs; Dev1).
     OpInfo {
@@ -2525,6 +2551,11 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "line_points" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_mesh::line_points(params, input_scene(inputs))?)),
         "normals" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_mesh::normals(params, input_scene(inputs))?)),
         "subdivide" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_mesh::subdivide(params, input_scene(inputs))?)),
+        "displace" => {
+            let image = inputs.get(1).copied().flatten().filter(|i| i.scene.is_none());
+            let camera = inputs.get(2).copied().flatten().and_then(|i| i.scene.as_deref());
+            Ok(scene_output(DEFAULT_FORMAT, crate::geo_mesh::displace(params, input_scene(inputs), image, camera)?))
+        }
         "fit_plane" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_fit::fit_plane(params, input_scene(inputs), inputs.get(1).copied().flatten())?)),
         "scatter" => {
             let image = inputs.get(1).copied().flatten().filter(|i| i.scene.is_none());

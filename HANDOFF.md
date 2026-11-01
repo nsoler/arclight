@@ -48,6 +48,13 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.13.37, Displace** (Dev1): `geo_mesh::displace` (noise /
+  attribute / image at uvs or through a camera; heights and normals
+  averaged per welded point, so seams stay closed); `geo_attr::fbm` is
+  `pub(crate)`. TODO.md: the user's hand-test ticks. Next: multi-camera
+  projection (P8b): Dev1 the node side (`project3d.rs`, ops, graph held
+  inputs, Frames list, example), Dev2 the renderers (facing fade, blend
+  layers, CPU and GPU, depth-map cache).
 - **0.13.36, Help ▸ Examples ▸ Particles** (Supervisor, user request):
   `examples/particledirectionalforce.json`, the user's Nuke script
   translated by hand (from its text, not the disassembly; the .nk stays

@@ -400,7 +400,13 @@ selected object.
   a line. **Normals** makes meshes smooth, faceted, or smooth with crisp
   edges past an angle (a cylinder's side smooth, its caps sharp).
   **Subdivide** makes meshes finer: Loop rounds them off, linear keeps
-  their shape for Displace to work on.
+  their shape for Displace to work on. **Displace** pushes meshes' points
+  out along their normals (in where Amount is negative) by smooth 3-D
+  noise (Frequency, Offset to drift, Octaves, Seed), a float attribute
+  (from Attribute Noise or Attribute from Image), or an image's
+  brightness less Midlevel, read at the uvs or through a camera (a
+  shadow catcher shaped by a depth plate). Seams stay closed; Subdivide
+  first for detail.
   **Delete Geo** removes points, faces or instances inside or outside a
   box or sphere you place in the 3D view (G moves it, S sizes it), or
   where an expression is true: `@P.y < 0` drops everything below the
