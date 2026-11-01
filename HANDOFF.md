@@ -1,15 +1,15 @@
 # Arclight — handoff notes
 
 Last updated 2026-11-01, session 12: **phase 14 (workspace and UI) on
-branch `wip-ns-ui`, 0.14.x, from 0.14.0; at 0.14.11, released as
-v0.14.11** (Linux, Windows, wheel + sdist; the user builds and posts the
+branch `wip-ns-ui`, 0.14.x, from 0.14.0; at 0.14.14, released as
+v0.14.14** (Linux, Windows, wheel + sdist; the user builds and posts the
 macOS DMG). Done in phase 14 so far: detachable panels (Mac-checked),
 Import project, copy / paste, templates, Project 3D GPU follow-ups,
 Bake Projection (+ texture) with two projection examples, the
-stand-alone Camera, Scanline Render's Camera param. Dev1 and Dev2 are
+stand-alone Camera, Scanline Render's Camera param, the Cube's atlas uv
+layout, the three-views camera example. Dev1 and Dev2 are
 standing by; the next items are the user's call (TODO.md "After the
-phase 13 pause": a Cube atlas uv layout for baking, Geo Info
-selection, Scanline Render's Width / Height with a background, the
+phase 13 pause": Geo Info selection, Scanline Render's Width / Height with a background, the
 remaining Project 3D note); phase 13 (procedural geometry, `docs/geo-plan.md`) ended at
 0.13.41 (v0.13.41) on `wip-ns-geo`, now frozen; phase 12 (GPU acceleration, `docs/gpu-plan.md`)
 ended at 0.12.19 (beta v0.12.19, with the macOS DMG) on `wip-ns-gpu`,
