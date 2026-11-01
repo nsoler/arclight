@@ -27,7 +27,8 @@ echo "Building ArclightVFX $version for Linux $arch..."
 cargo build --release --manifest-path "$repo/Cargo.toml" --bin arclight-gui --bin arclight
 
 rm -rf "$stage" && mkdir -p "$stage/bin" "$stage/share/arclight/examples/media" "$stage/share/arclight/icons"
-install -m755 "$repo/target/release/arclight-gui" "$repo/target/release/arclight" "$stage/bin/"
+out="${CARGO_TARGET_DIR:-$repo/target}/release"
+install -m755 "$out/arclight-gui" "$out/arclight" "$stage/bin/"
 strip "$stage/bin/"* 2>/dev/null || true
 install -m644 "$repo/examples/media/testsrc.mp4" "$stage/share/arclight/examples/media/"
 # Help ▸ Examples (the list is EXAMPLES in src/gui/main.rs).

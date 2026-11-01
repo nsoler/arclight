@@ -45,7 +45,7 @@ for bin in arclight-gui arclight; do
   slices=()
   for arch in $archs; do
     if [[ "$arch" == arm64 ]]; then target=aarch64-apple-darwin; else target=x86_64-apple-darwin; fi
-    slices+=("$repo/target/$target/release/$bin")
+    slices+=("${CARGO_TARGET_DIR:-$repo/target}/$target/release/$bin")
   done
   lipo -create "${slices[@]}" -output "$app/Contents/MacOS/$bin"
   chmod 755 "$app/Contents/MacOS/$bin"
