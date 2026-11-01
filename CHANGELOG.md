@@ -17,6 +17,20 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.38 — 2026-10-31
+
+- **Project 3D: several cameras on one set.** Blend with others mixes
+  overlapping projections into one layer instead of the later one
+  winning with a hard seam, each weighed by its Mix, Edge feather and
+  facing; Fade start / Fade end (degrees) fade a projection out where
+  it lands at a grazing angle; Frames (as `1001, 1040, 1080`) projects
+  one tracked camera and its plate from each frame listed, blended (it
+  overrides Frame hold). The same on the CPU and the GPU (a new
+  `arclight gpu --check` row). Example: `examples/multi-projection.json`.
+- A held projection no longer re-evaluates when the live projector or
+  image changes; under motion blur each projector's depth map is drawn
+  once, not per time sample.
+
 ## 0.13.37 — 2026-10-31
 
 - **Displace** (Scene): moves meshes' points (all, or Group's) along

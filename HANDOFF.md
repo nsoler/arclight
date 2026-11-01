@@ -48,6 +48,16 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.13.38, multi-camera projection (P8b)** (Dev1 node side, Dev2
+  renderers): `Projection` `fade_start` / `fade_end` / `blend` and
+  `facing()`; `project3d::frames()` and `project_shots()`;
+  `held_inputs` returns several frames, the graph keeps an evaluator per
+  held frame (`Elsewhen.held`) and appends each further frame's (image,
+  projector) after the node's inputs; `node_key` skips held ports. CPU
+  (`render3d/project.rs`) and GPU (`PJ_BLEND`, word 19 bit 3; fades in
+  words 29/30) blend runs of Blend-on projections; `project::SameMaps`
+  keeps projector depth maps across blur samples. Example
+  `examples/multi-projection.json` (not in Help ▸ Examples).
 - **0.13.37, Displace** (Dev1): `geo_mesh::displace` (noise /
   attribute / image at uvs or through a camera; heights and normals
   averaged per welded point, so seams stay closed); `geo_attr::fbm` is

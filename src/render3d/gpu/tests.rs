@@ -1,7 +1,7 @@
 //! The GPU renderer against the CPU one on the same scenes (D8 of
 //! docs/gpu-plan.md): skipped without a GPU.
 
-use super::check::{busy, busy_shadowed, differences, layered, moving, nearest_pass, projected, scattered, scene_at, scene_of, ORTHO, PERSPECTIVE};
+use super::check::{blended, busy, busy_shadowed, differences, layered, moving, nearest_pass, projected, scattered, scene_at, scene_of, ORTHO, PERSPECTIVE};
 use super::*;
 
 thread_local! {
@@ -401,6 +401,27 @@ fn projections_match_the_cpu_render() {
     // From the side, behind the sphere: what the projector doesn't see.
     let side = Camera { world: crate::geom::trs([-3.0, 0.5, -1.5], [0.0, -75.0, 0.0], [1.0; 3]), ..cam.clone() };
     compare(&gpu, &scene, &side, format, 2, Passes::DEPTH, None);
+}
+
+/// Two overlapping projectors blended by facing render on the GPU as on
+/// the CPU, a soft seam where they meet, not the later one's edge; and
+/// Blend off, as stacked.
+#[test]
+fn blended_projections_match_the_cpu_render() {
+    let Some(gpu) = crate::gpu::test_device() else {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    };
+    let (thrown, cam) = scene_of(&projected(PERSPECTIVE));
+    let mixed = blended(&thrown);
+    let format = Size { width: 320, height: 180 };
+    compare(&gpu, &mixed, &cam, format, 2, Passes::from_names(["depth", "diffuse"]), None);
+    let stacked = Scene { projections: mixed.projections.iter().map(|p| crate::ops::project3d::Projection { blend: false, fade_start: 90.0, fade_end: 90.0, ..p.clone() }).collect(), ..mixed.clone() };
+    compare(&gpu, &stacked, &cam, format, 2, Passes::DEPTH, None);
+    // (Blending shows: not the stacked render.)
+    let (a, b) = crate::gpu::cpu_only(|| (super::super::render(&mixed, &cam, format, 1, None), super::super::render(&stacked, &cam, format, 1, None)));
+    let changed = a.pixels.iter().zip(&b.pixels).filter(|(p, q)| (0..3).any(|c| (p[c] - q[c]).abs() > 0.05)).count();
+    assert!(changed > a.pixels.len() / 10, "{changed}");
 }
 
 /// Instances with a projection drawn instanced on the GPU (their

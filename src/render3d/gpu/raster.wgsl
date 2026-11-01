@@ -59,6 +59,7 @@ const PJ_WORDS: u32 = 32u;
 const PJ_ORTHO: u32 = 1u;
 const PJ_CROP: u32 = 2u;
 const PJ_BACKFACES: u32 = 4u;
+const PJ_BLEND: u32 = 8u;
 // Nothing in a shadow map's texel.
 const FAR_AWAY: f32 = 3.0e38;
 // The see-through casters a shadow map's texel gathers while it's drawn,
@@ -461,7 +462,7 @@ fn footprint(t: u32, hs: u32, s: u32, q: vec2<f32>, uv: vec2<f32>, step: f32) ->
 // pixels (orthographic: pixels a unit), flags (PJ_*), the image's width
 // and height, the camera's near; the image's first texture level and
 // mipmaps, the mode (0 replace, 1 over, 2 multiply), mix, edge; its depth
-// map (NONE: no occlusion).
+// map (NONE: no occlusion); Fade start and end (degrees).
 fn jw(j: u32, k: u32) -> u32 { return words[P.tables.z + P.splat.w + j * PJ_WORDS + k]; }
 fn jf(j: u32, k: u32) -> f32 { return bitcast<f32>(jw(j, k)); }
 fn jv3(j: u32, k: u32) -> vec3<f32> { return vec3<f32>(jf(j, k), jf(j, k + 1u), jf(j, k + 2u)); }
@@ -540,9 +541,42 @@ fn pj_apply(j: u32, color: vec4<f32>, plate: vec4<f32>, w: f32) -> vec4<f32> {
     return color + (put - color) * w;
 }
 
+// How much of projection j lands where its direction is `cos` off the
+// normal: all up to Fade start, none past Fade end, smooth between
+// (Projection::facing).
+fn pj_facing(j: u32, cos: f32) -> f32 {
+    let angle = degrees(acos(clamp(cos, -1.0, 1.0)));
+    let end = jf(j, 30u);
+    let start = min(jf(j, 29u), end);
+    if (angle <= start) { return 1.0; }
+    if (angle >= end) { return 0.0; }
+    let t = (end - angle) / (end - start);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// A layer of projections with Blend on (render3d/project.rs's Layer):
+// the first one, their plates times their ws added up and the ws, the
+// only one's plate and w, how many landed.
+struct Layer {
+    first: u32,
+    sum: vec4<f32>,
+    weight: f32,
+    only: vec4<f32>,
+    only_w: f32,
+    count: u32,
+}
+
+// `color` with layer l put on.
+fn layer_put(l: Layer, color: vec4<f32>) -> vec4<f32> {
+    if (l.count == 1u) { return pj_apply(l.first, color, l.only, l.only_w); }
+    if (l.weight > 0.0) { return pj_apply(l.first, color, l.sum / l.weight, min(l.weight, 1.0)); }
+    return color;
+}
+
 // Surface s's color at a hit (triangle t, hit surface hs, barycentric b,
 // at q with the next sample `step` on) with its projections put on, in
-// order (render3d/project.rs).
+// order, consecutive ones with Blend on as one layer
+// (render3d/project.rs).
 fn projected(s: u32, t: u32, hs: u32, b: vec3<f32>, q: vec2<f32>, step: f32, color: vec4<f32>) -> vec4<f32> {
     let list = su(s, 11u);
     if (list == NONE) { return color; }
@@ -554,13 +588,21 @@ fn projected(s: u32, t: u32, hs: u32, b: vec3<f32>, q: vec2<f32>, step: f32, col
     let at = P.tables.z + P.splat.w + list;
     let count = words[at];
     var out = color;
+    var layer = Layer(NONE, vec4<f32>(0.0), 0.0, vec4<f32>(0.0), 0.0, 0u);
     for (var i = 0u; i < count; i++) {
         let j = words[at + 1u + i];
+        let blend = (jw(j, 19u) & PJ_BLEND) != 0u;
+        if (!(blend && layer.first != NONE)) {
+            if (layer.first != NONE) { out = layer_put(layer, out); }
+            layer = Layer(NONE, vec4<f32>(0.0), 0.0, vec4<f32>(0.0), 0.0, 0u);
+        }
+        if (blend) { layer.first = select(layer.first, j, layer.first == NONE); }
         let l = pj_to_eye(j, p);
-        if ((jw(j, 19u) & PJ_BACKFACES) == 0u && dot(n, l) < 0.0) { continue; }
+        let cos = dot(n, l);
+        if ((jw(j, 19u) & PJ_BACKFACES) == 0u && cos < 0.0) { continue; }
         let here = pj_place(j, p);
         if (here.z < 0.0) { continue; }
-        var w = jf(j, 26u) * pj_crop(j, here.xy);
+        var w = jf(j, 26u) * pj_crop(j, here.xy) * pj_facing(j, abs(cos));
         if (w <= 0.0) { continue; }
         let m = jw(j, 28u);
         if (m != NONE) {
@@ -573,8 +615,18 @@ fn projected(s: u32, t: u32, hs: u32, b: vec3<f32>, q: vec2<f32>, step: f32, col
         let ay = pj_place(j, py);
         let covered = max(select(1.0, length(ax.xy - here.xy), ax.z >= 0.0), select(1.0, length(ay.xy - here.xy), ay.z >= 0.0));
         let uv = here.xy / vec2<f32>(jf(j, 20u), jf(j, 21u));
-        out = pj_apply(j, out, level_color(jw(j, 23u), jw(j, 24u), uv, covered), w);
+        let plate = level_color(jw(j, 23u), jw(j, 24u), uv, covered);
+        if (blend) {
+            layer.sum += w * plate;
+            layer.weight += w;
+            layer.only = plate;
+            layer.only_w = w;
+            layer.count += 1u;
+        } else {
+            out = pj_apply(j, out, plate, w);
+        }
     }
+    if (layer.first != NONE) { out = layer_put(layer, out); }
     return out;
 }
 

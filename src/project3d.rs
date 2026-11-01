@@ -7,7 +7,8 @@
 //! renderer (`render3d`) projects each shaded sample's point through
 //! the projector's camera into the image, before lighting. `ops.rs`
 //! registers the node; the graph hands it its projector and image at the
-//! Hold frame when Frame hold is on (see [`held_inputs`]).
+//! Hold frame when Frame hold is on, or at each of Frames (see
+//! [`held_inputs`]), each frame's a projection of its own, blended.
 
 use crate::geo;
 use crate::geom::Camera;
@@ -46,6 +47,17 @@ pub struct Projection {
     pub occlusion: bool,
     /// On surfaces facing away from the camera too.
     pub backfaces: bool,
+    /// Faded out by the angle (degrees) between a surface's normal and
+    /// the direction to the camera: whole up to `fade_start`, gone at
+    /// `fade_end` (see [`facing`](Self::facing)). 90 / 90: no fade.
+    pub fade_start: f32,
+    pub fade_end: f32,
+    /// Blended with the projections next to it that blend too: on a
+    /// surface, a run of them is one layer, its plate their plates
+    /// weighed by their weights w (Mix × crop × facing × visibility),
+    /// sum(w · plate) / sum(w), put on min(sum(w), 1) of the way by the
+    /// first one's mode. Off: put on after the ones before, over them.
+    pub blend: bool,
 }
 
 impl Projection {
@@ -64,6 +76,24 @@ impl Projection {
             Mode::Multiply => std::array::from_fn(|c| if c == 3 { a } else { color[c] * (plate[c] + 1.0 - plate[3]) }),
         };
         std::array::from_fn(|c| color[c] + (put[c] - color[c]) * w)
+    }
+
+    /// How much of it lands on a surface by its facing: `cos_angle` is the
+    /// cosine of the angle between the surface's normal (the side towards
+    /// the camera, with Backfaces on) and the direction to the camera. 1 up
+    /// to Fade start, smoothly to 0 at Fade end (a hard edge there when
+    /// start isn't below end), so at 90 / 90 everything facing it takes it.
+    pub fn facing(&self, cos_angle: f32) -> f32 {
+        let angle = cos_angle.clamp(-1.0, 1.0).acos().to_degrees();
+        let (start, end) = (self.fade_start.min(self.fade_end), self.fade_end);
+        if angle <= start {
+            1.0
+        } else if angle >= end {
+            0.0
+        } else {
+            let t = (end - angle) / (end - start);
+            t * t * (3.0 - 2.0 * t)
+        }
     }
 
     /// How much of it reaches frame position `px` of its image: 0 outside
@@ -85,22 +115,66 @@ impl Projection {
     }
 }
 
-/// The inputs a node takes at another frame, and the frame: Project 3D's
-/// projector and image at Hold frame, when Frame hold is on.
-pub fn held_inputs(op: &str, params: &Value) -> Option<(&'static [usize], i64)> {
-    (op == "project_3d" && params["hold"].as_bool().unwrap_or(false)).then(|| (&[1, 2][..], params["hold_frame"].as_i64().unwrap_or(1)))
+/// The frames listed in Frames (as "1001, 1040, 1080": commas or
+/// spaces between), in order, each once; none when it's empty.
+pub fn frames(params: &Value) -> Result<Vec<i64>> {
+    let mut out: Vec<i64> = Vec::new();
+    for t in params["frames"].as_str().unwrap_or("").split(|c: char| c == ',' || c.is_whitespace()).filter(|t| !t.is_empty()) {
+        let Ok(f) = t.parse::<i64>() else {
+            bail!("Project 3D: Frames takes frame numbers with commas between (as 1001, 1040, 1080), not '{t}'");
+        };
+        if !out.contains(&f) {
+            out.push(f);
+        }
+    }
+    Ok(out)
+}
+
+/// The inputs a node takes at other frames, and the frames: Project 3D's
+/// projector and image at each of Frames, or at Hold frame when Frame
+/// hold is on. The graph hands it the first frame's at their ports and
+/// each further frame's after its inputs, a pair (image, projector) a
+/// frame (see [`project_3d`]).
+pub fn held_inputs(op: &str, params: &Value) -> Option<(&'static [usize], Vec<i64>)> {
+    if op != "project_3d" {
+        return None;
+    }
+    // (Frames that don't read are the node's error to give.)
+    let listed = frames(params).unwrap_or_default();
+    if !listed.is_empty() {
+        return Some((&[1, 2][..], listed));
+    }
+    params["hold"].as_bool().unwrap_or(false).then(|| (&[1, 2][..], vec![params["hold_frame"].as_i64().unwrap_or(1)]))
 }
 
 /// A Project 3D: `scene` with `image` projected from `projector`'s first
 /// camera onto the meshes, cards and instances of Group's nodes (see the
 /// node's help in ops.rs).
-pub fn project_3d(params: &Value, mut scene: Scene, image: Option<&Image>, projector: Option<&Scene>) -> Result<Scene> {
-    let Some(camera) = projector.and_then(|s| s.cameras.first()) else {
-        bail!("Project 3D: connect a scene with a camera (the projector) to its projector input");
-    };
-    // (An unconnected input arrives as an empty image: nothing to project,
-    // not a clear one that would blacken what it lands on.)
-    let image = image.filter(|i| i.scene.is_none() && !i.window().is_empty()).ok_or_else(|| anyhow::anyhow!("Project 3D: connect the image to project to its image input"))?;
+pub fn project_3d(params: &Value, scene: Scene, image: Option<&Image>, projector: Option<&Scene>) -> Result<Scene> {
+    project_shots(params, scene, &[(image, projector)])
+}
+
+/// A Project 3D taking its image and projector at several frames
+/// (Frames): `shots` are (image, projector) a frame, each projected,
+/// blending with the others. One without Frames.
+pub fn project_shots(params: &Value, mut scene: Scene, shots: &[(Option<&Image>, Option<&Scene>)]) -> Result<Scene> {
+    let listed = frames(params)?;
+    if !listed.is_empty() && listed.len() != shots.len() {
+        bail!("Project 3D: Frames lists {} frames, but it was given the projector and image at {}", listed.len(), shots.len());
+    }
+    let mut taken = Vec::with_capacity(shots.len());
+    for (i, (image, projector)) in shots.iter().enumerate() {
+        let at = || listed.get(i).map_or(String::new(), |f| format!(" at frame {f}"));
+        let Some(camera) = projector.and_then(|s| s.cameras.first()) else {
+            bail!("Project 3D: connect a scene with a camera (the projector) to its projector input{}", at());
+        };
+        // (An unconnected input arrives as an empty image: nothing to
+        // project, not a clear one that would blacken what it lands on.)
+        let Some(image) = image.filter(|i| i.scene.is_none() && !i.window().is_empty()) else {
+            bail!("Project 3D: connect the image to project to its image input{}", at());
+        };
+        taken.push((camera.clone(), Arc::new(image.clone())));
+    }
     let group = params["group"].as_str().unwrap_or("").trim();
     let take = |node: &str| group.is_empty() || geo::glob(group, node);
     // Cards and meshes by their nodes; instances (by theirs, or by one of
@@ -118,17 +192,23 @@ pub fn project_3d(params: &Value, mut scene: Scene, image: Option<&Image>, proje
         _ => Mode::Replace,
     };
     let on = |n: &str, d: bool| params[n].as_bool().unwrap_or(d);
-    let projection = Projection {
+    let angle = |n: &str| params[n].as_f64().filter(|v| v.is_finite()).unwrap_or(90.0).clamp(0.0, 180.0) as f32;
+    let first = Projection {
         targets,
-        camera: camera.clone(),
-        image: Arc::new(image.clone()),
+        camera: taken[0].0.clone(),
+        image: taken[0].1.clone(),
         mode,
         mix: params["mix"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) as f32,
         crop: on("crop", true),
         edge: params["edge"].as_f64().unwrap_or(0.0).max(0.0),
         occlusion: on("occlusion", true),
         backfaces: on("backfaces", false),
+        fade_start: angle("fade_start"),
+        fade_end: angle("fade_end"),
+        blend: on("blend", false) || !listed.is_empty(),
     };
+    // One a frame, from the camera then with the image then.
+    let projections: Vec<Projection> = taken.into_iter().map(|(camera, image)| Projection { camera, image, ..first.clone() }).collect();
     for g in scene.instances.iter_mut() {
         let proto = |p: &geo::Prototype| match p {
             geo::Prototype::Model(m) => take(&m.node),
@@ -136,10 +216,10 @@ pub fn project_3d(params: &Value, mut scene: Scene, image: Option<&Image>, proje
             geo::Prototype::Splats(_) => false,
         };
         if take(&g.node) || g.prototypes.iter().any(proto) {
-            g.projections.push(Projection { targets: Vec::new(), ..projection.clone() });
+            g.projections.extend(projections.iter().map(|p| Projection { targets: Vec::new(), ..p.clone() }));
         }
     }
-    scene.projections.push(projection);
+    scene.projections.extend(projections);
     Ok(scene)
 }
 
@@ -353,6 +433,74 @@ mod tests {
         let g = graph(json!([{ "id": "blank", "op": "project_3d", "inputs": ["wall", "", "proj"] }]));
         let err = Evaluator::new().evaluate(&g, "blank", &EvalContext { frame: 1, write_outputs: false }).err().expect("an error");
         assert!(format!("{err}").contains("connect the image"), "{err}");
+    }
+
+    /// Frames: one projection a frame listed, from the projector's camera
+    /// and with its image then, all blending; it overrides Frame hold.
+    /// The node's key follows the held frames, not the live projector.
+    #[test]
+    fn frames_project_from_each_frame_listed() {
+        // The plate projected brightens over the shot (the wall's own stays).
+        let fading = json!({ "keys": [[1, [0, 0, 0, 1]], [11, [1, 1, 1, 1]]], "interp": "linear" });
+        let mut g = graph(json!([{ "id": "shotplate", "op": "constant", "params": { "color": fading, "width": 48, "height": 32 } }]));
+        let proj = g.nodes.iter_mut().find(|n| n.id == "proj").unwrap();
+        proj.params["translate"] = json!({ "keys": [[1, [0, 0, 0]], [11, [5, 0, 0]]], "interp": "linear" });
+        let pr = g.nodes.iter_mut().find(|n| n.id == "pr").unwrap();
+        pr.inputs[1] = "shotplate".into();
+        pr.params = json!({ "frames": "11, 1 6,1", "hold": true, "hold_frame": 3 });
+        for f in [1, 4, 9] {
+            let s = scene_at(&g, "pr", f);
+            assert_eq!(s.projections.len(), 3, "one a frame, each once");
+            for (p, (x, gray)) in s.projections.iter().zip([(5.0, 1.0), (0.0, 0.0), (2.5, 0.5)]) {
+                assert!((p.camera.world[(0, 3)] - x).abs() < 1e-6, "the camera then");
+                assert!((p.image.pixels[0][0] - gray).abs() < 1e-6, "the image then");
+                assert!(p.blend && p.targets == ["wall"]);
+            }
+        }
+        // The live projector moves, the plate changes: the held key doesn't.
+        let keys = Evaluator::keys(&g, "pr", &[1, 4, 9]).unwrap();
+        assert!(keys.iter().all(|k| *k == keys[0]), "{keys:?}");
+        let live = graph(json!([]));
+        let mut moving = live.clone();
+        moving.nodes.iter_mut().find(|n| n.id == "proj").unwrap().params["translate"] = json!({ "keys": [[1, [0, 0, 0]], [11, [5, 0, 0]]], "interp": "linear" });
+        let keys = Evaluator::keys(&moving, "pr", &[1, 4]).unwrap();
+        assert_ne!(keys[0], keys[1], "live, it follows the projector");
+        // A held frame's key changes when the projector does then.
+        let mut other = g.clone();
+        other.nodes.iter_mut().find(|n| n.id == "proj").unwrap().params["translate"] = json!({ "keys": [[1, [0, 0, 0]], [11, [6, 0, 0]]], "interp": "linear" });
+        assert_ne!(Evaluator::key(&g, "pr", &EvalContext { frame: 1, write_outputs: false }).unwrap(), Evaluator::key(&other, "pr", &EvalContext { frame: 1, write_outputs: false }).unwrap());
+        // Frames that don't read are an error.
+        g.nodes.iter_mut().find(|n| n.id == "pr").unwrap().params = json!({ "frames": "1001-1010" });
+        let err = Evaluator::new().evaluate(&g, "pr", &EvalContext { frame: 1, write_outputs: false }).err().expect("an error");
+        assert!(format!("{err}").contains("not '1001-1010'"), "{err}");
+        assert_eq!(super::frames(&json!({ "frames": " 1001,1040  1080 , " })).unwrap(), vec![1001, 1040, 1080]);
+        assert!(super::frames(&json!({})).unwrap().is_empty());
+    }
+
+    /// The new params: off by default (old projects load unchanged: no
+    /// fade, no blending, the same render); read when set; the facing
+    /// curve the renderers share.
+    #[test]
+    fn fade_and_blend_params() {
+        let cam = camera_at(0.0, 0.0);
+        let old = projected(Scene { cards: vec![card("wall", -10.0, 30.0)], ..Scene::default() }, &cam, json!({ "mode": "over", "mix": 0.5 }));
+        let p = &old.projections[0];
+        assert_eq!((p.fade_start, p.fade_end, p.blend), (90.0, 90.0, false));
+        for c in [1.0, 0.5, 0.0, -0.3] {
+            assert_eq!(p.facing(c), if c >= 0.0 { 1.0 } else { 0.0 }, "90 / 90: whole on all that faces it");
+        }
+        let set = projected(Scene { cards: vec![card("wall", -10.0, 30.0)], ..Scene::default() }, &cam, json!({ "fade_start": 30, "fade_end": 60, "blend": true }));
+        let p = &set.projections[0];
+        assert_eq!((p.fade_start, p.fade_end, p.blend), (30.0, 60.0, true));
+        let at = |deg: f32| p.facing(deg.to_radians().cos());
+        assert_eq!(at(0.0), 1.0);
+        assert!((at(29.0) - 1.0).abs() < 1e-6);
+        assert!((at(45.0) - 0.5).abs() < 1e-4, "half way: {}", at(45.0));
+        assert!(at(40.0) > at(50.0) && at(50.0) > 0.0);
+        assert_eq!(at(61.0), 0.0);
+        // Start past end: a hard edge at end.
+        let hard = super::Projection { fade_start: 70.0, fade_end: 50.0, ..p.clone() };
+        assert_eq!((hard.facing(49f32.to_radians().cos()), hard.facing(51f32.to_radians().cos())), (1.0, 0.0));
     }
 
     /// With motion blur the projection rides on a moving card: projected

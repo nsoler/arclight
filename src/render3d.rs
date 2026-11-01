@@ -790,6 +790,9 @@ pub fn render_blurred(scene: &Scene, cam: &Camera, format: Size, samples: usize,
             }
         }
     }
+    // (Each projector's depth map drawn once for all the times: see
+    // `project::SameMaps`.)
+    let _maps = project::SameMaps::hold();
     match blur_sum(&blur.times, blur.jitter, |t, cell| render_cell(&scene.at_time(&frames, t), &blur.camera(cam, t), format, samples, background, mixed, None, cell)) {
         Some(sum) if sum.pixels.len() == out.pixels.len() => mean_into(out, sum, blur.times.len()),
         _ => out,

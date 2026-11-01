@@ -226,6 +226,39 @@ projects it per rendered pixel, so a sharp plate lands on a 4-vertex card.
   hidden behind the first receives nothing with Occlusion on; frame hold
   stays put as the shot camera moves; CPU vs GPU within D8.
 
+**P8b, multi-camera projection** (added 2026-10-31 at the user's
+request; extends P8, 0.13.30 / 0.13.32). Several Project 3D nodes stack
+in order, so where two projectors overlap the later wins with a hard
+seam. Other compositors blend those seams by facing angle, and project
+one tracked camera from several frames. Split: the node side
+(`project3d.rs`, `ops.rs`, `graph.rs`; Dev1), the renderers
+(`render3d/project.rs`, `render3d/gpu/*`; Dev2).
+- **Facing fade:** `Projection::fade_start` / `fade_end` (degrees between
+  the surface's normal and the way to the projector; the side facing it
+  with Backfaces on): weight 1 up to start, smoothstep to 0 at end, a hard
+  edge at end when start isn't below it. 90 / 90 (the default) is no fade:
+  old projects render as before. `Projection::facing(cos)` is the one
+  curve the CPU and GPU share.
+- **Blend with others** (`Projection::blend`): a run of consecutive
+  blending projections on a surface is one layer. Each one's weight is
+  w_i = Mix × crop / Edge × facing × occlusion visibility; the layer's
+  plate is Σ w_i · plate_i / Σ w_i, put on min(Σ w_i, 1) of the way by the
+  first one's mode. Off: today's stacking.
+- **Frames** (a text param, `1001, 1040, 1080`; empty is off; it overrides
+  Frame hold): one projection a frame listed, from the projector's camera
+  and with its image then, all blending. `held_inputs` gives the frames;
+  the graph renders the held inputs in an evaluator a frame and hands
+  them to the node after its own inputs, an (image, projector) pair a
+  frame. The node's key counts the held inputs' keys at their frames,
+  not the live projector's and image's, so moving the live camera
+  doesn't re-evaluate a held projection.
+- Example: `examples/multi-projection.json` (a block and a wall under two
+  projectors from left and right, blended, faded by facing).
+- Tests: params read and default to the old look; Frames gives one
+  projection a frame at the camera and image then; the facing curve; the
+  key steady under a moving live projector; blended seams on the CPU and
+  GPU (Dev2).
+
 ## Risks and open questions
 
 - **Expression speed:** `expr.rs` is a tree-walking interpreter. For 1M

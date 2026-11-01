@@ -1484,8 +1484,12 @@ pub static OPS: &[OpInfo] = &[
             p!("edge", "Edge", ParamKind::Float { min: 0.0, max: 1000.0 }, 0.0),
             fixed!("occlusion", "Occlusion", ParamKind::Bool, true),
             fixed!("backfaces", "Backfaces", ParamKind::Bool, false),
+            p!("fade_start", "Fade start", ParamKind::Float { min: 0.0, max: 90.0 }, 90.0),
+            p!("fade_end", "Fade end", ParamKind::Float { min: 0.0, max: 90.0 }, 90.0),
+            fixed!("blend", "Blend with others", ParamKind::Bool, false),
             fixed!("hold", "Frame hold", ParamKind::Bool, false),
             fixed!("hold_frame", "Hold frame", ParamKind::Int { min: -1_000_000, max: 1_000_000 }, 1),
+            fixed!("frames", "Frames", ParamKind::Text, ""),
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -1495,8 +1499,14 @@ pub static OPS: &[OpInfo] = &[
                place of the surface's (lights then shade it as usual), Over lays it over by its alpha, Multiply tints. Crop \
                keeps it inside the camera's frame, faded in over Edge pixels; Occlusion puts it only on what the projector \
                sees first, nothing smearing through onto what's hidden; Backfaces puts it on surfaces facing away too. \
-               Frame hold takes the projector and the image at Hold frame (a patch painted on one frame stays put as the \
-               shot's camera moves). Several projections stack in order.",
+               Fade start / Fade end fade it out on surfaces turned from the projector, by the angle (degrees) between \
+               their normal and the way to it: whole up to start, gone at end (90 / 90: no fade). Frame hold takes the \
+               projector and the image at Hold frame (a patch painted on one frame stays put as the shot's camera \
+               moves). Several projections stack in order, the later on top; Blend with others blends this one with the \
+               blending projections next to it instead, each weighed by its Mix, Edge and facing, so where they overlap \
+               the seam is soft (two cameras' plates on one set). Frames (as 1001, 1040, 1080) projects the projector's \
+               camera and image from each frame listed, blended (one tracked camera covering a set from several \
+               frames); it overrides Frame hold.",
     },
     OpInfo {
         name: "particles_to_points",
@@ -2525,9 +2535,11 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         }
         "points_on_curve" => Ok(scene_output(DEFAULT_FORMAT, geo_curves::points_on_curve(params, input_scene(inputs))?)),
         "project_3d" => {
-            let image = inputs.get(1).copied().flatten().filter(|i| i.scene.is_none());
-            let projector = inputs.get(2).copied().flatten().and_then(|i| i.scene.as_deref());
-            Ok(scene_output(DEFAULT_FORMAT, project3d::project_3d(params, input_scene(inputs), image, projector)?))
+            // (image, projector) at each frame: the first at their ports,
+            // the others' after (see `project3d::held_inputs`).
+            let shot = |i: usize| (inputs.get(i).copied().flatten().filter(|i| i.scene.is_none()), inputs.get(i + 1).copied().flatten().and_then(|i| i.scene.as_deref()));
+            let shots: Vec<_> = std::iter::once(1).chain((3..inputs.len()).step_by(2)).map(shot).collect();
+            Ok(scene_output(DEFAULT_FORMAT, project3d::project_shots(params, input_scene(inputs), &shots)?))
         }
         "particles_to_points" => Ok(scene_output(DEFAULT_FORMAT, geo_particles::particles_to_points(params, input_scene(inputs))?)),
         "resample" => Ok(scene_output(DEFAULT_FORMAT, geo_curves::resample(params, input_scene(inputs))?)),

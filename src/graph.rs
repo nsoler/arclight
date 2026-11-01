@@ -537,6 +537,9 @@ pub struct Evaluator {
 struct Elsewhen {
     eval: Evaluator,
     images: HashMap<u64, Arc<Image>>,
+    /// Project 3D's held inputs, an evaluator a frame (see
+    /// [`ops::project3d::held_inputs`]).
+    held: HashMap<i64, Evaluator>,
 }
 
 /// An input needed at other frames, the frames, and their cache keys.
@@ -670,7 +673,8 @@ impl Evaluator {
             }
             let mut params = linked_params(index, node, ctx.frame, &graph.project)?;
             ops::apply_format(&node.op, &mut params, graph.project.format);
-            let mut k = node_key(node, &params, &keys, ctx);
+            let held = ops::project3d::held_inputs(&node.op, &params);
+            let mut k = node_key(node, &params, &keys, ctx, held.as_ref().map_or(&[][..], |h| h.0));
             if let Some((_, _, more)) = input_frames(graph, node, &params, ctx.frame)? {
                 k = mix(k, &more);
             }
@@ -683,10 +687,12 @@ impl Evaluator {
                     k = mix(k, &then);
                 }
             }
-            if let Some((ports, at)) = ops::project3d::held_inputs(&node.op, &params) {
-                let then = EvalContext { frame: at, write_outputs: false };
-                for d in held_deps(node, ports) {
-                    k = mix(k, &[Evaluator::key(graph, &d.1, &then)?]);
+            if let Some((ports, frames)) = held {
+                for at in frames {
+                    let then = EvalContext { frame: at, write_outputs: false };
+                    for d in held_deps(node, ports) {
+                        k = mix(k, &[Evaluator::key(graph, &d.1, &then)?]);
+                    }
                 }
             }
             keys.insert(id.as_str(), k);
@@ -728,7 +734,9 @@ impl Evaluator {
             // cache, and a changed link source re-renders.
             let mut params = linked_params(index, node, ctx.frame, project)?;
             ops::apply_format(&node.op, &mut params, graph_format);
-            let mut key = node_key(node, &params, &keys, ctx);
+            let held_inputs = ops::project3d::held_inputs(&node.op, &params);
+            // (Inputs held at other frames count by their keys then, not now.)
+            let mut key = node_key(node, &params, &keys, ctx, held_inputs.as_ref().map_or(&[][..], |h| h.0));
             // A node that needs its inputs at other frames: render those (and
             // what they need) then too, and key on them. A frame they fail
             // at (say before a plate's first) is left out: the render does
@@ -761,19 +769,32 @@ impl Evaluator {
             if let Some((_, (_, _, more))) = &elsewhen {
                 key = mix(key, more);
             }
-            // Inputs held at another frame (Project 3D's Frame hold):
-            // rendered then, in an evaluator of their own, keyed on their
-            // keys then.
-            let mut held_at: Vec<(usize, Arc<Image>)> = Vec::new();
-            if let Some((ports, at)) = ops::project3d::held_inputs(&node.op, &params) {
+            // Inputs held at other frames (Project 3D's Frame hold and
+            // Frames): rendered then, in an evaluator of their own a frame,
+            // keyed on their keys then. A frame's inputs at their ports
+            // (None where unconnected).
+            let mut held_at: Vec<Vec<(usize, Option<Arc<Image>>)>> = Vec::new();
+            if let Some((ports, frames)) = &held_inputs {
                 let deps = held_deps(node, ports);
-                let then = &mut self.elsewhen.entry(id.clone()).or_default().eval;
-                let ctx_then = EvalContext { frame: at, write_outputs: false };
-                then.run(index, &Graph::order(index, deps.iter().map(|d| d.1.clone()))?, &ctx_then, project).map_err(|e| node_err(id, format!("at its hold frame {at}: {e}")))?;
-                for (port, dep) in deps {
-                    let (k, res) = then.cache[&dep].clone();
-                    key = mix(key, &[k]);
-                    held_at.push((port, read(&res, &dep, &mut self.gpu_failed)?));
+                let kept = &mut self.elsewhen.entry(id.clone()).or_default().held;
+                kept.retain(|f, _| frames.contains(f));
+                for &at in frames {
+                    let then = kept.entry(at).or_default();
+                    let ctx_then = EvalContext { frame: at, write_outputs: false };
+                    then.run(index, &Graph::order(index, deps.iter().map(|d| d.1.clone()))?, &ctx_then, project).map_err(|e| node_err(id, format!("at frame {at}: {e}")))?;
+                    let mut row = Vec::with_capacity(ports.len());
+                    for &port in ports.iter() {
+                        let found = match deps.iter().find(|d| d.0 == port) {
+                            Some((_, dep)) => {
+                                let (k, res) = then.cache[dep].clone();
+                                key = mix(key, &[k]);
+                                Some(read(&res, dep, &mut self.gpu_failed)?)
+                            }
+                            None => None,
+                        };
+                        row.push((port, found));
+                    }
+                    held_at.push(row);
                 }
             }
             keys.insert(id.as_str(), key);
@@ -853,8 +874,16 @@ impl Evaluator {
                     inputs.push(Some(img));
                 }
             }
-            for (port, img) in &held_at {
-                inputs[*port] = Some(img);
+            // The first held frame's at their ports, the others' after.
+            for (n, row) in held_at.iter().enumerate() {
+                for (port, img) in row {
+                    let img = img.as_deref().or(inputs[*port]);
+                    if n == 0 {
+                        inputs[*port] = img;
+                    } else {
+                        inputs.push(img);
+                    }
+                }
             }
             let out = match &others {
                 _ if particle.is_some() => {
@@ -1095,7 +1124,10 @@ fn bypass_key(node: &NodeSpec, keys: &HashMap<&str, u64>, project: &Project) -> 
     }
 }
 
-fn node_key(node: &NodeSpec, params: &Value, keys: &HashMap<&str, u64>, ctx: &EvalContext) -> u64 {
+/// `held` are ports whose inputs are taken at other frames: what's
+/// connected there now doesn't count (their keys then do, mixed in by the
+/// caller).
+fn node_key(node: &NodeSpec, params: &Value, keys: &HashMap<&str, u64>, ctx: &EvalContext, held: &[usize]) -> u64 {
     let mut h = DefaultHasher::new();
     node.op.hash(&mut h);
     params.to_string().hash(&mut h);
@@ -1104,8 +1136,9 @@ fn node_key(node: &NodeSpec, params: &Value, keys: &HashMap<&str, u64>, ctx: &Ev
     if particle {
         node.params.to_string().hash(&mut h);
     }
-    for dep in &node.inputs {
-        keys.get(dep.as_str()).copied().unwrap_or(0).hash(&mut h);
+    for (i, dep) in node.inputs.iter().enumerate() {
+        let k = if held.contains(&i) { 0 } else { keys.get(dep.as_str()).copied().unwrap_or(0) };
+        k.hash(&mut h);
     }
     // CPU and GPU results are kept apart (see `gpu::backend_tag`).
     crate::gpu::backend_tag(&node.op).hash(&mut h);

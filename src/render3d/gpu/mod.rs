@@ -848,7 +848,7 @@ impl Tables {
                 w[15 + k] = f(cam.world[(k, 2)]);
             }
             w[18] = f(if cam.is_ortho() { cam.pixels_per_unit(1.0, size) } else { cam.focal_pixels(size) });
-            w[19] = cam.is_ortho() as u32 | (p.crop as u32) << 1 | (p.backfaces as u32) << 2;
+            w[19] = cam.is_ortho() as u32 | (p.crop as u32) << 1 | (p.backfaces as u32) << 2 | (p.blend as u32) << 3;
             w[20] = f(size.width as f64);
             w[21] = f(size.height as f64);
             w[22] = f(cam.near);
@@ -867,6 +867,8 @@ impl Tables {
             } else {
                 NONE
             };
+            w[29] = p.fade_start.to_bits();
+            w[30] = p.fade_end.to_bits();
             self.tables.extend_from_slice(&w);
         }
         for (si, s) in surfs.iter().enumerate().filter(|(_, s)| !s.projections.is_empty()) {

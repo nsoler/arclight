@@ -100,3 +100,33 @@ fn the_particle_example_pushes_its_two_streams_apart() {
     let together = apart(&graph);
     assert!(together.abs() < 20.0, "without the forces they rise together ({together:.0} pixels apart)");
 }
+
+/// multi-projection.json: two projectors, left and right, blended where
+/// they overlap: the wall's middle, which both see, mixes their colors
+/// (orange and blue), rather than the later one's blue alone.
+#[test]
+fn the_multi_projection_example_blends_its_two_projectors() {
+    let mut graph = example("multi-projection.json");
+    for id in ["render", "backdrop"] {
+        let n = graph.nodes.iter_mut().find(|n| n.id == id).unwrap();
+        n.params["width"] = 240.into();
+        n.params["height"] = 135.into();
+    }
+    let scene = eval(&graph, "project_right").scene.clone().expect("a scene");
+    assert_eq!(scene.projections.len(), 2);
+    assert!(scene.projections.iter().all(|p| p.blend && p.fade_start < p.fade_end));
+    // Warm (orange) pixels over the wall's upper middle, seen through the
+    // shot: both plates there when blended, the later's blue alone when
+    // stacked.
+    let warm = |graph: &Graph| {
+        let img = eval(graph, "render");
+        let (w, h) = (img.width, img.height);
+        img.pixels[h / 10 * w..h / 3 * w].iter().enumerate().filter(|(i, p)| (w / 3..2 * w / 3).contains(&(i % w)) && p[0] > p[2] + 0.05).count()
+    };
+    let blended = warm(&graph);
+    for n in graph.nodes.iter_mut().filter(|n| n.op == "project_3d") {
+        n.params["blend"] = false.into();
+    }
+    let stacked = warm(&graph);
+    assert!(blended > 4 * stacked.max(1) && blended > 200, "warm pixels: {blended} blended, {stacked} stacked");
+}

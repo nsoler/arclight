@@ -627,7 +627,18 @@ them as they go. Press play.
   cleanup patch painted on frame 1040 stays put while the camera moves.
   Stack several: a patch over the plate. Over and Multiply lay it over or
   tint the surface instead of replacing its color; lights shade it as
-  usual.
+  usual. **Several cameras on one set:** where two projectors overlap,
+  the later one wins with a hard seam; tick **Blend with others** on
+  each and they mix there instead, each weighed by its Mix, its Edge
+  feather and how squarely the surface faces it. **Fade start** / **Fade
+  end** (degrees from facing the projector head on) fade a projection
+  out where it lands at a grazing angle and smears, so the camera that
+  sees a wall straight on takes over there. **Frames** (as `1001, 1040,
+  1080`) projects one tracked camera's plate from each frame listed,
+  blended: a set covered from three moments of a camera move, with one
+  node (it overrides Frame hold). `examples/multi-projection.json`: two
+  checkerboards projected from left and right onto a block and a wall,
+  blended.
 - **Scanline Render** takes any number of scenes or particle streams:
   connect to its last (empty) input and a new one appears. With a Scanline
   Render selected, a Particle Emitter added from the node browser goes

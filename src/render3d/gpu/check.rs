@@ -85,6 +85,22 @@ pub(super) fn projected(camera: &str) -> String {
     )
 }
 
+/// [`projected`]'s scene with a second plate (noise) thrown onto
+/// everything from up and to the other side, right after the first: the
+/// two blended into one layer by how squarely each faces the surfaces
+/// (Fade 20° to 75°), a soft seam where they meet.
+pub(super) fn blended(scene: &Scene) -> Scene {
+    let mut s = scene.clone();
+    let first = crate::ops::project3d::Projection { blend: true, fade_start: 20.0, fade_end: 75.0, ..s.projections[0].clone() };
+    let camera = Camera { world: crate::geom::trs([-2.0, 1.0, 3.5], [-10.0, -24.0, 0.0], [1.0; 3]), ..first.camera.clone() };
+    let format = first.image.format;
+    let image = Arc::new(crate::gpu::check::noise(format, crate::image::IRect::frame(format), false, 7));
+    let second = crate::ops::project3d::Projection { camera, image, ..first.clone() };
+    s.projections[0] = first;
+    s.projections.insert(1, second);
+    s
+}
+
 /// Shadows through casters that let light through, over a floor: a card
 /// at opacity 0.4, a cutout (a feathered ellipse: clear, opaque and part
 /// way between), three cards at 0.5 stacked, eight at 0.8 (deeper than a
@@ -252,6 +268,7 @@ pub(crate) fn rows(gpu: &Gpu) -> Vec<CheckRow> {
     let (shaded, _) = scene_of(&busy_shadowed(PERSPECTIVE));
     let (see, see_cam) = scene_of(&layered(256, 12.0));
     let (thrown, _) = scene_of(&projected(PERSPECTIVE));
+    let mixed = blended(&thrown);
     let all = Passes::from_names(Passes::NAMES);
     vec![
         row(gpu, "3D render, lit, AA 3×3", &scene, &cam, hd, 3, Passes::DEPTH, false),
@@ -260,6 +277,7 @@ pub(crate) fn rows(gpu: &Gpu) -> Vec<CheckRow> {
         row(gpu, "3D render, shadows (4 lights)", &shaded, &cam, hd, 2, Passes::from_names(["depth", "shadow", "lights"]), false),
         row(gpu, "3D render, see-through shadows", &see, &see_cam, hd, 2, Passes::from_names(["depth", "shadow"]), false),
         row(gpu, "3D render, projections (Project 3D)", &thrown, &cam, hd, 2, Passes::DEPTH, false),
+        row(gpu, "3D render, projections blended by facing", &mixed, &cam, hd, 2, Passes::DEPTH, false),
         blur_row(Size { width: 960, height: 540 }),
         sprites_row(Size { width: 960, height: 540 }),
         splats_row(hd),

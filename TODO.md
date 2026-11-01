@@ -49,9 +49,14 @@ on the Macs (the DMG), from the release builds.
       cylinder), Subdivide (Loop on a cube) (0.13.28–0.13.33)
 - [ ] Area-light shadows at Quality 16 render in ~7 s at 4K with the GPU
       on (0.13.3, 0.13.4)
-- [ ] On the Macs: `arclight gpu --check` (67 rows now, including
+- [ ] On the Macs: `arclight gpu --check` (68 rows now, including
       instancing, instanced shadows and Project 3D) and
       `cargo test --release` on Metal
+- [ ] Project 3D with two projectors (examples/multi-projection.json):
+      Blend with others softens the seam on the wall and block; Fade
+      start / end fade a grazing projection out; Frames (three frames of
+      one moving camera) fills what one frame misses; GPU on and off look
+      the same (0.13.38)
 
 - [X] 0.12.17 (beta release v0.12.17): at the default window size the
       viewer's toolbar wraps onto a second row (Fit and 1:1 visible) and
@@ -288,15 +293,12 @@ after it. `ROADMAP.md` is the public summary of this list.
       Tab, undo / redo / save), popups and file drops in that window.
       Built generic, so the Viewer (full screen on a second monitor),
       Curve Editor and Properties can detach too. About two reports.
-- [ ] Project 3D under motion blur renders on the CPU, and each
-      projector's depth map is drawn again per time sample: cache it,
-      then the GPU (Dev2)
+- [ ] Project 3D under motion blur renders on the CPU (the GPU path
+      skips projections under blur); each projector's depth map is now
+      drawn once, not per time sample (0.13.38) (Dev2)
 - [ ] Project 3D occlusion on the GPU: an instanced copy straddling the
       projector's near plane isn't in its depth map (lights' maps split
       those out; projectors don't). Rare (Dev2)
-- [ ] Project 3D frame hold: the live projector / image still count in
-      the node's key, so upstream changes re-evaluate it though the held
-      result is the same (extra work only) (Dev2)
 - [ ] Project 3D targets are node names fixed at the node: a mesh renamed
       or merged under another node downstream would lose its projection
       (none does that today) (Dev2)
