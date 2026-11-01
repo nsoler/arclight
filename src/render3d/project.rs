@@ -63,15 +63,28 @@ impl<'a> Projectors<'a> {
     /// order; consecutive ones with Blend on as one layer, their plates
     /// mixed by how much of each lands (see [`Layer`]).
     #[allow(clippy::too_many_arguments)]
-    pub fn apply(&self, s: &Surface, t: &Tri, bary: &[f64; 3], q: [f64; 2], step: f64, n: &Vec3, mut color: Rgba) -> Rgba {
+    pub fn apply(&self, s: &Surface, t: &Tri, bary: &[f64; 3], q: [f64; 2], step: f64, n: &Vec3, color: Rgba) -> Rgba {
         let rest = |b: &[f64; 3]| t.v.iter().zip(b).map(|(v, w)| v.rest * *w).sum::<Vec3>();
-        let p = rest(bary);
+        let next = [rest(&t.bary_at([q[0] + step, q[1]])), rest(&t.bary_at([q[0], q[1] + step]))];
+        self.apply_at(s, &rest(bary), next, n, color).0
+    }
+
+    /// `color` (premultiplied) of surface `s` at point `p` (where it is at
+    /// the frame itself), its normal `n`, with the next samples across and
+    /// down at `next`: with `s`'s projections put on, as [`apply`]
+    /// (Self::apply) says; and how much of them landed (0 to 1: each
+    /// layer's w over what's under it, as Over combines alphas). The
+    /// renderer's samples and Bake Projection's texels (`bake.rs`) both.
+    pub fn apply_at(&self, s: &Surface, p: &Vec3, next: [Vec3; 2], n: &Vec3, mut color: Rgba) -> (Rgba, f32) {
+        let p = *p;
+        let mut covered = 0.0f32;
         let mut layer: Option<Layer> = None;
         for proj in &s.projections {
             let Some((pj, map, mips)) = self.list.iter().find(|e| std::ptr::eq(e.0, *proj)) else { continue };
             if !(pj.blend && layer.is_some()) {
                 if let Some(l) = layer.take() {
                     color = l.put(color);
+                    covered += (1.0 - covered) * l.covers();
                 }
             }
             let landed = (|| {
@@ -92,7 +105,7 @@ impl<'a> Projectors<'a> {
                         return None;
                     }
                 }
-                let texels = footprint(pj, size, px, [rest(&t.bary_at([q[0] + step, q[1]])), rest(&t.bary_at([q[0], q[1] + step]))]);
+                let texels = footprint(pj, size, px, next);
                 let uv = [px[0] / size.width.max(1) as f64, px[1] / size.height.max(1) as f64];
                 Some((w, sample_covering(img, false, uv, texels, mips)))
             })();
@@ -103,12 +116,14 @@ impl<'a> Projectors<'a> {
                 }
             } else if let Some((w, plate)) = landed {
                 color = pj.apply(color, plate, w);
+                covered += (1.0 - covered) * w.min(1.0);
             }
         }
         if let Some(l) = layer {
             color = l.put(color);
+            covered += (1.0 - covered) * l.covers();
         }
-        color
+        (color, covered)
     }
 }
 
@@ -131,6 +146,14 @@ impl Layer<'_> {
         self.weight += w;
         self.only = Some((w, plate));
         self.count += 1;
+    }
+
+    /// How much of it [`put`](Self::put) puts on.
+    fn covers(&self) -> f32 {
+        match self.only {
+            Some((w, _)) if self.count == 1 => w.min(1.0),
+            _ => self.weight.clamp(0.0, 1.0),
+        }
     }
 
     /// `color` with it put on.

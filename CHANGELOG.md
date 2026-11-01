@@ -18,6 +18,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.8 — 2026-10-31
+
+- Bake Projection's core (the node follows): Project 3D's result on
+  cards and meshes baked into their uv space, unlit, with the
+  renderer's own projection code (renders are unchanged, bit for bit),
+  and how much projection landed kept for a texture output; 4096² in
+  under a second.
+
 ## 0.14.7 — 2026-10-31
 
 - **Templates:** Insert ▸ Save selection as template… keeps nodes by

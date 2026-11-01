@@ -30,6 +30,7 @@ use std::sync::{Arc, OnceLock};
 #[cfg(feature = "gpu")]
 mod gpu;
 mod mip;
+pub mod bake;
 mod particles;
 mod project;
 mod shadow;

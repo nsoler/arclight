@@ -50,6 +50,14 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.14.8, bake core** (Dev2): `src/render3d/bake.rs` (`Baked {
+  surface, base, coverage }`, `bake(scene, take, size, padding)`,
+  `Baked::texture()` = surface - base·(1-c), alpha c; a uv-space
+  rasterizer, rows in parallel; Padding grows all three);
+  `project::Projectors::apply` wraps the new `apply_at` -> (color,
+  coverage), bit-identical. 2048² 0.20 s, 4096² 0.88 s on the
+  multi-projection set. Next: Dev1's Bake Projection / Bake Projection
+  Texture nodes with two examples; then Dev2's stand-alone Camera.
 - **0.14.7, templates** (Dev2): `src/gui/templates.rs` (Save selection
   as template… with Replace on a clash, Manage templates: rename,
   delete, show the folder; `insert()` = load + `clipboard::put`); a new
