@@ -186,6 +186,25 @@ fn browser_row(ui: &egui::Ui, op: &OpInfo) -> egui::text::LayoutJob {
     job
 }
 
+/// What the browser says of the 3D Camera Setup.
+const SETUP_HELP: &str = "A Camera, a Scene and a Scanline Render, wired up, in a \"3D Setup\" backdrop, so the render shows straight away: into the wire it was opened on, else just before the Viewer. Add Cards, meshes and lights to the Scene.";
+
+/// The 3D Camera Setup's browser row, as [`browser_row`] lays out a node's.
+fn setup_row(ui: &egui::Ui) -> egui::text::LayoutJob {
+    let style = ui.style();
+    let mut job = egui::text::LayoutJob::default();
+    egui::RichText::new("3D Camera Setup").size(14.0).append_to(&mut job, style, egui::FontSelection::Default, egui::Align::Center);
+    egui::RichText::new("   Camera, Scene and Scanline Render, wired").size(11.0).color(style.visuals.weak_text_color()).append_to(&mut job, style, egui::FontSelection::Default, egui::Align::Center);
+    job
+}
+
+/// Whether the browser's `query` finds the 3D Camera Setup: every word in
+/// "3d camera setup rig".
+fn setup_matches(query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    q.split_whitespace().all(|w| "3d camera setup rig".contains(w))
+}
+
 /// The Shift+E node browser: a search field over every op.
 struct Browser {
     query: String,
@@ -204,6 +223,8 @@ struct Browser {
 #[derive(Clone, Copy)]
 enum Pick<'a> {
     Op(&'static OpInfo),
+    /// The 3D Camera Setup (listed after the Camera).
+    Setup,
     Template(&'a arclight::templates::Template),
 }
 
@@ -383,22 +404,29 @@ impl NodeEditor {
 
     /// Add `op` at graph position `at`. Into the target wire when there is
     /// one; else, with a node selected, the new node takes it as its first
-    /// input.
+    /// input. With a Scanline Render selected, a node making a scene or
+    /// particles goes into its spare input.
     ///
-    /// A Camera comes with what it needs (`Doc::add_camera_setup`): a
-    /// Scene and a Scanline Render, which goes into the target wire, else
-    /// just before the Viewer (made if there's none); the Camera is
-    /// selected. `bare` (Shift held): just the Camera. With a
-    /// Scanline Render selected, a node making a scene or particles goes
-    /// into its spare input.
-    fn place(&mut self, doc: &mut Doc, op: &OpInfo, at: Pos2, bare: bool) {
+    /// A Camera comes alone (the whole 3D Camera Setup is its own entry:
+    /// [`place_setup`](Self::place_setup)): into the selected Project 3D's
+    /// projector input, or the selected Scanline Render's camera input if
+    /// that's empty.
+    fn place(&mut self, doc: &mut Doc, op: &OpInfo, at: Pos2) {
         let upstream = doc.selected.clone();
-        if op.name == "camera" && !bare {
-            doc.selected_wire = self.target_wire.take().map(|w| (w.src, w.dst, w.port));
-            doc.add_camera_setup([at.x, at.y]);
+        let id = doc.add_node(op.name, [at.x, at.y]);
+        if op.name == "camera" {
+            self.target_wire = None;
+            let into = upstream.as_deref().and_then(|u| doc.node(u)).and_then(|n| match n.op.as_str() {
+                "project_3d" => Some((n.id.clone(), 2)),
+                "scanline_render" if n.inputs.get(1).is_none_or(|i| i.is_empty()) => Some((n.id.clone(), 1)),
+                _ => None,
+            });
+            if let Some((node, port)) = into {
+                doc.connect(&id, &node, port);
+            }
+            doc.selected = Some(id);
             return;
         }
-        let id = doc.add_node(op.name, [at.x, at.y]);
         if let Some(w) = self.target_wire.take() {
             if fits_between(doc, &id, &w.src, &w.dst, w.port) && doc.insert_on_wire(&id, &w.src, &w.dst, w.port) {
                 doc.selected = Some(id);
@@ -420,6 +448,24 @@ impl NodeEditor {
             }
         }
         doc.selected = Some(id);
+    }
+
+    /// The 3D Camera Setup at graph position `at` (`Doc::add_camera_setup`):
+    /// a Camera, a Scene and a Scanline Render, which goes into the target
+    /// wire, else just before the Viewer (made if there's none); the
+    /// Camera selected.
+    fn place_setup(&mut self, doc: &mut Doc, at: Pos2) {
+        doc.selected_wire = self.target_wire.take().map(|w| (w.src, w.dst, w.port));
+        doc.add_camera_setup([at.x, at.y]);
+    }
+
+    /// Add `op` in the middle of the view, placed as the browser would
+    /// (Edit ▸ Add Camera).
+    pub fn add_at_view(&mut self, doc: &mut Doc, op: &str) {
+        if let Some(info) = ops::info(op) {
+            let c = self.view_center();
+            self.place(doc, info, Pos2::new(c[0], c[1]));
+        }
     }
 
     /// Keys over the graph (not while typing): D turns the selected nodes
@@ -464,14 +510,19 @@ impl NodeEditor {
         };
         let selected = doc.selected_wire.clone().map(|(src, dst, port)| WireRef { src, dst, port });
         self.target_wire = self.wire_at(doc, p, None).or(selected);
-        self.place(doc, op, self.to_graph(p), false);
+        self.place(doc, op, self.to_graph(p));
     }
 
     fn browser_ui(&mut self, ctx: &egui::Context, doc: &mut Doc) {
         let into = self.target_wire.as_ref().map(|w| format!("Insert between {} and {}", w.src, w.dst));
         let Some(b) = &mut self.browser else { return };
         let templates = std::mem::take(&mut b.templates);
-        let hits: Vec<Pick> = browse(&b.query).into_iter().map(Pick::Op).chain(browse_templates(&templates, &b.query).into_iter().map(Pick::Template)).collect();
+        let mut hits: Vec<Pick> = browse(&b.query).into_iter().map(Pick::Op).collect();
+        if setup_matches(&b.query) {
+            let after = hits.iter().position(|p| matches!(p, Pick::Op(op) if op.name == "camera")).map_or(0, |k| k + 1);
+            hits.insert(after, Pick::Setup);
+        }
+        hits.extend(browse_templates(&templates, &b.query).into_iter().map(Pick::Template));
         let (down, up, enter, esc) = ctx.input_mut(|i| {
             (
                 i.consume_key(Modifiers::NONE, Key::ArrowDown),
@@ -525,6 +576,22 @@ impl NodeEditor {
                         for (i, pick) in hits.iter().enumerate() {
                             let op = match pick {
                                 Pick::Op(op) => *op,
+                                Pick::Setup => {
+                                    let cam = ops::info("camera").expect("the camera op");
+                                    if last_cat != Some(cam.category) {
+                                        last_cat = Some(cam.category);
+                                        ui.label(egui::RichText::new(category_name(cam.category)).small().color(category_color(cam.category).gamma_multiply(1.8)));
+                                    }
+                                    let resp = ui.selectable_label(i == b.sel, setup_row(ui)).on_hover_text(SETUP_HELP);
+                                    if i == b.sel && (down || up) {
+                                        resp.scroll_to_me(None);
+                                    }
+                                    if resp.clicked() {
+                                        chosen = Some(*pick);
+                                        close = true;
+                                    }
+                                    continue;
+                                }
                                 Pick::Template(t) => {
                                     if !templates_heading {
                                         templates_heading = true;
@@ -548,7 +615,7 @@ impl NodeEditor {
                                 ui.label(egui::RichText::new(category_name(op.category)).small().color(category_color(op.category).gamma_multiply(1.8)));
                             }
                             let help = if op.name == "camera" {
-                                format!("{}\n\nComes with a Scene and a Scanline Render, wired in. Shift: the Camera alone.", op.help)
+                                format!("{}\n\nThe Camera alone (into a selected Project 3D's projector, or a selected Scanline Render's empty camera input). 3D Camera Setup, below it, brings a Scene and a Scanline Render too.", op.help)
                             } else {
                                 op.help.to_string()
                             };
@@ -569,24 +636,28 @@ impl NodeEditor {
             close = true;
         }
         let at = b.at;
+        enum Chosen {
+            Op(&'static OpInfo),
+            Setup,
+            Template(arclight::templates::Template),
+        }
         let chosen = chosen.map(|p| match p {
-            Pick::Op(op) => Ok(op),
-            Pick::Template(t) => Err(t.clone()),
+            Pick::Op(op) => Chosen::Op(op),
+            Pick::Setup => Chosen::Setup,
+            Pick::Template(t) => Chosen::Template(t.clone()),
         });
         if close {
             self.browser = None;
-            if !matches!(chosen, Some(Ok(_))) {
+            if !matches!(chosen, Some(Chosen::Op(_) | Chosen::Setup)) {
                 self.target_wire = None;
             }
         } else if let Some(b) = &mut self.browser {
             b.templates = templates;
         }
         match chosen {
-            Some(Ok(op)) => {
-                let bare = ctx.input(|i| i.modifiers.shift);
-                self.place(doc, op, self.to_graph(at), bare);
-            }
-            Some(Err(t)) => {
+            Some(Chosen::Op(op)) => self.place(doc, op, self.to_graph(at)),
+            Some(Chosen::Setup) => self.place_setup(doc, self.to_graph(at)),
+            Some(Chosen::Template(t)) => {
                 if let Err(e) = crate::templates::insert(doc, &t, self.graph_point(at)) {
                     self.template_error = Some(format!("Template {}: {e:#}", t.name));
                 }
@@ -1686,7 +1757,7 @@ mod tests {
         h.ed.target_wire = h.ed.wire_at(&doc, a.lerp(b, 0.5), None);
         assert!(h.ed.target_wire.is_some());
         let at = h.ed.to_graph(a.lerp(b, 0.5) + Vec2::new(0.0, 60.0));
-        h.ed.place(&mut doc, ops::info("merge").unwrap(), at, false);
+        h.ed.place(&mut doc, ops::info("merge").unwrap(), at);
         let merge = doc.selected.clone().unwrap();
         h.frame(&mut doc, vec![]);
         let to = NodeEditor::in_port(h.rect(&doc, &merge), 1, 3);
@@ -1904,30 +1975,61 @@ mod tests {
         h.frame(&mut doc, vec![]);
         assert!(h.ed.browser.is_some());
         assert_eq!(h.ed.target_wire, Some(WireRef { src: src.clone(), dst: blur.clone(), port: 0 }));
-        h.ed.place(&mut doc, ops::info("grade").unwrap(), h.ed.to_graph(mid), false);
+        h.ed.place(&mut doc, ops::info("grade").unwrap(), h.ed.to_graph(mid));
         let grade = doc.selected.clone().unwrap();
         assert_eq!((doc.node(&grade).unwrap().inputs[0].as_str(), doc.node(&blur).unwrap().inputs[0].as_str()), (src.as_str(), grade.as_str()));
     }
 
-    /// Placing a Camera brings its Scene and Scanline Render, with the
-    /// selected node as the background and into a Viewer (made, as there's
-    /// none), and selects the Camera; with Shift, just the Camera.
+    /// The Camera comes alone: into a selected Project 3D's projector, a
+    /// selected Scanline Render's empty camera input, else unwired. The
+    /// browser's 3D Camera Setup (found by "setup", listed after the
+    /// Camera) brings its Scene and Scanline Render, the selected node the
+    /// background, into a Viewer (made, as there's none).
     #[test]
-    fn a_camera_comes_with_its_rig_unless_shift_is_held() {
+    fn the_camera_alone_and_the_setup() {
         let mut doc = Doc::new(Graph::default(), None);
         let plate = doc.add_node("checkerboard", [0.0, 0.0]);
         doc.selected = Some(plate.clone());
         let mut ed = NodeEditor::default();
-        ed.place(&mut doc, ops::info("camera").unwrap(), Pos2::new(0.0, 100.0), false);
+        let camera = ops::info("camera").unwrap();
+        ed.place(&mut doc, camera, Pos2::new(0.0, 100.0));
+        assert_eq!(doc.graph.nodes.len(), 2, "just the Camera");
         let cam = doc.selected.clone().unwrap();
         assert_eq!(doc.node(&cam).unwrap().op, "camera");
-        let render = doc.graph.nodes.iter().find(|n| n.op == "scanline_render").unwrap();
+        // Into a Project 3D's projector.
+        let proj = doc.add_node("project_3d", [300.0, 0.0]);
+        doc.selected = Some(proj.clone());
+        ed.place(&mut doc, camera, Pos2::new(300.0, 100.0));
+        let cam2 = doc.selected.clone().unwrap();
+        assert_eq!(doc.node(&proj).unwrap().inputs[2], cam2);
+        // Into a Scanline Render's camera input while it's empty, not over
+        // one already there.
+        let render = doc.add_node("scanline_render", [600.0, 0.0]);
+        doc.selected = Some(render.clone());
+        ed.place(&mut doc, camera, Pos2::new(600.0, 100.0));
+        let cam3 = doc.selected.clone().unwrap();
+        assert_eq!(doc.node(&render).unwrap().inputs[1], cam3);
+        doc.selected = Some(render.clone());
+        ed.place(&mut doc, camera, Pos2::new(700.0, 100.0));
+        assert_eq!(doc.node(&render).unwrap().inputs[1], cam3, "kept");
+        // The setup, from the browser: "setup" finds it, Enter places it.
+        assert!(setup_matches("3d cam") && setup_matches("SETUP") && !setup_matches("blur"));
+        let mut doc = Doc::new(Graph::default(), None);
+        let plate = doc.add_node("checkerboard", [0.0, 0.0]);
+        doc.selected = Some(plate.clone());
+        let mut h = Harness::new();
+        h.frame(&mut doc, vec![]);
+        h.ed.open_browser(Some(Pos2::new(400.0, 300.0)));
+        h.frame(&mut doc, vec![]);
+        h.frame(&mut doc, vec![egui::Event::Text("camera".into())]);
+        h.frame(&mut doc, vec![key(Key::ArrowDown, Modifiers::NONE)]);
+        h.frame(&mut doc, vec![key(Key::Enter, Modifiers::NONE)]);
+        let cam = doc.selected.clone().unwrap();
+        assert_eq!(doc.node(&cam).unwrap().op, "camera");
+        let render = doc.graph.nodes.iter().find(|n| n.op == "scanline_render").expect("the setup's render");
         assert_eq!(render.inputs[2], plate);
         let render = render.id.clone();
         assert!(doc.graph.nodes.iter().any(|n| n.op == "viewer" && n.inputs[0] == render), "shown in a new Viewer");
-        let n = doc.graph.nodes.len();
-        ed.place(&mut doc, ops::info("camera").unwrap(), Pos2::new(400.0, 100.0), true);
-        assert_eq!(doc.graph.nodes.len(), n + 1, "Shift: the Camera alone");
     }
 
     #[test]
@@ -2348,7 +2450,7 @@ mod tests {
         // a new spare appears.
         doc.selected = Some(render.clone());
         let mut ed = NodeEditor::default();
-        ed.place(&mut doc, ops::info("particle_emitter").unwrap(), Pos2::ZERO, false);
+        ed.place(&mut doc, ops::info("particle_emitter").unwrap(), Pos2::ZERO);
         let emitter = doc.selected.clone().unwrap();
         assert_eq!(inputs(&doc), ["", "", "", emitter.as_str(), ""]);
         assert_eq!(ops::port("scanline_render", 4).map(|p| p.label), Some("scene"));

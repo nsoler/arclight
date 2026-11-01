@@ -1843,6 +1843,11 @@ impl App {
                     self.doc.add_camera_setup(at);
                     ui.close();
                 }
+                let tip = "The Camera alone, mid-graph: into the selected Project 3D's projector input, or the selected Scanline Render's camera input if that's empty";
+                if ui.button("Add Camera").on_hover_text(tip).clicked() {
+                    self.editor.add_at_view(&mut self.doc, "camera");
+                    ui.close();
+                }
                 ui.separator();
                 if ui.add_enabled(sel.is_some(), egui::Button::new("View node").shortcut_text("V")).clicked() {
                     self.doc.view_node(sel.as_deref().unwrap());

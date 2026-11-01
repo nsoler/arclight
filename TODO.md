@@ -339,6 +339,10 @@ after it. `ROADMAP.md` is the public summary of this list.
       running ArclightVFX: Reads still load. In the graph's own window
       too. ⌘C / ⌘V inside a text field stay the field's. Paste text
       from elsewhere: nothing happens
+- [ ] Camera alone (0.14.10): ⇧Tab, type "camera": Camera and 3D Camera
+      Setup listed; Camera with a Project 3D selected becomes its
+      projector; with a Scanline Render selected, its camera (if empty);
+      3D Camera Setup as before; Edit ▸ Add Camera
 - [ ] Projection examples (0.14.9): Help ▸ Examples ▸ Projection: a
       plate on a card from the shot camera: frame 1 shows the plate
       exactly; play: the block slides against the wall, its unseen sides

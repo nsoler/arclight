@@ -107,7 +107,7 @@ curves and **⌫** deletes the selected keys.
 ### 3D camera setup
 
 To put a picture into 3D, use **Edit ▸ Add 3D Camera Setup** (or choose
-**Camera** in the node browser; hold **⇧** for the Camera alone). It adds a
+**3D Camera Setup** in the node browser, just below Camera). It adds a
 **Camera**, a **Scene** and a **Scanline Render**, wired up, in a **3D
 Setup** backdrop, just before the **Viewer**, so the render shows straight
 away: the picture the Viewer showed becomes the render's background (with
@@ -120,6 +120,11 @@ inputs (or the render's last, empty input). The setup's Camera starts back
 along +Z, far enough that a new Card (1 wide, at the origin) just fills
 its frame. The 3D view shows everything the render draws, extra inputs
 included.
+
+For a Camera on its own, choose **Camera** in the node browser (or
+**Edit ▸ Add Camera**). With a Project 3D selected it becomes that
+projection's projector; with a Scanline Render selected it goes into the
+render's camera input if that's empty; otherwise it's left unwired.
 
 To see the scene as a Camera sees it, click **Look through in 3D view** in
 its Properties (spot and area lights have it too): the viewer switches to

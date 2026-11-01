@@ -50,6 +50,11 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.14.10, stand-alone Camera** (Dev2, user request): node_editor.rs
+  browser entries Camera (alone; into a selected Project 3D's projector
+  or a Scanline Render's empty camera input) and 3D Camera Setup
+  (`add_camera_setup`); `place()` lost its Shift flag; Edit ▸ Add
+  Camera (`add_at_view`). Next (Dev2): Scanline Render's Camera param.
 - **0.14.9, Bake Projection nodes + examples** (Dev1): `bake_projection`
   (Scene -> Scene: texture set, material color white, projections
   stripped) and `bake_texture` (Scene -> Image, `Baked::texture()`), two

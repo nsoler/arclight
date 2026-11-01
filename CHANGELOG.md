@@ -18,6 +18,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.10 — 2026-10-31
+
+- **Camera on its own:** in the node browser, Camera adds just the
+  Camera (into a selected Project 3D's projector input, or a selected
+  Scanline Render's empty camera input); the Camera + Scene + Scanline
+  Render set is its own entry, **3D Camera Setup** (no more holding
+  Shift); Edit ▸ Add Camera beside Add 3D Camera Setup.
+
 ## 0.14.9 — 2026-10-31
 
 - **Bake Projection** and **Bake Projection Texture**: freeze what
