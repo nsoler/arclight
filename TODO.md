@@ -321,7 +321,7 @@ after it. `ROADMAP.md` is the public summary of this list.
       template; Help ▸ Examples as built-in templates.
 - [X] Project 3D under motion blur renders on the GPU (0.14.1); each
       projector's depth map is drawn once, not per time sample (0.13.38)
-- [ ] Project 3D occlusion on the GPU: an instanced copy straddling the
+- [X] Project 3D occlusion on the GPU (0.14.3): an instanced copy straddling the
       projector's near plane isn't in its depth map (lights' maps split
       those out; projectors don't). Rare (Dev2)
 - [ ] Project 3D targets are node names fixed at the node: a mesh renamed

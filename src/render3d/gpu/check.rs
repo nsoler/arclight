@@ -431,9 +431,7 @@ fn instances_row(gpu: &Gpu, size: Size, shadows: bool) -> CheckRow {
     let cpu_draw = || crate::gpu::cpu_only(|| super::super::draw_passes(&all, &scene.lights, &[], &cam, size, 2, passes, None, None, None));
     let gpu_draw = || -> anyhow::Result<Option<Image>> {
         let Some(mut plan) = super::instances::Plan::new(&plain, &scene.instances, false, &cam) else { return Ok(None) };
-        if shadows {
-            plan.plan_shadows(&scene.lights);
-        }
+        plan.plan_maps(&scene.lights);
         super::draw_with(gpu, &plan.surfs, Some(&plan), &scene.lights, &[], &cam, size, 2, passes, None, None, None)
     };
     let _ = gpu_draw();

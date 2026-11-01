@@ -62,9 +62,10 @@ pub(super) struct Plan<'a> {
     sets: &'a [Instances],
     /// Each instance drawn here: the box round it in the scene.
     boxes: Vec<(Vec3, Vec3)>,
-    /// The shadow maps (see [`Plan::plan_shadows`]): as shadow.rs plans
+    /// The shadow maps (see [`Plan::plan_maps`]): as shadow.rs plans
     /// them, for the scene with every instance in it; each map's instances
-    /// drawn there as surfaces of their own (by their number here), and
+    /// (the lights', then the projectors') drawn there as surfaces of
+    /// their own (by their number here), and
     /// those surfaces (in `surfs`, no triangles of their own: the map's
     /// are added for it alone).
     pub shadows: Option<Vec<Option<shadow::LightView>>>,
@@ -330,11 +331,18 @@ impl<'a> Plan<'a> {
             .collect()
     }
 
-    /// Plan the shadow maps of `lights` (as shadow.rs does for the scene
-    /// with every instance a surface of its own), and which instances each
-    /// map draws as surfaces of their own: those reaching in front of its
-    /// near plane (their triangles clipped on the CPU there).
-    pub fn plan_shadows(&mut self, lights: &[crate::shade::Light]) {
+    /// Plan the shadow maps of `lights` (those casting shadows, as
+    /// shadow.rs does for the scene with every instance a surface of its
+    /// own), and which instances each map, those and the projectors'
+    /// after them, draws as surfaces of their own: those reaching in front
+    /// of its near plane (their triangles clipped on the CPU there).
+    /// Nothing to do without shadows or projectors' maps.
+    pub fn plan_maps(&mut self, lights: &[crate::shade::Light]) {
+        let projectors = super::projector_views(&super::projections_of(&self.surfs));
+        let shadows = lights.iter().any(|l| l.shadows);
+        if !shadows && projectors.is_empty() {
+            return;
+        }
         let sets = self.sets;
         let plain = &self.surfs[..self.plain];
         let extent = || {
@@ -361,9 +369,10 @@ impl<'a> Plan<'a> {
             pts.extend(more.into_iter().flatten());
             shadow::extent_of(&pts)
         };
-        let planned = shadow::plan_in(&self.surfs, lights, extent);
+        let planned = if shadows { shadow::plan_in(&self.surfs, lights, extent) } else { vec![None; lights.len()] };
         let mut own: Vec<Vec<u32>> = Vec::new();
-        for (_, v) in super::map_views(&planned) {
+        let views: Vec<shadow::View> = super::map_views(&planned).into_iter().map(|(_, v)| v.clone()).chain(projectors).collect();
+        for v in &views {
             let view = v.cam.view();
             let near = v.cam.near.max(1e-6);
             let row: Vec3 = Vec3::new(view[(2, 0)], view[(2, 1)], view[(2, 2)]);

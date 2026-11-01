@@ -131,9 +131,7 @@ pub(super) fn draw_instanced(surfs: &[Surface], sets: &[crate::geo::Instances], 
         return None;
     }
     let mut plan = instances::Plan::new(surfs, sets, headlight, cam)?;
-    if lights.iter().any(|l| l.shadows) {
-        plan.plan_shadows(lights);
-    }
+    plan.plan_maps(lights);
     let gpu = crate::gpu::get()?;
     match draw_with(&gpu, &plan.surfs, Some(&plan), lights, points, cam, format, samples, passes, next, cell, splats) {
         Ok(img) => {
@@ -182,9 +180,7 @@ pub(super) fn preview(scene: &Scene, cam: &Camera, format: Size, look: super::Pr
     // Instances drawn instanced.
     let sets = &scene.instances;
     let plan = sets.iter().any(|g| !g.is_empty()).then(|| instances::Plan::new(&surfs, sets, solid, cam)).flatten().map(|mut p| {
-        if lights.iter().any(|l| l.shadows) {
-            p.plan_shadows(&lights);
-        }
+        p.plan_maps(&lights);
         p
     });
     let expanded: Vec<Surface> = match plan {
@@ -340,12 +336,7 @@ fn prepare(gpu: &Gpu, surfs: &[Surface], plan: Option<&instances::Plan>, lights:
     // textures, their depth maps among the shadow maps). Under motion
     // blur a surface at another time than its frame takes them where it
     // is at the frame (its rest), and their maps are drawn from there.
-    let mut projs: Vec<&Projection> = Vec::new();
-    for p in surfs.iter().flat_map(|s| s.projections.iter()) {
-        if !projs.iter().any(|q| std::ptr::eq(*q, *p)) {
-            projs.push(p);
-        }
-    }
+    let projs = projections_of(surfs);
     // (A projector's map with see-through surfaces in it: on the CPU,
     // which keeps their layers.)
     let through = |k: usize, s: &Surface| !s.holdout && ((s.color[3] > 0.0 && s.color[3] < 1.0) || s.texture.is_some_and(|t| !opaque(t)) || plan.is_some_and(|p| k >= p.plain && s.triangles.is_empty() && s.instance.is_none() && p.sees_through(k)));
@@ -368,7 +359,7 @@ fn prepare(gpu: &Gpu, surfs: &[Surface], plan: Option<&instances::Plan>, lights:
     let see: Vec<bool> = if shadows.iter().any(Option::is_some) { surfs.iter().enumerate().map(|(k, s)| sees_through(s) || plan.is_some_and(|p| k >= p.plain && s.triangles.is_empty() && s.instance.is_none() && p.sees_through(k))).collect() } else { vec![false; surfs.len()] };
     let (bins, levels_at) = binned(&tris, format.width, format.height, &textures.levels);
     let mut tables = Tables { tris: tri_table(&tris), bins, levels_at, tables: surf_table(surfs, &textures.base, &layout, &see), at: [0; 4], maps: Vec::new(), map_words: 0 };
-    let projector_views: Vec<shadow::View> = projs.iter().filter(|p| p.occlusion).map(|p| shadow::Projector::view(&p.camera, p.image.format)).collect();
+    let projector_views = projector_views(&projs);
     let light_maps = map_views(&shadows).len();
     let then = (surfs.iter().any(|s| s.rest.is_some()) && !projector_views.is_empty()).then(|| super::project::at_frame(surfs));
     tables.add_lights(surfs, then.as_deref(), plan, lights, &layout, &shadows, &projector_views, &textures.levels, &see);
@@ -484,6 +475,23 @@ pub(super) fn blurred(scene: &Scene, cam: &Camera, format: Size, samples: usize,
     }
 }
 
+/// The projections on `surfs`, each once, in the order they come.
+pub(super) fn projections_of<'a>(surfs: &[Surface<'a>]) -> Vec<&'a Projection> {
+    let mut projs: Vec<&Projection> = Vec::new();
+    for p in surfs.iter().flat_map(|s| s.projections.iter()) {
+        if !projs.iter().any(|q| std::ptr::eq(*q, *p)) {
+            projs.push(p);
+        }
+    }
+    projs
+}
+
+/// Where the depth maps of `projs` (those with Occlusion) look from, in
+/// order: they come after the lights' maps.
+pub(super) fn projector_views(projs: &[&Projection]) -> Vec<shadow::View> {
+    projs.iter().filter(|p| p.occlusion).map(|p| shadow::Projector::view(&p.camera, p.image.format)).collect()
+}
+
 /// A time's render where sprites go over it before it joins the sum: the
 /// render, and it as a picture and depth.
 struct Scratch {
@@ -531,8 +539,8 @@ fn blur_on(gpu: &Gpu, scene: &Scene, cam: &Camera, format: Size, samples: usize,
                 // The instances drawn instanced (at this time's places).
                 let plain = super::plain_surfaces(now);
                 let mut plan = now.instances.iter().any(|g| !g.is_empty()).then(|| instances::Plan::new(&plain, &now.instances, false, &c)).flatten();
-                if let Some(p) = plan.as_mut().filter(|_| now.lights.iter().any(|l| l.shadows)) {
-                    p.plan_shadows(&now.lights);
+                if let Some(p) = plan.as_mut() {
+                    p.plan_maps(&now.lights);
                 }
                 let expanded: Vec<Surface>;
                 let surfs: &[Surface] = match &plan {

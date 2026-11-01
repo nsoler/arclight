@@ -50,7 +50,17 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
-- **0.14.2, detachable Node Graph** (Dev1): `src/gui/panels.rs`
+- **0.14.3, instanced occluders in projector maps** (Dev2):
+  `instances::Plan::plan_maps` (was `plan_shadows`) lists the copies
+  crossing the near plane for every occluding projector's map after the
+  lights' maps; `projections_of` / `projector_views` shared. Dev2's
+  Project 3D follow-up list is done.
+- **0.14.2, detachable Node Graph** (**macOS bug, user 2026-10-31:**
+  the detached window flickers and can't be clicked: the builder follows
+  the tracked size / pos every frame and egui turns each change into
+  OuterPosition / InnerSize commands that don't round-trip there; Dev1
+  fixing, with View ▸ Dock all panels, off-screen positions ignored,
+  and a detached pane's tab kept in the main window) (Dev1): `src/gui/panels.rs`
   (generic `Pane` Graph / Curves / Viewer / Properties, `Panels` <->
   `Settings.panels` (`config::PanelWindow`: detached, size, pos,
   fullscreen), viewport builder, `Here` = a window's panes for shortcut

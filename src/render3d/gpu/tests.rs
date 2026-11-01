@@ -373,7 +373,7 @@ fn instances_cast_shadows_drawn_instanced() {
     // planes and are drawn there as surfaces of their own.
     let plain: Vec<super::super::Surface> = Vec::new();
     let mut plan = instances::Plan::new(&plain, &copies.instances, false, &cam).unwrap();
-    plan.plan_shadows(&copies.lights);
+    plan.plan_maps(&copies.lights);
     assert!(plan.map_own.iter().any(|m| !m.is_empty()), "{:?}", plan.map_own);
     let shadowed = |img: &Image| img.plane("shadow.R").unwrap().data.iter().filter(|v| **v > 0.02).count();
     assert!(shadowed(&cpu) > 60, "there are shadows: {}", shadowed(&cpu));
@@ -458,6 +458,54 @@ fn projections_on_instances_drawn_instanced() {
     let cpu = crate::gpu::cpu_only(|| super::super::render_passes(&copies, &cam, format, 2, None, passes));
     let out = with_gpu(|| super::super::render_passes(&copies, &cam, format, 2, None, passes));
     assert!(differences(&cpu, &out).iter().all(|(_, mean, _)| *mean == 0.0));
+}
+
+/// Instanced copies crossing a projector's near plane occlude what's
+/// behind them in its depth map on the GPU as on the CPU (drawn there as
+/// surfaces of their own, clipped), as lights' maps do.
+#[test]
+fn instances_straddling_a_projectors_near_plane_occlude() {
+    if crate::gpu::test_device().is_none() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let (mut copies, _) = super::super::tests::instanced();
+    copies.lights.iter_mut().for_each(|l| l.shadows = false);
+    // The leaf tilted back, 0.43 nearer and farther than its middle.
+    for p in &mut copies.instances[0].prototypes {
+        if let crate::geo::Prototype::Card(c) = p {
+            c.world = crate::geom::trs([0.0; 3], [-60.0, 0.0, 0.0], [1.0; 3]);
+        }
+    }
+    let n = copies.instances[0].len();
+    copies.instances[0].attrs.set(crate::geo::CD, crate::geo::Attr::Vec4(vec![[1.0, 0.6, 0.6, 1.0]; n]), n).unwrap();
+    // The projector among the copies, the leaf in front of it (z -8)
+    // reaching behind it, the floor ahead in its shade; the cubes either
+    // side cross its near plane too. (Wholly in front of it, a crossing
+    // copy's triangles drawn uncut come out nearly right; reaching behind
+    // it, they don't.)
+    let plate = crate::gpu::check::noise(Size { width: 96, height: 64 }, crate::image::IRect::new(0, 0, 96, 64), false, 5);
+    let projector = Scene { cameras: vec![Camera { world: crate::geom::trs([0.0, 0.5, -7.6], [0.0; 3], [1.0; 3]), ..Camera::default() }], ..Scene::default() };
+    let copies = crate::ops::project3d::project_3d(&serde_json::json!({}), copies, Some(&plate), Some(&projector)).unwrap();
+    let plain = super::super::plain_surfaces(&copies);
+    let cam = super::super::tests::camera();
+    let mut plan = instances::Plan::new(&plain, &copies.instances, false, &cam).unwrap();
+    plan.plan_maps(&copies.lights);
+    // (Two maps: the floor's projection and the copies' own copy of it.)
+    assert_eq!(plan.map_own.len(), 2, "the projector's maps alone");
+    assert!(plan.map_own.iter().all(|m| m.len() == 3), "every copy crosses its near plane: {:?}", plan.map_own);
+    // From above, seeing the floor behind the cubes.
+    let cam = Camera { world: crate::geom::trs([0.0, 4.0, 0.0], [-25.0, 0.0, 0.0], [1.0; 3]), ..cam };
+    let format = Size { width: 160, height: 80 };
+    let passes = Passes::from_names(["depth", "id"]);
+    let cpu = crate::gpu::cpu_only(|| super::super::render_passes(&copies, &cam, format, 2, None, passes));
+    let before = INSTANCED.with(|n| n.get());
+    let out = with_gpu(|| super::super::render_passes(&copies, &cam, format, 2, None, passes));
+    assert_eq!(INSTANCED.with(|n| n.get()), before + 1, "drawn instanced: {:?}", crate::gpu::last_error());
+    for (name, mean, off) in differences(&cpu, &out) {
+        let (most_mean, most_off) = super::check::allowed(&name);
+        assert!(mean <= most_mean && off <= most_off, "{name}: mean {mean:.2e}, {:.3} % of values off", off * 100.0);
+    }
 }
 
 /// Moving instances: the motion pass (each copy matched to the next

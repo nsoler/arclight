@@ -18,6 +18,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.3 — 2026-10-31
+
+- Project 3D occlusion on the GPU: instanced copies crossing a
+  projector's near plane (a projector placed among them) occlude what's
+  behind them as on the CPU, as lights' shadow maps already did.
+
 ## 0.14.2 — 2026-10-31
 
 - **The Node Graph on a second monitor**: the ⧉ at the right of its tab
