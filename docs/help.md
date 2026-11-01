@@ -604,6 +604,12 @@ S** or the gizmos to place them (Attractor, Vortex and Bounce only
 move). In **2D**, while viewing a Particles 2D, select its Emitter to
 drag its position, size and angle in the viewer.
 
+**Example:** **Help ▸ Examples ▸ Particles** (or File ▸ Open
+`examples/particledirectionalforce.json`) opens two streams rising off
+the same card, teal and orange, each pushed its own way by its own
+Gravity used as a sideways force, with Wind (no wind, only drag) slowing
+them as they go. Press play.
+
 - **Project 3D** projects an image from a camera onto your geometry, like
   a slide projector: connect the plate (or a painted patch) and a camera,
   and every mesh, card or instance it lands on shows it at full

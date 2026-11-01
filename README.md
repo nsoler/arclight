@@ -440,6 +440,8 @@ applies everywhere and `mask_invert` does nothing.
 
 `examples/geo-scatter.json` puts the geometry nodes together: open it (**Help ▸ Examples** in the app, which ships it) and select a node to see its part.
 
+`examples/particledirectionalforce.json` (**Help ▸ Examples ▸ Particles**) has two streams off one card, each pushed its own way by its own force.
+
 In the 3D view, emitters (shape and direction), attractors, vortices and bounce planes are drawn, picked and moved with G / R / S and the gizmos (forces move only); in 2D, an emitter feeding a viewed Particles 2D shows box or point handles in the viewer.
 
 3D nodes (Camera, Card, Scene) build a 3D scene: their blue wires carry
@@ -748,6 +750,7 @@ python/           `arclt` Python module: Rust core (src/lib.rs) + Python API (ar
 examples/
   basic.json        a small sample graph
   geo-scatter.json  geometry nodes end to end: Scatter with a mask, Attribute Set, Instance on Points (rocks, cards facing the camera), sun shadows
+  particledirectionalforce.json  two particle streams, each pushed its own way by its own force (translated from a Nuke example script)
   media/testsrc.mp4 5 s test clip used by the GUI starter project
 ```
 

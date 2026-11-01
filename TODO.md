@@ -15,6 +15,9 @@ on the Macs (the DMG), from the release builds.
 - [ ] Help ▸ Examples ▸ Geometry nodes opens geo-scatter as an untitled
       project and renders (rocks, bush cards, sun shadows); Save asks
       where (0.13.21)
+- [ ] Help ▸ Examples ▸ Particles opens particledirectionalforce as an
+      untitled project; playing it, the teal stream drifts right and the
+      orange one left (0.13.36)
 - [ ] A wire dropped anywhere on a node connects to its first free input
       (the node lights up, the wire's end snaps); never into a mask; the
       other way from an input (0.13.2, 0.13.6)

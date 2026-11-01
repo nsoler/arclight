@@ -1826,7 +1826,10 @@ fn bundled(rel: &str) -> PathBuf {
 
 /// Help ▸ Examples: the example projects shipped with the app (menu
 /// label, file under examples/). Packaging copies the same files.
-const EXAMPLES: &[(&str, &str)] = &[("Geometry nodes: rocks and bushes scattered", "geo-scatter.json")];
+const EXAMPLES: &[(&str, &str)] = &[
+    ("Geometry nodes: rocks and bushes scattered", "geo-scatter.json"),
+    ("Particles: two streams pushed apart", "particledirectionalforce.json"),
+];
 
 /// The project shown on a fresh launch: the bundled test clip, transformed
 /// over a checkerboard, graded, viewed, and ready to render.

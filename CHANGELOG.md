@@ -17,6 +17,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.36 — 2026-10-31
+
+- **Help ▸ Examples ▸ Particles: two streams pushed apart**
+  (`examples/particledirectionalforce.json`, translated by hand from a
+  Nuke example script): two particle streams rise off one card, each
+  pushed its own way by its own force and slowed by drag. The Linux,
+  macOS and Windows packages ship it.
+
 ## 0.13.35 — 2026-10-31
 
 - Windows x64: the code builds for Windows, and

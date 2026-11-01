@@ -11,7 +11,11 @@ fn example(name: &str) -> Graph {
 }
 
 fn eval(graph: &Graph, id: &str) -> Arc<Image> {
-    let ctx = EvalContext { frame: 1, write_outputs: false };
+    eval_at(graph, id, 1)
+}
+
+fn eval_at(graph: &Graph, id: &str, frame: i64) -> Arc<Image> {
+    let ctx = EvalContext { frame, write_outputs: false };
     Evaluator::new().evaluate(graph, id, &ctx).unwrap_or_else(|e| panic!("{id}: {e}"))
 }
 
@@ -59,4 +63,40 @@ fn the_geo_scatter_example_scatters_in_its_patch_and_renders_with_shadows() {
     let luma = |p: [f32; 4]| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
     let darker = lit.pixels.iter().zip(&open.pixels).filter(|(a, b)| luma(**b) - luma(**a) > 0.03).count();
     assert!(darker > 100, "shadows darken the ground: {darker} pixels darker than without");
+}
+
+/// The mean column of `img`'s pixels that `pick` says are of a stream's
+/// color, and how many there are.
+fn mean_x(img: &Image, pick: impl Fn([f32; 4]) -> bool) -> (f64, usize) {
+    let hits: Vec<usize> = img.pixels.iter().enumerate().filter(|(_, p)| pick(**p)).map(|(i, _)| i % img.width).collect();
+    (hits.iter().sum::<usize>() as f64 / hits.len().max(1) as f64, hits.len())
+}
+
+/// particledirectionalforce.json: two streams rise off the same card, and
+/// each one's own directional force pushes it its own way, teal toward +x
+/// (right in the camera) and orange toward -x; without the forces they
+/// rise together.
+#[test]
+fn the_particle_example_pushes_its_two_streams_apart() {
+    let mut graph = example("particledirectionalforce.json");
+    for id in ["render", "background"] {
+        let n = graph.nodes.iter_mut().find(|n| n.id == id).unwrap();
+        n.params["width"] = 320.into();
+        n.params["height"] = 240.into();
+    }
+    let teal = |p: [f32; 4]| p[2] > p[0] + 0.1;
+    let orange = |p: [f32; 4]| p[0] > p[2] + 0.1;
+    let apart = |graph: &Graph| {
+        let img = eval_at(graph, "render", 60);
+        let ((t, nt), (o, no)) = (mean_x(&img, teal), mean_x(&img, orange));
+        assert!(nt > 200 && no > 200, "both streams show: {nt} teal, {no} orange pixels");
+        t - o
+    };
+    let pushed = apart(&graph);
+    assert!(pushed > 60.0, "teal right of orange by {pushed:.0} pixels");
+    for id in ["force_teal", "force_orange"] {
+        graph.nodes.iter_mut().find(|n| n.id == id).unwrap().params["strength"] = 0.0.into();
+    }
+    let together = apart(&graph);
+    assert!(together.abs() < 20.0, "without the forces they rise together ({together:.0} pixels apart)");
 }

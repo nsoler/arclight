@@ -48,6 +48,13 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.13.36, Help ▸ Examples ▸ Particles** (Supervisor, user request):
+  `examples/particledirectionalforce.json`, the user's Nuke script
+  translated by hand (from its text, not the disassembly; the .nk stays
+  untracked): per-channel forces became two chains into Scanline
+  Render, emitter half-life a Particle Wind drag (1.607), Nuke's
+  per-frame velocity / force × 24 / × 576. `EXAMPLES` has two entries;
+  packaging copies both; `tests/examples.rs` checks the streams part.
 - **0.13.35, Windows x64** (Supervisor, user request): `bridge` and
   `mcp` build everywhere (bridge: non-unix stubs, `Server::start` errs,
   no instances; deliberately no loopback-TCP bridge, any local web page
