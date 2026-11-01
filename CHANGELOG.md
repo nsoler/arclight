@@ -18,6 +18,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.6 — 2026-10-31
+
+- **Copy, cut, paste and duplicate nodes and backdrops** (⌘C ⌘X ⌘V ⌘D,
+  Edit menu), through the system clipboard: a paste lands at the
+  pointer, renames what clashes, and finds its files from another
+  project or another running ArclightVFX.
+
 ## 0.14.5 — 2026-10-31
 
 - **File ▸ Import project…** brings a saved project's nodes and

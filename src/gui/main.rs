@@ -5,6 +5,7 @@
 //! properties on the right.
 
 mod camera_tracker;
+mod clipboard;
 mod crash_dialog;
 mod bridge_calls;
 mod curve_editor;
@@ -62,6 +63,12 @@ const GROUP: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::G
 const UNGROUP: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::G);
 const PROJECT_SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::P);
 const PREFERENCES: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
+// (⌘C ⌘X ⌘V reach the app as egui's Copy / Cut / Paste events: these
+// name them in the Edit menu.)
+const COPY: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::C);
+const CUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::X);
+const PASTE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::V);
+const DUPLICATE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::D);
 
 /// The player and edit keys (`App::shortcuts`) pressed this frame: with no
 /// modifier, the arrows also with ⌥ (key to key). Over the 3D view, Home
@@ -1058,6 +1065,24 @@ impl App {
         }
         // ⌘A: every node, over the node graph (or in its own window); else
         // every vertex of the selected shape.
+        // ⌘C ⌘X ⌘V (egui's events; ⌘V brings the clipboard's text) and ⌘D:
+        // the selected nodes and backdrops, in whichever window the keys
+        // went to (see clipboard.rs).
+        let (copy, cut, pasted) = ctx.input(|i| {
+            let pasted: Vec<String> = i.events.iter().filter_map(|e| if let egui::Event::Paste(t) = e { Some(t.clone()) } else { None }).collect();
+            (i.events.iter().any(|e| matches!(e, egui::Event::Copy)), i.events.iter().any(|e| matches!(e, egui::Event::Cut)), pasted)
+        });
+        if cut {
+            self.cut(ctx);
+        } else if copy {
+            self.copy(ctx);
+        }
+        for text in pasted {
+            self.paste(&text, ctx, here);
+        }
+        if ctx.input_mut(|i| i.consume_shortcut(&DUPLICATE)) {
+            clipboard::duplicate(&mut self.doc);
+        }
         if ctx.input_mut(|i| i.consume_shortcut(&SELECT_ALL)) {
             match here.select_all_target() {
                 Some(Pane::Graph) => self.doc.select_all(),
@@ -1162,6 +1187,28 @@ impl App {
                 _ => {}
             }
         }
+    }
+
+    /// ⌘C: the selected nodes and backdrops onto the clipboard.
+    fn copy(&mut self, ctx: &egui::Context) {
+        if let Some(text) = clipboard::copy(&self.doc) {
+            ctx.copy_text(text);
+        }
+    }
+
+    /// ⌘X: copied, then deleted.
+    fn cut(&mut self, ctx: &egui::Context) {
+        if let Some(text) = clipboard::cut(&mut self.doc) {
+            ctx.copy_text(text);
+        }
+    }
+
+    /// ⌘V: nodes on the clipboard merged in, at the pointer if it's over
+    /// the Node Graph in this window (else off where they were copied);
+    /// text that isn't ours is left alone.
+    fn paste(&mut self, text: &str, ctx: &egui::Context, here: &Here) {
+        let at = if here.over(Pane::Graph) { ctx.input(|i| i.pointer.hover_pos()).map(|p| self.editor.graph_point(p)) } else { None };
+        clipboard::paste(&mut self.doc, text, at);
     }
 
     /// Merge the project saved at `path` into this one (File ▸ Import
@@ -1715,6 +1762,25 @@ impl App {
                 ui.separator();
                 let sel = self.doc.selected.clone();
                 let any = !self.doc.selection().is_empty() || self.doc.selected_backdrop.is_some();
+                if ui.add_enabled(any, egui::Button::new("Cut").shortcut_text(ui.ctx().format_shortcut(&CUT))).clicked() {
+                    self.cut(ui.ctx());
+                    ui.close();
+                }
+                if ui.add_enabled(any, egui::Button::new("Copy").shortcut_text(ui.ctx().format_shortcut(&COPY))).clicked() {
+                    self.copy(ui.ctx());
+                    ui.close();
+                }
+                // (The clipboard's text comes back as a Paste event, next
+                // frame: see `shortcuts`.)
+                if ui.add(egui::Button::new("Paste").shortcut_text(ui.ctx().format_shortcut(&PASTE))).clicked() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                    ui.close();
+                }
+                if ui.add_enabled(any, egui::Button::new("Duplicate").shortcut_text(ui.ctx().format_shortcut(&DUPLICATE))).clicked() {
+                    clipboard::duplicate(&mut self.doc);
+                    ui.close();
+                }
+                ui.separator();
                 if ui.add_enabled(any, egui::Button::new("Delete selected").shortcut_text("⌫")).clicked() {
                     self.doc.delete_selection();
                     ui.close();
@@ -2382,6 +2448,69 @@ mod tests {
         app.panels.set_detached(Pane::Viewer, true);
         app.panels.set_detached(Pane::Properties, true);
         assert_eq!(app.main_panes(), [Pane::Graph]);
+        drop(app);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// ⌘C ⌘X ⌘V ⌘D in the Node Graph's own window: copied to the
+    /// clipboard, cut, pasted at the pointer (renamed, selected), pasted
+    /// again off the originals with the pointer elsewhere, duplicated;
+    /// text that isn't ours pasted: nothing.
+    #[test]
+    fn copy_paste_in_the_graphs_window() {
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("arclight-gui-clipboard-test-{}", std::process::id()));
+        std::env::set_var("XDG_RUNTIME_DIR", &dir);
+        let ctx = egui::Context::default();
+        let mut app = App::new(ctx.clone(), Doc::new(starter_graph(), None));
+        app.panels = Panels::default();
+        app.panels.set_detached(Pane::Graph, true);
+        // (The graph drawn over the whole window, so the pointer's over it.)
+        app.pane_rects.insert(Pane::Graph, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)));
+        let at = egui::pos2(300.0, 200.0);
+        // One frame of `events` in the window with `panes`: what it put on
+        // the clipboard.
+        let press = |app: &mut App, events: Vec<egui::Event>, panes: Vec<Pane>| -> Option<String> {
+            let raw = egui::RawInput { events: [vec![egui::Event::PointerMoved(at)], events].concat(), ..Default::default() };
+            let out = ctx.run_ui(raw, |ui| {
+                let here = Here::new(panes.clone(), &app.pane_rects, ui.input(|i| i.pointer.hover_pos()));
+                app.shortcuts(ui.ctx(), &here);
+            });
+            app.doc.commit(false);
+            out.platform_output.commands.iter().find_map(|c| if let egui::OutputCommand::CopyText(t) = c { Some(t.clone()) } else { None })
+        };
+        let all = app.doc.graph.nodes.len();
+        let first = app.doc.graph.nodes[0].id.clone();
+        app.doc.select_nodes(std::slice::from_ref(&first), false);
+        let text = press(&mut app, vec![egui::Event::Copy], vec![Pane::Graph]).expect("copied");
+        assert_eq!(app.doc.graph.nodes.len(), all, "copy changes nothing");
+        // Pasted at the pointer, in graph units.
+        press(&mut app, vec![egui::Event::Paste(text.clone())], vec![Pane::Graph]);
+        assert_eq!(app.doc.graph.nodes.len(), all + 1);
+        let pasted = app.doc.selection();
+        assert_eq!(pasted.len(), 1);
+        assert_ne!(pasted[0], first, "renamed");
+        assert_eq!(app.doc.node(&pasted[0]).unwrap().pos, Some(app.editor.graph_point(at)));
+        // In the main window (the graph isn't there): off the original.
+        let main = app.main_panes();
+        press(&mut app, vec![egui::Event::Paste(text.clone())], main.clone());
+        let p = app.doc.graph.node(&first).unwrap().pos.unwrap();
+        assert_eq!(app.doc.node(&app.doc.selection()[0]).unwrap().pos, Some([p[0] + clipboard::OFFSET[0], p[1] + clipboard::OFFSET[1]]));
+        assert_eq!(app.doc.graph.nodes.len(), all + 2);
+        // Not ours: nothing.
+        press(&mut app, vec![egui::Event::Paste("just some text".into())], vec![Pane::Graph]);
+        assert_eq!(app.doc.graph.nodes.len(), all + 2);
+        // ⌘D: a copy, selected, the clipboard untouched.
+        let cmd_d = egui::Event::Key { key: Key::D, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND };
+        assert_eq!(press(&mut app, vec![cmd_d], vec![Pane::Graph]), None);
+        assert_eq!(app.doc.graph.nodes.len(), all + 3);
+        // ⌘X: on the clipboard and gone, one undo step.
+        let gone = app.doc.selection()[0].clone();
+        let cut = press(&mut app, vec![egui::Event::Cut], vec![Pane::Graph]).expect("cut");
+        assert!(cut.contains(&format!("\"{gone}\"")));
+        assert!(app.doc.node(&gone).is_none());
+        app.undo();
+        assert!(app.doc.node(&gone).is_some());
         drop(app);
         std::fs::remove_dir_all(&dir).ok();
     }

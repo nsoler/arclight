@@ -332,6 +332,13 @@ after it. `ROADMAP.md` is the public summary of this list.
       opened. Import the same project twice: the second copy renamed,
       its wires and links inside it. Rename a Locator used in an
       Attribute Set formula / a Curve's Path of: they follow
+- [ ] Copy / paste (0.14.6): select nodes, ⌘C, ⌘V with the pointer over
+      the graph: pasted there, renamed, selected; ⌘Z removes them. ⌘X
+      then ⌘V moves them. ⌘D duplicates. A backdrop selected copies its
+      nodes. Paste into another project (File ▸ New) and into a second
+      running ArclightVFX: Reads still load. In the graph's own window
+      too. ⌘C / ⌘V inside a text field stay the field's. Paste text
+      from elsewhere: nothing happens
 - [ ] **Import project, copy / paste, templates** (phase 14, after the
       panels; user, 2026-10-31): File ▸ Import project… merges a saved
       .json into the current graph (nodes renamed on a clash with wires,

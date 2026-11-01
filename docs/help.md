@@ -150,6 +150,11 @@ choose in Properties:
 - Drag a box on empty space (**⇧** adds).
 - **⌘A** selects all, **Esc** none.
 - **⌘G** groups the selection in a backdrop, **⇧⌘G** ungroups.
+- **⌘C** / **⌘X** / **⌘V** copy, cut and paste nodes (with a selected
+  backdrop, its nodes too) through the clipboard, between projects and
+  running ArclightVFX windows too: a paste lands at the pointer when it's
+  over the Node Graph, renames what clashes and still finds its files.
+  **⌘D** duplicates the selection. Also in the Edit menu.
 
 ## Viewer
 

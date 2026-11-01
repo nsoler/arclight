@@ -50,6 +50,14 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.14.6, copy / paste** (Dev2): `src/templates.rs` (`excerpt()`: a
+  selection as a standalone project, absolute paths, outside inputs cut,
+  backdrops whose nodes are all taken; `parse()`: only our JSON; the
+  template storage for milestone B), `config::templates_dir()`,
+  `src/gui/clipboard.rs` (copy / cut / paste / duplicate via
+  `Doc::import`); egui's Copy / Cut / Paste events and ⌘D in
+  `shortcuts()` per window; Edit ▸ Paste sends `RequestPaste`. Next:
+  templates (Dev2).
 - **0.14.5, Import project + merge core** (Dev1): `src/graph_merge.rs`
   (`merge(target, source, &Merge { only, place })` -> `Merged { nodes,
   backdrops, renamed }`; `rename_refs` for every node-name reference:

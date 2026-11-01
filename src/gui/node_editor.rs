@@ -535,6 +535,13 @@ impl NodeEditor {
         self.rect.min + self.pan + p.to_vec2() * self.zoom
     }
 
+    /// Screen point `p` (in the window the graph is drawn in) in graph
+    /// units: where a paste at the pointer lands.
+    pub fn graph_point(&self, p: Pos2) -> [f32; 2] {
+        let g = self.to_graph(p);
+        [g.x, g.y]
+    }
+
     fn to_graph(&self, p: Pos2) -> Pos2 {
         ((p - self.rect.min - self.pan) / self.zoom).to_pos2()
     }

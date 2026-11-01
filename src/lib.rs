@@ -57,4 +57,5 @@ pub mod sfm;
 pub mod shape;
 pub mod splat;
 pub mod solve;
+pub mod templates;
 pub mod track;

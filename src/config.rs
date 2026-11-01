@@ -28,6 +28,11 @@ pub fn data_dir() -> PathBuf {
     xdg("XDG_DATA_HOME", ".local/share")
 }
 
+/// Where Save selection as template… keeps templates, one project file each.
+pub fn templates_dir() -> PathBuf {
+    data_dir().join("templates")
+}
+
 pub fn cache_dir() -> PathBuf {
     xdg("XDG_CACHE_HOME", ".cache")
 }
