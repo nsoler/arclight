@@ -17,6 +17,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.39 — 2026-10-31
+
+- **Help ▸ Examples ▸ Projection: two cameras blended on one set**
+  (`examples/multi-projection.json`): two checkerboards projected from
+  left and right onto a ground, a block and a wall, blended where they
+  overlap. The Linux, macOS and Windows packages ship it.
+
 ## 0.13.38 — 2026-10-31
 
 - **Project 3D: several cameras on one set.** Blend with others mixes

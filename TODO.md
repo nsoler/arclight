@@ -52,7 +52,7 @@ on the Macs (the DMG), from the release builds.
 - [ ] On the Macs: `arclight gpu --check` (68 rows now, including
       instancing, instanced shadows and Project 3D) and
       `cargo test --release` on Metal
-- [ ] Project 3D with two projectors (examples/multi-projection.json):
+- [ ] Help ▸ Examples ▸ Projection (multi-projection.json, 0.13.39):
       Blend with others softens the seam on the wall and block; Fade
       start / end fade a grazing projection out; Frames (three frames of
       one moving camera) fills what one frame misses; GPU on and off look

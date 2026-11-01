@@ -1829,6 +1829,7 @@ fn bundled(rel: &str) -> PathBuf {
 const EXAMPLES: &[(&str, &str)] = &[
     ("Geometry nodes: rocks and bushes scattered", "geo-scatter.json"),
     ("Particles: two streams pushed apart", "particledirectionalforce.json"),
+    ("Projection: two cameras blended on one set", "multi-projection.json"),
 ];
 
 /// The project shown on a fresh launch: the bundled test clip, transformed

@@ -636,7 +636,8 @@ them as they go. Press play.
   sees a wall straight on takes over there. **Frames** (as `1001, 1040,
   1080`) projects one tracked camera's plate from each frame listed,
   blended: a set covered from three moments of a camera move, with one
-  node (it overrides Frame hold). `examples/multi-projection.json`: two
+  node (it overrides Frame hold). **Help ▸ Examples ▸ Projection** (or
+  `examples/multi-projection.json`): two
   checkerboards projected from left and right onto a block and a wall,
   blended.
 - **Scanline Render** takes any number of scenes or particle streams:
