@@ -1,8 +1,10 @@
 # Arclight — handoff notes
 
-Last updated 2026-10-31, session 12: **phase 13 (procedural geometry,
-GeoNodes-like, `docs/geo-plan.md`) on branch `wip-ns-geo`, 0.13.x, from
-0.13.0 (the plan)**; phase 12 (GPU acceleration, `docs/gpu-plan.md`)
+Last updated 2026-10-31, session 12: **phase 14 (workspace and UI:
+detachable panels first, then project import / copy-paste / templates;
+TODO.md "After the phase 13 pause") on branch `wip-ns-ui`, 0.14.x, from
+0.14.0**; phase 13 (procedural geometry, `docs/geo-plan.md`) ended at
+0.13.41 (v0.13.41) on `wip-ns-geo`, now frozen; phase 12 (GPU acceleration, `docs/gpu-plan.md`)
 ended at 0.12.19 (beta v0.12.19, with the macOS DMG) on `wip-ns-gpu`,
 now frozen; phase 11 (engine and platform: crash reporting, plugin
 process isolation, beta v0.11.3) ended at 0.11.5 on `wip-ns-engine`,
@@ -48,6 +50,12 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.14.0, phase 14 begins** (Supervisor, user's call): branch
+  `wip-ns-ui` from 0.13.41 (5d35db7). Dev1: detachable panels (TODO.md's
+  first item: Node Graph first, built generic). Dev2: Project 3D
+  follow-ups (GPU projections under blur, near-plane occlusion of
+  instances, node-name targets), files apart from Dev1's. Next after
+  panels: Import project, node copy / paste, templates.
 - **0.13.41, Write Geo** (Dev1, merged by hand from `../.verify/dev1-wg`):
   `src/geo_write.rs` (OBJ + MTL, glTF / GLB; .glb textures encoded in
   memory), gltf `extras` feature, `gltf.rs` reads COLOR_0 / `_name`

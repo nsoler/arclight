@@ -299,6 +299,16 @@ after it. `ROADMAP.md` is the public summary of this list.
       Tab, undo / redo / save), popups and file drops in that window.
       Built generic, so the Viewer (full screen on a second monitor),
       Curve Editor and Properties can detach too. About two reports.
+- [ ] **Import project, copy / paste, templates** (phase 14, after the
+      panels; user, 2026-10-31): File ▸ Import project… merges a saved
+      .json into the current graph (nodes renamed on a clash with wires,
+      links and expressions following; placed beside the work and
+      selected; the project's format / fps / range kept; media paths
+      rebased to this project's folder). ⌘C / ⌘X / ⌘V / ⌘D through the
+      clipboard as the same JSON (between windows and instances).
+      Templates: Save selection as template… into the user data folder;
+      Insert ▸ Templates and the node browser; File ▸ New from
+      template; Help ▸ Examples as built-in templates.
 - [ ] Project 3D under motion blur renders on the CPU (the GPU path
       skips projections under blur); each projector's depth map is now
       drawn once, not per time sample (0.13.38) (Dev2)
