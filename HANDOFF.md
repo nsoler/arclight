@@ -53,7 +53,8 @@ done), `docs/help.md` (the in-app help) and
   memory), gltf `extras` feature, `gltf.rs` reads COLOR_0 / `_name`
   back; `write_geo` writes only with `ctx.write_outputs` (node_key mixes
   it, as for `write`); `arclight render` runs its write pass for
-  write_geo too. **Phase 13's planned nodes are done.** Next: TODO.md's
+  write_geo too. **Phase 13's planned nodes are done.** Released as
+  v0.13.41 (Linux, Windows, wheel + sdist; the user posts the DMG). Next: TODO.md's
   "After the phase 13 pause" (detachable panels first), when the user
   says.
 - **0.13.40, Extrude** (Dev1, merged by hand from `../.verify/dev1-mesh`
