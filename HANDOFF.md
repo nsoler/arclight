@@ -1,6 +1,8 @@
 # Arclight — handoff notes
 
-Last updated 2026-11-01, session 12: **phase 14 (workspace and UI) on
+Last updated 2026-11-01, session 12: **PAUSED for the user's hand
+testing of v0.14.14 (2026-11-01): no new work until the user reports
+bugs or answers phase 15's Q1–Q5; Dev1 and Dev2 standing by.** **Phase 14 (workspace and UI) on
 branch `wip-ns-ui`, 0.14.x, from 0.14.0; at 0.14.14, released as
 v0.14.14** (all five assets, the DMG posted by the user). Done in phase 14 so far: detachable panels (Mac-checked),
 Import project, copy / paste, templates, Project 3D GPU follow-ups,
