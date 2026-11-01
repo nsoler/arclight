@@ -66,6 +66,9 @@ const PREFERENCES: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, 
 /// The player and edit keys (`App::shortcuts`) pressed this frame: with no
 /// modifier, the arrows also with ⌥ (key to key). Over the 3D view, Home
 /// and F are its own (frame everything, the selection).
+/// How long a menu-bar notice stays, in seconds.
+const NOTICE_SECONDS: f64 = 8.0;
+
 fn player_keys(i: &egui::InputState, over_3d: bool) -> Vec<Key> {
     use Key::*;
     [Space, L, J, K, ArrowRight, ArrowLeft, Home, End, Delete, Backspace, V, F]
@@ -265,6 +268,9 @@ struct App {
     cached: Vec<i64>,
     title: String,
     status: Option<String>,
+    /// A passing note in the menu bar (not an error), and when it was
+    /// given (ui time): "Imported 12 nodes from shot.json".
+    notice: Option<(String, f64)>,
     /// `ARCLIGHT_SCREENSHOT=<png>`: save one screenshot of the window after
     /// `ARCLIGHT_SCREENSHOT_DELAY` seconds (default 2), then quit. For docs/CI.
     screenshot: Option<(PathBuf, std::time::Instant, f32)>,
@@ -390,6 +396,7 @@ impl App {
             cached: Vec::new(),
             title: String::new(),
             status: None,
+            notice: None,
             screenshot: std::env::var_os("ARCLIGHT_SCREENSHOT").map(|p| {
                 let delay = std::env::var("ARCLIGHT_SCREENSHOT_DELAY").ok().and_then(|d| d.parse().ok()).unwrap_or(2.0);
                 (PathBuf::from(p), std::time::Instant::now(), delay)
@@ -855,6 +862,7 @@ impl App {
                 dialogs::save_project(what, dialogs::filter(dialogs::new(), "ArclightVFX project", &["json"]).set_file_name(format!("{name}.json")))
             }
             FileFor::Import => dialogs::pick(what, dialogs::new()),
+            FileFor::ImportProject => dialogs::pick_project(what, dialogs::filter(dialogs::new(), "ArclightVFX project", &["json"])),
             FileFor::NewFolder => None,
         };
     }
@@ -883,6 +891,7 @@ impl App {
                     self.close_now(ctx);
                 }
             }
+            Some(FileFor::ImportProject) => self.import_project(&path, ctx),
             Some(FileFor::Import) => {
                 let id = self.doc.add_node("media_in", [0.0, -90.0]);
                 properties::apply_media(&mut self.doc, &id, &path);
@@ -1155,12 +1164,42 @@ impl App {
         }
     }
 
+    /// Merge the project saved at `path` into this one (File ▸ Import
+    /// project…, or a project file dropped on the Node Graph): beside the
+    /// work, selected and framed, one undo step.
+    fn import_project(&mut self, path: &Path, ctx: &egui::Context) {
+        let source = match arclight::graph_merge::read(path) {
+            Ok(g) => g,
+            Err(e) => {
+                self.status = Some(format!("{e:#}"));
+                return;
+            }
+        };
+        let how = arclight::graph_merge::Merge { only: None, place: arclight::graph_merge::Place::Beside };
+        let added = self.doc.import(&source, &how);
+        self.editor.fit();
+        let name = path.file_name().map_or_else(|| path.to_string_lossy(), |n| n.to_string_lossy());
+        let n = added.nodes.len();
+        let mut note = format!("Imported {n} node{} from {name}", if n == 1 { "" } else { "s" });
+        if !added.renamed.is_empty() {
+            note += &format!(" ({} renamed: {})", added.renamed.len(), added.renamed.iter().map(|(a, b)| format!("{a} → {b}")).collect::<Vec<_>>().join(", "));
+        }
+        self.notice = Some((note, ctx.input(|i| i.time)));
+    }
+
     /// Dropping files creates a Media In per file (wired to the viewer if
     /// nothing is being viewed yet).
-    fn handle_drops(&mut self, ctx: &egui::Context) {
+    fn handle_drops(&mut self, ctx: &egui::Context, here: &Here) {
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
         for (k, path) in dropped.into_iter().enumerate() {
-            if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json")) {
+            let project = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("json"));
+            // A project dropped on the Node Graph (or its own window) goes
+            // into this one; elsewhere it's opened instead.
+            if project && (here.over(Pane::Graph) || here.panes == [Pane::Graph]) {
+                self.import_project(&path, ctx);
+                continue;
+            }
+            if project {
                 if let Ok(g) = Graph::from_file(&path) {
                     if self.doc.dirty {
                         self.ask = Some(Ask::Discard(Then::Load(path)));
@@ -1549,7 +1588,7 @@ impl App {
         ctx.show_viewport_immediate(pane.viewport_id(), builder, |ui, _class| {
             let ctx = ui.ctx().clone();
             let here = Here::new(vec![pane], &self.pane_rects, ctx.input(|i| i.pointer.hover_pos()));
-            self.handle_drops(&ctx);
+            self.handle_drops(&ctx, &here);
             self.shortcuts(&ctx, &here);
             let mut dock = false;
             let full = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
@@ -1638,6 +1677,11 @@ impl App {
                 if ui.add_enabled(!dialogs::busy(), egui::Button::new("Import media…")).clicked() {
                     ui.close();
                     self.choose(FileFor::Import);
+                }
+                let tip = "Bring a saved project's nodes into this one, beside what's here (names that clash are renamed; this project's settings stay)";
+                if ui.add_enabled(!dialogs::busy(), egui::Button::new("Import project…")).on_hover_text(tip).clicked() {
+                    ui.close();
+                    self.choose(FileFor::ImportProject);
                 }
                 if ui.add(egui::Button::new("Project Settings…").shortcut_text(ui.ctx().format_shortcut(&PROJECT_SETTINGS))).clicked() {
                     ui.close();
@@ -1790,6 +1834,12 @@ impl App {
                 ui.separator();
                 ui.weak(format!("{} {} ({})", arclight::SHORT_NAME, env!("CARGO_PKG_VERSION"), arclight::STAGE));
             });
+            let now = ui.input(|i| i.time);
+            if let Some((s, _)) = self.notice.as_ref().filter(|(_, t)| now - t < NOTICE_SECONDS) {
+                ui.separator();
+                ui.label(s);
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+            }
             if let Some(s) = &self.status {
                 ui.separator();
                 // As much as fits the bar; all of it on hover.
@@ -1880,6 +1930,8 @@ enum FileFor {
     Open,
     SaveAs,
     Import,
+    /// A project to merge into this one (File ▸ Import project…).
+    ImportProject,
     /// A folder for File ▸ New's project.
     NewFolder,
 }
@@ -1958,8 +2010,8 @@ impl eframe::App for App {
         self.poll_file(&ctx);
         self.handle_close(&ctx);
         self.handle_bridge(&ctx);
-        self.handle_drops(&ctx);
         let here = Here::new(self.main_panes(), &self.pane_rects, ctx.input(|i| i.pointer.hover_pos()));
+        self.handle_drops(&ctx, &here);
         self.shortcuts(&ctx, &here);
         // A first 3D setup in this project: show it in the 3D view.
         if let Some(render) = self.doc.show_3d.take() {
@@ -2226,6 +2278,63 @@ mod tests {
         press(&mut app, vec![], true);
         press(&mut app, vec![tab(Modifiers::NONE)], true);
         assert_eq!(app.viewer.mode3d, before, "not while typing");
+        drop(app);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// File ▸ Import project merges a saved project beside the work, its
+    /// nodes selected, with a notice (not an error); a project file
+    /// dropped on the graph's window is imported too, one dropped
+    /// elsewhere opened as before.
+    #[test]
+    fn a_project_is_imported_by_the_menu_or_a_drop_on_the_graph() {
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("arclight-gui-import-test-{}", std::process::id()));
+        std::env::set_var("XDG_RUNTIME_DIR", &dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let shot = dir.join("shot.json");
+        std::fs::write(&shot, r#"{"project": {"first_frame": 1, "last_frame": 9, "fps": 30.0}, "nodes": [
+            {"id": "grade1", "op": "grade", "pos": [0, 0]}, {"id": "blur1", "op": "blur", "inputs": ["grade1"], "pos": [200, 0]}]}"#).unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::new(ctx.clone(), Doc::new(starter_graph(), None));
+        app.panels = Panels::default();
+        let before = app.doc.graph.nodes.len();
+        let fps = app.doc.graph.project.fps;
+        app.import_project(&shot, &ctx);
+        assert_eq!(app.doc.graph.nodes.len(), before + 2);
+        assert_eq!(app.doc.selection().len(), 2, "the imported nodes selected");
+        assert_eq!(app.doc.graph.project.fps, fps, "this project's settings");
+        assert!(app.status.is_none());
+        assert!(app.notice.as_ref().is_some_and(|(n, _)| n.starts_with("Imported 2 nodes from shot.json")), "{:?}", app.notice);
+        // Dropped on the graph's own window: imported again (renamed).
+        /// A file dropped from the desktop.
+        #[derive(Debug)]
+        struct Dropped(PathBuf);
+        impl egui::DroppedFile for Dropped {
+            fn path(&self) -> &Path {
+                &self.0
+            }
+            fn bytes(&self) -> Result<Vec<u8>, String> {
+                std::fs::read(&self.0).map_err(|e| e.to_string())
+            }
+        }
+        let drop_on = |app: &mut App, panes: Vec<Pane>| {
+            let file: egui::DroppedFileHandle = Arc::new(Dropped(shot.clone()));
+            let raw = egui::RawInput { dropped_files: vec![file], ..Default::default() };
+            ctx.run_ui(raw, |ui| {
+                let here = Here::new(panes.clone(), &app.pane_rects, None);
+                app.handle_drops(ui.ctx(), &here);
+            })
+            .drop_without_applying_deltas();
+        };
+        drop_on(&mut app, vec![Pane::Graph]);
+        assert_eq!(app.doc.graph.nodes.len(), before + 4);
+        assert!(app.notice.as_ref().is_some_and(|(n, _)| n.contains("2 renamed: blur1 → blur2, grade1 → grade3")), "{:?}", app.notice);
+        // Dropped on the main window away from the graph: opened (asked
+        // first, as there are unsaved changes).
+        drop_on(&mut app, vec![Pane::Viewer, Pane::Properties]);
+        assert!(matches!(app.ask, Some(Ask::Discard(Then::Load(_)))));
+        assert_eq!(app.doc.graph.nodes.len(), before + 4);
         drop(app);
         std::fs::remove_dir_all(&dir).ok();
     }

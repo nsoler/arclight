@@ -34,6 +34,23 @@ Media Out that's off writes nothing. Handy for troubleshooting a chain.
 A node's inputs are yellow squares (hollow when optional); a **mask**
 input is violet and labelled **mask**.
 
+### Importing a project
+
+**File ▸ Import project…** brings a saved project's nodes (and its
+backdrops) into this one, to the right of what's here, selected and
+framed; one **⌘Z** takes it all back. A project file dropped on the Node
+Graph does the same (dropped anywhere else, it's opened instead). Nodes
+whose names are already taken here are renamed (grade1 becomes grade2,
+the menu bar says which), and everything that names them follows: wires,
+linked params and their formulas, Attribute Set and Delete Geo formulas
+(`loc.translate`), a Curve's **Path of**, Media Out's **Audio**, and a
+**Group** naming exactly that node (a pattern like `rock*` is left as
+written). This project's format, frame rate, range and folder stay as
+they are. The imported Reads keep reading the same files, wherever the
+other project's folder is.
+
+Renaming a node (its name in Properties) now reaches all of those too.
+
 ### On a second monitor
 
 The **⧉** button at the right of the Node Graph's tab (or **View ▸ Node

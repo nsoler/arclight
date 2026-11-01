@@ -229,6 +229,17 @@ impl Doc {
         self.set_selection(sel);
     }
 
+    /// Merge `source`'s nodes and backdrops (all, or `how.only`) into the
+    /// graph (see [`arclight::graph_merge::merge`]): clashing ids renamed,
+    /// the project's settings kept, the new nodes selected. One undo step
+    /// (all in this frame's edit).
+    pub fn import(&mut self, source: &Graph, how: &arclight::graph_merge::Merge) -> arclight::graph_merge::Merged {
+        let added = arclight::graph_merge::merge(&mut self.graph, source, how);
+        self.set_selection(added.nodes.clone());
+        self.changed();
+        added
+    }
+
     pub fn select_all(&mut self) {
         let ids: Vec<String> = self.graph.nodes.iter().map(|n| n.id.clone()).collect();
         // Keep the primary the primary.
@@ -743,7 +754,7 @@ impl Doc {
                     *inp = new.to_string();
                 }
             }
-            arclight::link::rename(&mut n.params, old, new);
+            arclight::graph_merge::rename_refs(&n.op, &mut n.params, old, new);
         }
         let lists = [&mut self.selected, &mut self.view_override, &mut self.active_viewer, &mut self.selection_for].into_iter().flatten();
         for id in lists.chain(self.selection.iter_mut()) {
@@ -968,6 +979,29 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::str::FromStr;
+
+    /// Importing a project: its nodes come in renamed where they clash,
+    /// selected, the project's settings kept; one undo takes it all back.
+    #[test]
+    fn an_import_is_one_undo_step() {
+        let mut d = Doc::new(Graph::default(), None);
+        d.graph.project.fps = 25.0;
+        let a = d.add_node("constant", [0.0, 0.0]);
+        d.commit(false);
+        let before = d.graph.clone();
+        let source = Graph::from_str(r#"{"project": {"first_frame": 1, "last_frame": 9, "fps": 30.0}, "nodes": [
+            {"id": "constant1", "op": "constant", "pos": [0, 0]},
+            {"id": "blur1", "op": "blur", "inputs": ["constant1"], "pos": [200, 0]}]}"#).unwrap();
+        let added = d.import(&source, &arclight::graph_merge::Merge { only: None, place: arclight::graph_merge::Place::Beside });
+        d.commit(false);
+        assert_eq!(added.nodes, ["constant2", "blur1"]);
+        assert_eq!(d.node("blur1").unwrap().inputs[0], "constant2");
+        assert_eq!(d.selection(), ["constant2", "blur1"], "the imported nodes selected");
+        assert_eq!((d.graph.project.fps, d.graph.nodes.len()), (25.0, 3));
+        assert!(d.node(&a).is_some() && d.dirty);
+        d.undo();
+        assert_eq!(d.graph, before, "one undo: as before the import");
+    }
 
     #[test]
     fn a_selection_holds_several_nodes_beside_the_primary() {

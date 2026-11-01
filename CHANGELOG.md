@@ -18,6 +18,20 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.5 — 2026-10-31
+
+- **File ▸ Import project…** brings a saved project's nodes and
+  backdrops into this one, beside the work, selected and framed, one
+  undo step; a project file dropped on the Node Graph does the same
+  (elsewhere it still opens). Names already taken are renamed (grade1 →
+  grade2; the menu bar says which) and everything naming them follows:
+  wires, linked params and formulas, Attribute Set / Delete Geo
+  formulas, a Curve's Path of, Media Out's Audio and an exact Group.
+  This project's format, frame rate, range and folder are kept, and
+  imported Reads keep reading the same files.
+- Fixed: renaming a node now also updates formulas, curve paths, audio
+  and Group params that name it (in the GUI, MCP and Python).
+
 ## 0.14.4 — 2026-10-31
 
 - **Fixed: on macOS a Node Graph in its own window flickered and took no

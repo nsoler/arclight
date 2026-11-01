@@ -2214,7 +2214,7 @@ fn add_path(op: &str, out: &mut Value, links: Links) {
 
 /// The params of geometry nodes that are per-element formulas (see
 /// [`crate::expr::Expr::eval_elem`]).
-const FORMULA_PARAMS: [&str; 5] = ["expression", "attr1_expr", "attr2_expr", "attr3_expr", "attr4_expr"];
+pub(crate) const FORMULA_PARAMS: [&str; 5] = ["expression", "attr1_expr", "attr2_expr", "attr3_expr", "attr4_expr"];
 
 /// `op`'s per-element formulas in `params`, parsed (those that parse).
 fn formulas(op: &str, params: &Value) -> Vec<crate::expr::Expr> {

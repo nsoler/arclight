@@ -420,7 +420,7 @@ impl Session {
                     *inp = new.to_string();
                 }
             }
-            crate::link::rename(&mut n.params, old, new);
+            crate::graph_merge::rename_refs(&n.op, &mut n.params, old, new);
         }
         Ok(())
     }
@@ -1332,6 +1332,24 @@ mod tests {
         s.delete_node("plate-2").unwrap();
         let e = s.render(&b, 1).err().unwrap().to_string();
         assert!(e.contains("'color'") && e.contains("plate-2"), "{e}");
+    }
+
+    /// A rename reaches every reference, not only inputs and links:
+    /// geometry formulas, a curve's Path of, Media Out's Audio, an exact
+    /// Group (a pattern stays).
+    #[test]
+    fn renames_reach_formulas_paths_audio_and_groups() {
+        let mut s = Session::default();
+        let loc = s.create_node("locator", None, &Map::new(), &[]).unwrap();
+        let set = s.create_node("attribute_set", None, &map(json!({"attr1_name": "w", "attr1_expr": format!("dist(@P, {loc}.translate)"), "group": loc.clone()})), &[]).unwrap();
+        let del = s.create_node("delete_geo", None, &map(json!({"mode": "expression", "expression": format!("@P.y < {loc}.translate.y"), "group": "loc*"})), &[]).unwrap();
+        let path = s.create_node("curve", None, &map(json!({"source": "node path", "path_of": loc.clone()})), &[]).unwrap();
+        let out = s.create_node("media_out", None, &map(json!({"audio": loc.clone()})), &[]).unwrap();
+        s.rename(&loc, "marker").unwrap();
+        let p = |id: &str, k: &str| s.node(id).unwrap().params[k].clone();
+        assert_eq!((p(&set, "attr1_expr"), p(&set, "group")), (json!("dist(@P, marker.translate)"), json!("marker")));
+        assert_eq!((p(&del, "expression"), p(&del, "group")), (json!("@P.y < marker.translate.y"), json!("loc*")));
+        assert_eq!((p(&path, "path_of"), p(&out, "audio")), (json!("marker"), json!("marker")));
     }
 
     #[test]

@@ -50,6 +50,14 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.14.5, Import project + merge core** (Dev1): `src/graph_merge.rs`
+  (`merge(target, source, &Merge { only, place })` -> `Merged { nodes,
+  backdrops, renamed }`; `rename_refs` for every node-name reference:
+  inputs, links, geometry formulas, `path_of`, Media Out `audio`, an
+  exact Group; `read(path)`); `Doc::import` (one undo step);
+  `Doc::rename` / `Session::rename` use `rename_refs`. A .json dropped
+  on the Node Graph imports, elsewhere opens. Dev2 builds copy / paste
+  and templates on `merge`.
 - **0.14.4, panels fixed and finished** (Dev1): `Panels.opened` caches
   the ViewportBuilder a window opens with and hands egui the same one
   every frame until docked (egui's builder diff turned tracked size /

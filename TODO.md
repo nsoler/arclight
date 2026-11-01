@@ -322,6 +322,16 @@ after it. `ROADMAP.md` is the public summary of this list.
       frames, ⌫ deletes keys, a key click seeks. Properties out: edit,
       Look through, formula popups open there. All four out, then dock
       each back
+- [ ] Import project (0.14.5): File ▸ Import project… on
+      examples/geo-scatter.json into the starter project: nodes to the
+      right, selected, framed; the menu bar names renames; ⌘Z removes
+      them all, ⇧⌘Z brings them back; the render shows the rocks. Import
+      a project from another folder with relative plates, save this one
+      elsewhere, reopen: plates load. Drag a project .json onto the
+      Node Graph (also in its own window): imported; onto the viewer:
+      opened. Import the same project twice: the second copy renamed,
+      its wires and links inside it. Rename a Locator used in an
+      Attribute Set formula / a Curve's Path of: they follow
 - [ ] **Import project, copy / paste, templates** (phase 14, after the
       panels; user, 2026-10-31): File ▸ Import project… merges a saved
       .json into the current graph (nodes renamed on a clash with wires,

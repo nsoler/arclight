@@ -32,6 +32,7 @@ pub mod geom;
 pub mod gltf;
 pub mod gpu;
 pub mod graph;
+pub mod graph_merge;
 pub mod image;
 pub mod light2d;
 pub mod link;
