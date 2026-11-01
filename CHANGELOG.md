@@ -18,6 +18,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.13 — 2026-11-01
+
+- **Help ▸ Examples ▸ Cameras: one set, three views**
+  (`examples/cameras-three-views.json`): one Scene with three cameras
+  (wide and moving, close-up, orthographic top), three Scanline Renders
+  each picking its camera with the Camera param, a Viewer per view and
+  a contact sheet of all three. The Linux, macOS and Windows packages
+  ship it.
+
 ## 0.14.12 — 2026-11-01
 
 - **Cube: a UV layout param**, per face (as before) or **atlas** (each

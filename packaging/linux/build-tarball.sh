@@ -32,7 +32,7 @@ install -m755 "$out/arclight-gui" "$out/arclight" "$stage/bin/"
 strip "$stage/bin/"* 2>/dev/null || true
 install -m644 "$repo/examples/media/testsrc.mp4" "$stage/share/arclight/examples/media/"
 # Help ▸ Examples (the list is EXAMPLES in src/gui/main.rs).
-install -m644 "$repo/examples/geo-scatter.json" "$repo/examples/particledirectionalforce.json" "$repo/examples/projection-basic.json" "$repo/examples/multi-projection.json" "$repo/examples/projection-bake.json" "$stage/share/arclight/examples/"
+install -m644 "$repo/examples/geo-scatter.json" "$repo/examples/particledirectionalforce.json" "$repo/examples/projection-basic.json" "$repo/examples/multi-projection.json" "$repo/examples/projection-bake.json" "$repo/examples/cameras-three-views.json" "$stage/share/arclight/examples/"
 install -m644 "$repo/assets/arclight.svg" "$repo/assets/arclight-icon.svg" "$repo/assets/arclight.png" "$stage/share/arclight/icons/"
 install -m755 "$repo/packaging/linux/install.sh" "$repo/packaging/linux/uninstall.sh" "$stage/"
 install -m644 "$repo/CHANGELOG.md" "$stage/"

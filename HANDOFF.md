@@ -57,6 +57,12 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.14.13, three-views example** (Dev1, user request):
+  `examples/cameras-three-views.json` (Scene 'world', cam_wide / cam_close
+  / cam_top, render_* naming them; a 2 × 2 contact sheet: Transform's
+  output is limited to one frame of overscan, so a 3-wide strip doesn't
+  fit). EXAMPLES has six entries. Next: projection-bake.json bakes the
+  block (atlas).
 - **0.14.12, Cube atlas uvs** (Dev2, user request): `mesh::cube_uvs(..,
   CubeUvs::PerFace | Atlas)`, `grid_in(.., cell)` (per face
   bit-identical); atlas 3 × 2, `ATLAS_GUTTER` 0.02; Cube param

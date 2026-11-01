@@ -395,6 +395,10 @@ after it. `ROADMAP.md` is the public summary of this list.
 - [X] Project 3D: bake a projection to a uv texture (0.14.8, 0.14.9)
 - [X] A primitive Cube "uv layout: atlas" option, so a cube can be
       baked to one texture (0.14.12)
+- [ ] Help ▸ Examples ▸ Cameras: one set, three views (0.14.13): the
+      main Viewer shows the 2 × 2 sheet; play 1–48 (top-left pans); open
+      viewer_wide / close / top; set render_top's Camera to cam_close
+      from its menu; rename cam_close: render_close follows
 - [ ] Cube UV layout atlas (0.14.12): a Cube with a texture, atlas: each
       face shows its own cell; Bake Projection on a projected atlas cube
       renders like the live projection from the side

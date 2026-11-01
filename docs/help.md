@@ -132,6 +132,12 @@ one with its **Camera** param: the menu beside it lists the Camera nodes
 wired into the render (one on the camera input is looked for first).
 Renaming that Camera keeps the render on it; a name that matches no
 camera is an error saying which cameras there are.
+**Help ▸ Examples ▸ Cameras: one set, three views**
+(`examples/cameras-three-views.json`): one Scene holds a small lit set
+and three cameras (a wide one that moves, a close-up, an orthographic
+top view); three Scanline Renders of that Scene each name their camera,
+with a Viewer per view and a contact sheet of all three (Transform and
+Merge) in the main Viewer.
 
 To see the scene as a Camera sees it, click **Look through in 3D view** in
 its Properties (spot and area lights have it too): the viewer switches to

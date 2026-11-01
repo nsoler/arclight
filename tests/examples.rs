@@ -185,3 +185,55 @@ fn the_bake_example_renders_as_the_live_projection() {
     let glb = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/bake/set.glb");
     assert!(!glb.exists(), "Write Geo writes only when rendered");
 }
+
+/// cameras-three-views.json: one Scene holding three cameras, rendered
+/// three times, each Scanline Render naming its camera with Camera: the
+/// three views differ, and each is what that camera wired to the render's
+/// camera input gives. The wide camera moves; the others hold.
+#[test]
+fn the_three_views_example_renders_each_named_camera() {
+    let mut graph = example("cameras-three-views.json");
+    for n in graph.nodes.iter_mut() {
+        if n.op == "scanline_render" || n.id == "sky" {
+            n.params["width"] = 240.into();
+            n.params["height"] = 135.into();
+        }
+    }
+    let views = [("render_wide", "cam_wide"), ("render_close", "cam_close"), ("render_top", "cam_top")];
+    let named: Vec<Arc<Image>> = views.iter().map(|(render, _)| eval(&graph, render)).collect();
+    for i in 0..3 {
+        for j in i + 1..3 {
+            let d = mean_difference(&named[i], &named[j]);
+            assert!(d > 0.05, "{} and {} differ: mean difference {d}", views[i].0, views[j].0);
+        }
+    }
+    // Each the same with its camera wired in and the Camera param cleared.
+    let mut wired = graph.clone();
+    for (render, cam) in views {
+        let n = wired.nodes.iter_mut().find(|n| n.id == render).unwrap();
+        n.params["camera"] = "".into();
+        n.inputs[1] = cam.into();
+    }
+    for ((render, _), img) in views.iter().zip(&named) {
+        let d = mean_difference(img, &eval(&wired, render));
+        assert!(d < 1e-6, "{render}: named and wired match: mean difference {d}");
+    }
+    // Unnamed and unwired, all three would render through the scene's
+    // first camera (the wide one).
+    let n = wired.nodes.iter_mut().find(|n| n.id == "render_top").unwrap();
+    n.inputs[1] = String::new();
+    assert!(mean_difference(&eval(&wired, "render_top"), &named[0]) < 1e-6, "the scene's first camera by default");
+    // The wide camera moves; the close-up holds.
+    assert!(mean_difference(&eval_at(&graph, "render_wide", 48), &named[0]) > 0.02, "the wide camera moves");
+    assert!(mean_difference(&eval_at(&graph, "render_close", 48), &named[1]) < 1e-6, "the close-up holds");
+    // The contact sheet, full size: the project's frame, a view in each of
+    // three cells, the fourth left dark.
+    let graph = example("cameras-three-views.json");
+    let sheet = eval(&graph, "sheet");
+    assert_eq!((sheet.format.width, sheet.format.height), (960, 540));
+    let dark = |[x, y]: [i32; 2]| sheet.at(x, y)[..3].iter().all(|c| *c < 0.1);
+    for cell in [[240, 135], [720, 135], [240, 405]] {
+        assert!(!dark(cell), "a view at {cell:?}");
+    }
+    assert!(dark([720, 405]), "the fourth cell is free");
+}
