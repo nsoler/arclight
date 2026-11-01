@@ -320,7 +320,10 @@ pub fn primitive(op: &str, p: &Value) -> Option<Mesh> {
     let segs = |d: [f64; 3]| -> [usize; 3] { std::array::from_fn(|i| p["segments"].get(i).and_then(Value::as_f64).unwrap_or(d[i]).round().clamp(1.0, 512.0) as usize) };
     let num = |n: &str, d: f64| p[n].as_f64().filter(|v| v.is_finite() && *v > 0.0).unwrap_or(d);
     Some(match op {
-        "cube" => mesh::cube(numbers::<3>(&p["size"], 1.0), segs([1.0; 3])),
+        "cube" => {
+            let layout = if p["uv_layout"].as_str() == Some("atlas") { mesh::CubeUvs::Atlas } else { mesh::CubeUvs::PerFace };
+            mesh::cube_uvs(numbers::<3>(&p["size"], 1.0), segs([1.0; 3]), layout)
+        }
         "sphere" => {
             let s = segs([32.0, 16.0, 1.0]);
             mesh::sphere(num("radius", 0.5), [s[0].max(3), s[1].max(2)])

@@ -605,6 +605,21 @@ mod tests {
         assert!(text.lines().any(|l| l.starts_with("v ") && l.split_whitespace().count() == 7 && l.ends_with("0.5 0.25 1")), "Cd as vertex colors");
     }
 
+    /// A Cube with UV layout atlas written to a .glb reads back with its
+    /// atlas uvs.
+    #[test]
+    fn an_atlas_cube_keeps_its_uvs_in_a_glb() {
+        let dir = folder("atlas");
+        let cube = crate::scene::primitive_model("cube", &json!({"uv_layout": "atlas"}), None).unwrap();
+        let want = crate::mesh::cube_uvs([1.0; 3], [1; 3], crate::mesh::CubeUvs::Atlas).uvs;
+        assert_eq!(cube.mesh.uvs, want);
+        let path = write_geo(&json!({"path": dir.join("block.glb").to_string_lossy()}), &Scene { meshes: vec![cube], ..Scene::default() }, 1).unwrap();
+        let parts = crate::gltf::read_gltf(&path).unwrap();
+        let uvs = &parts[0].mesh.uvs;
+        assert_eq!(uvs.len(), want.len());
+        assert!(uvs.iter().zip(&want).all(|(a, b)| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6), "{uvs:?}");
+    }
+
     #[test]
     fn gltf_and_glb_round_trip_with_shared_meshes_and_attributes() {
         for ext in ["gltf", "glb"] {

@@ -187,13 +187,20 @@ impl Mesh {
     /// A flat grid of `nu` × `nv` cells from `origin`, spanning `du` (u = 0
     /// to 1) and `dv` (v = 0 to 1), facing `du × dv`.
     fn grid(&mut self, origin: Vec3, du: Vec3, dv: Vec3, nu: usize, nv: usize) {
+        self.grid_in(origin, du, dv, nu, nv, ([0.0, 0.0], [1.0, 1.0]));
+    }
+
+    /// [`Mesh::grid`] with its texture coordinates in `cell` (its corner
+    /// and size in uv) instead of the whole square.
+    fn grid_in(&mut self, origin: Vec3, du: Vec3, dv: Vec3, nu: usize, nv: usize, cell: ([f64; 2], [f64; 2])) {
         let n = du.cross(&dv).normalize();
         let (nu, nv) = (nu.max(1), nv.max(1));
         let base = self.positions.len() as u32;
+        let ([u0, v0], [w, h]) = cell;
         for j in 0..=nv {
             for i in 0..=nu {
                 let (u, v) = (i as f64 / nu as f64, j as f64 / nv as f64);
-                self.vertex(origin + du * u + dv * v, n, [u, v]);
+                self.vertex(origin + du * u + dv * v, n, [u0 + u * w, v0 + v * h]);
             }
         }
         self.cells(base, nu, nv, false);
@@ -229,22 +236,54 @@ fn around(u: f64) -> Vec3 {
     Vec3::new(-a.sin(), 0.0, -a.cos())
 }
 
+/// How a [`cube`]'s faces share the texture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CubeUvs {
+    /// Each face uses the whole uv square.
+    PerFace,
+    /// Each face in its own cell of a 3 × 2 grid, read as on the texture
+    /// (v up): +X, −X, +Y along the top row, −Y, +Z, −Z along the bottom,
+    /// [`ATLAS_GUTTER`] apart, so one texture can paint (or a bake fill)
+    /// every face.
+    Atlas,
+}
+
+/// The empty uv space between two cells of a [`CubeUvs::Atlas`] (half of
+/// it round the outside), so a bake's padding and mip filtering don't run
+/// from one face into the next.
+pub const ATLAS_GUTTER: f64 = 0.02;
+
 /// A box `size` across (x, y, z), centered on the origin, each face split
 /// into `segments` along its axes. Each face has its own vertices (hard
 /// edges) and texture coordinates 0 to 1, upright seen from outside (the
 /// top and bottom with −Z and +Z up, respectively).
 pub fn cube(size: [f64; 3], segments: [usize; 3]) -> Mesh {
+    cube_uvs(size, segments, CubeUvs::PerFace)
+}
+
+/// [`cube`] with its faces laid out in uv by `layout`; each is upright
+/// seen from outside either way.
+pub fn cube_uvs(size: [f64; 3], segments: [usize; 3], layout: CubeUvs) -> Mesh {
     let [hx, hy, hz] = size.map(|v| v / 2.0);
     let [sx, sy, sz] = size;
     let [nx, ny, nz] = segments;
     let (x, y, z) = (Vec3::x(), Vec3::y(), Vec3::z());
+    // The face's cell, by its place in +X −X +Y −Y +Z −Z.
+    let cell = |k: usize| match layout {
+        CubeUvs::PerFace => ([0.0, 0.0], [1.0, 1.0]),
+        CubeUvs::Atlas => {
+            let (col, row) = ((k % 3) as f64, if k < 3 { 1.0 } else { 0.0 });
+            let g = ATLAS_GUTTER / 2.0;
+            ([col / 3.0 + g, row / 2.0 + g], [1.0 / 3.0 - 2.0 * g, 0.5 - 2.0 * g])
+        }
+    };
     let mut m = Mesh::default();
-    m.grid(Vec3::new(-hx, -hy, hz), x * sx, y * sy, nx, ny); // +Z
-    m.grid(Vec3::new(hx, -hy, -hz), -x * sx, y * sy, nx, ny); // −Z
-    m.grid(Vec3::new(hx, -hy, hz), -z * sz, y * sy, nz, ny); // +X
-    m.grid(Vec3::new(-hx, -hy, -hz), z * sz, y * sy, nz, ny); // −X
-    m.grid(Vec3::new(-hx, hy, hz), x * sx, -z * sz, nx, nz); // +Y
-    m.grid(Vec3::new(-hx, -hy, -hz), x * sx, z * sz, nx, nz); // −Y
+    m.grid_in(Vec3::new(-hx, -hy, hz), x * sx, y * sy, nx, ny, cell(4)); // +Z
+    m.grid_in(Vec3::new(hx, -hy, -hz), -x * sx, y * sy, nx, ny, cell(5)); // −Z
+    m.grid_in(Vec3::new(hx, -hy, hz), -z * sz, y * sy, nz, ny, cell(0)); // +X
+    m.grid_in(Vec3::new(-hx, -hy, -hz), z * sz, y * sy, nz, ny, cell(1)); // −X
+    m.grid_in(Vec3::new(-hx, hy, hz), x * sx, -z * sz, nx, nz, cell(2)); // +Y
+    m.grid_in(Vec3::new(-hx, -hy, -hz), x * sx, z * sz, nx, nz, cell(3)); // −Y
     m
 }
 
@@ -611,6 +650,59 @@ mod tests {
         // The front face's texture is upright: u to the right, v up.
         let front: Vec<usize> = (0..m.positions.len()).filter(|&i| m.normals[i] == Vec3::z()).collect();
         assert!(front.iter().all(|&i| (m.uvs[i][0] - (m.positions[i].x + 0.5)).abs() < 1e-12 && (m.uvs[i][1] - (m.positions[i].y + 0.5)).abs() < 1e-12));
+    }
+
+    /// Per face: each face's uvs are its grid's (i / nu, j / nv), exactly
+    /// as before the atlas; atlas: the same faces, each in its own cell
+    /// minus the gutter, the cells apart and in the unit square, upright as
+    /// per face (the same uvs, moved and scaled).
+    #[test]
+    fn a_cubes_uvs_per_face_and_in_an_atlas() {
+        let segments = [2, 3, 4];
+        let per_face = cube_uvs([1.0, 2.0, 3.0], segments, CubeUvs::PerFace);
+        assert_eq!(per_face.uvs, cube([1.0, 2.0, 3.0], segments).uvs);
+        let [nx, ny, nz] = segments;
+        let faces = [(nx, ny), (nx, ny), (nz, ny), (nz, ny), (nx, nz), (nx, nz)];
+        let mut old = Vec::new();
+        for (nu, nv) in faces {
+            for j in 0..=nv {
+                for i in 0..=nu {
+                    old.push([i as f64 / nu as f64, j as f64 / nv as f64]);
+                }
+            }
+        }
+        assert_eq!(per_face.uvs, old, "bit for bit");
+        let atlas = cube_uvs([1.0, 2.0, 3.0], segments, CubeUvs::Atlas);
+        assert_eq!((atlas.positions.clone(), atlas.triangles.clone()), (per_face.positions.clone(), per_face.triangles.clone()));
+        // The faces in mesh order (+Z −Z +X −X +Y −Y), and their cells.
+        let cell_of = [4, 5, 0, 1, 2, 3];
+        let g = ATLAS_GUTTER / 2.0;
+        let mut start = 0;
+        let mut boxes = Vec::new();
+        for (f, (nu, nv)) in faces.into_iter().enumerate() {
+            let n = (nu + 1) * (nv + 1);
+            let k = cell_of[f];
+            let (lo, hi) = ([(k % 3) as f64 / 3.0 + g, if k < 3 { 0.5 } else { 0.0 } + g], [(k % 3 + 1) as f64 / 3.0 - g, if k < 3 { 1.0 } else { 0.5 } - g]);
+            for i in start..start + n {
+                let (a, p) = (atlas.uvs[i], per_face.uvs[i]);
+                let want = [lo[0] + p[0] * (hi[0] - lo[0]), lo[1] + p[1] * (hi[1] - lo[1])];
+                assert!((a[0] - want[0]).abs() < 1e-12 && (a[1] - want[1]).abs() < 1e-12, "face {f} vertex {i}: {a:?} vs {want:?}");
+            }
+            let us = atlas.uvs[start..start + n].iter();
+            let (umin, umax) = us.clone().fold((f64::MAX, f64::MIN), |(a, b), uv| (a.min(uv[0]), b.max(uv[0])));
+            let (vmin, vmax) = us.fold((f64::MAX, f64::MIN), |(a, b), uv| (a.min(uv[1]), b.max(uv[1])));
+            assert!((umin - lo[0]).abs() < 1e-12 && (umax - hi[0]).abs() < 1e-12 && (vmin - lo[1]).abs() < 1e-12 && (vmax - hi[1]).abs() < 1e-12, "face {f} fills its cell");
+            assert!(umin > 0.0 && vmin > 0.0 && umax < 1.0 && vmax < 1.0);
+            boxes.push((umin, umax, vmin, vmax));
+            start += n;
+        }
+        for a in 0..6 {
+            for b in a + 1..6 {
+                let (p, q) = (boxes[a], boxes[b]);
+                let gap = (q.0 - p.1).max(p.0 - q.1).max(q.2 - p.3).max(p.2 - q.3);
+                assert!(gap >= ATLAS_GUTTER - 1e-12, "faces {a} and {b} {ATLAS_GUTTER} apart: {gap}");
+            }
+        }
     }
 
     #[test]

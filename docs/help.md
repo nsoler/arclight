@@ -426,7 +426,12 @@ selected object.
 
 - **Cube**, **Sphere**, **Cylinder** and **Plane** (3D category) make
   meshes with their own size and segments; connect an image to their
-  **texture** input to wrap it on, times **Color**.
+  **texture** input to wrap it on, times **Color**. The Cube's **UV
+  layout** is per face (each face shows the whole texture) or atlas:
+  each face gets its own cell of a 3 × 2 grid, upright seen from
+  outside, +X, −X, +Y along the top row and −Y, +Z, −Z along the
+  bottom, with a small gutter between the cells, so one texture paints
+  every face differently and Bake Projection can bake the cube.
 - **Read Splat** reads a Gaussian splat capture (`.ply`, `.splat` or
   Niantic's compressed `.spz`; `.ply` as Postshot,
   Polycam, Luma, Nerfstudio, gsplat and the INRIA 3DGS code export it:
@@ -765,9 +770,9 @@ them as they go. Press play.
   line. Surfaces baked by one node share one texture, so where their uvs
   overlap the later wins: bake them one node each (Group) unless their
   uvs are laid out apart. A mesh needs uvs; a primitive **Cube**'s six
-  faces each use the whole uv square, so a cube can't be baked to one
-  texture (leave it projected). Instances aren't baked (Realize Instances
-  first). **Bake Projection Texture** gives the texture itself, for a
+  faces each use the whole uv square unless its **UV layout** is atlas,
+  so set the Cube's UV layout to atlas to bake it. Instances aren't
+  baked (Realize Instances first). **Bake Projection Texture** gives the texture itself, for a
   Write (an EXR or PNG) or another node: the projections' part only,
   alpha where they landed, so laid **Over** the surface's own texture it
   gives the bake. **Help ▸ Examples ▸ Projection: baked to a texture**

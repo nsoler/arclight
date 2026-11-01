@@ -18,6 +18,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.12 — 2026-11-01
+
+- **Cube: a UV layout param**, per face (as before) or **atlas** (each
+  face its own cell of a 3 × 2 grid, +X −X +Y over −Y +Z −Z, upright
+  seen from outside, a 2% gutter), so one texture paints each face
+  differently and **Bake Projection can bake a cube**.
+
 ## 0.14.11 — 2026-10-31
 
 - **Scanline Render: a Camera param** picks which camera renders, by its

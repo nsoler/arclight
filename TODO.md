@@ -393,8 +393,11 @@ after it. `ROADMAP.md` is the public summary of this list.
       bits): past ~16.7 M births ids wrap (only Instance on Points'
       random pick by id cares) (Dev2)
 - [X] Project 3D: bake a projection to a uv texture (0.14.8, 0.14.9)
-- [ ] A primitive Cube "uv layout: atlas" option, so a cube can be
-      baked to one texture (its six faces share one uv square today)
+- [X] A primitive Cube "uv layout: atlas" option, so a cube can be
+      baked to one texture (0.14.12)
+- [ ] Cube UV layout atlas (0.14.12): a Cube with a texture, atlas: each
+      face shows its own cell; Bake Projection on a projected atlas cube
+      renders like the live projection from the side
 - [ ] Geo Info: per-point selection in the sheet's filter; world-space
       values
 - [ ] Scanline Render's Width / Height are ignored when a background is

@@ -904,6 +904,7 @@ pub static OPS: &[OpInfo] = &[
             PLACE_S,
             p!("size", "Size", ParamKind::Vec3, [1.0, 1.0, 1.0]),
             fixed!("segments", "Segments", ParamKind::Vec3, [1.0, 1.0, 1.0]),
+            fixed!("uv_layout", "UV layout", ParamKind::Choice(&["per face", "atlas"]), "per face"),
             SURFACE_COLOR,
             SHADING,
             SPECULAR,
@@ -916,7 +917,10 @@ pub static OPS: &[OpInfo] = &[
         overlay: Overlay::None,
         mask_base: None,
         help: "A box in 3D, Size across, centered on its origin, each face divided into Segments, then scaled, \
-               rotated and moved. Each face shows the whole texture (if connected) times Color. Outputs a scene holding it.",
+               rotated and moved. The texture (if connected) shows times Color, each face upright seen from outside: \
+               UV layout per face puts the whole texture on every face; atlas gives each face its own part of it, \
+               a 3 × 2 grid (+X, −X, +Y along the top, −Y, +Z, −Z along the bottom, a little apart), so one texture \
+               paints each face differently and Bake Projection can bake the cube. Outputs a scene holding it.",
     },
     OpInfo {
         name: "sphere",

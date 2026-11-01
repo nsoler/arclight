@@ -364,6 +364,36 @@ mod tests {
         assert!(diff < 2e-3, "mean difference {diff}");
     }
 
+    /// A Cube with UV layout atlas bakes every face it shows the projector
+    /// to its own part of one texture: baked (as Bake Projection sets it:
+    /// the texture, its color white) and seen from the side, it looks as
+    /// with the projection live. Per face, the faces overwrite one another
+    /// in the shared uv square, and it doesn't.
+    #[test]
+    fn an_atlas_cube_bakes_every_face() {
+        let cam = projector();
+        let side = filling(&cam, -5.0)[1] * 0.45;
+        let mean_diff = |layout: &str| {
+            let params = json!({ "uv_layout": layout, "size": [side, side, side], "translate": [0.0, 0.0, -6.0], "rotate": [25.0, 35.0, 0.0], "color": [0.5, 0.5, 0.5, 1.0] });
+            let block = Model { node: "block".into(), ..crate::scene::primitive_model("cube", &params, None).unwrap() };
+            let live = projected(Scene { meshes: vec![block.clone()], ..Scene::default() }, json!({}), &plate());
+            let b = bake(&live, |_| true, Size { width: 512, height: 512 }, 4).unwrap();
+            let frozen = Model { texture: Some(Arc::new(b.surface)), material: crate::mesh::Material { color: [1.0; 3], ..block.material.clone() }, ..block };
+            let frozen = Scene { meshes: vec![frozen], ..Scene::default() };
+            let view = Camera { world: geom::trs([1.5, 0.8, -1.0], [-8.0, 12.0, 0.0], [1.0; 3]), ..cam.clone() };
+            let size = Size { width: 160, height: 100 };
+            let (a, f) = crate::gpu::cpu_only(|| (super::super::render(&live, &view, size, 2, None), super::super::render(&frozen, &view, size, 2, None)));
+            let shown = a.pixels.iter().filter(|p| p[3] > 0.5).count();
+            assert!(shown > a.pixels.len() / 10, "{layout}: the cube is in view ({shown})");
+            a.pixels.iter().zip(&f.pixels).map(|(p, q)| (0..4).map(|c| (p[c] - q[c]).abs() as f64).sum::<f64>()).sum::<f64>() / (shown * 4) as f64
+        };
+        let (atlas, per_face) = (mean_diff("atlas"), mean_diff("per face"));
+        // (Not nil: the plate's blue, different at every pixel, is filtered
+        // twice, into the texture and out of it.)
+        assert!(atlas < 6e-3, "atlas: mean difference {atlas}");
+        assert!(per_face > 0.03, "per face: mean difference {per_face}");
+    }
+
     /// Padding grows the filled texels into empty uv space; a mesh without
     /// uvs, or a Group matching nothing, is an error.
     #[test]

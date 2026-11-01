@@ -57,6 +57,12 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.14.12, Cube atlas uvs** (Dev2, user request): `mesh::cube_uvs(..,
+  CubeUvs::PerFace | Atlas)`, `grid_in(.., cell)` (per face
+  bit-identical); atlas 3 × 2, `ATLAS_GUTTER` 0.02; Cube param
+  `uv_layout`. An atlas cube bakes to 0.0033 mean of live (per face
+  0.087). Next: Dev1's three-views example, then projection-bake.json
+  baking the block.
 - **Released v0.14.11** (2026-11-01): 0.14.8–0.14.11 since v0.14.7.
 - **0.14.11, Scanline Render's Camera param** (Dev2, user request):
   `ScanlineRender.camera` (serde default ""); `render_scene(inputs,
