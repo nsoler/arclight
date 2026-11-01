@@ -39,9 +39,21 @@ input is violet and labelled **mask**.
 The **⧉** button at the right of the Node Graph's tab (or **View ▸ Node
 Graph in its own window**) opens the graph in a window of its own, to put
 on another screen; the bottom panel keeps the Curve Editor. Close that
-window (or click its **Dock**) to put the graph back. The next start opens
-it the way you left it: out or docked, at the same size (and, except on
-Wayland, where the desktop places windows, in the same place).
+window (or click its **Dock**) to put the graph back; while it's out, its
+tab stays in the tab row, greyed (**Node Graph ⧉**): click it to dock the
+graph too. The next start opens it the way you left it, out or docked, at
+the same size (where it goes on your screens is up to the desktop: drag it
+to the other monitor). **View ▸ Dock all panels** puts every panel back in
+the main window at once, if a window ever ends up out of reach.
+
+The **Viewer**, the **Curve Editor** and **Properties** come out the same
+way (**View ▸ … in its own window**, or the **⧉** on the Curve Editor's
+tab and at Properties' heading). The viewer takes the player with it; with
+the viewer out, the Node Graph and Curve Editor fill the main window. Any
+of these windows can fill its screen: **Full screen** at its top, or
+**F11** (again to come back), and it reopens full screen next time; a
+viewer full screen on a second monitor with the graph on the first is the
+usual setup.
 
 Keys work in the window they're pressed in: in the graph's window, **F**
 frames the graph, **⌘A** selects every node, **⌫** deletes, **⇧E** /
@@ -50,7 +62,10 @@ undo, redo and save work as in the main window (so do **Tab**, which
 switches the viewer between 2D and 3D, and the player's keys). **⇧E** in
 the main window opens the browser in the graph's window and brings it to
 the front. Files dropped on the graph's window become Media In nodes as in
-the main window.
+the main window. In the viewer's window, **F** fits the picture, **⌘A**
+selects the shape's points and the viewer's own keys (2D / 3D, G / R / S
+in 3D) work as in the main window; in the Curve Editor's, **F** frames the
+curves and **⌫** deletes the selected keys.
 
 ### 3D camera setup
 

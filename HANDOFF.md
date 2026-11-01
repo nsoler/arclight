@@ -50,6 +50,15 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.14.4, panels fixed and finished** (Dev1): `Panels.opened` caches
+  the ViewportBuilder a window opens with and hands egui the same one
+  every frame until docked (egui's builder diff turned tracked size /
+  pos into OuterPosition / InnerSize commands each frame: the macOS
+  flicker); `PanelWindow.pos` removed (egui can't list monitors to
+  check a saved place; an old `pos` is ignored and dropped); View ▸ Dock
+  all panels; a detached pane keeps a greyed tab in the main window.
+  Every pane detachable, Full screen / F11. **Needs the user's check on
+  the Mac** (Wayland never showed the bug).
 - **0.14.3, instanced occluders in projector maps** (Dev2):
   `instances::Plan::plan_maps` (was `plan_shadows`) lists the copies
   crossing the near plane for every occluding projector's map after the

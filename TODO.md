@@ -290,7 +290,7 @@ a public release once tested.
 Phase 13 ends with a pause for the user's hand testing; these come
 after it. `ROADMAP.md` is the public summary of this list.
 
-- [ ] **Detachable panels for dual monitors** (first UI item after the
+- [ ] **Detachable panels for dual monitors** (built: 0.14.2, 0.14.4; the OS places windows; done once the Mac hand tests below pass) (first UI item after the
       pause; Dev1): the Node Graph in its own OS window (egui immediate
       viewport: `editor.ui(ui, &mut doc, …)` drawn in it), docked back
       when closed, state and size in settings.json (Wayland: the
@@ -299,6 +299,10 @@ after it. `ROADMAP.md` is the public summary of this list.
       Tab, undo / redo / save), popups and file drops in that window.
       Built generic, so the Viewer (full screen on a second monitor),
       Curve Editor and Properties can detach too. About two reports.
+- [ ] **On the Mac first** (0.14.4): detach the Node Graph: it opens on
+      screen, no flicker, takes clicks; Dock, closing it and View ▸ Dock
+      all panels each put it back; its greyed tab in the main window
+      docks it too
 - [ ] Node Graph in its own window (0.14.2): View ▸ Node Graph in its
       own window (and ⧉): a second window shows the graph, the bottom
       panel keeps the Curve Editor; move it to the other monitor and
@@ -307,8 +311,17 @@ after it. `ROADMAP.md` is the public summary of this list.
       undo step. ⇧E in the main window opens the browser in the graph
       window and raises it. Drop an image on it: a Media In. Close it
       (or Dock): back in the panel. Quit with it out and restart: out
-      again, same size (X11 / macOS: same place and monitor). Edit ▸
+      again, same size (the OS places it). Edit ▸
       Preferences ▸ OK while it's out: it stays out
+- [ ] Viewer / Curve Editor / Properties in their own windows (0.14.4):
+      View ▸ Viewer in its own window: picture, toolbar and player there,
+      graph and curves fill the main window; play, scrub, Tab, 3D orbit
+      and G / R / S there. Full screen (button and F11) on the second
+      monitor and back; restart: it reopens full screen. A GPU render
+      (GPU on) and the 3D lit preview show in it. Curve Editor out: F
+      frames, ⌫ deletes keys, a key click seeks. Properties out: edit,
+      Look through, formula popups open there. All four out, then dock
+      each back
 - [ ] **Import project, copy / paste, templates** (phase 14, after the
       panels; user, 2026-10-31): File ▸ Import project… merges a saved
       .json into the current graph (nodes renamed on a clash with wires,

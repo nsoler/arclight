@@ -338,8 +338,6 @@ struct App {
     /// A drag or typing going on in a panel's own window this frame (one
     /// undo step per finished gesture, as in the main window).
     gesture_out: bool,
-    /// Windows can't place themselves (Wayland).
-    wayland: bool,
 }
 
 impl App {
@@ -429,7 +427,6 @@ impl App {
             panels_unsaved: false,
             pane_rects: Default::default(),
             gesture_out: false,
-            wayland: panels::on_wayland(),
         };
         app.apply_settings(&ctx_for_settings);
         app
@@ -1375,37 +1372,78 @@ impl App {
             (BottomTab::Curves, [Pane::Graph]) => self.tab = BottomTab::Graph,
             _ => {}
         }
-        if !bottom.is_empty() {
+        let viewer_out = self.panels.detached(Pane::Viewer);
+        // With the viewer out, the graph and curves fill the main window.
+        // With both of those out, a bar of their (greyed) tabs stays, so
+        // a panel out is never just gone.
+        if bottom.is_empty() && !viewer_out && !self.panels.out().is_empty() {
+            egui::Panel::bottom("graph_tabs").show(ui, |ui| {
+                self.tab_row(ui, &bottom);
+            });
+        }
+        if !bottom.is_empty() && !viewer_out {
             egui::Panel::bottom("graph")
                 .resizable(true)
                 .default_size(340.0)
                 .min_size(140.0)
                 .frame(egui::Frame::NONE.fill(ui.visuals().panel_fill))
-                .show(ui, |ui| {
-                    let shown = ui.horizontal(|ui| {
-                        ui.add_space(6.0);
-                        if bottom.contains(&Pane::Graph) {
-                            ui.selectable_value(&mut self.tab, BottomTab::Graph, "Node Graph");
-                        }
-                        if bottom.contains(&Pane::Curves) {
-                            let animated = self.doc.selected.as_ref().is_some_and(|id| self.doc.is_node_animated(id));
-                            let label = if animated { "Curve Editor ◆" } else { "Curve Editor" };
-                            ui.selectable_value(&mut self.tab, BottomTab::Curves, label).on_hover_text("Keyframe curves of the selected node");
-                        }
-                        let shown = if self.tab == BottomTab::Graph { Pane::Graph } else { Pane::Curves };
-                        self.detach_button(ui, shown);
-                        shown
-                    });
-                    self.pane_ui(ui, shown.inner);
-                });
+                .show(ui, |ui| self.bottom_tabs(ui, &bottom));
         }
         egui::CentralPanel::default_margins().show(ui, |ui| {
-            if self.panels.detached(Pane::Viewer) {
-                ui.centered_and_justified(|ui| ui.weak("The viewer is in its own window (View ▸ Viewer in its own window)"));
-            } else {
+            if !viewer_out {
                 self.pane_ui(ui, Pane::Viewer);
+            } else if !bottom.is_empty() {
+                self.bottom_tabs(ui, &bottom);
+            } else {
+                self.tab_row(ui, &bottom);
+                ui.centered_and_justified(|ui| ui.weak("Every panel is in a window of its own: click one above, or View ▸ Dock all panels, to bring it back"));
             }
         });
+    }
+
+    /// The Node Graph and Curve Editor's tabs (those of `bottom` still in
+    /// the main window) and the one picked.
+    fn bottom_tabs(&mut self, ui: &mut egui::Ui, bottom: &[Pane]) {
+        let shown = self.tab_row(ui, bottom);
+        self.pane_ui(ui, shown);
+    }
+
+    /// The tab row: the Node Graph and Curve Editor's tabs (those in
+    /// `bottom`), then every panel that's out in its own window, greyed,
+    /// a click docking it; the ⧉ for the tab shown. The pane shown.
+    fn tab_row(&mut self, ui: &mut egui::Ui, bottom: &[Pane]) -> Pane {
+        ui.horizontal(|ui| {
+            ui.add_space(6.0);
+            for pane in [Pane::Graph, Pane::Curves] {
+                let tab = if pane == Pane::Graph { BottomTab::Graph } else { BottomTab::Curves };
+                if bottom.contains(&pane) {
+                    let animated = pane == Pane::Curves && self.doc.selected.as_ref().is_some_and(|id| self.doc.is_node_animated(id));
+                    let label = if animated { "Curve Editor ◆" } else { pane.title() };
+                    let r = ui.selectable_value(&mut self.tab, tab, label);
+                    if pane == Pane::Curves {
+                        r.on_hover_text("Keyframe curves of the selected node");
+                    }
+                }
+            }
+            for pane in self.panels.out() {
+                let label = egui::RichText::new(format!("{} ⧉", pane.title())).weak();
+                let tip = format!("The {} is in its own window: click to dock it here", pane.title());
+                if ui.add(egui::Button::new(label).frame(false)).on_hover_text(tip).clicked() {
+                    self.panels.set_detached(pane, false);
+                    match pane {
+                        Pane::Graph => self.tab = BottomTab::Graph,
+                        Pane::Curves => self.tab = BottomTab::Curves,
+                        _ => {}
+                    }
+                }
+            }
+            let shown = if self.tab == BottomTab::Graph { Pane::Graph } else { Pane::Curves };
+            if bottom.contains(&shown) {
+                self.detach_button(ui, shown);
+            }
+            shown
+        })
+        .inner
     }
 
     /// A pane's insides, in the main window or its own.
@@ -1492,11 +1530,8 @@ impl App {
     }
 
     /// The button at a panel's header that opens it in a window of its
-    /// own (only for those that can go yet).
+    /// own.
     fn detach_button(&mut self, ui: &mut egui::Ui, pane: Pane) {
-        if !panels::DETACHABLE.contains(&pane) {
-            return;
-        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(6.0);
             let tip = format!("Open the {} in a window of its own (for a second monitor); close that window to put it back", pane.title());
@@ -1510,25 +1545,34 @@ impl App {
     /// the main window, with its own keys and drops; docked back when the
     /// window closes (or Dock is clicked).
     fn pane_window(&mut self, ctx: &egui::Context, pane: Pane) {
-        let builder = self.panels.builder(pane, self.wayland);
+        let builder = self.panels.builder(pane);
         ctx.show_viewport_immediate(pane.viewport_id(), builder, |ui, _class| {
             let ctx = ui.ctx().clone();
             let here = Here::new(vec![pane], &self.pane_rects, ctx.input(|i| i.pointer.hover_pos()));
             self.handle_drops(&ctx);
             self.shortcuts(&ctx, &here);
             let mut dock = false;
+            let full = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+            // F11, or the button: this window full screen (a viewer on a
+            // second monitor), or back.
+            let mut go_full = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F11));
             egui::Panel::top(egui::Id::unique(("pane_header", pane.key()))).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.strong(pane.title());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         dock = ui.small_button("Dock").on_hover_text("Put it back in the main window (closing this window does too)").clicked();
+                        let label = if full { "Exit full screen" } else { "Full screen" };
+                        go_full |= ui.small_button(label).on_hover_text("Fill this window's screen, or back (F11)").clicked();
                     });
                 });
             });
+            if go_full {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!full));
+            }
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(ui.visuals().panel_fill)).show(ui, |ui| self.pane_ui(ui, pane));
-            let (content, outer, full, close) = ctx.input(|i| (i.content_rect(), i.viewport().outer_rect, i.viewport().fullscreen.unwrap_or(false), i.viewport().close_requested()));
+            let (content, full, close) = ctx.input(|i| (i.content_rect(), i.viewport().fullscreen.unwrap_or(false), i.viewport().close_requested()));
             self.gesture_out |= ctx.input(|i| i.pointer.any_down()) || ctx.text_edit_focused();
-            self.panels.track(pane, content, outer, full, close || dock);
+            self.panels.track(pane, content, full, close || dock);
         });
     }
 
@@ -1689,7 +1733,12 @@ impl App {
                 ui.checkbox(&mut self.viewer.show_frame_size, "Show frame size")
                     .on_hover_text("Label the viewed frame's corners with its size: 0,0 bottom-left, width,height top-right");
                 ui.separator();
-                for pane in panels::DETACHABLE {
+                // (Always here: the way back from a window out of reach.)
+                if ui.add_enabled(!self.panels.out().is_empty(), egui::Button::new("Dock all panels")).on_hover_text("Put every panel that has a window of its own back in this one").clicked() {
+                    self.panels.dock_all();
+                    ui.close();
+                }
+                for pane in &Pane::ALL {
                     let mut out = self.panels.detached(*pane);
                     let tip = format!("The {} in a window of its own, for a second monitor (closing that window puts it back)", pane.title());
                     if ui.checkbox(&mut out, format!("{} in its own window", pane.title())).on_hover_text(tip).changed() {
@@ -2220,6 +2269,10 @@ mod tests {
         // Docked again: the bottom panel's tab comes first in the main window.
         app.panels.set_detached(Pane::Graph, false);
         assert_eq!(app.main_panes(), [Pane::Graph, Pane::Viewer, Pane::Properties]);
+        // The viewer and Properties out: the main window has the graph.
+        app.panels.set_detached(Pane::Viewer, true);
+        app.panels.set_detached(Pane::Properties, true);
+        assert_eq!(app.main_panes(), [Pane::Graph]);
         drop(app);
         std::fs::remove_dir_all(&dir).ok();
     }

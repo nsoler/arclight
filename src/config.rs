@@ -111,17 +111,15 @@ impl Default for Settings {
     }
 }
 
-/// A GUI panel's own window: out of the main window or docked, and the
-/// size (points) it had, and on X11 / macOS / Windows its position
-/// (points, across the monitors: which one it was on) and whether it
-/// filled its screen. Wayland gives no positions (the compositor places
-/// windows), so there `pos` stays as it was.
+/// A GUI panel's own window: out of the main window or docked, the size
+/// (points) it had and whether it filled its screen. Not its place: the
+/// OS places it (a saved place can be off every monitor there is now; a
+/// `pos` from 0.14.2 is ignored).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(default)]
 pub struct PanelWindow {
     pub detached: bool,
     pub size: Option<[f32; 2]>,
-    pub pos: Option<[f32; 2]>,
     pub fullscreen: bool,
 }
 
@@ -414,7 +412,7 @@ mod tests {
     fn panel_windows_round_trip() {
         assert!(Settings::default().panels.is_empty());
         let mut s = Settings::default();
-        s.panels.insert("graph".into(), PanelWindow { detached: true, size: Some([900.0, 500.0]), pos: Some([2000.0, 40.0]), fullscreen: false });
+        s.panels.insert("graph".into(), PanelWindow { detached: true, size: Some([900.0, 500.0]), fullscreen: false });
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back, s);
         let part: Settings = serde_json::from_str(r#"{"panels": {"viewer": {"detached": true}}}"#).unwrap();

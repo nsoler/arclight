@@ -1,9 +1,10 @@
 //! Panels in windows of their own, for a second monitor: the Node Graph
 //! (and, built the same way, the Viewer, Curve Editor and Properties) drawn
 //! in an egui immediate viewport, an OS window, instead of in the main
-//! window; docked back when that window closes. Whether each is out, its
-//! size and (where the platform tells) its position and full screen are
-//! kept in settings.json ([`PanelWindow`]).
+//! window; docked back when that window closes (or with View ▸ Dock all
+//! panels). Whether each is out, its size and full screen are kept in
+//! settings.json ([`PanelWindow`]); the OS places the window, as egui
+//! can't say which monitors there are to check a saved place against.
 //!
 //! Each window handles its own keys: the app's shortcuts run once a
 //! window, given the panes drawn there and the one under the pointer
@@ -61,22 +62,26 @@ impl Pane {
     }
 }
 
-/// The panes that can go out into a window of their own (so far).
-pub const DETACHABLE: &[Pane] = &[Pane::Graph];
-
 /// Which panes are out in windows of their own, and where those are.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Panels {
     windows: BTreeMap<Pane, PanelWindow>,
     /// Changed since [`take_changed`](Self::take_changed) last said so.
     changed: bool,
+    /// The builder each open window was made with, handed to egui
+    /// unchanged every frame until it's docked: egui turns any change in
+    /// it into a move / resize / full screen command, so one following
+    /// the window's tracked geometry would move it every frame (on macOS
+    /// the reported and the set position differ: the window flickered and
+    /// took no clicks).
+    opened: BTreeMap<Pane, egui::ViewportBuilder>,
 }
 
 impl Panels {
     /// From settings.json's `panels` (names it doesn't know left out).
     pub fn from_settings(saved: &BTreeMap<String, PanelWindow>) -> Panels {
         let windows = Pane::ALL.into_iter().filter_map(|p| saved.get(p.key()).map(|w| (p, w.clone()))).collect();
-        Panels { windows, changed: false }
+        Panels { windows, changed: false, opened: BTreeMap::new() }
     }
 
     /// As settings.json keeps them: docked panes' sizes too, for next time.
@@ -88,11 +93,22 @@ impl Panels {
         self.windows.get(&pane).is_some_and(|w| w.detached)
     }
 
+    /// Every pane back in the main window (View ▸ Dock all panels: also
+    /// the way back from a window that's out of reach).
+    pub fn dock_all(&mut self) {
+        for pane in Pane::ALL {
+            self.set_detached(pane, false);
+        }
+    }
+
     /// Out into its own window, or docked back.
     pub fn set_detached(&mut self, pane: Pane, out: bool) {
         if self.detached(pane) != out {
             self.windows.entry(pane).or_default().detached = out;
             self.changed = true;
+        }
+        if !out {
+            self.opened.remove(&pane);
         }
     }
 
@@ -106,51 +122,52 @@ impl Panels {
         std::mem::take(&mut self.changed)
     }
 
-    /// `pane`'s window as it was left: its size, and its place unless the
-    /// compositor places windows (`wayland`); full screen if it was.
-    pub fn builder(&self, pane: Pane, wayland: bool) -> egui::ViewportBuilder {
+    /// The builder for `pane`'s window this frame: made once, when it
+    /// opens, from where it was left ([`initial`](Self::initial)), then
+    /// the same until it's docked (see `opened`).
+    pub fn builder(&mut self, pane: Pane) -> egui::ViewportBuilder {
+        if let Some(b) = self.opened.get(&pane) {
+            return b.clone();
+        }
+        let b = self.initial(pane);
+        self.opened.insert(pane, b.clone());
+        b
+    }
+
+    /// `pane`'s window as it was left: its size, full screen if it was.
+    /// No place: the OS puts it on a screen (a saved place could be off
+    /// every monitor there is now, and egui can't tell).
+    fn initial(&self, pane: Pane) -> egui::ViewportBuilder {
         let w = self.windows.get(&pane).cloned().unwrap_or_default();
         let size = w.size.map_or(pane.default_size(), Vec2::from);
-        let mut b = egui::ViewportBuilder::default()
+        egui::ViewportBuilder::default()
             .with_title(format!("{} — {}", pane.title(), arclight::SHORT_NAME))
             .with_app_id("arclight")
             .with_inner_size(size)
             .with_min_inner_size([240.0, 160.0])
-            .with_fullscreen(w.fullscreen);
-        if let Some(p) = w.pos.filter(|_| !wayland) {
-            b = b.with_position(Pos2::from(p));
-        }
-        b
+            .with_fullscreen(w.fullscreen)
     }
 
     /// After drawing `pane`'s window: keep its size (`content`, the
-    /// window's inside), its position (`outer`, None on Wayland) and full
-    /// screen. True when the window asked to close: then it's docked.
-    pub fn track(&mut self, pane: Pane, content: Rect, outer: Option<Rect>, fullscreen: bool, close: bool) -> bool {
+    /// window's inside) and full screen, for next time. True when the
+    /// window asked to close: then it's docked.
+    pub fn track(&mut self, pane: Pane, content: Rect, fullscreen: bool, close: bool) -> bool {
         let w = self.windows.entry(pane).or_default();
         let before = w.clone();
-        // (Full screen: its size and place stay those to come back to.)
+        // (Full screen: its size stays the one to come back to.)
         if !fullscreen && content.is_positive() {
             w.size = Some(content.size().round().into());
-            if let Some(o) = outer {
-                w.pos = Some(o.min.round().into());
-            }
         }
         w.fullscreen = fullscreen;
         if close {
             w.detached = false;
+            self.opened.remove(&pane);
         }
         if *w != before {
             self.changed = true;
         }
         close
     }
-}
-
-/// True when the GUI runs on Wayland, where windows can't place
-/// themselves (and can't say where they are).
-pub fn on_wayland() -> bool {
-    cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var("WINIT_UNIX_BACKEND").map_or(true, |b| b != "x11")
 }
 
 /// One window, for its shortcuts: the panes drawn there (the main
@@ -205,8 +222,8 @@ impl Here {
 mod tests {
     use super::*;
 
-    /// Out and back, with the size and place it had; settings.json's form
-    /// round trips; a change is reported once.
+    /// Out and back, with the size it had; settings.json's form round
+    /// trips; a change is reported once; Dock all brings every one back.
     #[test]
     fn panels_keep_their_windows() {
         let mut p = Panels::default();
@@ -215,41 +232,79 @@ mod tests {
         assert!(p.detached(Pane::Graph) && p.take_changed() && !p.take_changed());
         p.set_detached(Pane::Graph, true);
         assert!(!p.take_changed(), "no change, nothing to save");
-        // Tracked: size and place (X11 / macOS), then on Wayland (no place).
         let content = Rect::from_min_size(Pos2::ZERO, Vec2::new(900.4, 500.0));
-        assert!(!p.track(Pane::Graph, content, Some(Rect::from_min_size(Pos2::new(2000.0, 30.0), Vec2::splat(10.0))), false, false));
+        assert!(!p.track(Pane::Graph, content, false, false));
         assert!(p.take_changed());
         let saved = p.to_settings();
-        assert_eq!(saved["graph"], PanelWindow { detached: true, size: Some([900.0, 500.0]), pos: Some([2000.0, 30.0]), fullscreen: false });
-        assert_eq!(Panels::from_settings(&saved), Panels { changed: false, ..p.clone() });
-        p.track(Pane::Graph, content, None, false, false);
-        assert_eq!(p.to_settings()["graph"].pos, Some([2000.0, 30.0]), "Wayland: the place kept as it was");
+        assert_eq!(saved["graph"], PanelWindow { detached: true, size: Some([900.0, 500.0]), fullscreen: false });
+        assert_eq!(Panels::from_settings(&saved).to_settings(), saved);
+        p.track(Pane::Graph, content, false, false);
         assert!(!p.take_changed());
         // Full screen: the size to come back to stays.
-        p.track(Pane::Graph, Rect::from_min_size(Pos2::ZERO, Vec2::new(2560.0, 1440.0)), None, true, false);
+        p.track(Pane::Graph, Rect::from_min_size(Pos2::ZERO, Vec2::new(2560.0, 1440.0)), true, false);
         assert_eq!(p.to_settings()["graph"].size, Some([900.0, 500.0]));
         assert!(p.to_settings()["graph"].fullscreen);
         // Closed: docked, the window's size kept for next time.
-        assert!(p.track(Pane::Graph, content, None, false, true));
+        assert!(p.track(Pane::Graph, content, false, true));
         assert!(!p.detached(Pane::Graph) && p.take_changed());
         assert_eq!(p.to_settings()["graph"].size, Some([900.0, 500.0]));
         // Unknown names in settings.json are left out.
         let mut odd = BTreeMap::new();
         odd.insert("toolbox".to_string(), PanelWindow { detached: true, ..PanelWindow::default() });
         assert!(Panels::from_settings(&odd).out().is_empty());
+        // Dock all: whatever was out.
+        for pane in [Pane::Graph, Pane::Viewer, Pane::Properties] {
+            p.set_detached(pane, true);
+        }
+        p.builder(Pane::Viewer);
+        p.dock_all();
+        assert!(p.out().is_empty() && p.opened.is_empty() && p.take_changed());
     }
 
-    /// The builder opens it where it was (not on Wayland), at its size.
+    /// The builder opens it at its size and full screen as left, never at
+    /// a saved place (a place from settings.json written before, or by
+    /// another machine, is ignored: the OS places it).
     #[test]
-    fn windows_open_where_they_were() {
-        let mut saved = BTreeMap::new();
-        saved.insert("viewer".to_string(), PanelWindow { detached: true, size: Some([800.0, 450.0]), pos: Some([1920.0, 0.0]), fullscreen: true });
-        let p = Panels::from_settings(&saved);
-        let b = p.builder(Pane::Viewer, false);
-        assert_eq!((b.inner_size, b.position, b.fullscreen), (Some(Vec2::new(800.0, 450.0)), Some(Pos2::new(1920.0, 0.0)), Some(true)));
-        assert_eq!(p.builder(Pane::Viewer, true).position, None, "Wayland places it");
-        assert_eq!(p.builder(Pane::Graph, false).inner_size, Some(Pane::Graph.default_size()), "never out: the default size");
+    fn windows_open_as_they_were_left() {
+        let old = r#"{"viewer": {"detached": true, "size": [800, 450], "pos": [-30000, 9000], "fullscreen": true}}"#;
+        let saved: BTreeMap<String, PanelWindow> = serde_json::from_str(old).unwrap();
+        let mut p = Panels::from_settings(&saved);
+        let b = p.initial(Pane::Viewer);
+        assert_eq!((b.inner_size, b.position, b.fullscreen), (Some(Vec2::new(800.0, 450.0)), None, Some(true)));
+        assert_eq!(p.initial(Pane::Graph).inner_size, Some(Pane::Graph.default_size()), "never out: the default size");
+        assert_eq!(p.builder(Pane::Viewer), b, "opened as left");
         assert!(Pane::ALL.iter().map(|p| p.viewport_id()).collect::<std::collections::HashSet<_>>().len() == 4);
+    }
+
+    /// While a window is open, the builder egui gets each frame stays the
+    /// one it opened with, however its size and full screen are tracked
+    /// (else egui would move and resize it every frame: the flicker on
+    /// macOS); docked and out again, it opens as it was left.
+    #[test]
+    fn an_open_windows_builder_stays_put() {
+        let mut p = Panels::default();
+        p.set_detached(Pane::Graph, true);
+        let first = p.builder(Pane::Graph);
+        for k in 0..5 {
+            let k = k as f32;
+            let content = Rect::from_min_size(Pos2::new(k, 0.0), Vec2::new(800.0 + k * 13.0, 450.0 + k * 7.0));
+            p.track(Pane::Graph, content, k == 3.0, false);
+            assert_eq!(p.builder(Pane::Graph), first, "frame {k}: the same builder");
+        }
+        // What was tracked is kept for settings.json (the last size before
+        // it went full screen; now not full screen).
+        let kept = p.to_settings()["graph"].clone();
+        assert_eq!((kept.size, kept.fullscreen), (Some([852.0, 478.0]), false));
+        // Docked (by the menu or its close) and out again: from there.
+        p.set_detached(Pane::Graph, false);
+        p.set_detached(Pane::Graph, true);
+        let again = p.builder(Pane::Graph);
+        assert_eq!((again.inner_size, again.fullscreen), (Some(Vec2::new(852.0, 478.0)), Some(false)));
+        assert_eq!(p.builder(Pane::Graph), again);
+        p.track(Pane::Graph, Rect::from_min_size(Pos2::ZERO, Vec2::splat(300.0)), false, true);
+        assert!(!p.detached(Pane::Graph));
+        p.set_detached(Pane::Graph, true);
+        assert_eq!(p.builder(Pane::Graph).inner_size, Some(Vec2::splat(300.0)), "closed: opens at its last size");
     }
 
     /// Keys go to the window they were pressed in: F frames what's under
@@ -273,5 +328,13 @@ mod tests {
         assert_eq!((graph.fit_target(), graph.select_all_target()), (Some(Pane::Graph), Some(Pane::Graph)));
         let props = Here::new(vec![Pane::Properties], &rects, Some(Pos2::new(450.0, 50.0)));
         assert_eq!((props.fit_target(), props.select_all_target()), (None, None));
+        // The viewer out on a second monitor: F and ⌘A there are the
+        // viewer's; in the main window, the graph's.
+        let viewer = Here::new(vec![Pane::Viewer], &rects, Some(Pos2::new(50.0, 50.0)));
+        assert_eq!((viewer.hover, viewer.fit_target(), viewer.select_all_target()), (None, Some(Pane::Viewer), Some(Pane::Viewer)));
+        let main = Here::new(vec![Pane::Graph, Pane::Properties], &rects, Some(Pos2::new(250.0, 50.0)));
+        assert_eq!((main.hover, main.fit_target(), main.select_all_target()), (None, Some(Pane::Graph), Some(Pane::Graph)));
+        let curves = Here::new(vec![Pane::Curves], &rects, None);
+        assert_eq!((curves.fit_target(), curves.select_all_target()), (Some(Pane::Curves), None));
     }
 }

@@ -18,6 +18,24 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.4 — 2026-10-31
+
+- **Fixed: on macOS a Node Graph in its own window flickered and took no
+  clicks** (the window was moved and resized every frame), and could
+  end up off-screen. Now it opens once at its size and the OS places
+  it. **View ▸ Dock all panels** puts every panel back at once, and a
+  panel that's out keeps a greyed tab in the main window (click it to
+  dock).
+- **The Viewer, Curve Editor and Properties in windows of their own**
+  too (View ▸ … in its own window, or the ⧉ on the Curve Editor's tab
+  and Properties' heading): a viewer full screen on a second monitor
+  with the graph on the first. The viewer takes the player with it, and
+  the Node Graph and Curve Editor fill the main window. Any panel
+  window can fill its screen (Full screen at its top, or F11) and
+  reopens that way. Keys follow the window: in the viewer's, F fits the
+  picture and ⌘A selects the shape's points; in the Curve Editor's, F
+  frames the curves and Delete deletes the selected keys.
+
 ## 0.14.3 — 2026-10-31
 
 - Project 3D occlusion on the GPU: instanced copies crossing a
