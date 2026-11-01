@@ -100,7 +100,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "points_from_geo" | "grid_points" | "line_points" | "normals" | "subdivide" | "displace" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "curve_to_mesh" | "points_on_curve" | "project_3d" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "points_from_geo" | "grid_points" | "line_points" | "normals" | "subdivide" | "displace" | "extrude" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "curve_to_mesh" | "points_on_curve" | "project_3d" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -1323,6 +1323,27 @@ pub static OPS: &[OpInfo] = &[
                attribute (attribute: Attribute, e.g. from Attribute Noise or Attribute from Image), or the image input's \
                brightness less Midlevel (image: at the points' uvs, or where the camera input's camera sees them). Seams \
                stay closed. Subdivide first for detail; Recompute normals shades the new shape.",
+    },
+    OpInfo {
+        name: "extrude",
+        label: "Extrude",
+        category: Category::Scene,
+        inputs: &[SPLATS_IN],
+        params: &[
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("mode", "Mode", ParamKind::Choice(&["individual", "region"]), "individual"),
+            p!("distance", "Distance", ParamKind::Float { min: -1000.0, max: 1000.0 }, 0.5),
+            fixed!("weight", "Weight", ParamKind::Text, "extrude"),
+            p!("inset", "Inset", ParamKind::Float { min: 0.0, max: 1.0 }, 0.0),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Pushes the meshes' faces (Group's, or all) out along their normals by Distance × their weight (the float \
+               face attribute named in Weight, e.g. set with Attribute Set on faces: faces at 0 stay put; all faces if \
+               there's no such attribute), with walls joining them to where they were. Individual: each face on its \
+               own, its top shrunk toward its center by Inset; region: connected faces move together (along their mean \
+               normals), walls only round each region's edge. Walls get the face attribute side = 1 (0 elsewhere), for \
+               coloring or deleting them.",
     },
     // Fit Plane (geo_fit.rs; Dev1).
     OpInfo {
@@ -2568,6 +2589,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
             let camera = inputs.get(2).copied().flatten().and_then(|i| i.scene.as_deref());
             Ok(scene_output(DEFAULT_FORMAT, crate::geo_mesh::displace(params, input_scene(inputs), image, camera)?))
         }
+        "extrude" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_mesh::extrude(params, input_scene(inputs))?)),
         "fit_plane" => Ok(scene_output(DEFAULT_FORMAT, crate::geo_fit::fit_plane(params, input_scene(inputs), inputs.get(1).copied().flatten())?)),
         "scatter" => {
             let image = inputs.get(1).copied().flatten().filter(|i| i.scene.is_none());

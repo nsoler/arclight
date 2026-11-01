@@ -179,7 +179,8 @@ CPU and GPU.
 tracker's path), **Resample**, **Curve to Mesh** (sweep a profile: roads,
 cables, pipes), **Points on Curve** (fences, lampposts), **Fit Plane**
 (a ground plane fitted to selected tracker points: the most common VFX
-use, and a one-click win).
+use, and a one-click win). **Done** (0.13.x; Extrude last), with
+Normals' by-angle mode for Smooth Normals / Flat.
 
 **P6, time and particles.** **Points to Particles** (emit from a point
 set, its attributes carried over) and **Particles to Points** (a frame

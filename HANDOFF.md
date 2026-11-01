@@ -48,6 +48,12 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.13.40, Extrude** (Dev1, merged by hand from `../.verify/dev1-mesh`
+  onto 0.13.39): `geo_mesh::extrude` / `extrude_mesh` with a `Builder`;
+  individual (inset) or region (mean normals, walls on region edges);
+  weight from a float face attribute; walls `side` = 1. Next: Write Geo
+  (Dev1, from `../.verify/dev1-wg`, adds gltf `extras`), the last phase
+  13 node.
 - **0.13.39, Help ▸ Examples ▸ Projection** (Supervisor, user
   request): `EXAMPLES` has three entries; packaging copies all three.
   Released as v0.13.39 (Linux tarball, Windows zip, Linux wheel + sdist;

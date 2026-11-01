@@ -494,6 +494,165 @@ pub fn displace(params: &Value, mut scene: Scene, image: Option<&crate::image::I
     Ok(scene)
 }
 
+/// Builds a mesh from another's vertices: copies made with their
+/// attributes (and uvs) carried, new faces with their parents' face
+/// attributes and a side flag.
+struct Builder<'a> {
+    from: &'a Mesh,
+    out: Mesh,
+    sources: Vec<u32>,
+    parents: Vec<u32>,
+    sides: Vec<i32>,
+}
+
+impl<'a> Builder<'a> {
+    fn new(from: &'a Mesh) -> Builder<'a> {
+        Builder { from, out: Mesh::default(), sources: Vec::new(), parents: Vec::new(), sides: Vec::new() }
+    }
+
+    /// A vertex at `p`, carrying vertex `v`'s uv (or `uv`) and attributes.
+    fn vertex(&mut self, v: u32, p: Vec3, uv: Option<[f64; 2]>) -> u32 {
+        self.out.positions.push(p);
+        if self.from.uvs.len() == self.from.positions.len() {
+            self.out.uvs.push(uv.unwrap_or(self.from.uvs[v as usize]));
+        }
+        self.sources.push(v);
+        self.out.positions.len() as u32 - 1
+    }
+
+    fn face(&mut self, tri: [u32; 3], parent: usize, side: bool) {
+        self.out.triangles.push(tri);
+        self.parents.push(parent as u32);
+        self.sides.push(i32::from(side));
+    }
+
+    /// A wall from the edge `a`–`b` (bottom vertices, of `from`'s vertices
+    /// `va`, `vb`) up to `ta`–`tb`: a quad facing out when the edge runs
+    /// counter-clockwise round its face.
+    fn wall(&mut self, (va, vb): (u32, u32), bottom: (Vec3, Vec3), top: (Vec3, Vec3), parent: usize) {
+        let a = self.vertex(va, bottom.0, Some([0.0, 0.0]));
+        let b = self.vertex(vb, bottom.1, Some([1.0, 0.0]));
+        let tb = self.vertex(vb, top.1, Some([1.0, 1.0]));
+        let ta = self.vertex(va, top.0, Some([0.0, 1.0]));
+        self.face([a, b, tb], parent, true);
+        self.face([a, tb, ta], parent, true);
+    }
+
+    fn finish(mut self) -> Result<Mesh> {
+        self.out.point_attrs = self.from.point_attrs.gathered(&self.sources);
+        self.out.face_attrs = self.from.face_attrs.gathered(&self.parents);
+        let n = self.out.triangles.len();
+        self.out.face_attrs.set("side", Attr::Int(self.sides), n)?;
+        Ok(normals_by_angle(&self.out, 30.0))
+    }
+}
+
+/// `m`'s faces (those weighted above 0) pushed out along their normals
+/// by `distance` × their weight, with walls: each on its own (shrunk by
+/// `inset` toward its center), or as regions of connected faces moving
+/// together (walls only where a region ends).
+pub fn extrude_mesh(m: &Mesh, weights: &[f64], distance: f64, region: bool, inset: f64) -> Result<Mesh> {
+    let face_n: Vec<Vec3> = (0..m.triangles.len()).map(|t| m.face_normal(t).try_normalize(1e-300).unwrap_or_else(Vec3::y)).collect();
+    let mut b = Builder::new(m);
+    // The original vertices, as they are, for the faces that stay.
+    for (v, p) in m.positions.iter().enumerate() {
+        b.vertex(v as u32, *p, None);
+    }
+    let picked = |t: usize| weights[t] > 0.0;
+    if !region {
+        for (t, tri) in m.triangles.iter().enumerate() {
+            if !picked(t) {
+                b.face(*tri, t, false);
+                continue;
+            }
+            let p = tri.map(|v| m.positions[v as usize]);
+            let c = (p[0] + p[1] + p[2]) / 3.0;
+            let lift = face_n[t] * distance * weights[t];
+            let up = p.map(|q| c + (q - c) * (1.0 - inset.clamp(0.0, 1.0)) + lift);
+            let top = [0, 1, 2].map(|k| b.vertex(tri[k], up[k], None));
+            b.face(top, t, false);
+            for k in 0..3 {
+                let j = (k + 1) % 3;
+                b.wall((tri[k], tri[j]), (p[k], p[j]), (up[k], up[j]), t);
+            }
+        }
+        return b.finish();
+    }
+    // Regions: each welded point of a picked face moves along the mean
+    // normal of the picked faces round it, by their mean weight (each face
+    // counted by its corner's angle there, so a face split in two counts
+    // once).
+    let (of, firsts) = weld(&m.positions);
+    let mut push: Vec<(Vec3, f64, f64)> = vec![(Vec3::zeros(), 0.0, 0.0); firsts.len()];
+    for (t, tri) in m.triangles.iter().enumerate().filter(|(t, _)| picked(*t)) {
+        for k in 0..3 {
+            let (p, a, c) = (m.positions[tri[k] as usize], m.positions[tri[(k + 1) % 3] as usize], m.positions[tri[(k + 2) % 3] as usize]);
+            let angle = (a - p).angle(&(c - p));
+            let e = &mut push[of[tri[k] as usize] as usize];
+            e.0 += face_n[t] * angle;
+            e.1 += weights[t] * angle;
+            e.2 += angle;
+        }
+    }
+    let lifted = |g: u32| {
+        let (n, w, k) = push[g as usize];
+        m.positions[firsts[g as usize] as usize] + n.try_normalize(1e-300).unwrap_or_else(Vec3::y) * distance * (w / k.max(1e-300))
+    };
+    // Welded edges of picked faces, counted: those of one picked face are
+    // the regions' rims.
+    let key = |a: u32, b: u32| if a < b { (a, b) } else { (b, a) };
+    let mut uses: HashMap<(u32, u32), usize> = HashMap::new();
+    for (_, tri) in m.triangles.iter().enumerate().filter(|(t, _)| picked(*t)) {
+        for k in 0..3 {
+            *uses.entry(key(of[tri[k] as usize], of[tri[(k + 1) % 3] as usize])).or_default() += 1;
+        }
+    }
+    let mut tops: HashMap<u32, u32> = HashMap::new();
+    for (t, tri) in m.triangles.iter().enumerate() {
+        if !picked(t) {
+            b.face(*tri, t, false);
+            continue;
+        }
+        let top = tri.map(|v| *tops.entry(v).or_insert_with(|| b.vertex(v, lifted(of[v as usize]), None)));
+        b.face(top, t, false);
+        for k in 0..3 {
+            let (va, vb) = (tri[k], tri[(k + 1) % 3]);
+            let (ga, gb) = (of[va as usize], of[vb as usize]);
+            if uses[&key(ga, gb)] == 1 {
+                b.wall((va, vb), (m.positions[va as usize], m.positions[vb as usize]), (lifted(ga), lifted(gb)), t);
+            }
+        }
+    }
+    b.finish()
+}
+
+/// An Extrude: the meshes' (Group's) faces pushed out along their
+/// normals by Distance × their weight (the float face attribute Weight,
+/// faces at 0 staying put; all faces when there's no such attribute),
+/// with walls round them (face attribute side 1), each face on its own
+/// (inset by Inset) or connected faces as one (region).
+pub fn extrude(params: &Value, mut scene: Scene) -> Result<Scene> {
+    let group = params["group"].as_str().unwrap_or("").trim();
+    let take = |node: &str| group.is_empty() || geo::glob(group, node);
+    let distance = params["distance"].as_f64().unwrap_or(0.5);
+    let weight = params["weight"].as_str().unwrap_or("extrude").trim();
+    let region = params["mode"].as_str() == Some("region");
+    let inset = params["inset"].as_f64().unwrap_or(0.0);
+    for model in scene.meshes.iter_mut().filter(|m| take(&m.node)) {
+        let m = &*model.mesh;
+        let weights: Vec<f64> = match m.face_attrs.float(weight) {
+            Some(w) => w.iter().map(|v| *v as f64).collect(),
+            None => vec![1.0; m.triangles.len()],
+        };
+        let n = weights.iter().filter(|w| **w > 0.0).count() * 7 + m.triangles.len();
+        if n > MAX_TRIANGLES {
+            bail!("Extrude: {} would have about {n} triangles (at most {MAX_TRIANGLES})", model.node);
+        }
+        model.mesh = std::sync::Arc::new(extrude_mesh(m, &weights, distance, region, inset)?);
+    }
+    Ok(scene)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -646,6 +805,72 @@ mod tests {
         assert!((0..m.positions.len()).all(|i| cube.positions[w[i] as usize] == m.positions[i]), "each vertex's own attributes");
     }
 
+    /// The outward side of each wall: its normal points away from the face's center.
+    fn walls_face_out(m: &Mesh, center: Vec3) -> bool {
+        let side = m.face_attrs.int("side").unwrap();
+        (0..m.triangles.len()).filter(|&t| side[t] == 1).all(|t| {
+            let c = m.triangles[t].iter().map(|&v| m.positions[v as usize]).sum::<Vec3>() / 3.0;
+            m.face_normal(t).dot(&(c - center)) > 0.0
+        })
+    }
+
+    #[test]
+    fn extrude_each_face_with_walls_weights_and_inset() {
+        let tri = Mesh { positions: vec![Vec3::zeros(), Vec3::x(), Vec3::y()], triangles: vec![[0, 1, 2]], ..Mesh::default() };
+        let m = extrude_mesh(&tri, &[1.0], 2.0, false, 0.0).unwrap();
+        assert_eq!(m.triangles.len(), 1 + 6, "a top and three quads");
+        let side = m.face_attrs.int("side").unwrap();
+        assert_eq!((side.iter().filter(|s| **s == 1).count(), side[0]), (6, 0));
+        let top = m.triangles[0].map(|v| m.positions[v as usize]);
+        assert!(top.iter().all(|p| p.z == 2.0), "{top:?}");
+        assert!(walls_face_out(&m, Vec3::new(1.0 / 3.0, 1.0 / 3.0, 1.0)));
+        // Inset: the top shrinks toward its center.
+        let shrunk = extrude_mesh(&tri, &[1.0], 1.0, false, 0.5).unwrap();
+        let p = shrunk.positions[shrunk.triangles[0][1] as usize];
+        assert!((p - Vec3::new(2.0 / 3.0, 1.0 / 6.0, 1.0)).norm() < 1e-12, "{p:?}");
+        // Weights: a plane's two faces, one at half, then one not at all.
+        let mut plane = mesh_of("plane", json!({"size": [2, 2]}));
+        plane.face_attrs.set("extrude", Attr::Float(vec![1.0, 0.5]), 2).unwrap();
+        let out = extrude(&json!({"distance": 1.0}), one(plane.clone())).unwrap();
+        let m = &out.meshes[0].mesh;
+        let tops: Vec<f64> = m.triangles.iter().enumerate().filter(|(t, _)| m.face_attrs.int("side").unwrap()[*t] == 0).map(|(_, tri)| m.positions[tri[0] as usize].z).collect();
+        assert_eq!(tops, [1.0, 0.5]);
+        plane.face_attrs.set("extrude", Attr::Float(vec![1.0, 0.0]), 2).unwrap();
+        let out = extrude(&json!({"distance": 1.0}), one(plane)).unwrap();
+        assert_eq!(out.meshes[0].mesh.triangles.len(), 2 + 6, "the other stays as it was");
+    }
+
+    #[test]
+    fn extrude_regions_of_connected_faces_together() {
+        // A plane's two triangles as one region: one top, walls on its
+        // four outer edges only (none on the diagonal).
+        let plane = mesh_of("plane", json!({"size": [2, 2]}));
+        let out = extrude(&json!({"distance": 1.0, "mode": "region"}), one(plane)).unwrap();
+        let m = &out.meshes[0].mesh;
+        assert_eq!(m.triangles.len(), 2 + 8);
+        assert!(walls_face_out(m, Vec3::new(0.0, 0.0, 0.5)));
+        // A cube's +z face (its own vertices) pushed up: closed onto the
+        // sides below (12 welded points: 8 corners and 4 new).
+        let mut cube = mesh_of("cube", json!({"size": [2, 2, 2]}));
+        let w: Vec<f32> = (0..cube.triangles.len()).map(|t| if cube.face_normal(t).z > 0.5 { 1.0 } else { 0.0 }).collect();
+        cube.face_attrs.set("extrude", Attr::Float(w), cube.triangles.len()).unwrap();
+        let out = extrude(&json!({"distance": 1.0, "mode": "region"}), one(cube)).unwrap();
+        let m = &out.meshes[0].mesh;
+        assert_eq!(weld(&m.positions).1.len(), 12);
+        assert!(m.positions.iter().all(|p| p.z <= 2.0 + 1e-12) && m.positions.iter().any(|p| (p.z - 2.0).abs() < 1e-12));
+        assert!(walls_face_out(m, Vec3::new(0.0, 0.0, 1.5)));
+        // Two faces at a right angle (+z and +x) as one region: their shared
+        // edge moves along the mean of their normals, one top for both
+        // (8 corners and 6 new points; no wall between them).
+        let mut cube = mesh_of("cube", json!({"size": [2, 2, 2]}));
+        let w: Vec<f32> = (0..cube.triangles.len()).map(|t| { let n = cube.face_normal(t); if n.z > 0.5 || n.x > 0.5 { 1.0 } else { 0.0 } }).collect();
+        cube.face_attrs.set("extrude", Attr::Float(w), cube.triangles.len()).unwrap();
+        let m = extrude(&json!({"distance": 1.0, "mode": "region"}), one(cube)).unwrap().meshes[0].mesh.clone();
+        assert_eq!(weld(&m.positions).1.len(), 14);
+        let d = 1.0 / 2f64.sqrt();
+        assert!(m.positions.iter().any(|p| (p - Vec3::new(1.0 + d, 1.0, 1.0 + d)).norm() < 1e-12), "the shared corner along the diagonal");
+    }
+
     /// Evaluates `nodes` and returns `id`'s first mesh.
     fn graph_mesh(nodes: Value, id: &str) -> Mesh {
         let graph: crate::graph::Graph = serde_json::from_value(json!({ "nodes": nodes })).unwrap();
@@ -760,5 +985,11 @@ mod tests {
     fn displace_in_a_graph() {
         let m = graph_mesh(json!([{"id": "p", "op": "plane", "params": {"segments": [8, 8]}}, {"id": "d", "op": "displace", "inputs": ["p", "", ""], "params": {"amount": 0.5}}]), "d");
         assert!(m.positions.iter().any(|p| p.z.abs() > 1e-3), "moved off the plane");
+    }
+
+    #[test]
+    fn extrude_in_a_graph() {
+        let m = graph_mesh(json!([{"id": "c", "op": "cube"}, {"id": "e", "op": "extrude", "inputs": ["c"], "params": {"distance": 0.2}}]), "e");
+        assert_eq!(m.triangles.len(), 12 * 7);
     }
 }

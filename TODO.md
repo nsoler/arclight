@@ -52,6 +52,9 @@ on the Macs (the DMG), from the release builds.
 - [ ] On the Macs: `arclight gpu --check` (68 rows now, including
       instancing, instanced shadows and Project 3D) and
       `cargo test --release` on Metal
+- [ ] Extrude a cube's faces: individual with Inset, region on faces
+      picked by Attribute Set (`extrude`); walls colored by `side`
+      (0.13.40)
 - [ ] Help ▸ Examples ▸ Projection (multi-projection.json, 0.13.39):
       Blend with others softens the seam on the wall and block; Fade
       start / end fade a grazing projection out; Frames (three frames of

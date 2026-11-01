@@ -406,7 +406,15 @@ selected object.
   (from Attribute Noise or Attribute from Image), or an image's
   brightness less Midlevel, read at the uvs or through a camera (a
   shadow catcher shaped by a depth plate). Seams stay closed; Subdivide
-  first for detail.
+  first for detail. **Extrude** pushes meshes' faces out along their
+  normals by Distance, with walls joining them to where they were:
+  Individual lifts each face on its own (Inset shrinks its top, for
+  panels and windows), Region moves connected faces together (a
+  building's roof raised as one). Which faces, and how far each: a
+  float face attribute named in Weight (`extrude` by default; Attribute
+  Set on faces, e.g. `random(@id) < 0.3` for a third of them); faces at
+  0 stay put, and all go when there's no such attribute. The walls get
+  the face attribute `side` = 1, to color or delete them.
   **Delete Geo** removes points, faces or instances inside or outside a
   box or sphere you place in the 3D view (G moves it, S sizes it), or
   where an expression is true: `@P.y < 0` drops everything below the

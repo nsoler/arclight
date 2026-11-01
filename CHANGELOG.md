@@ -17,6 +17,19 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.40 — 2026-10-31
+
+- **Extrude** (Scene): pushes meshes' faces (all, or Group's) out along
+  their normals by Distance, with walls joining them to where they were.
+  Individual lifts each face on its own (Inset shrinks its top toward
+  its center); Region moves connected faces together, walls only round
+  each region's edge. A float face attribute (Weight, `extrude` by
+  default; Attribute Set on faces) picks the faces and scales how far
+  each goes; all faces go without it. Walls get the face attribute
+  `side` = 1, to color or delete them.
+- README's node table gains Displace and Extrude rows and Project 3D's
+  new parameters.
+
 ## 0.13.39 — 2026-10-31
 
 - **Help ▸ Examples ▸ Projection: two cameras blended on one set**
