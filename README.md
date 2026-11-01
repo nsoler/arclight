@@ -1,5 +1,7 @@
 # ArclightVFX Compositor
 
+![ArclightVFX Compositor: the horned lizard Gaussian splat capture in the 3D view, with its node graph and properties](examples/hornedlizard-3d-sample.jpg)
+
 **Beta.** An original **node-graph image compositor** written in Rust.
 ArclightVFX (formerly Arclight) reads a
 JSON description of an image-processing DAG, evaluates it, and writes the
