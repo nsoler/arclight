@@ -1145,7 +1145,7 @@ fn node_key(node: &NodeSpec, params: &Value, keys: &HashMap<&str, u64>, ctx: &Ev
     if particle || ops::is_time_varying(&node.op, params) {
         ctx.frame.hash(&mut h);
     }
-    if node.op == "write" {
+    if matches!(node.op.as_str(), "write" | "write_geo") {
         ctx.write_outputs.hash(&mut h);
     }
     h.finish()

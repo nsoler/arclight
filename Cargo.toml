@@ -1,6 +1,6 @@
 [package]
 name = "arclight"
-version = "0.13.40"
+version = "0.13.41"
 edition = "2021"
 description = "ArclightVFX Compositor — an original node-graph image compositor"
 license = "MIT OR Apache-2.0"
@@ -42,7 +42,7 @@ libloading = "0.9"
 eframe = { version = "0.37.0", optional = true }
 rfd = { version = "0.17.2", optional = true }
 nalgebra = "0.33"
-gltf = { version = "1.4", default-features = false, features = ["import", "utils", "names", "KHR_materials_unlit", "KHR_materials_emissive_strength"] }
+gltf = { version = "1.4", default-features = false, features = ["import", "utils", "names", "extras", "KHR_materials_unlit", "KHR_materials_emissive_strength"] }
 egui_commonmark = { version = "0.26", default-features = false, features = ["pulldown_cmark"], optional = true }
 # Sound in the GUI's playback (ALSA on Linux: libasound.so.2 at run time).
 cpal = { version = "0.18", optional = true }

@@ -487,6 +487,18 @@ selected object.
   materials, so its meshes come in white; turn on **Override material**
   to shade them. Only Ogawa .abc files are read (Alembic 1.5 and later
   write them; an old HDF5 one says to re-export).
+- **Write Geo** hands a scene's geometry to other 3D tools: an OBJ (with
+  its MTL) or a glTF file (.gltf with a .bin beside it, or one .glb), by
+  the file's extension, written when the graph is rendered (as Write does
+  images; viewing it writes nothing); `####` in the name writes one file
+  a frame. A relative path is the project folder's. **Include** picks
+  meshes, cards (a textured quad each), instances, points and curves;
+  **Group** narrows them to its nodes. Materials and textures go with
+  them. OBJ bakes everything where it is; glTF keeps each object's
+  placement, and copies of one prototype share its mesh (**Instances**
+  instance) or get their own (realize). Cd goes as vertex colors; with
+  **Attributes** on, glTF carries the other point attributes too (as
+  `_name`), and Read Geo reads them back.
 - Each has Translate / Rotate / Scale, like a Card; wire them into a Scene
   and a Scanline Render draws them with the cards.
 - **Shading** sets how they take light: **unlit** (their color as it is),

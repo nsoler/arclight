@@ -100,7 +100,7 @@ pub fn output_kind(op: &str) -> Kind {
     match op {
         "particles_2d" => Kind::Image,
         _ if particle_nodes::is_particle(op) => Kind::Scene,
-        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "points_from_geo" | "grid_points" | "line_points" | "normals" | "subdivide" | "displace" | "extrude" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "curve_to_mesh" | "points_on_curve" | "project_3d" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
+        "camera" | "card" | "scene" | "point_cloud" | "locator" | "cube" | "sphere" | "cylinder" | "plane" | "read_geo" | "read_splat" | "splat_crop" | "splat_color" | "transform_geo" | "scatter" | "delete_geo" | "fit_plane" | "attribute_noise" | "falloff" | "attribute_from_image" | "attribute_transfer" | "points_from_geo" | "grid_points" | "line_points" | "normals" | "subdivide" | "displace" | "extrude" | "write_geo" | "attribute_set" | "instance_on_points" | "realize_instances" | "curve" | "resample" | "particles_to_points" | "curve_to_mesh" | "points_on_curve" | "project_3d" | "light_ambient" | "light_directional" | "light_point" | "light_spot" | "light_area" => Kind::Scene,
         _ => Kind::Image,
     }
 }
@@ -2095,6 +2095,30 @@ pub static OPS: &[OpInfo] = &[
         help: "Shows its input in the viewer panel.",
     },
     OpInfo {
+        name: "write_geo",
+        label: "Write Geo",
+        category: Category::Output,
+        inputs: &[SPLATS_IN],
+        params: &[
+            p!("path", "File", ParamKind::Path { save: true }, ""),
+            fixed!("include", "Include", ParamKind::Flags(&["meshes", "cards", "instances", "points", "curves"]), ["meshes", "cards", "instances", "points", "curves"]),
+            fixed!("group", "Group", ParamKind::Text, ""),
+            fixed!("instances", "Instances", ParamKind::Choice(&["instance", "realize"]), "instance"),
+            fixed!("attributes", "Attributes", ParamKind::Bool, true),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Writes its scene's geometry to a file other 3D tools read when the graph is rendered (as Write does \
+               images): Wavefront OBJ (.obj, with its .mtl) or glTF (.gltf with a .bin beside it, or one .glb), by the \
+               file's extension; #### in the name is the frame, for a sequence. Include picks meshes, cards (a textured \
+               quad each), instances, points and curves; Group narrows them to its nodes. Materials go with them (color, \
+               opacity, specular, roughness, emission, the color texture as a PNG beside the file or inside a .glb). OBJ \
+               bakes every object where it is in the scene; glTF keeps each one's placement, and the copies of one \
+               prototype share its mesh (Instances instance) or get their own (realize). Cd goes as vertex colors (and \
+               each copy's tint); with Attributes on, glTF also carries the other point attributes (as _name, read back \
+               by Read Geo). The scene passes through unchanged.",
+    },
+    OpInfo {
         name: "write",
         label: "Write (still)",
         category: Category::Output,
@@ -2316,7 +2340,7 @@ pub fn is_time_varying(op: &str, params: &Value) -> bool {
     match op {
         "media_in" => true,
         "read" => media::is_sequence_pattern(path) || media::is_video(Path::new(path)),
-        "write" => media::is_sequence_pattern(path),
+        "write" | "write_geo" => media::is_sequence_pattern(path),
         // A geometry formula reading the frame or time.
         "delete_geo" | "attribute_set" => formulas(op, params).iter().any(crate::expr::Expr::uses_time),
         _ => crate::plugin::is_time_varying(op),
@@ -2617,6 +2641,14 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "corner_pin" => corner_pin(params, inputs),
         "rectangle" | "ellipse" | "polygon" | "roto" => shape_op(op, params, inputs),
         "write" => write(params, inputs, ctx),
+        // A scene's geometry to a file when rendering; passed through.
+        "write_geo" => {
+            let scene = input_scene(inputs);
+            if ctx.write_outputs {
+                crate::geo_write::write_geo(params, &scene, ctx.frame)?;
+            }
+            Ok(scene_output(DEFAULT_FORMAT, scene))
+        }
         // Rendering to disk is driven by `render`; in the graph these pass through.
         "media_out" | "viewer" => Ok(input(inputs, 0, op)?.clone()),
         other => match crate::plugin::eval(other, params, inputs, ctx) {

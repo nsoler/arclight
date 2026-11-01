@@ -48,6 +48,14 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.13.41, Write Geo** (Dev1, merged by hand from `../.verify/dev1-wg`):
+  `src/geo_write.rs` (OBJ + MTL, glTF / GLB; .glb textures encoded in
+  memory), gltf `extras` feature, `gltf.rs` reads COLOR_0 / `_name`
+  back; `write_geo` writes only with `ctx.write_outputs` (node_key mixes
+  it, as for `write`); `arclight render` runs its write pass for
+  write_geo too. **Phase 13's planned nodes are done.** Next: TODO.md's
+  "After the phase 13 pause" (detachable panels first), when the user
+  says.
 - **0.13.40, Extrude** (Dev1, merged by hand from `../.verify/dev1-mesh`
   onto 0.13.39): `geo_mesh::extrude` / `extrude_mesh` with a `Builder`;
   individual (inset) or region (mean normals, walls on region edges);

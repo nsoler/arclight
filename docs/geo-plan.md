@@ -186,7 +186,8 @@ Normals' by-angle mode for Smooth Normals / Flat.
 set, its attributes carried over) and **Particles to Points** (a frame
 of a particle stream as a point set, so particles can drive instances:
 debris meshes on particles). **Write Geo** (OBJ and glTF; Alembic per
-frame later) to hand the result to other tools.
+frame later) to hand the result to other tools. **Done** (Write Geo
+last; Alembic still later).
 
 **P7, the GPU** (as phase 12 did for 2D): Attribute Set and Scatter as
 compute shaders when the counts are large (> 100k), the expression

@@ -16,6 +16,9 @@
 //!   base color for a metal), Blinn shading; `KHR_materials_unlit` is
 //!   Unlit. An embedded image (in a `.glb` or a data URI) is saved once to
 //!   the temporary folder, as `Material::texture` is a file.
+//! - COLOR_0 and application-specific attributes (`_name`, floats) come
+//!   in as the mesh's point attributes (Cd, name), so what Write Geo
+//!   writes reads back.
 
 use crate::geom::{Mat4, Vec3};
 use crate::mesh::{Material, Mesh, Part, Shading};
@@ -82,12 +85,42 @@ fn primitive(prim: &::gltf::Primitive, buffers: &[::gltf::buffer::Data], folder:
     if let Some(uv) = reader.read_tex_coords(0) {
         mesh.uvs = uv.into_f32().map(|t| [t[0] as f64, 1.0 - t[1] as f64]).collect();
     }
+    read_attributes(prim, buffers, &mut mesh);
     match reader.read_normals() {
         Some(n) => mesh.normals = n.map(|n| Vec3::new(n[0] as f64, n[1] as f64, n[2] as f64).try_normalize(1e-300).unwrap_or_else(Vec3::y)).collect(),
         None => mesh = mesh.flat(),
     }
     let material = material(&prim.material(), buffers, folder)?;
     Ok(Some(Part { name: String::new(), mesh, material }))
+}
+
+/// A primitive's colors (COLOR_0, as Cd) and application-specific
+/// attributes (`_name`, as name: floats by their width), as point
+/// attributes of `mesh`, as Write Geo writes them.
+fn read_attributes(prim: &::gltf::Primitive, buffers: &[::gltf::buffer::Data], mesh: &mut Mesh) {
+    use crate::geo::Attr;
+    let n = mesh.positions.len();
+    let reader = prim.reader(|b| buffers.get(b.index()).map(|d| &d.0[..]));
+    if let Some(c) = reader.read_colors(0) {
+        let c: Vec<[f32; 4]> = c.into_rgba_f32().collect();
+        let _ = mesh.point_attrs.set(crate::geo::CD, Attr::Vec4(c), n);
+    }
+    let data = |b: ::gltf::Buffer| buffers.get(b.index()).map(|d| &d.0[..]);
+    for (semantic, accessor) in prim.attributes() {
+        let ::gltf::Semantic::Extras(name) = semantic else { continue };
+        if accessor.data_type() != ::gltf::accessor::DataType::F32 || name.is_empty() {
+            continue;
+        }
+        let attr = match accessor.dimensions() {
+            ::gltf::accessor::Dimensions::Scalar => ::gltf::accessor::Iter::<f32>::new(accessor, data).map(|i| Attr::Float(i.collect())),
+            ::gltf::accessor::Dimensions::Vec3 => ::gltf::accessor::Iter::<[f32; 3]>::new(accessor, data).map(|i| Attr::Vec3(i.collect())),
+            ::gltf::accessor::Dimensions::Vec4 => ::gltf::accessor::Iter::<[f32; 4]>::new(accessor, data).map(|i| Attr::Vec4(i.collect())),
+            _ => None,
+        };
+        if let Some(a) = attr {
+            let _ = mesh.point_attrs.set(&name, a, n);
+        }
+    }
 }
 
 /// A glTF material as ours.

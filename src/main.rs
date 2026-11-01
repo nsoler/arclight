@@ -229,7 +229,7 @@ fn render(path: PathBuf, frame: i64, verbose: bool) -> Result<()> {
 
     // Still writes (and a full evaluation, so errors anywhere surface).
     let has_media_out = g.nodes.iter().any(|n| n.op == "media_out");
-    if g.nodes.iter().any(|n| n.op == "write") || !has_media_out {
+    if g.nodes.iter().any(|n| matches!(n.op.as_str(), "write" | "write_geo")) || !has_media_out {
         let ctx = EvalContext { frame, write_outputs: true };
         // (Results the writes don't need may stay on the GPU.)
         let results = arclight::graph::Evaluator::new().run_all(&g, &ctx)?;

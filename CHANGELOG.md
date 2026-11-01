@@ -17,6 +17,22 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.13.41 — 2026-10-31
+
+- **Write Geo** (Output): writes a scene's geometry for other 3D tools
+  when the graph is rendered (as Write does images; viewing writes
+  nothing): Wavefront OBJ with its MTL, or glTF (.gltf + .bin, or one
+  .glb), by the extension; `####` in the name for one file a frame,
+  relative paths in the project folder. Include picks meshes, cards,
+  instances, points and curves; Group narrows them. Materials and
+  textures go along; OBJ bakes everything in place, glTF keeps
+  placements and shares a prototype's mesh among its copies (or
+  Instances realize). Cd goes as vertex colors, and in glTF the other
+  point attributes as `_name`, which Read Geo now reads back.
+- `arclight render` writes Write Geo's files even in a project with a
+  Media Out.
+- **Phase 13's planned nodes are all in** (docs/geo-plan.md).
+
 ## 0.13.40 — 2026-10-31
 
 - **Extrude** (Scene): pushes meshes' faces (all, or Group's) out along

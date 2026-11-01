@@ -55,6 +55,9 @@ on the Macs (the DMG), from the release builds.
 - [ ] Extrude a cube's faces: individual with Inset, region on faces
       picked by Attribute Set (`extrude`); walls colored by `side`
       (0.13.40)
+- [ ] Write Geo: `arclight render` a scene to .obj, .gltf and .glb
+      (with a textured card and instances) and open them in Blender;
+      Read Geo reads the glTF back with its attributes (0.13.41)
 - [ ] Help ▸ Examples ▸ Projection (multi-projection.json, 0.13.39):
       Blend with others softens the seam on the wall and block; Fade
       start / end fade a grazing projection out; Frames (three frames of

@@ -26,6 +26,7 @@ pub mod geo;
 pub mod geo_attr;
 pub mod geo_fit;
 pub mod geo_mesh;
+pub mod geo_write;
 pub mod geo_table;
 pub mod geom;
 pub mod gltf;
