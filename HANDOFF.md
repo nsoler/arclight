@@ -57,6 +57,10 @@ done), `docs/help.md` (the in-app help) and
   feature to Cargo.toml. Then phase 13 is complete; next, TODO.md's
   "After the phase 13 pause" (detachable panels first). Dev2: done,
   standing by. `target/release` (the launcher) is 0.13.33.
+- **0.14.14, the bake example bakes the block** (Dev1):
+  `projection-bake.json` gains `bake_block` (Cube `uv_layout` atlas);
+  the baked set has no projections and no cameras left (projectors live
+  inside projections). Released as v0.14.14.
 - **0.14.13, three-views example** (Dev1, user request):
   `examples/cameras-three-views.json` (Scene 'world', cam_wide / cam_close
   / cam_top, render_* naming them; a 2 × 2 contact sheet: Transform's

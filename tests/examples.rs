@@ -153,9 +153,10 @@ fn the_basic_projection_example_gives_back_its_plate() {
     assert!(d > 0.05, "frame 48 shows the parallax: mean difference {d}");
 }
 
-/// projection-bake.json: the two-camera set with the wall and the ground
-/// baked: rendered from the baked scene it looks as the live projection
-/// does (to the bake's filtering), the baked surfaces carry no projection,
+/// projection-bake.json: the two-camera set with the wall, the ground and
+/// the block (its Cube's uvs an atlas) baked: rendered from the baked scene
+/// it looks as the live projection does (to the bake's filtering), nothing
+/// keeps a projection,
 /// and the wall's texture is only where the projections landed. Write Geo
 /// writes nothing unless rendered.
 #[test]
@@ -178,8 +179,11 @@ fn the_bake_example_renders_as_the_live_projection() {
     let baked = eval(&graph, "render_baked");
     let d = mean_difference(&live, &baked);
     assert!(d < 0.02, "baked renders as live: mean difference {d}");
-    let scene = eval(&graph, "bake_wall").scene.clone().expect("a scene");
-    assert!(scene.projections.iter().all(|p| p.targets == ["block"]), "only the block keeps its projections");
+    let scene = eval(&graph, "bake_block").scene.clone().expect("a scene");
+    assert!(scene.projections.is_empty(), "nothing keeps its projections: {:?}", scene.projections.iter().map(|p| &p.targets).collect::<Vec<_>>());
+    assert!(scene.cameras.is_empty(), "the projectors went with their projections");
+    let block = scene.meshes.iter().find(|m| m.node == "block").expect("the block");
+    assert!(block.texture.is_some(), "the block is baked");
     let tex = eval(&graph, "wall_texture");
     assert!(tex.pixels.iter().any(|p| p[3] == 0.0) && tex.pixels.iter().any(|p| p[3] > 0.9), "alpha: where the projections landed");
     let glb = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/bake/set.glb");

@@ -782,8 +782,9 @@ them as they go. Press play.
   Write (an EXR or PNG) or another node: the projections' part only,
   alpha where they landed, so laid **Over** the surface's own texture it
   gives the bake. **Help ▸ Examples ▸ Projection: baked to a texture**
-  (`examples/projection-bake.json`): the two-camera set's wall and ground
-  baked, rendered beside the live projection, the wall's texture in a
+  (`examples/projection-bake.json`): the two-camera set's ground, wall and
+  block (its Cube's UV layout atlas) baked, one Bake Projection each,
+  rendered beside the live projection, the wall's texture in a
   second Viewer, and a Write Geo that writes `bake/set.glb` when the
   project is rendered.
 - **Scanline Render** takes any number of scenes or particle streams:

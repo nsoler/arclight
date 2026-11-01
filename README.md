@@ -452,7 +452,7 @@ applies everywhere and `mask_invert` does nothing.
 
 `examples/multi-projection.json` (**Help ▸ Examples ▸ Projection: two cameras blended on one set**) projects two checkerboards from two cameras onto a block and a wall, blended where they overlap (Project 3D's Blend with others and Fade).
 
-`examples/projection-bake.json` (**Help ▸ Examples ▸ Projection: baked to a texture**) bakes that set's wall and ground with Bake Projection and renders them without the projectors beside the live render, shows the wall's texture alone (Bake Projection Texture), and writes the baked set to `bake/set.glb` with Write Geo when rendered.
+`examples/projection-bake.json` (**Help ▸ Examples ▸ Projection: baked to a texture**) bakes that set's ground, wall and block (its Cube's `uv_layout` atlas) with Bake Projection and renders them without the projectors beside the live render, shows the wall's texture alone (Bake Projection Texture), and writes the baked set to `bake/set.glb` with Write Geo when rendered.
 
 `examples/cameras-three-views.json` (**Help ▸ Examples ▸ Cameras: one set, three views**) renders one Scene through three of its cameras (wide and moving, close-up, orthographic top), each Scanline Render picking its camera by name with its Camera param, with a Viewer per view and a contact sheet of the three.
 
@@ -771,7 +771,7 @@ examples/
   particledirectionalforce.json  two particle streams, each pushed its own way by its own force (translated from a Nuke example script)
   projection-basic.json  Project 3D from the shot camera (held at frame 1) onto a wall and a block: the plate at frame 1, parallax as it moves
   multi-projection.json  Project 3D from two cameras onto a block and a wall, blended where they overlap
-  projection-bake.json   that set's wall and ground baked to textures (Bake Projection), rendered beside the live one, written to a .glb
+  projection-bake.json   that set's ground, wall and block baked to textures (Bake Projection), rendered beside the live one, written to a .glb
   cameras-three-views.json  one Scene, three cameras (wide, close-up, top), three Scanline Renders each naming its camera, a contact sheet
   media/testsrc.mp4 5 s test clip used by the GUI starter project
 ```

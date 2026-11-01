@@ -59,7 +59,8 @@
      0.5,
      0.5,
      1
-    ]
+    ],
+    "uv_layout": "atlas"
    },
    "pos": [
     40,
@@ -365,10 +366,26 @@
    ]
   },
   {
+   "id": "bake_block",
+   "op": "bake_projection",
+   "inputs": [
+    "bake_wall"
+   ],
+   "params": {
+    "group": "block",
+    "width": 1024,
+    "height": 1024
+   },
+   "pos": [
+    800,
+    40
+   ]
+  },
+  {
    "id": "world_baked",
    "op": "scene",
    "inputs": [
-    "bake_wall",
+    "bake_block",
     "sky",
     "shot",
     ""
@@ -438,14 +455,14 @@
    "id": "save_glb",
    "op": "write_geo",
    "inputs": [
-    "bake_wall"
+    "bake_block"
    ],
    "params": {
     "path": "bake/set.glb"
    },
    "pos": [
     990,
-    -40
+    40
    ]
   }
  ],
@@ -469,14 +486,14 @@
   },
   {
    "id": "bd_bake",
-   "title": "Baked: the wall and the ground (one Bake Projection each: surfaces share one uv square); the block stays projected (a cube's faces share one too). Rendered without the projectors on them",
+   "title": "Baked: the ground, the wall and the block (one Bake Projection each: surfaces baked together share one texture; the block's Cube has UV layout atlas so its six faces get their own cells). Rendered without the projectors",
    "pos": [
     780,
     -160
    ],
    "size": [
     780,
-    150
+    230
    ],
    "color": [
     0.25,

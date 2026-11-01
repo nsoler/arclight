@@ -356,9 +356,10 @@ after it. `ROADMAP.md` is the public summary of this list.
       plate on a card from the shot camera: frame 1 shows the plate
       exactly; play: the block slides against the wall, its unseen sides
       grey. Projection: baked to a texture: render_baked looks like
-      render_live; the second Viewer shows the wall's texture, clear
-      where nothing landed; `arclight render` writes bake/set.glb; in
-      Blender the ground and wall are textured, the block grey. Bake
+      render_live, block included (0.14.14); the second Viewer shows the
+      wall's texture, clear where nothing landed; `arclight render`
+      writes bake/set.glb; in Blender the ground, wall and block are
+      textured (the block's atlas). Bake
       Projection on a Read Geo mesh without uvs: a clear error; Group
       naming an Instance on Points: "Realize Instances first"
 - [ ] Templates (0.14.7): select a few nodes, Insert ▸ Save selection as

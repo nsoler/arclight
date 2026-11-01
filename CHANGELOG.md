@@ -18,6 +18,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.14 — 2026-11-01
+
+- Help ▸ Examples ▸ Projection: baked to a texture now bakes the block
+  too (its Cube's UV layout set to atlas, a third Bake Projection), so
+  the baked set renders and writes to .glb with no projections left.
+
 ## 0.14.13 — 2026-11-01
 
 - **Help ▸ Examples ▸ Cameras: one set, three views**
