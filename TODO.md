@@ -411,6 +411,15 @@ after it. `ROADMAP.md` is the public summary of this list.
 - [X] Ellipse's Size is a radius but reads like a diameter: label or
       tooltip it (Dev1, 2026-10-31)
 
+## Phase 15: production readiness (proposed, 2026-11-01)
+
+Planned in `docs/production-plan.md`, waiting for the user's answers
+(Q1–Q5 there). Milestones, in order: P1 color management (OCIO / ACES),
+P2 node groups and gizmos, P3 regions / disk cache / proxies, P4 the
+farm (ranges, chunks, exit codes, reproducible, a Deadline submitter),
+P5 EXR (multi-part, Shuffle, compression, metadata); alongside, STMap,
+Defocus, vector tools, Denoise, keying.
+
 ## Before going public
 
 - [ ] Licence (MIT / Apache or GPL), a LICENSE and a NOTICES file

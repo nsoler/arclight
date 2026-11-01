@@ -16,7 +16,10 @@ user's call (TODO.md "After the phase 13 pause": Geo Info per-point
 selection, Scanline Render's Width / Height with a background; notes
 only: Project 3D's node-name targets, Particles to Points id packing).
 Nuke script import stays "Not planned" (the user confirmed,
-2026-11-01; originality rule below); phase 13 (procedural geometry, `docs/geo-plan.md`) ended at
+2026-11-01; originality rule below). **Phase 15 (production readiness)
+proposed** in `docs/production-plan.md` (OCIO, groups / gizmos, regions
+/ disk cache / proxies, the farm, EXR), awaiting the user's answers to
+its Q1–Q5; `ROADMAP.md` updated to match; phase 13 (procedural geometry, `docs/geo-plan.md`) ended at
 0.13.41 (v0.13.41) on `wip-ns-geo`, now frozen; phase 12 (GPU acceleration, `docs/gpu-plan.md`)
 ended at 0.12.19 (beta v0.12.19, with the macOS DMG) on `wip-ns-gpu`,
 now frozen; phase 11 (engine and platform: crash reporting, plugin
