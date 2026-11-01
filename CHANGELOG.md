@@ -18,6 +18,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.15 — 2026-11-01
+
+- Fix: opening another project (or example) after using the 3D view no
+  longer leaves the 3D view (or Geo Info) showing the previous one.
+  Every new document started at revision 1, which the viewers' caches
+  are keyed by; revisions are now unique across the session.
+
 ## 0.14.14 — 2026-11-01
 
 - Help ▸ Examples ▸ Projection: baked to a texture now bakes the block

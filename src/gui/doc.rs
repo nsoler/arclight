@@ -69,10 +69,18 @@ pub struct Doc {
     pub undo_levels: usize,
 }
 
+/// A revision no document has had yet: unique across the process, so a
+/// newly loaded project never shares one with the project it replaced (the
+/// viewers' caches are keyed by it).
+fn next_revision() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 impl Doc {
     pub fn new(graph: Graph, path: Option<PathBuf>) -> Doc {
         let history = History { undo: Vec::new(), redo: Vec::new(), committed: Graph::default(), committed_edits: 0 };
-        let mut doc = Doc { graph, selected: None, selection: Vec::new(), selection_for: None, selected_backdrop: None, selected_wire: None, show_3d: None, intro_3d: false, view_override: None, active_viewer: None, view_format: None, revision: 1, path, dirty: false, edits: 0, history, undo_levels: UNDO_LEVELS };
+        let mut doc = Doc { graph, selected: None, selection: Vec::new(), selection_for: None, selected_backdrop: None, selected_wire: None, show_3d: None, intro_3d: false, view_override: None, active_viewer: None, view_format: None, revision: next_revision(), path, dirty: false, edits: 0, history, undo_levels: UNDO_LEVELS };
         doc.normalize();
         doc.auto_layout();
         doc.history.committed = doc.graph.clone();
@@ -88,7 +96,7 @@ impl Doc {
     /// An edit that affects rendering.
     pub fn changed(&mut self) {
         self.normalize();
-        self.revision += 1;
+        self.revision = next_revision();
         self.dirty = true;
         self.edits += 1;
     }
@@ -979,6 +987,19 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::str::FromStr;
+
+    /// A loaded project never shares a revision with the one it replaced,
+    /// or the viewers (keyed by it) would keep showing the old project.
+    #[test]
+    fn revisions_unique_across_documents() {
+        let a = Doc::new(Graph::default(), None);
+        let mut b = Doc::new(Graph::default(), None);
+        assert_ne!(a.revision, b.revision);
+        let before = b.revision;
+        b.changed();
+        assert!(b.revision > before);
+        assert_ne!(Doc::new(Graph::default(), None).revision, b.revision);
+    }
 
     /// Importing a project: its nodes come in renamed where they clash,
     /// selected, the project's settings kept; one undo takes it all back.
