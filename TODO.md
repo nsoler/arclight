@@ -327,7 +327,7 @@ after it. `ROADMAP.md` is the public summary of this list.
       frames, ⌫ deletes keys, a key click seeks. Properties out: edit,
       Look through, formula popups open there. All four out, then dock
       each back
-- [ ] Import project (0.14.5): File ▸ Import project… on
+- [X] Import project (0.14.5): File ▸ Import project… on
       examples/geo-scatter.json into the starter project: nodes to the
       right, selected, framed; the menu bar names renames; ⌘Z removes
       them all, ⇧⌘Z brings them back; the render shows the rocks. Import
@@ -337,22 +337,22 @@ after it. `ROADMAP.md` is the public summary of this list.
       opened. Import the same project twice: the second copy renamed,
       its wires and links inside it. Rename a Locator used in an
       Attribute Set formula / a Curve's Path of: they follow
-- [ ] Copy / paste (0.14.6): select nodes, ⌘C, ⌘V with the pointer over
+- [X] Copy / paste (0.14.6): select nodes, ⌘C, ⌘V with the pointer over
       the graph: pasted there, renamed, selected; ⌘Z removes them. ⌘X
       then ⌘V moves them. ⌘D duplicates. A backdrop selected copies its
       nodes. Paste into another project (File ▸ New) and into a second
       running ArclightVFX: Reads still load. In the graph's own window
       too. ⌘C / ⌘V inside a text field stay the field's. Paste text
       from elsewhere: nothing happens
-- [ ] Scanline Render's Camera (0.14.11): two Cameras in one Scene into
+- [X] Scanline Render's Camera (0.14.11): two Cameras in one Scene into
       a Scanline Render: its Camera menu lists both; picking one renders
       through it; rename that Camera: the setting follows; a wrong name:
       the error names the cameras; empty: as before
-- [ ] Camera alone (0.14.10): ⇧Tab, type "camera": Camera and 3D Camera
+- [X] Camera alone (0.14.10): ⇧Tab, type "camera": Camera and 3D Camera
       Setup listed; Camera with a Project 3D selected becomes its
       projector; with a Scanline Render selected, its camera (if empty);
       3D Camera Setup as before; Edit ▸ Add Camera
-- [ ] Projection examples (0.14.9): Help ▸ Examples ▸ Projection: a
+- [X] Projection examples (0.14.9): Help ▸ Examples ▸ Projection: a
       plate on a card from the shot camera: frame 1 shows the plate
       exactly; play: the block slides against the wall, its unseen sides
       grey. Projection: baked to a texture: render_baked looks like
@@ -362,7 +362,7 @@ after it. `ROADMAP.md` is the public summary of this list.
       textured (the block's atlas). Bake
       Projection on a Read Geo mesh without uvs: a clear error; Group
       naming an Instance on Points: "Realize Instances first"
-- [ ] Templates (0.14.7): select a few nodes, Insert ▸ Save selection as
+- [X] Templates (0.14.7): select a few nodes, Insert ▸ Save selection as
       template… (a name; the same name offers Replace); Insert ▸
       Templates puts it in; ⇧Tab and type its name: it's listed after
       the nodes, Enter inserts it there; File ▸ New from template starts
@@ -408,7 +408,7 @@ after it. `ROADMAP.md` is the public summary of this list.
 - [ ] Scanline Render's Width / Height are ignored when a background is
       connected (the plate's size wins): say so in help, or let them win
       (Dev1, 2026-10-31, from the geo-scatter example)
-- [ ] Ellipse's Size is a radius but reads like a diameter: label or
+- [X] Ellipse's Size is a radius but reads like a diameter: label or
       tooltip it (Dev1, 2026-10-31)
 
 ## Before going public
@@ -429,5 +429,4 @@ after it. `ROADMAP.md` is the public summary of this list.
 
 - OpenFX hosting (a large project of its own)
 - Copying another product's licensing scheme
-- Nuke script import (originality rule)
 

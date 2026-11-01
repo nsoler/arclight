@@ -2,15 +2,22 @@
 
 Last updated 2026-11-01, session 12: **phase 14 (workspace and UI) on
 branch `wip-ns-ui`, 0.14.x, from 0.14.0; at 0.14.14, released as
-v0.14.14** (Linux, Windows, wheel + sdist; the user builds and posts the
-macOS DMG). Done in phase 14 so far: detachable panels (Mac-checked),
+v0.14.14** (all five assets, the DMG posted by the user). Done in phase 14 so far: detachable panels (Mac-checked),
 Import project, copy / paste, templates, Project 3D GPU follow-ups,
 Bake Projection (+ texture) with two projection examples, the
 stand-alone Camera, Scanline Render's Camera param, the Cube's atlas uv
-layout, the three-views camera example. Dev1 and Dev2 are
-standing by; the next items are the user's call (TODO.md "After the
-phase 13 pause": Geo Info selection, Scanline Render's Width / Height with a background, the
-remaining Project 3D note); phase 13 (procedural geometry, `docs/geo-plan.md`) ended at
+layout, the three-views camera example. **Hand-checked by the user
+(2026-11-01):** panels (Mac), Import project, copy / paste, templates,
+the projection examples, the Camera alone, Scanline Render's Camera.
+**Still to hand-check:** Viewer / Curve Editor / Properties in their own
+windows (0.14.4), the three-views example (0.14.13), the Cube atlas
+(0.14.12). Dev1 and Dev2 are standing by; the next items are the
+user's call (TODO.md "After the phase 13 pause": Geo Info per-point
+selection, Scanline Render's Width / Height with a background; notes
+only: Project 3D's node-name targets, Particles to Points id packing).
+The user removed "Nuke script import" from TODO.md's "Not planned"
+list on 2026-11-01; the originality rule below still stands (never use
+the disassembly in `arclight-compound/`); phase 13 (procedural geometry, `docs/geo-plan.md`) ended at
 0.13.41 (v0.13.41) on `wip-ns-geo`, now frozen; phase 12 (GPU acceleration, `docs/gpu-plan.md`)
 ended at 0.12.19 (beta v0.12.19, with the macOS DMG) on `wip-ns-gpu`,
 now frozen; phase 11 (engine and platform: crash reporting, plugin
