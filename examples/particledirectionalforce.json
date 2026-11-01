@@ -1,0 +1,51 @@
+{
+  "project": { "folder": ".", "format": { "width": 640, "height": 480 },
+               "fps": 24.0, "first_frame": 1, "last_frame": 100 },
+  "nodes": [
+    { "id": "camera1", "op": "camera", "pos": [105, 487],
+      "params": { "focal": 50, "film_back": [24.576, 18.432],
+                  "translate": [-4.041593075, 3.406004429, 6.260117054],
+                  "rotate": [-17.30209541, -32.57871628, 0] } },
+
+    { "id": "emitter_teal", "op": "particle_emitter", "pos": [128, 187],
+      "params": { "shape": "rectangle", "dimensions": [1, 1, 1], "rotate": [-90, 0, 0],
+                  "rate": 100, "life": 85, "speed": 0, "along_normal": 2.76,
+                  "size": 0.025, "color": [0, 0.3212000132, 0.4399999976, 1],
+                  "color_end": [0, 0.3212000132, 0.4399999976, 1], "seed": 1 } },
+    { "id": "halflife_teal", "op": "particle_wind", "inputs": ["emitter_teal"], "pos": [128, 247],
+      "params": { "wind": [0, 0, 0], "drag": 1.607 } },
+    { "id": "force_teal", "op": "particle_gravity", "inputs": ["halflife_teal"], "pos": [128, 307],
+      "params": { "acceleration": [5.76, 0, 0] } },
+    { "id": "look_teal", "op": "particle_render", "inputs": ["force_teal"], "pos": [128, 367],
+      "params": { "look": "sprites", "outline": "square", "orient": "none" } },
+
+    { "id": "emitter_orange", "op": "particle_emitter", "pos": [328, 187],
+      "params": { "shape": "rectangle", "dimensions": [1, 1, 1], "rotate": [-90, 0, 0],
+                  "rate": 100, "life": 85, "speed": 0, "along_normal": 2.76,
+                  "size": 0.025, "color": [1, 0.5791472197, 0.003982091323, 1],
+                  "color_end": [1, 0.5791472197, 0.003982091323, 1], "seed": 2 } },
+    { "id": "halflife_orange", "op": "particle_wind", "inputs": ["emitter_orange"], "pos": [328, 247],
+      "params": { "wind": [0, 0, 0], "drag": 1.607 } },
+    { "id": "force_orange", "op": "particle_gravity", "inputs": ["halflife_orange"], "pos": [328, 307],
+      "params": { "acceleration": [-5.76, 0, 0] } },
+    { "id": "look_orange", "op": "particle_render", "inputs": ["force_orange"], "pos": [328, 367],
+      "params": { "look": "sprites", "outline": "square", "orient": "none" } },
+
+    { "id": "background", "op": "constant", "pos": [426, 487],
+      "params": { "width": 640, "height": 480, "color": [0, 0, 0, 1] } },
+
+    { "id": "render", "op": "scanline_render",
+      "inputs": ["", "camera1", "background", "look_teal", "look_orange"], "pos": [228, 547],
+      "params": { "width": 640, "height": 480 } },
+
+    { "id": "viewer1", "op": "viewer", "inputs": ["render"], "pos": [228, 627] }
+  ],
+  "backdrops": [
+    { "id": "bd_note", "title": "Translated from Nuke's particledirectionalforce.nk: each stream gets its own directional force",
+      "pos": [90, 120], "size": [400, 40], "color": [0.36, 0.40, 0.46] },
+    { "id": "bd_teal", "title": "Teal stream (Nuke channel a): pushed toward +x",
+      "pos": [100, 160], "size": [180, 250], "color": [0.25, 0.48, 0.47] },
+    { "id": "bd_orange", "title": "Orange stream (Nuke channel b): pushed toward -x",
+      "pos": [300, 160], "size": [180, 250], "color": [0.58, 0.44, 0.20] }
+  ]
+}
