@@ -15,9 +15,8 @@ windows (0.14.4), the three-views example (0.14.13), the Cube atlas
 user's call (TODO.md "After the phase 13 pause": Geo Info per-point
 selection, Scanline Render's Width / Height with a background; notes
 only: Project 3D's node-name targets, Particles to Points id packing).
-The user removed "Nuke script import" from TODO.md's "Not planned"
-list on 2026-11-01; the originality rule below still stands (never use
-the disassembly in `arclight-compound/`); phase 13 (procedural geometry, `docs/geo-plan.md`) ended at
+Nuke script import stays "Not planned" (the user confirmed,
+2026-11-01; originality rule below); phase 13 (procedural geometry, `docs/geo-plan.md`) ended at
 0.13.41 (v0.13.41) on `wip-ns-geo`, now frozen; phase 12 (GPU acceleration, `docs/gpu-plan.md`)
 ended at 0.12.19 (beta v0.12.19, with the macOS DMG) on `wip-ns-gpu`,
 now frozen; phase 11 (engine and platform: crash reporting, plugin

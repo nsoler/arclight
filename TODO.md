@@ -429,4 +429,5 @@ after it. `ROADMAP.md` is the public summary of this list.
 
 - OpenFX hosting (a large project of its own)
 - Copying another product's licensing scheme
+- Nuke script import (originality rule)
 
