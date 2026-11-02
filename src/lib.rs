@@ -57,6 +57,7 @@ pub mod session;
 pub mod shade;
 pub mod sfm;
 pub mod shape;
+pub mod shape_feather;
 pub mod splat;
 pub mod solve;
 pub mod templates;

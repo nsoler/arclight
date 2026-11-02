@@ -2048,6 +2048,9 @@ pub static OPS: &[OpInfo] = &[
             p!("color", "Color", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]),
             p!("opacity", "Opacity", OPACITY, 1.0),
             p!("feather", "Feather", FEATHER, 0.0),
+            // Per vertex, in the order of `points`: added to Feather there, blended
+            // along the outline (missing entries are 0).
+            p!("point_feather", "Point feather", ParamKind::Points { stride: 1 }, Vec::<f64>::new()),
             fixed!("invert", "Invert", ParamKind::Bool, false),
             fixed!("operation", "Operation", ParamKind::Choice(SHAPE_OPS), "over"),
             fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
@@ -2079,6 +2082,9 @@ pub static OPS: &[OpInfo] = &[
             p!("color", "Color", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]),
             p!("opacity", "Opacity", OPACITY, 1.0),
             p!("feather", "Feather", FEATHER, 0.0),
+            // Per vertex, in the order of `points`: added to Feather there, blended
+            // along the outline (missing entries are 0).
+            p!("point_feather", "Point feather", ParamKind::Points { stride: 1 }, Vec::<f64>::new()),
             fixed!("invert", "Invert", ParamKind::Bool, false),
             fixed!("operation", "Operation", ParamKind::Choice(SHAPE_OPS), "over"),
             fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
@@ -4536,23 +4542,45 @@ struct BoxShape {
 struct Polygon {
     points: Vec<f32>,
     fill_rule: String,
+    /// Per-vertex feather (Roto and Polygon); old projects have none.
+    #[serde(default)]
+    point_feather: Vec<f32>,
 }
 
-/// A shape op's outline (and fill rule) from its resolved params.
-fn shape_outline(op: &str, params: &Value) -> Result<(Vec<Pt>, FillRule)> {
-    Ok(match op {
+/// One outline of a shape op, ready to rasterize.
+struct ShapeSample {
+    outline: Vec<Pt>,
+    rule: FillRule,
+    /// The overall Feather.
+    feather: f32,
+    /// Each outline vertex's own feather on top (`shape_feather`); empty
+    /// when no point has one, which keeps the plain soft edge.
+    widths: Vec<f32>,
+}
+
+/// A shape op's outline from its resolved `params` (one motion sample's
+/// or the frame's), with `feather` its overall Feather.
+fn shape_sample(op: &str, params: &Value, feather: f32) -> Result<ShapeSample> {
+    let (outline, rule, widths) = match op {
         "rectangle" | "ellipse" => {
             let b: BoxShape = parse(params, op)?;
             let f = if op == "rectangle" { shape::rectangle } else { shape::ellipse };
-            (f(b.center, b.size, b.rotate), FillRule::NonZero)
+            (f(b.center, b.size, b.rotate), FillRule::NonZero, Vec::new())
         }
         _ => {
             let p: Polygon = parse(params, op)?;
             let rule = if p.fill_rule == "even-odd" { FillRule::EvenOdd } else { FillRule::NonZero };
-            let outline = if op == "roto" { shape::spline(&p.points) } else { p.points.as_chunks::<2>().0.to_vec() };
-            (outline, rule)
+            let stride = if op == "roto" { 6 } else { 2 };
+            if crate::shape_feather::any_local(&p.point_feather, p.points.len() / stride) {
+                let (o, w) = if op == "roto" { crate::shape_feather::spline(&p.points, &p.point_feather) } else { crate::shape_feather::polygon(&p.points, &p.point_feather) };
+                (o, rule, w)
+            } else {
+                let outline = if op == "roto" { shape::spline(&p.points) } else { p.points.as_chunks::<2>().0.to_vec() };
+                (outline, rule, Vec::new())
+            }
         }
-    })
+    };
+    Ok(ShapeSample { outline, rule, feather, widths })
 }
 
 /// Pixels an outline can touch with a soft edge `feather` wide (centered
@@ -4576,18 +4604,15 @@ fn shape_op(op: &str, params: &Value, inputs: &[Option<&Image>]) -> Result<Image
     let format = bg.map_or(source_size(style.width, style.height), |b| b.format);
     // One outline (with its feather), or with motion blur one per sample
     // across the shutter, averaged.
-    let samples: Vec<(Vec<Pt>, FillRule, f32)> = match params.get("_motion").and_then(Value::as_array) {
+    let samples: Vec<ShapeSample> = match params.get("_motion").and_then(Value::as_array) {
         Some(motion) => motion
             .iter()
             .map(|p| {
                 let feather = p.get("feather").and_then(Value::as_f64).map_or(style.feather, |f| f as f32);
-                shape_outline(op, p).map(|(o, r)| (o, r, feather))
+                shape_sample(op, p, feather)
             })
             .collect::<Result<_>>()?,
-        None => {
-            let (o, r) = shape_outline(op, params)?;
-            vec![(o, r, style.feather)]
-        }
+        None => vec![shape_sample(op, params, style.feather)?],
     };
     // Coverage only where the shape can reach: its outlines' bounds plus
     // the feather, within the frame. Inverted, it covers the rest of the
@@ -4596,13 +4621,17 @@ fn shape_op(op: &str, params: &Value, inputs: &[Option<&Image>]) -> Result<Image
     let reach = if style.invert {
         frame
     } else {
-        samples.iter().fold(IRect::default(), |u, (o, _, f)| u.union(&outline_bounds(o, *f))).intersect(&frame)
+        samples.iter().fold(IRect::default(), |u, s| u.union(&outline_bounds(&s.outline, s.feather + s.widths.iter().copied().fold(0.0, f32::max)))).intersect(&frame)
     };
     let mut cov = vec![0.0f32; reach.width() * reach.height()];
     let weight = 1.0 / samples.len() as f32;
-    for (outline, rule, feather) in &samples {
-        let shifted: Vec<Pt> = outline.iter().map(|p| [p[0] - reach.x0 as f32, p[1] - reach.y0 as f32]).collect();
-        let c = shape::coverage(&[shifted], reach.width(), reach.height(), *feather, *rule);
+    for s in &samples {
+        let shifted: Vec<Pt> = s.outline.iter().map(|p| [p[0] - reach.x0 as f32, p[1] - reach.y0 as f32]).collect();
+        let c = if s.widths.is_empty() {
+            shape::coverage(&[shifted], reach.width(), reach.height(), s.feather, s.rule)
+        } else {
+            crate::shape_feather::coverage(&shifted, &s.widths, s.feather, reach.width(), reach.height(), s.rule)
+        };
         cov.iter_mut().zip(c).for_each(|(a, b)| *a += b * weight);
     }
     let at = |x: i32, y: i32| {

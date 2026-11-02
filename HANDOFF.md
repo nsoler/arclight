@@ -3,8 +3,9 @@
 Last updated 2026-11-01, session 13: **keying ("option D", the user's
 choice over integrating CorridorKey, whose licence keeps it out):
 Dev1's Color Difference Key shipped as 0.14.16, Dev2's Edge Extend
-(pull-push fill, also the clean-screen-plate maker) as 0.14.17; Dev1 and
-Dev2 standing by.
+(pull-push fill, also the clean-screen-plate maker) as 0.14.17. Then the user's roto items 1 and 2: per-point feather (Dev1,
+0.14.18) and shapes following a Tracker (Dev2, 0.14.19), released
+together with the keying as v0.14.19.
 The user said stay on 0.14.x, no phase 15 yet.** The v0.14.15 hand
 tests and phase 15's Q1–Q5 are still open. **Phase 14 (workspace and UI) on
 branch `wip-ns-ui`, 0.14.x, from 0.14.0; at 0.14.15, released as
@@ -44,6 +45,22 @@ done), `docs/help.md` (the in-app help) and
 
 ## Start here (next session)
 
+- **0.14.18, per-point feather** (Dev1): `src/shape_feather.rs`.
+  `point_feather` is a parallel list param on Roto and Polygon
+  (`ParamKind::Points { stride: 1 }`, default []), one value per vertex
+  in `points` order; missing entries, negatives and NaN read as 0, and
+  `points` keeps stride 6 / 2, so nothing that reads points changed.
+  `ops::shape_sample` (replacing shape_outline; one place every outline,
+  each motion sample's too, is built) flattens with a width per vertex
+  (Roto linear in the bezier t, Polygon linear along edges);
+  `shape_feather::coverage` takes per pixel the min over nearby edges of
+  d / w(closest point), then smoothstep(0.5 ± that), centred on the
+  outline like Feather. All-zero shapes use `shape::coverage` itself
+  (bit-identical; test `old_projects_render_the_same`). Viewer:
+  `Part::Feather`, the handle at vertex + outward normal × (Feather +
+  own) / 2, at least 16 screen px out; outward from the winding; it
+  yields to the multi-select transform box's handles. Possible later: a
+  smoothstep blend in t if kinks show at vertices.
 - **0.14.17, Edge Extend** (Dev2): `edge_extend`, `src/edge_extend.rs`,
   GPU in `src/gpu/edge_extend.rs` + `edge_extend.wgsl`. Pull-push: seed
   (straight color × coverage, coverage), 2×2-sum pulls down to 1×1

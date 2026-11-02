@@ -18,6 +18,18 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.18 — 2026-11-01
+
+- **Per-point feather** on **Roto** and **Polygon**: each point gets its
+  own feather (`point_feather`, px), so one shape can be soft at the hair
+  and hard at the arm; it blends linearly along the curve between points,
+  adds to the overall Feather, and keys on its own track. In the viewer a
+  selected point shows a blue feather handle out along the curve's normal
+  (drag it; ⇧ sets every selected point); Properties lists every point's
+  value with an "all" field. Inserting and deleting points keeps the
+  feathers in step in every key. Projects saved before it look exactly the
+  same.
+
 ## 0.14.17 — 2026-11-01
 
 - New **Edge Extend** node (Keyer category): pushes the colors just

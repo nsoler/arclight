@@ -105,6 +105,8 @@ enum Part {
     Tangent { i: usize, out: bool },
     /// New symmetric tangents pulled out of spline vertex `i`.
     Pull(usize),
+    /// Vertex `i`'s feather handle (Roto / Polygon `point_feather`).
+    Feather(usize),
     /// Tracker track `i`: its pattern box moves the track.
     Track(usize),
     /// A corner of track `i`'s pattern (or search) box: sizes that box for
@@ -193,7 +195,9 @@ enum Geo {
     /// Vertices of a point list (`stride` numbers each, x and y first). A
     /// spline (stride 6) also has each vertex's in and out handle offsets
     /// in `tan`; other point lists leave it empty.
-    Points { param: &'static str, stride: usize, pts: Vec<Vec2>, tan: Vec<[Vec2; 2]> },
+    /// `feather`: each vertex's own feather (padded to `pts`), when the op
+    /// has a `point_feather` param; `global` its overall Feather.
+    Points { param: &'static str, stride: usize, pts: Vec<Vec2>, tan: Vec<[Vec2; 2]>, feather: Option<Vec<f32>>, global: f32 },
     /// Tracker boxes: each track's position (`None` when it is off) and its
     /// `[pattern, search]` box sizes and its boxes' offset from its point,
     /// in image pixels.
@@ -354,7 +358,12 @@ fn geo(doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
             } else {
                 Vec::new()
             };
-            Geo::Points { param, stride, pts, tan }
+            let feather = has_point_feather(op).then(|| {
+                let f: Vec<f32> = at(POINT_FEATHER).as_array().map(|a| a.iter().map(num).collect()).unwrap_or_default();
+                (0..flat.len() / stride).map(|i| f.get(i).copied().filter(|v| v.is_finite()).unwrap_or(0.0).max(0.0)).collect()
+            });
+            let global = at("feather").as_f64().unwrap_or(0.0) as f32;
+            Geo::Points { param, stride, pts, tan, feather, global }
         }
         Overlay::Tracker { pattern, search } => Geo::Tracker {
             names: [pattern, search],
@@ -661,7 +670,7 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
             }
             None
         }
-        Geo::Points { ref pts, ref tan, .. } => {
+        Geo::Points { ref pts, ref tan, ref feather, global, .. } => {
             let s: Vec<Pos2> = pts.iter().map(|&v| xf.screen(v)).collect();
             // Tangent tips first, so one lying over another vertex stays
             // grabbable; a collapsed handle leaves the vertex to its own hit.
@@ -684,6 +693,15 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
                 }
                 if let Some(&(_, h)) = handles.iter().find(|(q, _)| q.distance(p) < GRAB) {
                     return Some(Part::SelBox(h));
+                }
+            }
+            // The selected vertices' feather handles (after the transform
+            // box's, which they can lie on with several vertices selected).
+            if let Some(f) = feather {
+                for &i in sel.iter().filter(|&&i| i < pts.len()) {
+                    if feather_tip(xf, pts, tan, f, global, i).distance(p) < GRAB {
+                        return Some(Part::Feather(i));
+                    }
                 }
             }
             if s.len() < 2 {
@@ -825,6 +843,11 @@ impl Overlays {
             return;
         }
         let (n, stride, spline) = (pts.len(), *stride, *stride == SPLINE);
+        // The new vertex's feather: between its neighbours'.
+        edit_point_feather(doc, &drag.node, n, |f| {
+            let (a, b) = (f[i % n], f[(i + 1) % n]);
+            insert_vertex(f, 1, i + 1, &[a + (b - a) * t as f64])
+        });
         doc.set_param(&drag.node, param, anim::edit_all(&doc.param(&drag.node, param), |v| {
             if spline {
                 return split_spline(v, i, t);
@@ -898,6 +921,8 @@ impl Overlays {
                     let mut vertex = vec![0.0; stride];
                     vertex[0] = p.x as f64;
                     vertex[1] = p.y as f64;
+                    // It takes the feather of the vertex it follows.
+                    edit_point_feather(doc, &id, pts.len(), |f| insert_vertex(f, 1, i, &[if i > 0 { f[i - 1] } else { 0.0 }]));
                     doc.set_param(&id, param, anim::edit_all(&doc.param(&id, param), |v| insert_vertex(v, stride, i, &vertex)));
                     self.points = vec![i];
                     // On a spline, dragging on pulls out the new vertex's tangents.
@@ -978,6 +1003,7 @@ impl Overlays {
         let raw = doc.param(&id, param);
         let n = anim::sample(&raw, 0.0).len() / stride;
         if n.saturating_sub(gone.len()) >= MIN_POINTS {
+            edit_point_feather(doc, &id, n, |f| f.iter().enumerate().filter(|(i, _)| !gone.contains(i)).map(|(_, x)| *x).collect());
             doc.set_param(&id, param, anim::edit_all(&raw, |v| {
                 v.chunks(stride).enumerate().filter(|(i, _)| !gone.contains(i)).flat_map(|(_, c)| c.to_vec()).collect()
             }));
@@ -1219,9 +1245,25 @@ impl Overlays {
                     painter.text(label, egui::Align2::LEFT_BOTTOM, format!("{}", i + 1), egui::FontId::proportional(12.0), col);
                 }
             }
-            Geo::Points { pts, tan, .. } => {
+            Geo::Points { pts, tan, feather, global, .. } => {
                 let s: Vec<Pos2> = pts.iter().map(|&v| xf.screen(v)).collect();
                 outline_path(painter, points_outline(xf, &pts, &tan), HANDLE);
+                // The selected vertices' feather handles: a diamond out along
+                // the normal at the soft edge's outer end, dashed to the vertex.
+                if let Some(f) = &feather {
+                    for &i in self.selection(doc).iter().filter(|&&i| i < pts.len()) {
+                        let tip = feather_tip(xf, &pts, &tan, f, global, i);
+                        let col = if hot == Some(Part::Feather(i)) { HOT } else { FEATHER_HANDLE };
+                        painter.add(Shape::dashed_line(&[s[i], tip], Stroke::new(1.0, col), 3.0, 3.0));
+                        let d = 4.5;
+                        let diamond = vec![tip + Vec2::new(0.0, -d), tip + Vec2::new(d, 0.0), tip + Vec2::new(0.0, d), tip + Vec2::new(-d, 0.0)];
+                        painter.add(Shape::convex_polygon(diamond, col, outline));
+                        if hot == Some(Part::Feather(i)) {
+                            let label = format!("{:.0}", f[i]);
+                            painter.text(tip + Vec2::new(8.0, -8.0), egui::Align2::LEFT_BOTTOM, label, egui::FontId::proportional(12.0), col);
+                        }
+                    }
+                }
                 // Where a click would insert a vertex.
                 if let (Some(Part::Edge(i, t)), None) = (hot, &self.drag) {
                     let p = if tan.is_empty() {
@@ -1265,6 +1307,66 @@ impl Overlays {
             }
         }
     }
+}
+
+/// The per-vertex feather param of Roto and Polygon.
+const POINT_FEATHER: &str = "point_feather";
+/// How far from its vertex a feather handle sits at least, screen pixels.
+const FEATHER_MIN: f32 = 16.0;
+const FEATHER_HANDLE: Color32 = Color32::from_rgb(120, 200, 255);
+
+fn has_point_feather(op: &str) -> bool {
+    ops::info(op).is_some_and(|i| i.params.iter().any(|s| s.name == POINT_FEATHER))
+}
+
+/// The outward unit normal at vertex `i` of a closed outline (image space):
+/// across its tangent handles on a spline, else across the bisector of its
+/// two edges; outward by the outline's winding.
+fn outward(pts: &[Vec2], tan: &[[Vec2; 2]], i: usize) -> Vec2 {
+    let n = pts.len();
+    if n < 2 || i >= n {
+        return Vec2::ZERO;
+    }
+    let (prev, next) = (pts[(i + n - 1) % n], pts[(i + 1) % n]);
+    let mut d = tan.get(i).map_or(Vec2::ZERO, |h| h[1] - h[0]);
+    if d.length() < 1e-3 {
+        d = (pts[i] - prev).normalized() + (next - pts[i]).normalized();
+    }
+    if d.length().is_nan() || d.length() <= 1e-6 {
+        d = next - prev;
+    }
+    let area: f32 = (0..n).map(|k| pts[k].x * pts[(k + 1) % n].y - pts[(k + 1) % n].x * pts[k].y).sum();
+    let normal = Vec2::new(d.y, -d.x).normalized();
+    if area < 0.0 { -normal } else { normal }
+}
+
+/// Where vertex `i`'s feather handle is on screen: out along its normal
+/// to the soft edge's outer end (half of Feather + its own), at least
+/// [`FEATHER_MIN`] from the vertex.
+fn feather_tip(xf: &Xf, pts: &[Vec2], tan: &[[Vec2; 2]], feather: &[f32], global: f32, i: usize) -> Pos2 {
+    let n = outward(pts, tan, i);
+    let base = xf.screen(pts[i]);
+    let tip = xf.screen(pts[i] + n * (global.max(0.0) + feather.get(i).copied().unwrap_or(0.0)) / 2.0);
+    let dir = (xf.screen(pts[i] + n) - base).normalized();
+    if tip.distance(base) < FEATHER_MIN && dir.length() > 0.5 { base + dir * FEATHER_MIN } else { tip }
+}
+
+/// Keep node `id`'s `point_feather` in step with an edit of its `n`
+/// vertices, in every key: `f` gets the list padded to `n` (missing
+/// entries are 0). Left alone when the op has none, or nothing is set.
+fn edit_point_feather(doc: &mut Doc, id: &str, n: usize, f: impl Fn(&[f64]) -> Vec<f64>) {
+    if !doc.node(id).is_some_and(|nd| has_point_feather(&nd.op)) {
+        return;
+    }
+    let raw = doc.param(id, POINT_FEATHER);
+    if !anim::is_animated(&raw) && anim::sample(&raw, 0.0).iter().all(|v| *v == 0.0) {
+        return;
+    }
+    doc.set_param(id, POINT_FEATHER, anim::edit_all(&raw, |v| {
+        let mut padded = v.to_vec();
+        padded.resize(n, 0.0);
+        f(&padded)
+    }));
 }
 
 /// `v` with `vertex` inserted as vertex `i`.
@@ -1478,7 +1580,22 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
             }
             _ => {}
         },
-        Geo::Points { param, stride, pts, tan } => {
+        Geo::Points { param, stride, pts, tan, feather, .. } => {
+            if let (Part::Feather(i), Some(f)) = (drag.part, &feather) {
+                // Out along the vertex's normal widens the ramp by twice as
+                // much (it's centred on the curve); Shift sets every selected
+                // vertex to the result.
+                let along = outward(&pts, &tan, i).dot(delta);
+                let w = (f[i] + 2.0 * along).max(0.0);
+                let mut out: Vec<f64> = f.iter().map(|&x| x as f64).collect();
+                let len = out.len();
+                for &k in selected.iter().filter(|&&k| k < len && (shift || k == i)) {
+                    out[k] = w.round() as f64;
+                }
+                out[i] = w.round() as f64;
+                doc.edit_param(&id, POINT_FEATHER, frame, json!(out));
+                return;
+            }
             let mut v: Vec<f64> = anim::sample(&doc.param(&id, param), frame as f64);
             let handles = match drag.part {
                 Part::Tangent { i, out } if i < tan.len() => {
@@ -1551,7 +1668,7 @@ fn apply(drag: &mut Drag, selected: &[usize], p: Vec2, mods: Mods, doc: &mut Doc
 
 fn cursor(part: Part) -> CursorIcon {
     match part {
-        Part::Point | Part::Move | Part::Body | Part::EdgeMove { .. } | Part::Vertex(_) | Part::Tangent { .. } | Part::Pull(_) | Part::Track(_) | Part::TrackOffset(_) | Part::Corner { .. } => CursorIcon::Move,
+        Part::Point | Part::Move | Part::Body | Part::EdgeMove { .. } | Part::Vertex(_) | Part::Tangent { .. } | Part::Pull(_) | Part::Feather(_) | Part::Track(_) | Part::TrackOffset(_) | Part::Corner { .. } => CursorIcon::Move,
         Part::Marquee | Part::Pick => CursorIcon::Crosshair,
         Part::LightAim | Part::LightCone | Part::LightSoft => CursorIcon::Alias,
         Part::LightReach => CursorIcon::ResizeHorizontal,
@@ -1917,6 +2034,70 @@ mod tests {
         assert!((num(&d.param("n", "rotate")) - 90.0).abs() < 1e-3);
         assert_eq!(drag(&mut d, Pos2::new(100.0, 50.0), Pos2::new(90.0, 45.0), 1), Part::Move);
         assert_eq!(vec2(&d.param("n", "center")), Vec2::new(90.0, 45.0));
+    }
+
+    fn feather_keys(d: &Doc) -> Vec<Vec<f32>> {
+        d.param("n", "point_feather")["keys"].as_array().unwrap().iter().map(|k| k[1].as_array().unwrap().iter().map(num).collect()).collect()
+    }
+
+    /// A selected vertex's feather handle sits out along its normal; dragging
+    /// it outward sets that vertex's own feather (twice the distance, the
+    /// ramp being centred on the curve), the others staying 0.
+    #[test]
+    fn dragging_a_feather_handle_sets_that_point_s_feather() {
+        for op in ["polygon", "roto"] {
+            let pts = if op == "roto" { spline_square() } else { SQUARE.to_vec() };
+            let mut d = doc(op, json!({ "points": pts }));
+            let mut ov = Overlays::default();
+            // Select the bottom-right corner (150, 75).
+            let corner = Pos2::new(150.0, 75.0);
+            gesture(&mut ov, &mut d, corner, corner, 1, Mods::default());
+            assert_eq!(ov.points, vec![2], "{op}");
+            // Its handle: FEATHER_MIN out, away from the shape's middle (on the
+            // polygon diagonally; on the spline across its tangents).
+            let Some(Geo::Points { pts, tan, feather: Some(f), global, .. }) = geo(&d, "n", 1, SIZE) else { panic!("{op}") };
+            let tip = feather_tip(&XF, &pts, &tan, &f, global, 2);
+            let out = outward(&pts, &tan, 2);
+            assert!(out.dot(Vec2::new(50.0, 25.0)) > 20.0 && (out.length() - 1.0).abs() < 1e-4, "{op}: {out:?}");
+            let part = gesture(&mut ov, &mut d, tip, tip + out * 15.0, 1, Mods::default());
+            assert_eq!(part, Some(Part::Feather(2)), "{op}");
+            assert_eq!(d.param("n", "point_feather"), json!([0.0, 0.0, 30.0, 0.0]), "{op}");
+        }
+    }
+
+    /// Inserting and deleting vertices keeps `point_feather` in step in
+    /// every key, the points and the feathers each animated on their own
+    /// keys; a shape with no per-point feather never gains the param.
+    #[test]
+    fn point_feather_follows_inserts_and_deletes_in_every_key() {
+        let moved: Vec<f32> = SQUARE.iter().map(|v| v + 10.0).collect();
+        let mut d = doc("polygon", json!({
+            "points": { "keys": [[1, SQUARE], [10, moved]] },
+            "point_feather": { "keys": [[1, [0, 10, 20, 30]], [5, [4, 4, 4]]] },
+        }));
+        let mut ov = Overlays::default();
+        // Click the top edge's midpoint: a vertex between 0 and 1.
+        let at = Pos2::new(100.0, 25.0);
+        gesture(&mut ov, &mut d, at, at, 1, Mods::default());
+        assert_eq!(points(&d, 1).len(), 10);
+        // Between its neighbours; the short key is padded with 0 first.
+        assert_eq!(feather_keys(&d), vec![vec![0.0, 5.0, 10.0, 20.0, 30.0], vec![4.0, 4.0, 4.0, 4.0, 0.0]]);
+        // Delete it again: both lists lose that entry.
+        assert_eq!(ov.points, vec![1]);
+        assert!(ov.delete_points(&mut d));
+        assert_eq!(points(&d, 1), SQUARE);
+        assert_eq!(feather_keys(&d), vec![vec![0.0, 10.0, 20.0, 30.0], vec![4.0, 4.0, 4.0, 0.0]]);
+        // Ctrl+click adds after the selected vertex, with its feather.
+        let mut ov = Overlays::default();
+        let corner = Pos2::new(150.0, 75.0);
+        gesture(&mut ov, &mut d, corner, corner, 1, Mods::default());
+        let empty = Pos2::new(190.0, 95.0);
+        gesture(&mut ov, &mut d, empty, empty, 1, Mods { command: true, ..Mods::default() });
+        assert_eq!(feather_keys(&d)[0], vec![0.0, 10.0, 20.0, 20.0, 30.0]);
+        // A plain shape: inserting adds no point_feather.
+        let mut d = doc("polygon", json!({ "points": SQUARE }));
+        gesture(&mut Overlays::default(), &mut d, at, at, 1, Mods::default());
+        assert!(d.graph.nodes[0].params.get("point_feather").is_none());
     }
 
     #[test]

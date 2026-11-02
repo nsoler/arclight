@@ -691,6 +691,34 @@ impl Properties {
                 let mut b = value.as_bool().unwrap_or(false);
                 ui.checkbox(&mut b, "").changed().then(|| json!(b))
             }
+            ParamKind::Points { stride: 1 } if spec.name == "point_feather" => {
+                // Roto / Polygon: each point's own feather, numbered as the
+                // points are; "all" sets every one (as ⇧ on a viewer handle).
+                let pts_stride = if op == "roto" { 6 } else { 2 };
+                let n = doc.param_at(id, "points", self.frame).as_array().map_or(0, |a| a.len() / pts_stride);
+                let mut v: Vec<f32> = (0..n).map(|i| f(&value, i).max(0.0)).collect();
+                let mut changed = false;
+                ui.vertical(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for (i, x) in v.iter_mut().enumerate() {
+                            changed |= ui
+                                .add(egui::DragValue::new(x).speed(0.5).range(0.0..=10000.0).prefix(format!("{} ", i + 1)).max_decimals(1))
+                                .on_hover_text(format!("Point {}'s own feather, px, on top of Feather", i + 1))
+                                .changed();
+                        }
+                    });
+                    if n > 1 {
+                        let mean = v.iter().sum::<f32>() / n as f32;
+                        let mut all = mean;
+                        let resp = ui.add(egui::DragValue::new(&mut all).speed(0.5).range(0.0..=10000.0).prefix("all ").max_decimals(1));
+                        if resp.on_hover_text("Set every point's feather to this").changed() {
+                            v.fill(all);
+                            changed = true;
+                        }
+                    }
+                });
+                changed.then(|| json!(v))
+            }
             ParamKind::Points { stride } => {
                 // Points are edited in the viewer; show how many there are.
                 let n = value.as_array().map_or(0, |a| a.len() / stride.max(1));

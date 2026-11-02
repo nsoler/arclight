@@ -37,6 +37,18 @@ of CorridorKey):
       with it as its screen plate keys cleaner than on one picked color;
       GPU on and off look the same
 
+Roto (0.14.18–0.14.19, the user's items 1 and 2):
+
+- [ ] Per-point feather (0.14.18): select a Roto point and drag its blue
+      feather handle out: the edge softens near that point only and blends
+      back along the curve; ⇧-drag with several points selected sets them
+      all; Properties ▸ Point feather shows the same numbers, and "all"
+      sets every point; key it at two frames and scrub (it animates,
+      separately from the points); insert a point on the curve, Ctrl+click
+      add one and ⌫ delete one: the feathers stay on their points in every
+      key; Polygon the same; an old project with Roto / Polygon looks
+      unchanged
+
 Phase 13 (v0.13.34, the pause after 2026-10-31): try these on Linux and
 on the Macs (the DMG), from the release builds.
 

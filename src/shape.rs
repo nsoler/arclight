@@ -176,7 +176,7 @@ pub fn split_cubic(c: &Cubic, t: f32) -> (Cubic, Cubic) {
 /// One when the control points lie on the chord (the curve is that line);
 /// otherwise chord error is at most 3/4 · L / n² for L the largest second
 /// difference of the control points.
-fn pieces(c: &Cubic, tol: f32) -> usize {
+pub(crate) fn pieces(c: &Cubic, tol: f32) -> usize {
     if segment_distance(c[1], c[0], c[3]).max(segment_distance(c[2], c[0], c[3])) <= tol {
         return 1;
     }

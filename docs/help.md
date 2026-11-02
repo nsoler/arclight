@@ -230,6 +230,9 @@ included.
 - The selected node's handles draw over the image: drag them to edit (a
   Transform's gizmo, shape boxes and vertices, tracker boxes, corner pins,
   a Light 2D's position, aim, cone and softness).
+  A selected Roto or Polygon point also shows a blue feather handle out
+  from the curve: drag it to soften the edge near that point alone (**⇧**
+  for every selected point); Feather stays as an overall amount on top.
   **⌘**-click (or **⌘**-drag) in a Keyer or Color Difference Key picks
   the screen color.
 - **View ▸ Show frame size**: labels the viewed frame's bottom-left
