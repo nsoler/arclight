@@ -183,6 +183,7 @@ pub fn rename_refs(op: &str, params: &mut Value, old: &str, new: &str) {
     match op {
         "curve" => set("path_of", &exact),
         "rectangle" | "ellipse" | "polygon" | "roto" => set("follow", &exact),
+        "point_cloud" => set(crate::camtrack_tracks::FROM_TRACKER, &exact),
         "scanline_render" => set("camera", &exact),
         // ("auto" and "none" aren't nodes.)
         "media_out" => set("audio", &|s: &str| (s != "auto" && s != "none").then(|| exact(s)).flatten()),

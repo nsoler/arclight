@@ -278,7 +278,7 @@ impl Session {
         }
         let settings = camtrack::Settings::from_params(&p, self.graph.project.first_frame, self.graph.project.last_frame);
         let mut frames = camtrack::input_frames(&self.graph, id)?;
-        let sol = camtrack::run(&mut frames, &settings, progress)?;
+        let (sol, tracks) = camtrack::run_tracked(&mut frames, &settings, progress)?;
         let summary = solution_summary(&sol, settings.first, settings.last);
         self.checkpoint();
         let i = self.node_index(id)?;
@@ -286,6 +286,11 @@ impl Session {
             self.graph.nodes[i].params[k] = v;
         }
         self.graph.nodes[i].params["solution"] = sol.to_value();
+        // Kept to solve again from; a new track clears the deleted points.
+        self.graph.nodes[i].params[crate::camtrack_tracks::TRACKS] = json!(crate::camtrack_tracks::encode(&tracks));
+        if let Some(p) = self.graph.nodes[i].params.as_object_mut() {
+            p.remove(crate::camtrack_tracks::EXCLUDED);
+        }
         Ok(summary)
     }
 
@@ -331,9 +336,7 @@ impl Session {
         let sol = self.camera_solution(id)?;
         let params = if linked { camtrack::camera_links(id) } else { camtrack::camera_params(&sol) };
         let camera = self.create_node("camera", None, &params, &[])?;
-        let mut cloud = Map::new();
-        cloud.insert("points".into(), json!(sol.points.iter().flatten().collect::<Vec<_>>()));
-        let points = self.create_node("point_cloud", None, &cloud, &[])?;
+        let points = self.tracker_cloud(id, &sol)?;
         let scene = self.create_node("scene", None, &Map::new(), &[camera.clone(), points.clone()])?;
         let lens = camtrack::lens_params(&sol).map(|p| self.create_node("lens_distort", None, &p, &[id.to_string()])).transpose()?;
         let plate = lens.clone().unwrap_or_else(|| id.to_string());
@@ -343,6 +346,21 @@ impl Session {
             out["lens"] = json!(lens);
         }
         Ok(out)
+    }
+
+    /// A Point Cloud of Camera Tracker `id`'s solve `sol`, tagged so
+    /// deleting points or solving again brings it along (see
+    /// [`crate::camtrack_tracks::refresh_clouds`]). Its name.
+    fn tracker_cloud(&mut self, id: &str, sol: &camtrack::Solution) -> Result<String> {
+        let mut tags = crate::camtrack_tracks::cloud_params(id, sol);
+        let mut cloud = Map::new();
+        cloud.insert("points".into(), tags.remove("points").unwrap_or_default());
+        let name = self.create_node("point_cloud", None, &cloud, &[])?;
+        let i = self.node_index(&name)?;
+        for (k, v) in tags {
+            self.graph.nodes[i].params[k.as_str()] = v;
+        }
+        Ok(name)
     }
 
     /// Place a node on points `ids` of Camera Tracker `id`'s solve: `what`
@@ -370,11 +388,7 @@ impl Session {
                 let flat: Vec<f64> = sol.points.iter().flatten().copied().collect();
                 let cloud = match self.graph.nodes.iter().find(|n| n.op == "point_cloud" && n.params["points"] == json!(flat)) {
                     Some(n) => n.id.clone(),
-                    None => {
-                        let mut p = Map::new();
-                        p.insert("points".into(), json!(flat));
-                        self.create_node("point_cloud", None, &p, &[])?
-                    }
+                    None => self.tracker_cloud(id, &sol)?,
                 };
                 let mut params = Map::new();
                 params.insert("points".into(), json!(crate::geo_fit::indices_text(ids)));

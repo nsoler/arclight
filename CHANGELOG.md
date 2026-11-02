@@ -18,6 +18,23 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.21 — 2026-11-02
+
+- Camera Tracker: **Delete points** (button, or ⌫ in the viewer) leaves
+  the selected points' feature tracks out and solves the camera again
+  from the tracks the node now keeps, without tracking the shot again;
+  the panel reports the change ("Deleted 4 points: error 0.84 → 0.61
+  px"). The ground, origin and scale stay (the new solve is fitted onto
+  the old one), exported Point Clouds and their Fit Planes follow by
+  track, and ⌘Z undoes it in one step. **Select worst** selects points
+  over an error (the Max error to start with, else the worst 5%).
+  **Re-solve** solves again from the kept tracks with the current
+  settings. Keeping the tracks adds about 0.7 MB to a project per
+  tracker for a 200-frame shot.
+- Fix: ⌫ / Delete with the pointer over the viewer no longer deletes the
+  selected node (it deleted the Camera Tracker when its points were
+  picked); nodes are deleted from the Node Graph.
+
 ## 0.14.20 — 2026-11-02
 
 - Camera Tracker: the solve's quality is shown at the top of its

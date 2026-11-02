@@ -15,6 +15,7 @@ pub mod anim;
 pub mod audio;
 pub mod bundle;
 pub mod camtrack;
+pub mod camtrack_tracks;
 pub mod bridge;
 pub mod color;
 pub mod config;

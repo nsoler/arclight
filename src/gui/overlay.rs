@@ -999,6 +999,10 @@ impl Overlays {
     /// Returns false (doing nothing) when no vertices are selected, so the
     /// caller can delete the node instead.
     pub fn delete_points(&mut self, doc: &mut Doc) -> bool {
+        // A Camera Tracker's picked points (solved again without them).
+        if self.picker.delete_points(doc) {
+            return true;
+        }
         self.sync_selection(doc);
         let Some(id) = doc.selected.clone() else { return false };
         let Some(Overlay::Points(param)) = doc.node(&id).and_then(|n| ops::info(&n.op)).map(|i| i.overlay) else {

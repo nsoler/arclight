@@ -67,6 +67,14 @@ Camera Tracker (0.14.20–0.14.21, from the user's v0.14.19 testing):
       jumps); points colored by error in the 2D viewer and the 3D view,
       with the hover text; an old save without per-point errors draws blue
       points; the floor how-to line under the frame list
+- [ ] Delete points (0.14.21): in a solved Camera Tracker, set ground /
+      origin / scale and Export (Linked); Select worst, then ⌫: the error
+      drops, the floor stays level, the Camera doesn't jump, the exported
+      Point Cloud and a Fit Plane on it follow; ⌘Z restores it all at
+      once; Re-solve after changing Max error keeps the deleted points
+      out, Track & Solve brings them back; save / reopen keeps the
+      deletions; ⌫ over the viewer never deletes the node; try it on real
+      footage (only synthetic tracks are tested)
 
 Phase 13 (v0.13.34, the pause after 2026-10-31): try these on Linux and
 on the Macs (the DMG), from the release builds.

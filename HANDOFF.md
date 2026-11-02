@@ -47,6 +47,25 @@ done), `docs/help.md` (the in-app help) and
 
 ## Start here (next session)
 
+- **0.14.21, Camera Tracker point deletion + ⌫ fix** (Dev2, from the
+  user's testing: ⌫ on picked points deleted the tracker node).
+  `src/camtrack_tracks.rs` + `src/gui/camera_points.rs`. Tracks are kept
+  on the node as `tracks` ("ft1:" + base64, little-endian; ~0.7 MB for
+  300 features × 200 frames; each undo snapshot copies it, ~0.18 ms),
+  deletion is `excluded_tracks`, and `Solution.point_tracks` ties each
+  point to its track (deletion, re-solve alignment and cloud refresh go
+  by it). A re-solve is fitted onto the previous solve (trimmed
+  similarity over reliable shared points; under 4 shared it stays raw
+  and says so), so ground / origin / scale survive. Point Clouds made
+  from a solve are tagged `from_tracker` / `point_tracks` (an untagged
+  cloud equal to the pre-re-solve points counts as tagged); Fit Planes
+  are remapped by track, one left under 3 points keeps its fit on a
+  frozen copy. Track & Solve replaces `tracks` and clears exclusions;
+  old projects have no `point_tracks`, so Delete is disabled there.
+  ⌫ rule (main.rs): over the viewer, nodes are never deleted. Note:
+  graph.rs `node_key` hashes the params string (+0.3 ms per tracker
+  evaluation with tracks); skip `tracks` there if it ever matters. Not
+  hand-tested on real footage.
 - **0.14.20, Camera Tracker solve quality** (Dev1, from the user's
   v0.14.19 testing: the error wasn't prominent and setting the floor
   wasn't discoverable): `src/gui/solve_quality.rs` holds the grading

@@ -4,6 +4,7 @@
 //! Layout: viewer + transport in the center, node graph along the bottom,
 //! properties on the right.
 
+mod camera_points;
 mod camera_tracker;
 mod clipboard;
 mod crash_dialog;
@@ -1183,12 +1184,13 @@ impl App {
             t.seek(project.last_frame, &project);
         }
         if pressed(Key::Delete) || pressed(Key::Backspace) {
-            // Selected keys in the curve editor, or selected shape points in
-            // the viewer, are deleted rather than the node.
+            // Selected keys in the curve editor, or selected shape or
+            // tracker points in the viewer, are deleted rather than the
+            // node; over the viewer, nodes never are.
             if here.has(Pane::Curves) && self.curves.has_selection() {
                 self.curves.delete_selected(&mut self.doc);
             } else if here.has(Pane::Viewer) && self.viewer.delete_points(&mut self.doc) {
-            } else {
+            } else if !here.over(Pane::Viewer) {
                 self.doc.delete_selection();
             }
         }
@@ -2463,6 +2465,40 @@ mod tests {
         drop_on(&mut app, vec![Pane::Viewer, Pane::Properties]);
         assert!(matches!(app.ask, Some(Ask::Discard(Then::Load(_)))));
         assert_eq!(app.doc.graph.nodes.len(), before + 4);
+        drop(app);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// ⌫ or Delete with the pointer over the viewer never deletes a node:
+    /// not a selected Camera Tracker whose points are shown there (picked
+    /// points are deleted instead, see camera_tracker's tests); over the
+    /// Node Graph it does.
+    #[test]
+    fn delete_over_the_viewer_never_deletes_nodes() {
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("arclight-gui-viewer-delete-test-{}", std::process::id()));
+        std::env::set_var("XDG_RUNTIME_DIR", &dir);
+        let ctx = egui::Context::default();
+        let (doc, id) = crate::camera_points::tests::tracked_doc("ct_viewer_delete_test");
+        let mut app = App::new(ctx.clone(), doc);
+        app.panels = Panels::default();
+        app.pane_rects.insert(Pane::Viewer, egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 300.0)));
+        app.pane_rects.insert(Pane::Graph, egui::Rect::from_min_size(egui::pos2(0.0, 300.0), egui::vec2(400.0, 300.0)));
+        let press = |app: &mut App, key: Key, at: egui::Pos2| {
+            let event = egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+            let raw = egui::RawInput { events: vec![egui::Event::PointerMoved(at), event], ..Default::default() };
+            ctx.run_ui(raw, |ui| {
+                let here = Here::new(vec![Pane::Graph, Pane::Viewer], &app.pane_rects, ui.input(|i| i.pointer.hover_pos()));
+                app.shortcuts(ui.ctx(), &here);
+            })
+            .drop_without_applying_deltas();
+        };
+        for key in [Key::Backspace, Key::Delete] {
+            press(&mut app, key, egui::pos2(200.0, 150.0));
+            assert!(app.doc.node(&id).is_some(), "{key:?} over the viewer keeps the tracker");
+        }
+        press(&mut app, Key::Backspace, egui::pos2(200.0, 450.0));
+        assert!(app.doc.node(&id).is_none(), "⌫ over the graph deletes it");
         drop(app);
         std::fs::remove_dir_all(&dir).ok();
     }

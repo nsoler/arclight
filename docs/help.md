@@ -944,6 +944,27 @@ sun coming from one side.
   they're at height 0); then **Set origin** (one point) and **Set scale**
   (two points and their distance apart). **Fit plane** adds a floor
   surface on them, e.g. a shadow catcher.
+- **Delete bad points:** select points in the viewer and click **Delete
+  points** in the floating panel, or press **⌫**. Their feature tracks are
+  left out and the camera is solved again from the rest, without tracking
+  the shot again. The panel then reports the change, e.g. "Deleted 4
+  points: error 0.84 → 0.61 px". The new solve is fitted onto the old one,
+  so your ground, origin and scale stay and a linked Camera doesn't jump.
+  A Point Cloud made by Export or Fit plane follows the new solve too, and
+  each Fit Plane on it keeps its points. A Fit Plane left with fewer than
+  3 of its points goes onto a copy of its old cloud, and the message names
+  it. ⌘Z undoes the whole deletion in one step.
+- **Select worst** in the floating panel selects every point over the
+  error you set (the node's Max error to start with), or the worst 5% if
+  none is over it. Look them over, then delete them.
+- **Re-solve** in the panel solves again from the kept tracks with the
+  current settings (Max error, Solve, focal and so on). Deleted points
+  stay out. **Track & Solve** tracks the shot afresh and brings every
+  point back, and so does **Clear solve**. Solves saved before tracks were
+  kept need a new Track & Solve before points can be deleted.
+- ⌫ and Delete with the pointer over the viewer only ever delete things
+  in the viewer (points, keys), never nodes. Delete nodes from the Node
+  Graph.
 - With **Linked** on (the default) the exported Camera follows the solve
   live: its Translate, Rotate, Focal and Film back read the Camera
   Tracker's solve at every frame, so re-solving or setting the origin,

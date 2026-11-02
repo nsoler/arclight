@@ -13,7 +13,7 @@
 //! [`Solution::set_scale`] move it to something meaningful, and
 //! [`card_on_points`] / [`Solution::centroid`] place things on the points.
 
-use crate::features::{Blocked, FeatureTracker, Settings as TrackSettings};
+use crate::features::{Blocked, FeatureTrack, FeatureTracker, Settings as TrackSettings};
 use crate::graph::{Evaluator, Graph};
 use crate::ops::EvalContext;
 use crate::geom::{self, Camera, Vec3};
@@ -109,7 +109,7 @@ impl Settings {
 }
 
 /// A solved shot, as kept in a Camera Tracker's `solution` param.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Solution {
     /// The tracked frame size.
     pub format: [usize; 2],
@@ -143,6 +143,11 @@ pub struct Solution {
     pub k1: f64,
     #[serde(default)]
     pub k2: f64,
+    /// Each point's feature track (its number in the tracker's kept
+    /// tracks, see [`crate::camtrack_tracks`]), in the same order as
+    /// `points` (empty in solves saved before tracks were kept).
+    #[serde(default)]
+    pub point_tracks: Vec<usize>,
 }
 
 /// Computer-vision frame (y down, z forward) ↔ the scene's (y up, z back).
@@ -180,6 +185,7 @@ impl Solution {
             tripod,
             k1: sol.intr.k1,
             k2: sol.intr.k2,
+            point_tracks: sol.points.iter().enumerate().filter(|(_, p)| p.is_some()).map(|(i, _)| i).collect(),
         }
     }
 
@@ -349,6 +355,12 @@ fn blocked(mask: &Image, format: Size, s: &Settings) -> Blocked {
 /// tracked frames, then solved ones (out of twice the frame count) and is
 /// checked for a cancel.
 pub fn run(frames: &mut dyn FnMut(i64) -> Result<Frame>, s: &Settings, progress: &Progress) -> Result<Solution> {
+    Ok(run_tracked(frames, s, progress)?.0)
+}
+
+/// [`run`], and the feature tracks it solved from (what
+/// [`crate::camtrack_tracks`] keeps to solve again from).
+pub fn run_tracked(frames: &mut dyn FnMut(i64) -> Result<Frame>, s: &Settings, progress: &Progress) -> Result<(Solution, Vec<FeatureTrack>)> {
     if s.last <= s.first {
         bail!("the frame range needs at least two frames");
     }
@@ -375,7 +387,31 @@ pub fn run(frames: &mut dyn FnMut(i64) -> Result<Frame>, s: &Settings, progress:
     };
     let (sol, tripod) = solve(&tracker.tracks, s, intr, &settings, &mut solving)?;
     progress.done.store(2 * n, Ordering::Relaxed);
-    Ok(Solution::from_sfm(&sol, s.film_back, format, tripod))
+    Ok((Solution::from_sfm(&sol, s.film_back, format, tripod), tracker.tracks))
+}
+
+/// Solve `tracks` (of a `format` shot) again as `s` says, leaving out the
+/// `excluded` ones (their numbers), over the frames they span. Each
+/// point's [`Solution::point_tracks`] is its number in `tracks`.
+pub fn resolve(tracks: &[FeatureTrack], excluded: &[usize], s: &Settings, format: Size, progress: &mut dyn FnMut(f32) -> bool) -> Result<Solution> {
+    let kept: Vec<usize> = (0..tracks.len()).filter(|i| excluded.binary_search(i).is_err()).collect();
+    let used: Vec<FeatureTrack> = kept.iter().map(|&i| tracks[i].clone()).collect();
+    let mut s = s.clone();
+    let spans = used.iter().filter(|t| !t.points.is_empty());
+    if let (Some(first), Some(last)) = (spans.clone().map(|t| t.start).min(), spans.map(|t| t.start + t.points.len() as i64 - 1).max()) {
+        (s.first, s.last) = (first, last);
+    }
+    if s.last <= s.first {
+        bail!("too few tracks are left to solve from");
+    }
+    let intr = Intrinsics::new(s.focal, s.film_back[0], format);
+    let settings = sfm::Settings { max_error: s.max_error, solve_focal: s.solve_focal, solve_distortion: s.solve_distortion, ..sfm::Settings::default() };
+    let (sol, tripod) = solve(&used, &s, intr, &settings, progress)?;
+    let mut out = Solution::from_sfm(&sol, s.film_back, format, tripod);
+    for t in &mut out.point_tracks {
+        *t = kept[*t];
+    }
+    Ok(out)
 }
 
 /// Solve `tracks` as `s.mode` says, and whether that was a tripod solve.
@@ -502,6 +538,7 @@ mod tests {
             tripod: false,
             k1: 0.0,
             k2: 0.0,
+            point_tracks: Vec::new(),
         }
     }
 

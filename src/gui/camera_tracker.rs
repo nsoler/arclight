@@ -19,10 +19,13 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
+/// A Track & Solve's result: the solve and the tracks it came from.
+type Tracked = (Solution, Vec<arclight::features::FeatureTrack>);
+
 /// A Track & Solve run, or how the last one ended.
 pub struct CamJob {
     progress: Arc<Progress>,
-    handle: Option<JoinHandle<anyhow::Result<Solution>>>,
+    handle: Option<JoinHandle<anyhow::Result<Tracked>>>,
     /// (succeeded, message).
     result: Option<(bool, String)>,
 }
@@ -39,7 +42,7 @@ fn start(doc: &Doc, id: &str) -> CamJob {
         Err(e) => return fail(e),
     };
     let pg = progress.clone();
-    let handle = std::thread::spawn(move || camtrack::run(&mut frames, &settings, &pg));
+    let handle = std::thread::spawn(move || camtrack::run_tracked(&mut frames, &settings, &pg));
     CamJob { progress, handle: Some(handle), result: None }
 }
 
@@ -56,10 +59,14 @@ fn spot_below(doc: &Doc, id: &str) -> [f32; 2] {
 /// The Camera Tracker panel's extras. `jobs` holds runs by node.
 pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, id: &str, jobs: &mut std::collections::HashMap<String, CamJob>) {
     ui.add_space(4.0);
+    // camera_points: a finished Delete points or Re-solve lands.
+    crate::camera_points::poll(ui.ctx(), doc, id);
     // A finished run: keep its solve on the node.
     if let Some(job) = jobs.get_mut(id).filter(|j| j.handle.as_ref().is_some_and(|h| h.is_finished())) {
         job.result = Some(match job.handle.take().unwrap().join() {
-            Ok(Ok(sol)) => {
+            Ok(Ok((sol, tracks))) => {
+                // camera_points: the tracks kept to solve again from.
+                crate::camera_points::tracked(doc, id, &tracks);
                 let settings_lens = doc.node(id).is_some_and(|n| n.params["solve_distortion"].as_bool().unwrap_or(false));
                 let first = sol.frames.first().copied().unwrap_or(0);
                 let mut msg = format!(
@@ -108,6 +115,10 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, id: &str, jobs: &mut std::collect
         if b.clicked() {
             jobs.insert(id.to_string(), start(doc, id));
         }
+        // camera_points: solve again from the kept tracks.
+        if let Some(sol) = doc.node(id).and_then(|n| Solution::from_params(&n.params)) {
+            crate::camera_points::resolve_button(ui, doc, id, &sol);
+        }
     });
     let sol = doc.node(id).and_then(|n| Solution::from_params(&n.params));
     if let Some(sol) = &sol {
@@ -133,6 +144,7 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, id: &str, jobs: &mut std::collect
             }
             if ui.button("Clear solve").clicked() {
                 doc.remove_param(id, "solution");
+                crate::camera_points::cleared(doc, id);
             }
         });
     }
@@ -140,6 +152,8 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, id: &str, jobs: &mut std::collect
         let color = if *ok { Color32::from_rgb(110, 200, 120) } else { Color32::from_rgb(235, 100, 90) };
         ui.colored_label(color, msg);
     }
+    // camera_points: how the last Delete points or Re-solve went.
+    crate::camera_points::show_message(ui, id);
 }
 
 /// One row of the per-frame list: a frame from the first solved to the
@@ -203,7 +217,10 @@ fn export(doc: &mut Doc, id: &str, sol: &Solution, linked: bool) -> String {
         doc.set_param(&camera, &k, v);
     }
     let points = doc.add_node("point_cloud", at(NODE_W + 30.0, 0.0));
-    doc.set_param(&points, "points", json!(sol.points.iter().flatten().collect::<Vec<_>>()));
+    // camera_points: tagged, so a deletion or re-solve brings it along.
+    for (k, v) in arclight::camtrack_tracks::cloud_params(id, sol) {
+        doc.set_param(&points, &k, v);
+    }
     let scene = doc.add_node("scene", at(0.0, NODE_H + 40.0));
     doc.connect(&camera, &scene, 0);
     doc.connect(&points, &scene, 1);
@@ -248,7 +265,10 @@ pub(crate) fn place_plane(doc: &mut Doc, id: &str, sol: &Solution, ids: &[usize]
         Some(n) => n.id.clone(),
         None => {
             let cloud = doc.add_node("point_cloud", spot_below(doc, id));
-            doc.set_param(&cloud, "points", flat);
+            // camera_points: tagged, so a deletion or re-solve brings it along.
+            for (k, v) in arclight::camtrack_tracks::cloud_params(id, sol) {
+                doc.set_param(&cloud, &k, v);
+            }
             cloud
         }
     };
@@ -381,6 +401,13 @@ impl PointPicker {
     /// pixels. True when it applies (see [`tracker_for`]), so other
     /// overlays stand aside.
     pub fn interact(&mut self, ui: &egui::Ui, resp: &Response, xf: &Xf, size: Vec2, doc: &mut Doc, frame: i64) -> bool {
+        // camera_points: a finished deletion or re-solve lands (the
+        // points renumbered, so the selection goes).
+        if let Some(t) = tracker_for(doc) {
+            if crate::camera_points::poll(ui.ctx(), doc, &t) {
+                self.selected.clear();
+            }
+        }
         let Some((id, sol)) = self.solve(doc) else { return false };
         let pts = on_screen(&sol, xf, frame, size);
         let shift = ui.input(|i| i.modifiers.shift);
@@ -399,6 +426,25 @@ impl PointPicker {
         if let Ok(mut p) = PICKED.lock() {
             *p = (!self.selected.is_empty()).then(|| (id.clone(), self.selected.clone()));
         }
+        true
+    }
+
+    /// ⌫ over the viewer: delete the selected points (see
+    /// [`crate::camera_points::delete`]). True when it applies (the
+    /// tracker's points are being picked, or solved again), so nothing else
+    /// is deleted.
+    pub fn delete_points(&mut self, doc: &Doc) -> bool {
+        let Some(id) = tracker_for(doc) else { return false };
+        if crate::camera_points::busy(&id) {
+            return true;
+        }
+        let Some(sol) = doc.node(&id).and_then(|n| Solution::from_params(&n.params)) else { return false };
+        if self.node.as_deref() != Some(id.as_str()) || self.selected.is_empty() {
+            return false;
+        }
+        crate::camera_points::delete(doc, &id, &sol, &self.selected);
+        self.selected.clear();
+        self.message = None;
         true
     }
 
@@ -436,12 +482,25 @@ impl PointPicker {
     /// The floating panel of things to do with the selection.
     fn actions(&mut self, ui: &egui::Ui, canvas: Rect, doc: &mut Doc, id: &str, sol: &Solution, frame: i64) {
         let n = self.selected.len();
-        if n == 0 && self.message.is_none() {
+        // camera_points: with nothing selected, just Select worst.
+        if sol.points.is_empty() {
             return;
         }
         let mut result: Option<anyhow::Result<String>> = None;
         egui::Area::new(egui::Id::unique(("camera_points", id))).fixed_pos(canvas.left_top() + Vec2::new(10.0, 10.0)).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
+                if n == 0 {
+                    // camera_points: Select worst, with nothing selected.
+                    if let Some(m) = crate::camera_points::worst_row(ui, doc, id, sol, &mut self.selected) {
+                        result = Some(Ok(m));
+                    }
+                    if let Some((ok, msg)) = &self.message {
+                        let color = if *ok { Color32::from_rgb(110, 200, 120) } else { Color32::from_rgb(235, 100, 90) };
+                        ui.colored_label(color, msg);
+                    }
+                    crate::camera_points::show_message(ui, id);
+                    return;
+                }
                 ui.label(format!("{n} point(s) selected"));
                 ui.horizontal(|ui| {
                     if ui.add_enabled(n > 0, egui::Button::new("Place Card here")).on_hover_text("A Card on the points' plane (3+ points), else facing the camera, sized to them").clicked() {
@@ -470,10 +529,21 @@ impl PointPicker {
                         doc.set_param(id, "solution", moved.to_value());
                     }
                 });
+                // camera_points: Delete points and Select worst.
+                let mut deleted = false;
+                ui.horizontal(|ui| deleted = crate::camera_points::delete_button(ui, doc, id, sol, &self.selected));
+                if deleted {
+                    self.selected.clear();
+                    self.message = None;
+                }
+                if let Some(m) = crate::camera_points::worst_row(ui, doc, id, sol, &mut self.selected) {
+                    result = Some(Ok(m));
+                }
                 if let Some((ok, msg)) = &self.message {
                     let color = if *ok { Color32::from_rgb(110, 200, 120) } else { Color32::from_rgb(235, 100, 90) };
                     ui.colored_label(color, msg);
                 }
+                crate::camera_points::show_message(ui, id);
             });
         });
         if let Some(r) = result {
@@ -523,12 +593,31 @@ mod tests {
     fn solved() -> Doc {
         let sol = Solution {
             format: [200, 100], focal: 35.0, film_back: [36.0, 24.0], frames: vec![1], cameras: vec![[0.0, 0.0, 0.0, -15.0, 0.0, 0.0]],
-            points: (0..9).map(|i| [(i % 3) as f64 - 1.0, -2.0, -8.0 - (i / 3) as f64]).collect(), rms: 0.1, frame_rms: vec![0.1], point_rms: Vec::new(), pnp_frames: Vec::new(), tripod: false, k1: 0.0, k2: 0.0,
+            points: (0..9).map(|i| [(i % 3) as f64 - 1.0, -2.0, -8.0 - (i / 3) as f64]).collect(), rms: 0.1, frame_rms: vec![0.1], point_rms: Vec::new(), pnp_frames: Vec::new(), tripod: false, k1: 0.0, k2: 0.0, point_tracks: Vec::new(),
         };
         let node = NodeSpec { id: "ct".into(), op: "camera_tracker".into(), inputs: vec![String::new()], params: json!({ "solution": sol.to_value() }), pos: Some([0.0, 0.0]), disabled: false };
         let mut d = Doc::new(Graph { nodes: vec![node], ..Default::default() }, None);
         d.selected = Some("ct".into());
         d
+    }
+
+    /// ⌫ with a tracker's points picked deletes those points (solving
+    /// again without them), never the node; with none picked it doesn't
+    /// apply; while solving it's still the viewer's.
+    #[test]
+    fn the_delete_key_deletes_picked_points() {
+        let ctx = egui::Context::default();
+        let (mut d, id) = crate::camera_points::tests::tracked_doc("ct_delete_key_test");
+        let mut pick = PointPicker::default();
+        let (_, sol) = pick.solve(&d).unwrap();
+        assert!(!pick.delete_points(&d), "nothing picked");
+        pick.selected = vec![0, 1];
+        assert!(pick.delete_points(&d) && pick.selected.is_empty());
+        assert!(pick.delete_points(&d), "solving: still the viewer's");
+        assert!(crate::camera_points::finish(&ctx, &mut d, &id));
+        let after = Solution::from_params(&d.node(&id).unwrap().params).unwrap();
+        assert_eq!(after.points.len(), sol.points.len() - 2);
+        assert!(!after.point_tracks.contains(&sol.point_tracks[0]) && !after.point_tracks.contains(&sol.point_tracks[1]));
     }
 
     #[test]

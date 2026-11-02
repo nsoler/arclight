@@ -482,6 +482,7 @@ mod tests {
             tripod: false,
             k1: 0.0,
             k2: 0.0,
+            point_tracks: Vec::new(),
         };
         let mut g = graph(json!([
             { "id": "plate", "op": "checkerboard", "params": { "width": 64, "height": 40, "size": 4 } },
