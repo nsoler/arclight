@@ -456,7 +456,10 @@ macro_rules! shape_help {
              width of the soft edge, centered on the outline. Motion blur (samples per \
              frame, 0 for off) averages the animated shape over the shutter: Shutter frames \
              long, centered on the frame or starting or ending there. The alpha feeds mask \
-             inputs directly."
+             inputs directly. Follow tracker: the shape moves, turns and scales with that \
+             Tracker's solved motion from the Follow reference frame (the Tracker's own \
+             reference frame when unset), and its own keys act as corrections in the \
+             reference frame's place; feathers aren't scaled by it."
         )
     };
 }
@@ -2006,6 +2009,9 @@ pub static OPS: &[OpInfo] = &[
             fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
             fixed!("shutter", "Shutter", SHUTTER, 0.5),
             fixed!("shutter_offset", "Shutter offset", ParamKind::Choice(SHUTTER_OFFSETS), "centered"),
+            fixed!("follow", "Follow tracker", ParamKind::Text, ""),
+            // Null: the Tracker's own reference frame.
+            fixed!("follow_reference", "Follow reference frame", FRAME, Value::Null),
         ],
         overlay: Overlay::Box { center: "center", size: "size", rotate: "rotate", ellipse: false },
         mask_base: None,
@@ -2030,6 +2036,9 @@ pub static OPS: &[OpInfo] = &[
             fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
             fixed!("shutter", "Shutter", SHUTTER, 0.5),
             fixed!("shutter_offset", "Shutter offset", ParamKind::Choice(SHUTTER_OFFSETS), "centered"),
+            fixed!("follow", "Follow tracker", ParamKind::Text, ""),
+            // Null: the Tracker's own reference frame.
+            fixed!("follow_reference", "Follow reference frame", FRAME, Value::Null),
         ],
         overlay: Overlay::Box { center: "center", size: "size", rotate: "rotate", ellipse: true },
         mask_base: None,
@@ -2056,6 +2065,9 @@ pub static OPS: &[OpInfo] = &[
             fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
             fixed!("shutter", "Shutter", SHUTTER, 0.5),
             fixed!("shutter_offset", "Shutter offset", ParamKind::Choice(SHUTTER_OFFSETS), "centered"),
+            fixed!("follow", "Follow tracker", ParamKind::Text, ""),
+            // Null: the Tracker's own reference frame.
+            fixed!("follow_reference", "Follow reference frame", FRAME, Value::Null),
         ],
         overlay: Overlay::Points("points"),
         mask_base: None,
@@ -2090,6 +2102,9 @@ pub static OPS: &[OpInfo] = &[
             fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
             fixed!("shutter", "Shutter", SHUTTER, 0.5),
             fixed!("shutter_offset", "Shutter offset", ParamKind::Choice(SHUTTER_OFFSETS), "centered"),
+            fixed!("follow", "Follow tracker", ParamKind::Text, ""),
+            // Null: the Tracker's own reference frame.
+            fixed!("follow_reference", "Follow reference frame", FRAME, Value::Null),
         ],
         overlay: Overlay::Points("points"),
         mask_base: None,
@@ -2362,7 +2377,10 @@ fn add_formula_refs(op: &str, out: &mut Value, frame: i64, links: Links) {
 
 fn resolve_linked(op: &str, params: &Value, frame: i64, links: Links) -> Value {
     let Value::Object(map) = params else { return params.clone() };
-    if !map.values().any(|v| anim::is_animated(v) || crate::link::is_link(v)) {
+    // (A shape following a Tracker moves even when nothing of its own is
+    // animated.)
+    let follows = crate::shape_follow::OPS.contains(&op) && crate::shape_follow::followed(params).is_some();
+    if !follows && !map.values().any(|v| anim::is_animated(v) || crate::link::is_link(v)) {
         let mut out = params.clone();
         if op == "tracker" {
             add_reference_tracks(params, &mut out);
@@ -2403,7 +2421,11 @@ fn resolve_at(op: &str, map: &Map<String, Value>, t: f64, links: Links) -> Value
             (k.clone(), v)
         })
         .collect();
-    Value::Object(resolved)
+    let mut out = Value::Object(resolved);
+    if let Some(follow) = links {
+        crate::shape_follow::inject(op, map, t, follow, &mut out);
+    }
+    out
 }
 
 /// For an animated shape or warp with motion blur on, its params at each
@@ -4580,6 +4602,9 @@ fn shape_sample(op: &str, params: &Value, feather: f32) -> Result<ShapeSample> {
             }
         }
     };
+    // Moved by the Tracker the shape follows (this sample's motion), its
+    // positions only: `widths` stay as they are (one per outline vertex).
+    let outline = crate::shape_follow::map_outline(outline, params)?;
     Ok(ShapeSample { outline, rule, feather, widths })
 }
 

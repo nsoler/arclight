@@ -626,6 +626,8 @@ impl Properties {
                 let resp = ui.add(egui::Slider::new(&mut v, min..=max).clamping(egui::SliderClamping::Never));
                 resp.changed().then(|| json!(v))
             }
+            // A shape's Follow reference frame: unset means the Tracker's own.
+            ParamKind::Int { min, max } if spec.name == "follow_reference" => follow_reference_edit(ui, doc, id, &value, min, max),
             ParamKind::Int { min, max } => {
                 let mut v = value.as_i64().unwrap_or(0);
                 ui.add(egui::DragValue::new(&mut v).range(min..=max)).changed().then(|| json!(v))
@@ -782,6 +784,7 @@ impl Properties {
                 let offered = match (op, spec.name) {
                     ("media_out", "audio") => audio_suggestions(doc),
                     ("scanline_render", "camera") => camera_suggestions(doc, id),
+                    (_, "follow") if arclight::shape_follow::OPS.contains(&op) => tracker_suggestions(doc),
                     _ => text_suggestions(op, spec.name, layers),
                 };
                 ui.horizontal(|ui| {
@@ -794,7 +797,11 @@ impl Properties {
                     egui::ComboBox::from_id_salt(("text", id, spec.name)).selected_text("").width(20.0).show_ui(ui, |ui| {
                         for o in &offered {
                             // ("": a Scanline Render's default camera.)
-                            let label = if o.is_empty() { "(the first camera)" } else { o.as_str() };
+                            let label = match (o.is_empty(), spec.name) {
+                                (true, "follow") => "(none)",
+                                (true, _) => "(the first camera)",
+                                _ => o.as_str(),
+                            };
                             if ui.selectable_label(*o == current, label).clicked() {
                                 out = Some(json!(o));
                             }
@@ -1355,6 +1362,31 @@ fn audio_suggestions(doc: &Doc) -> Vec<String> {
 
 /// Scanline Render `id`'s Camera menu: "" (the camera input's first,
 /// else the scene's), then the Camera nodes upstream of it.
+/// What a shape can follow: none, or any of the project's Trackers.
+fn tracker_suggestions(doc: &Doc) -> Vec<String> {
+    std::iter::once(String::new()).chain(doc.graph.nodes.iter().filter(|n| n.op == "tracker").map(|n| n.id.clone())).collect()
+}
+
+/// A shape's Follow reference frame: unset (null), it shows the followed
+/// Tracker's own reference frame, and ↺ puts it back to that.
+fn follow_reference_edit(ui: &mut egui::Ui, doc: &Doc, id: &str, value: &Value, min: i64, max: i64) -> Option<Value> {
+    let tracker = doc.node(id).and_then(|n| arclight::shape_follow::followed(&n.params)).and_then(|t| doc.node(t));
+    let own = tracker.map(|t| ops::params_with_defaults("tracker", &t.params)["reference_frame"].as_i64().unwrap_or(1));
+    let mut v = value.as_i64().or(own).unwrap_or(1);
+    let mut out = None;
+    ui.horizontal(|ui| {
+        if ui.add(egui::DragValue::new(&mut v).range(min..=max)).changed() {
+            out = Some(json!(v));
+        }
+        if value.is_null() {
+            ui.weak("the Tracker's");
+        } else if ui.small_button("↺").on_hover_text("Back to the Tracker's own reference frame").clicked() {
+            out = Some(Value::Null);
+        }
+    });
+    out
+}
+
 fn camera_suggestions(doc: &Doc, id: &str) -> Vec<String> {
     let cameras = doc.graph.nodes.iter().filter(|n| n.op == "camera" && doc.is_upstream(&n.id, id));
     std::iter::once(String::new()).chain(cameras.map(|n| n.id.clone())).collect()

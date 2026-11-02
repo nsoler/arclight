@@ -14,6 +14,10 @@
 //!   between solved frames as their keys would be (see
 //!   [`crate::camtrack::solved_value`]).
 //!
+//! - `{"link": {"node": N, "follow": true, "reference": R}}`: Tracker N's
+//!   solved motion from frame R (null: its reference frame) as an affine
+//!   matrix, for a shape following it (see [`crate::shape_follow`]).
+//!
 //! - `{"link": {"expr": F}}`: formula F (see [`crate::expr`]), reading any
 //!   number of nodes' params, e.g. `"sin(frame / 8) * 5 + t.track1.x"`.
 //!
@@ -132,6 +136,9 @@ fn evaluate<'a>(lookup: &dyn Fn(&str) -> Option<&'a NodeSpec>, v: &Value, t: f64
             return Err(format!("'{node}' isn't a Camera Tracker"));
         }
         crate::camtrack::solved_value(&n.params, what, t).map_err(|e| format!("'{node}': {e:#}"))?
+    } else if l["follow"].as_bool() == Some(true) {
+        // A shape following the Tracker (`crate::shape_follow`).
+        crate::shape_follow::link_value(&n.op, &n.params, l, t).map_err(|e| format!("'{node}' {e}"))?
     } else if let Some(what) = l["motion"].as_str() {
         let pivot = [l["pivot"][0].as_f64().unwrap_or(0.0) as f32, l["pivot"][1].as_f64().unwrap_or(0.0) as f32];
         let (translate, rotate, scale) = track::motion_at(&n.params, t, l["stabilize"].as_bool().unwrap_or(false), pivot);
@@ -218,6 +225,8 @@ pub fn describe(v: &Value) -> String {
         format!("= {f}")
     } else if let Some(what) = l["solve"].as_str() {
         format!("{node} · solved {what}")
+    } else if l["follow"].as_bool() == Some(true) {
+        format!("{node} · followed")
     } else if l.get("motion").is_some() {
         let how = if l["stabilize"].as_bool() == Some(true) { "stabilize" } else { "match-move" };
         format!("{node} · {how}")

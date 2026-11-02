@@ -45,6 +45,22 @@ done), `docs/help.md` (the in-app help) and
 
 ## Start here (next session)
 
+- **0.14.19, shapes follow a Tracker** (Dev2): `src/shape_follow.rs`.
+  A live link kind `{"link":{"node":N,"follow":true,"reference":R}}` →
+  the 6-number affine (R → t), solved from track's public positions /
+  warps with the Tracker's own Solve, exactly the identity at R. Params
+  `follow` (Text, the Tracker's name; rename via graph_merge) and
+  `follow_reference` (null = the Tracker's `reference_frame`) on the four
+  shapes. `ops::resolve_at` injects it as `_follow` (each motion-blur
+  sample gets its own M(t); the cache key sees it); resolve_linked's
+  no-animation fast path is bypassed for following shapes.
+  `shape_sample` maps each outline's positions through it (widths and
+  feathers untouched; `shape_follow::affine` / `map_point` for
+  width-carrying outlines). The viewer reuses `Xf.warp`
+  (`Xf::for_node`). Test gotcha: the overlay tests' `gesture()` uses the
+  unwarped XF; for warped nodes drive press / drag_to with the drag's
+  frozen xf. Possible follow-ups: Bake (key the motion into the shape),
+  and the follow in the Tracker's Export menu.
 - **0.14.18, per-point feather** (Dev1): `src/shape_feather.rs`.
   `point_feather` is a parallel list param on Roto and Polygon
   (`ParamKind::Points { stride: 1 }`, default []), one value per vertex

@@ -77,10 +77,19 @@ impl Xf {
 
     /// This mapping for the selected node's overlay: a Tracker shown
     /// through its own match-move or stabilize draws its tracks where its
-    /// output shows them.
+    /// output shows them; a shape following a Tracker draws its handles
+    /// where the followed motion puts them (and drags map back through
+    /// it, so edits stay in the shape's own space).
     fn for_node(&self, doc: &Doc, id: &str, frame: i64) -> Xf {
-        let n = doc.node(id).filter(|n| n.op == "tracker" && doc.viewed().as_deref() == Some(id));
-        Xf { warp: n.and_then(|n| track::output_map(&n.params, frame)), ..*self }
+        let n = doc.node(id);
+        let tracker = n.filter(|n| n.op == "tracker" && doc.viewed().as_deref() == Some(id)).and_then(|n| track::output_map(&n.params, frame));
+        let follow = || {
+            let n = n.filter(|n| arclight::shape_follow::OPS.contains(&n.op.as_str()))?;
+            let link = arclight::shape_follow::link_of(&n.params)?;
+            let lookup = |id: &str| doc.node(id);
+            arclight::shape_follow::from_value(&arclight::link::resolve(&lookup, &link, frame as f64, doc.graph.project.clock()))
+        };
+        Xf { warp: tracker.or_else(follow), ..*self }
     }
 }
 
@@ -1893,6 +1902,54 @@ mod tests {
         // Viewing something else (or the plain input) leaves the boxes in place.
         d.graph.nodes[1].inputs = vec![String::new()];
         assert!(XF.for_node(&d, "n", 2).warp.is_none());
+    }
+
+    /// A Roto following a Tracker (turned 90° about (50, 50) by frame 2):
+    /// its handles show where the motion puts them, and dragging a point
+    /// or a feather handle edits the shape in its own (reference) space.
+    #[test]
+    fn a_shape_following_a_tracker_shows_and_drags_its_handles_through_the_motion() {
+        let mut d = doc("roto", json!({ "points": spline_square(), "follow": "t" }));
+        d.graph.nodes.push(arclight::graph::NodeSpec { id: "t".into(), op: "tracker".into(), inputs: vec![], params: json!({
+            "track1_on": true, "track1": [50, 50],
+            "track2_on": true, "track2": { "keys": [[1, [100, 50]], [2, [50, 100]]], "interp": "linear" },
+            "solve": "translate, rotate",
+        }), pos: None, disabled: false });
+        assert!(XF.for_node(&d, "n", 1).warp.is_some_and(|m| m.iter().zip([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]).all(|(a, b)| (a - b).abs() < 1e-5)), "identity at the reference frame");
+        let xf = XF.for_node(&d, "n", 2);
+        let turn = |p: Vec2| Pos2::new(50.0 - (p.y - 50.0), 50.0 + (p.x - 50.0));
+        let corner = Vec2::new(150.0, 75.0);
+        let shown = xf.screen(corner);
+        assert!(shown.distance(turn(corner)) < 1e-3, "{shown:?}");
+        // A press, drag and release as `interact` does them: drag positions
+        // through the mapping the press froze.
+        let warped = |ov: &mut Overlays, d: &mut Doc, from: Pos2, to: Pos2| {
+            ov.sync_selection(d);
+            ov.press(d, 2, SIZE, &XF, from, Mods::default());
+            let part = ov.drag.as_ref().map(|dr| dr.part);
+            let frozen = ov.drag.as_ref().map_or(xf, |dr| dr.xf);
+            ov.drag_to(d, 2, frozen.image(to), Mods::default());
+            ov.release(d);
+            part
+        };
+        // Select the corner where it's shown: a click leaves it in place.
+        let mut ov = Overlays::default();
+        assert_eq!(warped(&mut ov, &mut d, shown, shown), Some(Part::Vertex(2)));
+        assert_eq!(ov.points, vec![2]);
+        assert_eq!(&points(&d, 2)[12..14], &[150.0, 75.0]);
+        // Its feather handle, dragged 15 px further out on screen: 30 px of
+        // feather (the motion turns, it doesn't scale).
+        let Some(Geo::Points { pts, tan, feather: Some(f), global, .. }) = geo(&d, "n", 2, SIZE) else { panic!() };
+        let tip = feather_tip(&xf, &pts, &tan, &f, global, 2);
+        let out = (xf.screen(pts[2] + outward(&pts, &tan, 2)) - xf.screen(pts[2])).normalized();
+        assert_eq!(warped(&mut ov, &mut d, tip, tip + out * 15.0), Some(Part::Feather(2)));
+        let fe: Vec<f32> = d.param("n", "point_feather").as_array().unwrap().iter().map(num).collect();
+        assert!((fe[2] - 30.0).abs() < 1e-3 && fe.iter().enumerate().all(|(i, v)| i == 2 || *v == 0.0), "{fe:?}");
+        // Dragging the corner 10 px right on screen moves it 10 px along the
+        // shape's own −y (the motion turned +x on screen into it).
+        assert_eq!(warped(&mut ov, &mut d, shown, shown + Vec2::new(10.0, 0.0)), Some(Part::Vertex(2)));
+        let p = points(&d, 2);
+        assert!((p[12] - 150.0).abs() < 1e-3 && (p[13] - 65.0).abs() < 1e-3, "{:?}", &p[12..14]);
     }
 
     #[test]

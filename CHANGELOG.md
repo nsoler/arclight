@@ -18,6 +18,19 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.19 — 2026-11-01
+
+- **Shapes follow a Tracker:** Rectangle, Ellipse, Polygon and Roto get
+  **Follow tracker** (any Tracker in the project) and **Follow reference
+  frame** (default: the Tracker's own). The shape moves, turns and scales
+  with the Tracker's solved motion (as far as its tracks and Solve allow),
+  motion blur included, while its own keys act as corrections in the
+  reference frame's place, so fixing a point on frame 40 doesn't fight the
+  track. The viewer draws the handles where the shape has moved and maps
+  drags back. Feathers aren't scaled. Renaming the Tracker carries the
+  link; deleting it reports the missing Tracker. Older projects render
+  unchanged.
+
 ## 0.14.18 — 2026-11-01
 
 - **Per-point feather** on **Roto** and **Polygon**: each point gets its

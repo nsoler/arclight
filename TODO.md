@@ -48,6 +48,16 @@ Roto (0.14.18–0.14.19, the user's items 1 and 2):
       add one and ⌫ delete one: the feathers stay on their points in every
       key; Polygon the same; an old project with Roto / Polygon looks
       unchanged
+- [ ] Shapes follow a Tracker (0.14.19): track a feature, draw a Roto on
+      the reference frame and pick the Tracker in Follow tracker: the
+      shape rides the motion (with two or more tracks and Solve set, it
+      turns and scales too); scrub away and drag a point: it's a
+      correction on top of the track, and the reference frame stays
+      unchanged; the handles (feather handles too) sit on the moved shape
+      and drag where you see them; motion blur on the shape follows the
+      track; set a Follow reference frame and ↺ it back; rename the
+      Tracker (the link follows) and delete it (the shape names the
+      missing Tracker); Rectangle / Ellipse / Polygon the same
 
 Phase 13 (v0.13.34, the pause after 2026-10-31): try these on Linux and
 on the Macs (the DMG), from the release builds.

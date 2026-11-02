@@ -183,6 +183,26 @@ choose in Properties:
   connected the node applies everywhere and Invert does nothing.
 - **Mix**: how much of the result shows, on top of the mask.
 
+### Roto following a Tracker
+
+A **Rectangle**, **Ellipse**, **Polygon** or **Roto** can ride on a
+**Tracker**: pick it in **Follow tracker** (the list shows the project's
+Trackers). The shape then moves, turns and scales with the tracked motion,
+as much as the Tracker solves (one track: moving, plus turning and scaling
+if Track motion followed them; two or more: from their positions).
+
+- Draw the shape on the **Follow reference frame** (the Tracker's own
+  reference frame unless you set one; ↺ puts it back). There it isn't
+  moved at all.
+- On other frames, fix what the track misses by dragging points as usual:
+  the keys you set are corrections on top of the track, so they don't
+  fight it.
+- The handles draw where the track has moved the shape, so you drag them
+  where you see them. Motion blur follows the track too; feathers aren't
+  scaled by it.
+- Rename the Tracker and the shape keeps following it; delete it and the
+  shape reports the missing Tracker.
+
 ### Edge Extend and clean screen plates
 
 **Edge Extend** pushes the colors just inside a matte's edge out into
@@ -229,7 +249,8 @@ included.
   when the viewed node has a scene).
 - The selected node's handles draw over the image: drag them to edit (a
   Transform's gizmo, shape boxes and vertices, tracker boxes, corner pins,
-  a Light 2D's position, aim, cone and softness).
+  a Light 2D's position, aim, cone and softness). A shape following a
+  Tracker shows its handles where the track has moved it.
   A selected Roto or Polygon point also shows a blue feather handle out
   from the curve: drag it to soften the edge near that point alone (**⇧**
   for every selected point); Feather stays as an overall amount on top.
