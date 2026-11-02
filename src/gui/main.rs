@@ -23,6 +23,7 @@ mod properties;
 mod script_jobs;
 mod sound;
 mod templates;
+mod solve_quality;
 mod spreadsheet;
 mod transport;
 mod viewer;

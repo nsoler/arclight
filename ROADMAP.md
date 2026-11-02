@@ -63,10 +63,19 @@ What a film pipeline needs before a facility can adopt it, planned in
 - **EXR for a pipeline:** multi-part and multi-layer files, a Shuffle
   node, every compression, metadata and timecode carried through.
 - **Alongside:** STMap, Defocus / ZDefocus, VectorBlur and an optical
-  flow retime, Denoise, an IBK-style keyer and Edge Extend.
+  flow retime, Denoise. (The keying pair, a Color Difference Key with a
+  screen plate and Edge Extend, shipped early in 0.14.16–0.14.17.)
 
 ## Later
 
+- **Paint** (proposed 2026-11-02, on hold): a node of brush strokes for
+  cleanup, separate from Roto. Strokes stay editable curves (size,
+  hardness / softness, opacity, color, spacing per stroke); Paint, Erase,
+  **Clone** (offset in x / y and in frames) and **Reveal** (from a second
+  input, e.g. a clean plate) brushes; a lifetime per stroke (one frame, a
+  range, from a frame on, all); which channels it writes; a stroke list
+  in Properties. Then Blur / Smudge / Dodge / Burn, following a Tracker
+  (as shapes do since 0.14.19), motion blur, and tablet pen pressure.
 - Deep compositing (deep EXR) and stereo / multi-view.
 - A planar tracker; editorial conform (OTIO / EDL, timecode).
 - Review tools: a flipbook with the display transform, A/B wipe,

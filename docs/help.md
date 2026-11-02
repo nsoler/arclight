@@ -930,6 +930,20 @@ sun coming from one side.
 - **Track & Solve** in its panel follows features through the frame range
   and solves the camera; **Export** adds a Camera, the point cloud, a
   Scene and a Scanline Render over the plate.
+- **How good is the solve?** The top of its Properties shows the overall
+  error (RMS, in pixels) in large type: **green** under 0.5 px (good),
+  **amber** under 1 px (usable), **red** from 1 px (high: delete bad points
+  or mask things moving through the shot), with the worst frame and the
+  point count. Under it, a strip chart has a bar per frame (the dashed
+  line is 1 px): hover for a frame's error, click a bar to go to that
+  frame. The solved points in the viewer, and in the 3D view, take the
+  same colours by their own error (solves saved before per-point errors
+  were kept draw them blue); hover a point for its error.
+- **Set the floor:** select 3 or more points on the floor in the viewer,
+  then **Ground plane** in the floating panel (it levels the solve so
+  they're at height 0); then **Set origin** (one point) and **Set scale**
+  (two points and their distance apart). **Fit plane** adds a floor
+  surface on them, e.g. a shadow catcher.
 - With **Linked** on (the default) the exported Camera follows the solve
   live: its Translate, Rotate, Focal and Film back read the Camera
   Tracker's solve at every frame, so re-solving or setting the origin,

@@ -47,6 +47,15 @@ done), `docs/help.md` (the in-app help) and
 
 ## Start here (next session)
 
+- **0.14.20, Camera Tracker solve quality** (Dev1, from the user's
+  v0.14.19 testing: the error wasn't prominent and setting the floor
+  wasn't discoverable): `src/gui/solve_quality.rs` holds the grading
+  (0.5 / 1.0 px steps), the Properties readout and per-frame graph
+  (`top`, `error_graph`, `frame_at` for the click), `point_color` /
+  `hovered_error` for the 2D picker and `HOW_TO_FLOOR`.
+  `viewport3d::error_color` delegates to it, so 2D and 3D agree. Reads
+  `Solution::point_rms` (already filled by the solver; empty = no
+  coloring). A graph click goes through Properties' seek.
 - **0.14.19, shapes follow a Tracker** (Dev2): `src/shape_follow.rs`.
   A live link kind `{"link":{"node":N,"follow":true,"reference":R}}` →
   the 6-number affine (R → t), solved from track's public positions /

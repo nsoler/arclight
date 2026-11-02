@@ -18,6 +18,20 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.20 — 2026-11-02
+
+- Camera Tracker: the solve's quality is shown at the top of its
+  Properties: the overall error in large type, green under 0.5 px (good),
+  amber under 1 px (usable), red from 1 px (high: delete bad points or
+  mask movers), with the worst frame and point count, and a per-frame
+  error strip chart (dashed 1 px line, hover for a value, click a bar to
+  go to that frame). Solved points in the viewer are colored by their own
+  error on the same scale, with the hovered point's error shown, and the
+  panel says how to set the floor (Ground plane, Set origin / Set scale,
+  Fit plane). The 3D view's point colors now use the same steps
+  (previously a ramp: green under 0.25 px, yellow about 1, red from 2).
+  Solves saved before per-point errors were kept draw as before.
+
 ## 0.14.19 — 2026-11-01
 
 - **Shapes follow a Tracker:** Rectangle, Ellipse, Polygon and Roto get

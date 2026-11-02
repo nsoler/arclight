@@ -312,6 +312,13 @@ impl Properties {
             });
             ui.label(RichText::new(info.help).small().weak());
             ui.separator();
+            // solve_quality: a Camera Tracker's solve error, large, and its
+            // per-frame graph (a click goes to that frame).
+            if op == "camera_tracker" {
+                if let Some(f) = crate::solve_quality::top(ui, doc, id, self.frame) {
+                    self.seek = Some(f);
+                }
+            }
 
             let mut rename: Option<String> = None;
             egui::Grid::new(("props", id)).num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {

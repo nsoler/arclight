@@ -15,7 +15,7 @@ pause" below, each with its version; on Linux and on the Mac (the DMG).
 Keying (0.14.16–, the user's "option D": classic keying in Rust instead
 of CorridorKey):
 
-- [ ] Color Difference Key (0.14.16): open `examples/color-difference-key.json`
+- [X] Color Difference Key (0.14.16): open `examples/color-difference-key.json`
       and view `comp_screen_plate` and `comp_one_color`: with the screen
       plate the uneven green clears and the orange's edge has no green
       fringe, keyed on one color the dim corners leave haze; on
@@ -27,7 +27,7 @@ of CorridorKey):
       Edge Extend is in, Edge Extend → screen plate keys a real
       unevenly lit plate cleanly
 
-- [ ] Edge Extend (0.14.17): on a keyed foreground, the edges take the
+- [X] Edge Extend (0.14.17): on a keyed foreground, the edges take the
       colors just inside them (no dark or green fringe) out to Distance,
       or everywhere with Fill everything; Alpha original keeps the key's
       alpha (then Premultiply); a matte input, its channel and Invert
@@ -39,7 +39,7 @@ of CorridorKey):
 
 Roto (0.14.18–0.14.19, the user's items 1 and 2):
 
-- [ ] Per-point feather (0.14.18): select a Roto point and drag its blue
+- [X] Per-point feather (0.14.18): select a Roto point and drag its blue
       feather handle out: the edge softens near that point only and blends
       back along the curve; ⇧-drag with several points selected sets them
       all; Properties ▸ Point feather shows the same numbers, and "all"
@@ -58,6 +58,15 @@ Roto (0.14.18–0.14.19, the user's items 1 and 2):
       track; set a Follow reference frame and ↺ it back; rename the
       Tracker (the link follows) and delete it (the shape names the
       missing Tracker); Rectangle / Ellipse / Polygon the same
+
+Camera Tracker (0.14.20–0.14.21, from the user's v0.14.19 testing):
+
+- [ ] Solve quality (0.14.20): after Track & Solve, the big error color
+      (green / amber / red) and its meaning line, the worst frame and point
+      count; hover and click bars in the per-frame graph (the transport
+      jumps); points colored by error in the 2D viewer and the 3D view,
+      with the hover text; an old save without per-point errors draws blue
+      points; the floor how-to line under the frame list
 
 Phase 13 (v0.13.34, the pause after 2026-10-31): try these on Linux and
 on the Macs (the DMG), from the release builds.

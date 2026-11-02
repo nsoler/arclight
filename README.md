@@ -171,8 +171,8 @@ project.
 - **Draws** the ground grid and axes, cards textured with their images
   (at lower resolution while the view moves), outlines, camera frusta and
   animated cameras' paths, locators, and point clouds (a Camera Tracker's
-  colored by error: green under 0.25 px, yellow about 1 px, red from
-  2 px).
+  colored by error as in the 2D viewer: green under 0.5 px, amber under
+  1 px, red from 1 px).
 - **Select:** left-click a card, camera, locator or point (**⇧** adds or
   removes), left-drag on empty space to box-select, **A** all, **Alt+A**
   or **Esc** none. The node graph and Properties follow, and the other

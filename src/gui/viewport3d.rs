@@ -2852,13 +2852,11 @@ impl Viewport3d {
     }
 }
 
-/// A solved point's color by its reprojection error: green under a
-/// quarter pixel, through yellow at 1, to red from 2 pixels.
+/// A solved point's color by its reprojection error, on the Camera
+/// Tracker's scale (see `solve_quality::grade`): green under half a pixel,
+/// amber under 1, red from 1 pixel.
 pub fn error_color(e: f32) -> Color32 {
-    let t = ((e - 0.25) / 1.75).clamp(0.0, 1.0);
-    let (g, y, r) = ([80.0, 220.0, 90.0], [240.0, 210.0, 60.0], [235.0, 70.0, 60.0]);
-    let mix = |a: [f32; 3], b: [f32; 3], u: f32| Color32::from_rgb((a[0] + (b[0] - a[0]) * u) as u8, (a[1] + (b[1] - a[1]) * u) as u8, (a[2] + (b[2] - a[2]) * u) as u8);
-    if t < 0.43 { mix(g, y, t / 0.43) } else { mix(y, r, (t - 0.43) / 0.57) }
+    crate::solve_quality::error_color(e as f64)
 }
 
 impl Viewport3d {
@@ -3795,11 +3793,12 @@ mod tests {
 
     #[test]
     fn points_are_colored_by_their_error() {
-        assert_eq!(error_color(0.1), error_color(0.25), "good is green");
+        assert_eq!(error_color(0.1), error_color(0.49), "good is green");
         let (good, poor) = (error_color(0.2), error_color(3.0));
         assert!(good.g() > good.r() && poor.r() > poor.g());
-        let mid = error_color(1.0);
-        assert!(mid.r() > 200 && mid.g() > 150, "about yellow at a pixel: {mid:?}");
+        let mid = error_color(0.75);
+        assert!(mid.r() > 200 && mid.g() > 150, "amber under a pixel: {mid:?}");
+        assert_eq!(error_color(1.0), error_color(3.0), "red from a pixel, as the tracker's readout");
     }
 
     /// A blurred view's particle streaks pass where the render's motion

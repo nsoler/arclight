@@ -111,13 +111,15 @@ pub fn panel(ui: &mut egui::Ui, doc: &mut Doc, id: &str, jobs: &mut std::collect
     });
     let sol = doc.node(id).and_then(|n| Solution::from_params(&n.params));
     if let Some(sol) = &sol {
-        let worst = sol.frame_rms.iter().copied().fold(0.0, f64::max);
+        // solve_quality: the error is at the top of Properties now.
         let mode = if sol.tripod { " · tripod" } else { "" };
-        ui.label(format!("{} frames, {} points · error {:.2} px (worst frame {:.2}) · {:.1} mm{mode}", sol.frames.len(), sol.points.len(), sol.rms, worst, sol.focal));
+        ui.label(format!("{} frames · {:.1} mm{mode}", sol.frames.len(), sol.focal));
         if sol.k1 != 0.0 || sol.k2 != 0.0 {
             ui.label(format!("Lens: K1 {:.4}, K2 {:.4}", sol.k1, sol.k2)).on_hover_text("Lens Distort's values (about the frame's center): Export undistorts the plate with them");
         }
         frame_list(ui, id, sol);
+        // solve_quality: how to set the floor.
+        ui.label(crate::solve_quality::HOW_TO_FLOOR);
         ui.weak("Select points in the viewer (click, ⇧-click, drag a box) to place a Card or Locator, or to set the origin, ground and scale.");
         ui.horizontal(|ui| {
             let key = egui::Id::unique("camera_tracker_linked_export");
@@ -487,15 +489,23 @@ impl PointPicker {
     pub fn draw(&self, painter: &egui::Painter, xf: &Xf, size: Vec2, doc: &Doc, frame: i64) {
         let Some(id) = tracker_for(doc) else { return };
         let Some(sol) = doc.node(&id).and_then(|n| Solution::from_params(&n.params)) else { return };
-        for (i, p) in on_screen(&sol, xf, frame, size) {
+        // solve_quality: points coloured by their error (as usual without
+        // one), the hovered point's error beside it.
+        let pts = on_screen(&sol, xf, frame, size);
+        for &(i, p) in &pts {
             if !painter.clip_rect().contains(p) {
                 continue;
             }
             if self.node.as_deref() == Some(id.as_str()) && self.selected.contains(&i) {
                 painter.circle(p, 3.5, Color32::from_rgb(255, 210, 60), Stroke::new(1.0, Color32::BLACK));
             } else {
-                painter.circle(p, 2.0, Color32::from_rgb(90, 175, 225), Stroke::new(0.5, Color32::from_black_alpha(200)));
+                let color = crate::solve_quality::point_color(&sol, i).unwrap_or(Color32::from_rgb(90, 175, 225));
+                painter.circle(p, 2.0, color, Stroke::new(0.5, Color32::from_black_alpha(200)));
             }
+        }
+        if let Some((i, p, e)) = crate::solve_quality::hovered_error(&sol, &pts, painter.ctx().pointer_hover_pos().filter(|h| painter.clip_rect().contains(*h))) {
+            let text = format!("point {i}: {e:.2} px");
+            painter.text(p + Vec2::new(8.0, -8.0), egui::Align2::LEFT_BOTTOM, text, egui::FontId::proportional(12.0), crate::solve_quality::error_color(e));
         }
         if let Some((a, b, _)) = &self.marquee {
             painter.rect(Rect::from_two_pos(*a, *b), 0.0, Color32::from_white_alpha(18), Stroke::new(1.0, Color32::from_white_alpha(170)), egui::StrokeKind::Middle);
