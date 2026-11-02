@@ -17,6 +17,7 @@ mod gpu_check;
 mod help;
 mod node_editor;
 mod overlay;
+mod pivot;
 mod panels;
 mod preferences;
 mod project_settings;
@@ -1121,7 +1122,8 @@ impl App {
         }
         // Esc clears the node graph's selection (text fields returned above;
         // the node browser handles its own).
-        if !self.editor.browser_open() && ctx.input(|i| i.key_pressed(Key::Escape)) {
+        // (pivot: not while the viewer's pivot mode is on: Esc leaves that.)
+        if !self.editor.browser_open() && !self.viewer.pivot_active() && ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.doc.clear_selection();
         }
         // Shift+E before any plain-E binding: shortcut matching ignores Shift.

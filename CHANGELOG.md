@@ -18,6 +18,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.22 — 2026-11-02
+
+- Viewer: **"." sets a pivot.** With a Transform selected (or 2+ Roto /
+  Polygon points), "." over the 2D viewer turns on pivot mode (an orange
+  crosshair, with a hint): click or drag to place the pivot without
+  moving the picture, as Translate makes up for the new Center. Animated
+  Center / Translate are keyed at the frame as one undo step. ⇧. resets
+  to Auto, "." or Esc leaves, and typing "." in text fields is
+  unaffected. For shape points it sets the transform box's rotate / scale
+  pivot for that selection.
+
 ## 0.14.21 — 2026-11-02
 
 - Camera Tracker: **Delete points** (button, or ⌫ in the viewer) leaves

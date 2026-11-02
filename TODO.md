@@ -76,6 +76,18 @@ Camera Tracker (0.14.20–0.14.21, from the user's v0.14.19 testing):
       deletions; ⌫ over the viewer never deletes the node; try it on real
       footage (only synthetic tracks are tested)
 
+Viewer:
+
+- [ ] "." pivot mode (0.14.22): Transform: "." over the 2D viewer shows
+      the hint and crosshair; clicking or dragging moves only the
+      crosshair and the picture stays put (try rotated and scaled); with
+      Center / Translate animated the hint names the frame and ⌘Z undoes
+      the move in one step; ⇧. returns to Auto; "." and Esc leave, and Esc
+      keeps the node selected; typing "1.5" in a Properties field doesn't
+      toggle it. Roto / Polygon: select 2+ points, ".", click a corner,
+      leave the mode: the box's rotate stem turns about it; other points
+      go back to the box middle. Check ⇧. on a non-US keyboard layout
+
 Phase 13 (v0.13.34, the pause after 2026-10-31): try these on Linux and
 on the Macs (the DMG), from the release builds.
 

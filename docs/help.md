@@ -256,6 +256,21 @@ included.
   for every selected point); Feather stays as an overall amount on top.
   **⌘**-click (or **⌘**-drag) in a Keyer or Color Difference Key picks
   the screen color.
+- **.** (period, pointer over the 2D viewer, not in a text field) sets a
+  pivot: with a **Transform** selected, or two or more **Roto** /
+  **Polygon** points, it turns on pivot mode (an orange crosshair; the
+  viewer says "Pivot: click to place · . or Esc to exit · ⇧. resets").
+  Click anywhere, or drag, to put the pivot there: only the pivot moves,
+  never the picture (a Transform's Translate changes to make up for its
+  Center). **⇧.** puts it back to Auto (the layer's middle; for points, the
+  box's middle), again without moving anything; **.** or **Esc** leaves.
+  On a Transform, animated Center and Translate are keyed at the current
+  frame (the hint says so), as one undo step; with Rotate or Scale
+  animated, the picture is held exactly at that frame only, and **⇧.** on
+  an animated Center keys the Auto spot rather than clearing the keys.
+  For points, the pivot is what the transform box rotates and scales
+  about, for that selection (it isn't saved). The 3D view's **.** still
+  frames the selection.
 - **View ▸ Show frame size**: labels the viewed frame's bottom-left
   corner 0,0 and its top-right corner with its width,height (the image's
   format); on by default.

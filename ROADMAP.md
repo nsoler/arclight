@@ -76,6 +76,12 @@ What a film pipeline needs before a facility can adopt it, planned in
   range, from a frame on, all); which channels it writes; a stroke list
   in Properties. Then Blur / Smudge / Dodge / Burn, following a Tracker
   (as shapes do since 0.14.19), motion blur, and tablet pen pressure.
+- **A pivot for 3D objects** (noted 2026-11-02, maybe): place an
+  object's pivot interactively in the 3D view (a door on its hinge, a
+  card tipping from its bottom edge) instead of adding a Transform Geo
+  with a typed Pivot. "." already frames the selection in 3D, so it would
+  need another key (e.g. Ctrl+.) or a pivot menu. The 2D version ("."
+  in the viewer) comes in 0.14.22.
 - Deep compositing (deep EXR) and stereo / multi-view.
 - A planar tracker; editorial conform (OTIO / EDL, timecode).
 - Review tools: a flipbook with the display transform, A/B wipe,

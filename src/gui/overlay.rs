@@ -67,7 +67,7 @@ impl Xf {
         self.img_rect.min + p * self.zoom
     }
 
-    fn image(&self, s: Pos2) -> Vec2 {
+    pub(crate) fn image(&self, s: Pos2) -> Vec2 {
         let p = (s - self.img_rect.min) / self.zoom;
         match &self.warp {
             Some(m) => Vec2::from(track::apply(&track::invert(m), p.into())),
@@ -309,6 +309,9 @@ pub struct Overlays {
     input: Option<(String, Arc<Image>)>,
     /// A solved Camera Tracker's points, to select and place things on.
     picker: crate::camera_tracker::PointPicker,
+    // pivot: a placed pivot for the transform box of a shape's selected
+    // vertices (node, the selection it was placed for, where). UI only.
+    sel_pivot: Option<(String, Vec<usize>, Vec2)>,
 }
 
 fn vec2(v: &Value) -> Vec2 {
@@ -754,6 +757,32 @@ impl Overlays {
         self.drag.is_some() || self.picker.dragging()
     }
 
+    // pivot: the shape box's pivot, for `pivot::PivotMode`.
+    /// The placed pivot of node `id`'s selected vertices' box, while that
+    /// selection is the one it was placed for.
+    fn placed_pivot(&self, id: &str) -> Option<Vec2> {
+        self.sel_pivot.as_ref().filter(|(n, sel, _)| n == id && self.points_node.as_deref() == Some(id) && *sel == self.points).map(|(_, _, p)| *p)
+    }
+
+    /// The selected node's selected vertices' box pivot, when 2+ are
+    /// selected: (where, placed rather than the box's middle).
+    pub(crate) fn selection_pivot(&self, doc: &Doc, frame: i64, size: Vec2, xf: &Xf) -> Option<(Vec2, bool)> {
+        let id = doc.selected.as_deref().filter(|id| self.points_node.as_deref() == Some(*id))?;
+        let Some(Geo::Points { pts, .. }) = geo(doc, id, frame, size) else { return None };
+        let middle = sel_box(xf, &pts, &self.points)?.center().to_vec2();
+        Some(self.placed_pivot(id).map_or((middle, false), |p| (p, true)))
+    }
+
+    /// Place the selected vertices' box pivot (None: back to the middle).
+    pub(crate) fn set_selection_pivot(&mut self, p: Option<Vec2>) {
+        self.sel_pivot = p.zip(self.points_node.clone()).map(|(p, n)| (n, self.points.clone(), p));
+    }
+
+    /// The node and input image the overlays were told of.
+    pub(crate) fn input(&self) -> Option<&(String, Arc<Image>)> {
+        self.input.as_ref()
+    }
+
     /// Tell the overlays a node's input image (or that none is known).
     pub fn set_input(&mut self, input: Option<(String, Arc<Image>)>) {
         self.input = input;
@@ -953,7 +982,8 @@ impl Overlays {
         let Some(g) = self.node_geo(doc, &id, frame, size) else { return };
         let start = xf.image(o);
         let pivot = match (&g, part) {
-            (Geo::Points { pts, .. }, Part::SelBox(_)) => sel_box(xf, pts, &self.points).map_or(Vec2::ZERO, |r| r.center().to_vec2()),
+            // pivot: about a placed pivot, else the box's middle.
+            (Geo::Points { pts, .. }, Part::SelBox(_)) => self.placed_pivot(&id).or_else(|| sel_box(xf, pts, &self.points).map(|r| r.center().to_vec2())).unwrap_or(Vec2::ZERO),
             _ => g.pivot(),
         };
         let d = start - pivot;
@@ -2318,6 +2348,34 @@ mod tests {
         let mut ov = Overlays::default();
         select(&mut ov, &mut d, Pos2::new(125.0, 0.0));
         assert!(!matches!(hit(&geo(&d, "n", 1, SIZE).unwrap(), &XF, Pos2::new(100.0, 50.0), &ov.points), Some(Part::SelBox(_))));
+    }
+
+    // pivot: a placed pivot is what the box turns about, for that
+    // selection only.
+    #[test]
+    fn the_transform_box_turns_about_a_placed_pivot() {
+        let mut d = doc("polygon", json!({ "points": SQUARE }));
+        let mut ov = Overlays::default();
+        assert!(ov.select_all_points(&d));
+        ov.sync_selection(&d);
+        assert_eq!(ov.selection_pivot(&d, 1, SIZE, &XF), Some((Vec2::new(100.0, 50.0), false)));
+        // Pivot on the first corner, (50, 25): turning keeps it there and
+        // every vertex as far from it.
+        ov.set_selection_pivot(Some(Vec2::new(50.0, 25.0)));
+        assert_eq!(ov.selection_pivot(&d, 1, SIZE, &XF), Some((Vec2::new(50.0, 25.0), true)));
+        let stem = Pos2::new(100.0, 25.0 - BOX_PAD - STEM);
+        let part = gesture(&mut ov, &mut d, stem, Pos2::new(200.0, 50.0), 1, Mods::default());
+        assert_eq!(part, Some(Part::SelBox(BoxHandle::Rotate)));
+        let v = points(&d, 1);
+        assert!((v[0] - 50.0).abs() < 1e-3 && (v[1] - 25.0).abs() < 1e-3, "the pivot's vertex stays: {v:?}");
+        let far = |x: f32, y: f32| (Vec2::new(x, y) - Vec2::new(50.0, 25.0)).length();
+        for (i, before) in [(1, far(150.0, 25.0)), (2, far(150.0, 75.0)), (3, far(50.0, 75.0))] {
+            assert!((far(v[2 * i], v[2 * i + 1]) - before).abs() < 1e-2, "vertex {i}: {v:?}");
+        }
+        assert!((v[2] - 150.0).abs() > 1.0, "it turned");
+        // Another selection: back to its box's middle.
+        ov.points = vec![0, 1];
+        assert_eq!(ov.selection_pivot(&d, 1, SIZE, &XF).map(|p| p.1), Some(false));
     }
 
     fn spline_square() -> Vec<f32> {

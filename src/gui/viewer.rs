@@ -80,6 +80,8 @@ pub struct Viewer {
     pan: Vec2,
     fit_pending: bool,
     overlays: Overlays,
+    // pivot: "." pivot mode (see `pivot`).
+    pivot: crate::pivot::PivotMode,
     /// The toolbar's status text width last frame, to tell whether it fits
     /// beside the controls or needs a row of its own.
     status_w: f32,
@@ -157,6 +159,7 @@ impl Default for Viewer {
             picked: None,
             fit_pending: true,
             overlays: Overlays::default(),
+            pivot: Default::default(),
             mode3d: false,
             sheet: false,
             viewport3d: Default::default(),
@@ -212,6 +215,11 @@ impl Viewer {
     }
 
     /// Switch between the image (2D) and the scene (3D).
+    // pivot: whether "." pivot mode is on (Esc is then its own).
+    pub fn pivot_active(&self) -> bool {
+        !self.mode3d && self.pivot.active()
+    }
+
     pub fn toggle_3d(&mut self) {
         self.mode3d = !self.mode3d;
     }
@@ -480,10 +488,13 @@ impl Viewer {
         self.overlays.set_input(d.input.cloned());
         // Overlay handles take a drag before panning does.
         let xf = |v: &Viewer| Xf::new(Rect::from_center_size(rect.center() + v.pan, size * v.zoom), v.zoom);
-        self.overlays.interact(ui, &resp, &xf(self), size, doc, frame);
+        // pivot: "." pivot mode takes the pointer from the handles.
+        if !self.pivot.ui(ui, &resp, &xf(self), size, doc, frame, &mut self.overlays) {
+            self.overlays.interact(ui, &resp, &xf(self), size, doc, frame);
+        }
 
         // Interaction: drag to pan, scroll / pinch to zoom about the cursor.
-        if resp.dragged() && !self.overlays.dragging() {
+        if resp.dragged() && !self.overlays.dragging() && !self.pivot.active() {
             self.pan += resp.drag_delta();
         }
         if resp.double_clicked() {
@@ -536,6 +547,7 @@ impl Viewer {
             }
         }
         self.overlays.draw(ui, &painter, &xf(self), size, doc, frame);
+        self.pivot.draw(ui, &painter, &xf(self), size, doc, frame, &self.overlays); // pivot
         // A 3D scene has no pixels: say what's in it instead.
         if let Some(scene) = &img.scene {
             let text = format!("3D scene: {}\nConnect it to a Scanline Render to see it.", scene.describe());

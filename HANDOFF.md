@@ -8,8 +8,8 @@ Dev1's Color Difference Key shipped as 0.14.16, Dev2's Edge Extend
 as v0.14.19. From the user's v0.14.19 testing, Camera Tracker solve
 quality (Dev1, 0.14.20) and point deletion + the ⌫ fix (Dev2, 0.14.21),
 **released as v0.14.21** (2026-11-02, Linux / Windows / wheel, marked
-Latest; the macOS DMG to come from the user). In progress: Dev1, "." sets
-a node's pivot in the 2D viewer (0.14.22). Paint is on hold (ROADMAP
+Latest; the macOS DMG to come from the user). Then "." sets a node's pivot
+in the 2D viewer (Dev1, 0.14.22). Paint is on hold (ROADMAP
 "Later").
 The user said stay on 0.14.x, no phase 15 yet.** The v0.14.15 hand
 tests and phase 15's Q1–Q5 are still open. **Phase 14 (workspace and UI) on
@@ -50,6 +50,19 @@ done), `docs/help.md` (the in-app help) and
 
 ## Start here (next session)
 
+- **0.14.22, "." sets a pivot** (Dev1, user request): `src/gui/pivot.rs`
+  holds PivotMode (keys, pointer, crosshair, hint), the compensation
+  (t' = t + (M − I)(c' − c), M = R(rotate)·S, y down; a click at q puts
+  the pivot under the pointer: c' = c + M⁻¹(q − (c + t))) and
+  place / reset for Transform through `doc.edit_param` (links refused
+  with a note; animated params keyed, one undo step). The Viewer runs it
+  before the overlays and skips their interaction and panning while it's
+  on; main.rs's global Esc defers to it. Shape-box pivots are UI-only
+  (`Overlays::sel_pivot`, tied to the node and exact selection). Caveats
+  (documented): with rotate / scale animated the picture is held exactly
+  only at the current frame; ⇧. on an animated Center keys the auto spot.
+  2D only: "." frames the selection in 3D (a 3D pivot is a ROADMAP
+  "maybe").
 - **0.14.21, Camera Tracker point deletion + ⌫ fix** (Dev2, from the
   user's testing: ⌫ on picked points deleted the tracker node).
   `src/camtrack_tracks.rs` + `src/gui/camera_points.rs`. Tracks are kept
