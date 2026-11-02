@@ -17,6 +17,8 @@ pub mod check;
 #[cfg(feature = "gpu")]
 pub mod display;
 #[cfg(feature = "gpu")]
+pub mod edge_extend;
+#[cfg(feature = "gpu")]
 pub mod image;
 #[cfg(feature = "gpu")]
 pub mod ops;
@@ -160,7 +162,7 @@ pub fn wanted() -> bool {
 /// The ops with a GPU path (see `gpu::ops`).
 pub const OPS: &[&str] = &[
     "grade", "exposure", "saturation", "invert", "clamp", "premult", "unpremult", "channel_select", "switch", "dissolve", "keymix", "constant",
-    "checkerboard", "merge", "blur", "transform", "corner_pin", "tracker", "lens_distort", "resize", "keyer", "color_difference_key", "shuffle",
+    "checkerboard", "merge", "blur", "transform", "corner_pin", "tracker", "lens_distort", "resize", "keyer", "color_difference_key", "edge_extend", "shuffle",
 ];
 
 /// What a node's cache key mixes in for the backend: 1 when `op` has a

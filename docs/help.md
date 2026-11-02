@@ -183,6 +183,28 @@ choose in Properties:
   connected the node applies everywhere and Invert does nothing.
 - **Mix**: how much of the result shows, on top of the mask.
 
+### Edge Extend and clean screen plates
+
+**Edge Extend** pushes the colors just inside a matte's edge out into
+the area it leaves transparent, so a keyed foreground's edges don't
+pick up dark or green fringes. The matte is the **matte** input's
+chosen channel, or the image's own alpha with nothing plugged in.
+**Distance** sets how far past the edge it reaches (in pixels);
+**Fill everything** fills the whole frame. **Alpha: original
+(unpremultiplied)** keeps the input's alpha with straight color: follow
+it with **Premultiply**.
+
+To make a clean screen plate (the empty screen) for a **Color
+Difference Key**'s screen plate input or a **Keyer**'s clean plate:
+
+1. Plug the green / blue screen plate into Edge Extend's input.
+2. Plug a rough matte of the subject into **matte**: a Keyer set to
+   Output **matte**, with Shrink / grow at +3 or so, so no edge is left.
+3. Turn on **Invert matte** and **Fill everything**, Alpha **solid**.
+
+The subject is filled with the screen colors around it, uneven lighting
+included.
+
 ## Selecting nodes
 
 - Click to select; **⇧** or **⌘** click to add or remove.

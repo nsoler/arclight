@@ -27,6 +27,16 @@ of CorridorKey):
       Edge Extend is in, Edge Extend → screen plate keys a real
       unevenly lit plate cleanly
 
+- [ ] Edge Extend (0.14.17): on a keyed foreground, the edges take the
+      colors just inside them (no dark or green fringe) out to Distance,
+      or everywhere with Fill everything; Alpha original keeps the key's
+      alpha (then Premultiply); a matte input, its channel and Invert
+      matte; **clean screen plate**: a green plate in, a Keyer's matte
+      (grown a few px) in Matte, Invert matte and Fill everything on,
+      gives an empty, evenly filled screen, and a Color Difference Key
+      with it as its screen plate keys cleaner than on one picked color;
+      GPU on and off look the same
+
 Phase 13 (v0.13.34, the pause after 2026-10-31): try these on Linux and
 on the Macs (the DMG), from the release builds.
 

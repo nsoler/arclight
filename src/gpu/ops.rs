@@ -46,6 +46,8 @@ pub fn preference(op: &str, params: &Value) -> Prefer {
         "blur" | "keyer" => Prefer::Always,
         // Pixel by pixel, like the pointwise ops.
         "color_difference_key" => Prefer::WithResidentInput,
+        // A pyramid of passes over the whole frame.
+        "edge_extend" => Prefer::Always,
         // Distorting reads the plate through the lens's inverse (Newton's
         // method per pixel: slow on the CPU); undistorting is a polynomial,
         // about what a transfer costs.
@@ -275,6 +277,10 @@ fn eval_op(gpu: &Gpu, op: &str, params: &Value, inputs: &[Option<&GpuImage>], cp
             keyer(gpu, &p, &plan, screen, src, plate)?
         }
         "color_difference_key" => return crate::key_color::gpu::eval(gpu, params, inputs, cpu),
+        "edge_extend" => {
+            let Some(src) = input(0) else { return Ok(None) };
+            return super::edge_extend::eval(gpu, params, src, input(1));
+        }
         other => bail!("no GPU path for '{other}'"),
     }))
 }

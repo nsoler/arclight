@@ -20,6 +20,7 @@ pub mod color;
 pub mod config;
 pub mod crash;
 pub mod dpx;
+pub mod edge_extend;
 pub mod expr;
 pub mod features;
 pub mod geo;

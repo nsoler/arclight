@@ -2,8 +2,9 @@
 
 Last updated 2026-11-01, session 13: **keying ("option D", the user's
 choice over integrating CorridorKey, whose licence keeps it out):
-Dev1's Color Difference Key shipped as 0.14.16; Dev2's Edge Extend
-(pull-push fill, also the clean-screen-plate maker) comes as 0.14.17.
+Dev1's Color Difference Key shipped as 0.14.16, Dev2's Edge Extend
+(pull-push fill, also the clean-screen-plate maker) as 0.14.17; Dev1 and
+Dev2 standing by.
 The user said stay on 0.14.x, no phase 15 yet.** The v0.14.15 hand
 tests and phase 15's Q1–Q5 are still open. **Phase 14 (workspace and UI) on
 branch `wip-ns-ui`, 0.14.x, from 0.14.0; at 0.14.15, released as
@@ -43,6 +44,17 @@ done), `docs/help.md` (the in-app help) and
 
 ## Start here (next session)
 
+- **0.14.17, Edge Extend** (Dev2): `edge_extend`, `src/edge_extend.rs`,
+  GPU in `src/gpu/edge_extend.rs` + `edge_extend.wgsl`. Pull-push: seed
+  (straight color × coverage, coverage), 2×2-sum pulls down to 1×1
+  (coverage capped at 1), bilinear pushes back up (fine + (1 − w)·up);
+  `plan()` shared, CPU and GPU run identical passes. The distance limit
+  is a separable square max-reach (square, not round: a Euclidean reach
+  is a possible follow-up if diagonal overreach shows). Pixels with
+  input alpha 0 never seed the fill, even under an external matte.
+  Data window: frame ∪ data with Fill everything, else data grown by
+  the distance. Extra planes not carried; no mask / mix input. Docs:
+  help.md "Edge Extend and clean screen plates".
 - **0.14.16, Color Difference Key** (Dev1): `color_difference_key`,
   `src/key_color.rs` (core, CPU, and GPU in `key_color::gpu`) +
   `src/gpu/key_color.wgsl`; a new node beside the Keyer, which is

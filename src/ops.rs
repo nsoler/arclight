@@ -771,6 +771,33 @@ pub static OPS: &[OpInfo] = &[
                (premultiplied), the matte, or the despilled plate.",
     },
     OpInfo {
+        name: "edge_extend",
+        label: "Edge Extend",
+        category: Category::Keyer,
+        inputs: &[IN, opt("matte")],
+        params: &[
+            fixed!("matte_channel", "Matte channel", ParamKind::Choice(MASK_CHANNELS), "alpha"),
+            fixed!("invert", "Invert matte", ParamKind::Bool, false),
+            fixed!("fill_all", "Fill everything", ParamKind::Bool, false),
+            p!("distance", "Distance", ParamKind::Float { min: 0.0, max: 200.0 }, 16.0),
+            fixed!("alpha", "Alpha", ParamKind::Choice(crate::edge_extend::ALPHA_MODES), "solid"),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Pushes the colors just inside a matte's edge outward into the area it \
+               leaves transparent (pull-push fill), so a keyed foreground's edges don't \
+               pick up dark or green fringes. The matte: the Matte input's chosen \
+               channel, or the image's own when it isn't connected. Distance: how far \
+               past the edge to extend, in pixels (a square reach); Fill everything \
+               fills the whole frame. Alpha: solid (an opaque plate) or the input's \
+               original alpha with the extended color unpremultiplied (follow it with \
+               Premultiply). Clean screen plate: feed the green/blue screen plate in, \
+               a rough subject matte (a Keyer's matte, grown a few pixels) into Matte, \
+               turn on Invert matte and Fill everything: the subject is filled with \
+               the screen around it, ready for a Color Difference Key's screen plate \
+               or a Keyer's clean plate input.",
+    },
+    OpInfo {
         name: "channel_select",
         label: "Channel Select",
         category: Category::Channel,
@@ -2638,6 +2665,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "keymix" => keymix(inputs),
         "keyer" => keyer(params, inputs),
         "color_difference_key" => crate::key_color::eval(params, inputs),
+        "edge_extend" => crate::edge_extend::edge_extend(params, inputs),
         "crop" => crop(params, inputs),
         "resize" => resize(params, inputs),
         "lens_distort" => lens_distort(params, inputs),

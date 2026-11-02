@@ -254,7 +254,7 @@ reference: GPU results are tested against it within stated tolerances
 it, never at start-up. Ops move to the GPU milestone by milestone (phase
 12); until an op has a GPU path, it renders on the CPU as before.
 
-On the GPU now: **Blur**, **Keyer**, **Lens Distort** and motion-blurred
+On the GPU now: **Blur**, **Keyer**, **Edge Extend**, **Lens Distort** and motion-blurred
 **Transform / Corner Pin / Tracker** (always); and **Grade, Exposure,
 Saturation, Invert, Clamp, Premult, Unpremult, Channel Select, Switch,
 Dissolve, Keymix, Merge** (zmerge too), **Shuffle**, **Resize**, **Color Difference Key** and
@@ -386,6 +386,7 @@ applies everywhere and `mask_invert` does nothing.
 | `keymix` | A, B + mask | — | A where mask alpha is 1, B where 0 |
 | `keyer` | input, clean plate (opt) + mask | `screen` (color, or null = estimated from the image), `balance`, `clip_black`, `clip_white`, `despill`, `shrink_grow` (px, negative shrinks), `softness` (px the matte's edge blurs over), `output` (`keyed`/`matte`/`despill only`) | green/blue screen color-difference key with despill; a clean plate gives a per-pixel screen color |
 | `color_difference_key` | input, screen plate (opt) + mask | `screen_mode` (`green`/`blue`/`picked`), `screen` (the picked color, or null = estimated from the image), `red_weight`, `blue_weight` (on a blue screen it weighs green), `clip_black`, `clip_white`, `subtract_screen` (bool), `despill`, `output` (`keyed`/`matte`/`despill only`) | weighted color-difference key, pixel by pixel: matte = 1 − (screen channel − weighted other two) / the screen's, against the screen plate's color at each pixel when one is plugged in (e.g. an Edge Extend of the plate), evening out uneven lighting; Subtract screen takes the screen's share out of the edges (αF = c − (1 − α)S), Despill holds the screen channel to the weighted others. `examples/color-difference-key.json` keys an unevenly lit screen both ways |
+| `edge_extend` | input, matte (opt) | `matte_channel` (`alpha`/`red`/`green`/`blue`/`luminance`; the matte's, or the input's own when no matte is plugged in), `invert` (bool), `fill_all` (bool), `distance` (px past the matte's edge, a square reach), `alpha` (`solid`/`original (unpremultiplied)`) | pushes the colors just inside a matte's edge out into the transparent area (pull-push fill), so keyed edges don't pick up dark or screen-colored fringes; `original (unpremultiplied)` keeps the input's alpha with straight color (follow it with Premultiply). **Clean screen plate:** the screen plate in, a rough subject matte (e.g. a Keyer's matte grown a few px) in matte, `invert` and `fill_all` on: the subject is filled with the screen around it, for a Color Difference Key's screen plate or a Keyer's clean plate |
 | `dissolve` | A, B | `amount` | cross-fade A → B |
 | `switch` | 5 (optional) | `which` | passes input `which` through; keyframe it to cut |
 | `transform` | 1 + mask | `translate` [2], `scale` [2], `rotate` (deg), `center` [2] or null | affine, bilinear resample (averaged over each pixel's footprint where it shrinks, as Corner Pin and the Tracker output also do), about `center`; null (the default) pivots on the middle of the input's data window, so a Transform after a shape turns it in place; `motion_blur`, `shutter`, `shutter_offset` as for shapes (the animated warp, averaged over the shutter) |

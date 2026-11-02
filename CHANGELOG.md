@@ -18,6 +18,19 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.17 — 2026-11-01
+
+- New **Edge Extend** node (Keyer category): pushes the colors just
+  inside a matte's edge out into the transparent area with a pull-push
+  fill (a pyramid of premultiplied color and coverage), so keyed edges
+  don't pick up dark or green fringes. Matte from an optional matte input
+  or the image's own channel (alpha / R / G / B / luminance, invertible);
+  Distance in pixels or Fill everything; Alpha solid, or original
+  (unpremultiplied). With an inverted subject matte and Fill everything it
+  turns a screen plate into a clean screen plate for the Color Difference
+  Key's screen plate (or the Keyer's clean plate). On the GPU (always),
+  matching the CPU within 1e-6.
+
 ## 0.14.16 — 2026-11-01
 
 - New **Color Difference Key** node (Keyer category): keys a green or blue
