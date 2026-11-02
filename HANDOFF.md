@@ -4,8 +4,10 @@ Last updated 2026-11-01, session 13: **keying ("option D", the user's
 choice over integrating CorridorKey, whose licence keeps it out):
 Dev1's Color Difference Key shipped as 0.14.16, Dev2's Edge Extend
 (pull-push fill, also the clean-screen-plate maker) as 0.14.17. Then the user's roto items 1 and 2: per-point feather (Dev1,
-0.14.18) and shapes following a Tracker (Dev2, 0.14.19), released
-together with the keying as v0.14.19.
+0.14.18) and shapes following a Tracker (Dev2, 0.14.19), **released
+as v0.14.19** (2026-11-01: Linux tarball, Windows zip, arclt wheel +
+sdist, marked Latest; the macOS DMG to come from the user). Dev1 and Dev2
+standing by; next: the user's hand tests (TODO.md "Keying", "Roto").
 The user said stay on 0.14.x, no phase 15 yet.** The v0.14.15 hand
 tests and phase 15's Q1–Q5 are still open. **Phase 14 (workspace and UI) on
 branch `wip-ns-ui`, 0.14.x, from 0.14.0; at 0.14.15, released as
