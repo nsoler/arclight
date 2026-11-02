@@ -1,6 +1,6 @@
 # Arclight — handoff notes
 
-Last updated 2026-11-01, session 13: **keying ("option D", the user's
+Last updated 2026-11-02, session 13: **keying ("option D", the user's
 choice over integrating CorridorKey, whose licence keeps it out):
 Dev1's Color Difference Key shipped as 0.14.16, Dev2's Edge Extend
 (pull-push fill, also the clean-screen-plate maker) as 0.14.17. Then the user's roto items 1 and 2: per-point feather (Dev1,
@@ -9,7 +9,11 @@ as v0.14.19. From the user's v0.14.19 testing, Camera Tracker solve
 quality (Dev1, 0.14.20) and point deletion + the ⌫ fix (Dev2, 0.14.21),
 **released as v0.14.21** (2026-11-02, Linux / Windows / wheel, marked
 Latest; the macOS DMG to come from the user). Then "." sets a node's pivot
-in the 2D viewer (Dev1, 0.14.22). Paint is on hold (ROADMAP
+in the 2D viewer (Dev1, 0.14.22), **released as v0.14.22** (2026-11-02,
+Linux / Windows / wheel, marked Latest; the macOS DMGs for v0.14.21 and
+v0.14.22 to come from the user). **Session ended there at the user's
+word:** Dev1 and Dev2 stood down, nothing in flight; next is the user's
+hand testing (TODO.md "Camera Tracker", "Viewer"). Paint is on hold (ROADMAP
 "Later").
 The user said stay on 0.14.x, no phase 15 yet.** The v0.14.15 hand
 tests and phase 15's Q1–Q5 are still open. **Phase 14 (workspace and UI) on
