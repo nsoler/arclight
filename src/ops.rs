@@ -738,6 +738,39 @@ pub static OPS: &[OpInfo] = &[
                (premultiplied), the matte, or the despilled plate.",
     },
     OpInfo {
+        name: "color_difference_key",
+        label: "Color Difference Key",
+        category: Category::Keyer,
+        inputs: &[IN, opt("screen plate"), MASK],
+        params: &[
+            fixed!("screen_mode", "Screen", ParamKind::Choice(crate::key_color::SCREEN_MODES), "green"),
+            // Null: estimated from the image when the screen is "picked".
+            p!("screen", "Picked color", ParamKind::Color, Value::Null),
+            p!("red_weight", "Red weight", ParamKind::Float { min: 0.0, max: 2.0 }, 0.5),
+            p!("blue_weight", "Blue weight (green on a blue screen)", ParamKind::Float { min: 0.0, max: 2.0 }, 0.5),
+            p!("clip_black", "Clip black", ParamKind::Float { min: 0.0, max: 1.0 }, 0.0),
+            p!("clip_white", "Clip white", ParamKind::Float { min: 0.0, max: 1.0 }, 1.0),
+            fixed!("subtract_screen", "Subtract screen", ParamKind::Bool, true),
+            p!("despill", "Despill", ParamKind::Float { min: 0.0, max: 1.0 }, 1.0),
+            fixed!("output", "Output", ParamKind::Choice(crate::key_color::OUTPUTS), "keyed"),
+            MIX, MASK_CHANNEL, MASK_INVERT,
+        ],
+        overlay: Overlay::Pick("screen"),
+        mask_base: Some(0),
+        help: "Keys a green or blue screen by weighted color difference: how far the \
+               screen channel rises above Red weight × red plus Blue weight × blue (× \
+               green on a blue screen), against the screen's. Screen: a green or blue \
+               preset, or the Picked color (Ctrl+click or Ctrl+drag in the viewer; \
+               estimated from the plate when unset). A screen plate (the empty screen, \
+               e.g. from Edge Extend) keys each pixel against the screen's own color \
+               there, which evens out uneven lighting. Subtract screen takes the \
+               screen's share out of the edges' color, clearing green fringes; Despill \
+               holds the screen channel down to the weighted others. Clip black/white \
+               crush the matte's ends. Pixel by pixel: follow it with a Keyer, Blur or \
+               Erode to shrink or soften the matte. Output: the keyed image \
+               (premultiplied), the matte, or the despilled plate.",
+    },
+    OpInfo {
         name: "channel_select",
         label: "Channel Select",
         category: Category::Channel,
@@ -2526,7 +2559,7 @@ pub fn eval(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalConte
 /// planes themselves; others (plugins, sources) drop them.
 pub(crate) fn planes_source(op: &str) -> Option<usize> {
     match op {
-        "grade" | "exposure" | "saturation" | "invert" | "clamp" | "premult" | "unpremult" | "channel_select" | "keyer" | "blur" => Some(0),
+        "grade" | "exposure" | "saturation" | "invert" | "clamp" | "premult" | "unpremult" | "channel_select" | "keyer" | "color_difference_key" | "blur" => Some(0),
         "rectangle" | "ellipse" | "polygon" | "roto" => Some(0),
         "keymix" => Some(1),
         _ => None,
@@ -2604,6 +2637,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "dissolve" => dissolve(params, inputs),
         "keymix" => keymix(inputs),
         "keyer" => keyer(params, inputs),
+        "color_difference_key" => crate::key_color::eval(params, inputs),
         "crop" => crop(params, inputs),
         "resize" => resize(params, inputs),
         "lens_distort" => lens_distort(params, inputs),

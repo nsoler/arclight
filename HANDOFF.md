@@ -1,8 +1,11 @@
 # Arclight — handoff notes
 
-Last updated 2026-11-01, session 12: **PAUSED for the user's hand
-testing of v0.14.15 (2026-11-01): no new work until the user reports
-bugs or answers phase 15's Q1–Q5; Dev1 and Dev2 standing by.** **Phase 14 (workspace and UI) on
+Last updated 2026-11-01, session 13: **keying ("option D", the user's
+choice over integrating CorridorKey, whose licence keeps it out):
+Dev1's Color Difference Key shipped as 0.14.16; Dev2's Edge Extend
+(pull-push fill, also the clean-screen-plate maker) comes as 0.14.17.
+The user said stay on 0.14.x, no phase 15 yet.** The v0.14.15 hand
+tests and phase 15's Q1–Q5 are still open. **Phase 14 (workspace and UI) on
 branch `wip-ns-ui`, 0.14.x, from 0.14.0; at 0.14.15, released as
 v0.14.15** (all five assets, the DMG posted by the user). 0.14.15 fixes the user's hand-test bug: a loaded project
 showed the previous one in the 3D view (every Doc started at revision
@@ -40,6 +43,19 @@ done), `docs/help.md` (the in-app help) and
 
 ## Start here (next session)
 
+- **0.14.16, Color Difference Key** (Dev1): `color_difference_key`,
+  `src/key_color.rs` (core, CPU, and GPU in `key_color::gpu`) +
+  `src/gpu/key_color.wgsl`; a new node beside the Keyer, which is
+  unchanged (two weights instead of the hi/lo balance, plus screen
+  subtraction αF = c − (1−α)S; separate so saved projects don't move).
+  Pixel by pixel, no shrink / grow / softness (chain a Keyer, Blur or
+  Erode). The screen channel is fixed per node by the mode (a picked
+  color keys as blue if blue > green). Known: matte = 1 − d(c)/d(s)
+  is ill-conditioned where a screen plate pixel barely leads green /
+  blue, so the gpu/check row uses a picked screen on a smooth plate.
+  Names are descriptive per the originality rule (the plan's
+  "IBK-style" is not used). Example `examples/color-difference-key.json`.
+  Not hand-checked in the GUI yet (TODO.md "Keying").
 - **0.13.0 (2026-10-31): phase 13 begins** on `wip-ns-geo` with
   `docs/geo-plan.md` (GeoNodes-like geometry: D1 scene wires, D2
   per-element expressions, D4 instancing; P1–P7; suggested first slice

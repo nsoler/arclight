@@ -12,6 +12,21 @@ project, copy / paste, templates, the projection examples, the Camera
 alone and Scanline Render's Camera are under "After the phase 13
 pause" below, each with its version; on Linux and on the Mac (the DMG).
 
+Keying (0.14.16–, the user's "option D": classic keying in Rust instead
+of CorridorKey):
+
+- [ ] Color Difference Key (0.14.16): open `examples/color-difference-key.json`
+      and view `comp_screen_plate` and `comp_one_color`: with the screen
+      plate the uneven green clears and the orange's edge has no green
+      fringe, keyed on one color the dim corners leave haze; on
+      Picked, ⌘/Ctrl+click and ⌘/Ctrl+drag in the viewer set the Picked
+      color (and with none set, it estimates one); Blue screen, Red /
+      Blue weight, Subtract screen off (a green-tinted edge comes back,
+      despilled) and Output matte / despill only behave as their labels
+      say; a mask and Mix fade it; GPU on and off look the same; once
+      Edge Extend is in, Edge Extend → screen plate keys a real
+      unevenly lit plate cleanly
+
 Phase 13 (v0.13.34, the pause after 2026-10-31): try these on Linux and
 on the Macs (the DMG), from the release builds.
 

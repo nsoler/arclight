@@ -1,0 +1,39 @@
+{
+  "nodes": [
+    { "id": "screen", "op": "constant",
+      "params": { "width": 640, "height": 360, "color": [0.12, 0.62, 0.14, 1.0] } },
+
+    { "id": "falloff", "op": "ellipse",
+      "params": { "width": 640, "height": 360, "center": [300, 170], "size": [700, 460],
+                  "feather": 220, "invert": true } },
+
+    { "id": "unevenly_lit", "op": "grade", "inputs": ["screen", "falloff"],
+      "params": { "multiply": [0.45, 0.45, 0.45] } },
+
+    { "id": "plate", "op": "ellipse", "inputs": ["unevenly_lit"],
+      "params": { "width": 640, "height": 360, "center": [320, 190], "size": [260, 220],
+                  "color": [0.85, 0.45, 0.2, 1.0], "feather": 30 } },
+
+    { "id": "key_screen_plate", "op": "color_difference_key", "inputs": ["plate", "unevenly_lit"],
+      "params": { "screen_mode": "green", "subtract_screen": true, "despill": 1.0 } },
+
+    { "id": "key_one_color", "op": "color_difference_key", "inputs": ["plate"],
+      "params": { "screen_mode": "picked", "screen": [0.12, 0.62, 0.14, 1.0],
+                  "subtract_screen": true, "despill": 1.0 } },
+
+    { "id": "bg", "op": "checkerboard",
+      "params": { "width": 640, "height": 360, "size": 40 } },
+
+    { "id": "comp_screen_plate", "op": "merge", "inputs": ["key_screen_plate", "bg"],
+      "params": { "operation": "over" } },
+
+    { "id": "comp_one_color", "op": "merge", "inputs": ["key_one_color", "bg"],
+      "params": { "operation": "over" } },
+
+    { "id": "out_screen_plate", "op": "write", "inputs": ["comp_screen_plate"],
+      "params": { "path": "color_difference_key_screen_plate.png" } },
+
+    { "id": "out_one_color", "op": "write", "inputs": ["comp_one_color"],
+      "params": { "path": "color_difference_key_one_color.png" } }
+  ]
+}

@@ -34,6 +34,7 @@ pub mod gpu;
 pub mod graph;
 pub mod graph_merge;
 pub mod image;
+pub mod key_color;
 pub mod light2d;
 pub mod link;
 pub mod media;

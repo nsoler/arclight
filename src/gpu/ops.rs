@@ -44,6 +44,8 @@ pub enum Prefer {
 pub fn preference(op: &str, params: &Value) -> Prefer {
     match op {
         "blur" | "keyer" => Prefer::Always,
+        // Pixel by pixel, like the pointwise ops.
+        "color_difference_key" => Prefer::WithResidentInput,
         // Distorting reads the plate through the lens's inverse (Newton's
         // method per pixel: slow on the CPU); undistorting is a polynomial,
         // about what a transfer costs.
@@ -272,6 +274,7 @@ fn eval_op(gpu: &Gpu, op: &str, params: &Value, inputs: &[Option<&GpuImage>], cp
             };
             keyer(gpu, &p, &plan, screen, src, plate)?
         }
+        "color_difference_key" => return crate::key_color::gpu::eval(gpu, params, inputs, cpu),
         other => bail!("no GPU path for '{other}'"),
     }))
 }
@@ -1059,6 +1062,43 @@ mod tests {
             (json!({"shrink_grow": 3, "softness": 9, "clip_black": 0.1, "clip_white": 0.8}), true),
         ] {
             agree(&gpu, "keyer", params, &[Some(&plate), if with_clean { Some(&clean) } else { None }], (1e-4, 1e-4));
+        }
+    }
+
+    /// The Color Difference Key on the GPU as on the CPU: each screen mode,
+    /// with and without a screen plate (smaller than the plate), each
+    /// output, subtraction off, other weights and clips, a mask and mix.
+    #[test]
+    fn color_difference_key_matches_the_cpu() {
+        let Some(gpu) = crate::gpu::test_device() else { return eprintln!("skipped: no GPU adapter") };
+        let f = Size { width: 120, height: 80 };
+        let mut plate = crate::gpu::check::smooth(f, IRect::new(-4, 2, 118, 84), false, 6);
+        for (i, px) in plate.pixels.iter_mut().enumerate() {
+            // Every third pixel a lit screen: some keyed, some not, some between.
+            if i % 3 == 0 {
+                *px = [0.1 * px[3], 0.7 * px[3], 0.12 * px[3], px[3]];
+            }
+        }
+        // An unevenly lit screen plate (green or blue leading clearly: a
+        // plate barely leading divides by ~0, where any float difference
+        // shows).
+        let mut screen = noise(f, IRect::new(10, 0, 90, 70), false, 7);
+        for px in &mut screen.pixels {
+            *px = [0.05 + 0.1 * px[0], 0.45 + 0.3 * px[1], 0.05 + 0.1 * px[2], 1.0];
+        }
+        let mask = noise(f, IRect::new(0, 0, 120, 80), false, 8);
+        let op = "color_difference_key";
+        for (params, with_screen, masked) in [
+            (json!({}), false, false),
+            (json!({"screen_mode": "blue"}), false, false),
+            (json!({"screen_mode": "picked"}), false, false),
+            (json!({"screen_mode": "picked", "screen": [0.2, 0.3, 0.8, 1.0], "red_weight": 0.8, "blue_weight": 0.3}), true, false),
+            (json!({"subtract_screen": false, "despill": 0.4, "clip_black": 0.1, "clip_white": 0.7}), true, false),
+            (json!({"output": "matte"}), true, false),
+            (json!({"output": "despill only"}), true, false),
+            (json!({"mix": 0.6}), true, true),
+        ] {
+            agree(&gpu, op, params, &[Some(&plate), if with_screen { Some(&screen) } else { None }, if masked { Some(&mask) } else { None }], (1e-5, 1e-4));
         }
     }
 

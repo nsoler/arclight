@@ -396,6 +396,7 @@ fn op_rows(gpu: &super::Gpu, sizes: &[Sized]) -> Vec<CheckRow> {
         ("resize x2", "resize", json!({"width": 2048, "height": 2048, "fit": "fit"}), FILTER, false, false, true),
         ("resize x0.5", "resize", json!({"width": 512, "height": 512, "fit": "fit"}), FILTER, false, false, true),
         ("keyer, shrink / grow, soft", "keyer", json!({"screen": [0.1, 0.75, 0.15, 1.0], "shrink_grow": 2.5, "softness": 9}), FILTER, false, false, true),
+        ("color difference key", "color_difference_key", json!({"screen_mode": "picked", "screen": [0.15, 0.7, 0.2, 1.0], "despill": 0.8}), FILTER, false, false, true),
     ];
     let ctx = crate::ops::EvalContext { frame: 1, write_outputs: false };
     let mut rows = Vec::new();

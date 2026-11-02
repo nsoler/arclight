@@ -18,6 +18,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.16 — 2026-11-01
+
+- New **Color Difference Key** node (Keyer category): keys a green or blue
+  screen by weighted color difference (Red / Blue weights), against a
+  preset, a picked color (⌘/Ctrl+click in the viewer) or, with a **screen
+  plate** plugged in, the screen's own color at each pixel, which evens
+  out uneven lighting. **Subtract screen** takes the screen's share out of
+  edge colors (αF = c − (1−α)S) and Despill holds the screen channel to
+  the weighted others; outputs keyed, matte or despill only, with mask and
+  mix. Runs on the GPU too. Example: `examples/color-difference-key.json`.
+
 ## 0.14.15 — 2026-11-01
 
 - Fix: opening another project (or example) after using the 3D view no

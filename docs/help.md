@@ -172,6 +172,7 @@ zmerge).
 ### Masks
 
 Merge, Keymix, Grade, Exposure, Saturation, Invert, Clamp, Blur, Keyer,
+Color Difference Key,
 Transform, Corner Pin and Lens Distort (the nodes with a **mask** input)
 apply only where the mask lets them; elsewhere their input shows through. Connect any image to it, then
 choose in Properties:
@@ -207,7 +208,8 @@ choose in Properties:
 - The selected node's handles draw over the image: drag them to edit (a
   Transform's gizmo, shape boxes and vertices, tracker boxes, corner pins,
   a Light 2D's position, aim, cone and softness).
-  **⌘**-click (or **⌘**-drag) in a Keyer picks the screen color.
+  **⌘**-click (or **⌘**-drag) in a Keyer or Color Difference Key picks
+  the screen color.
 - **View ▸ Show frame size**: labels the viewed frame's bottom-left
   corner 0,0 and its top-right corner with its width,height (the image's
   format); on by default.
