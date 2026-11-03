@@ -729,7 +729,9 @@ impl Viewer {
                 self.pan = Vec2::ZERO;
             }
             ui.label(format!("{:.0}%", self.zoom * 100.0));
-            room = ui.available_width();
+            // What is left on this row: `available_width` in a wrapping
+            // layout is the whole row's.
+            room = ui.available_size_before_wrap().x;
             fits = room >= self.status_w + gap;
             if fits {
                 self.status(ui, d);
@@ -1359,6 +1361,40 @@ mod tests {
                     .drop_without_applying_deltas();
                 }
                 assert!(right <= width, "3D {mode3d}, {width} wide: the controls reach {right}");
+            }
+        }
+    }
+
+
+    /// A long status ("Viewing …", the go-back note, a data window) takes
+    /// a row of its own when it doesn't fit beside the controls, rather
+    /// than being drawn over them, and shares the row when it does; also
+    /// after a spell in 3D.
+    #[test]
+    fn a_long_status_takes_its_own_row_when_it_does_not_fit() {
+        use arclight::image::{IRect, Size};
+        let img = Arc::new(Image::blank(Size { width: 1920, height: 1080 }, IRect::new(0, -66, 1920, 1080)));
+        let d = Display { image: Some(&img), gpu: None, error: None, target: Some("scanline_render1"), returns_to: Some("viewer1"), frame: 97, millis: 6.2, input: None };
+        for (width, rows) in [(1150.0, 2), (2400.0, 1)] {
+            let ctx = egui::Context::default();
+            let mut v = Viewer::default();
+            for mode3d in [false, false, true, false, false] {
+                v.mode3d = mode3d;
+                let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 600.0))), ..Default::default() };
+                let mut h = 0.0;
+                ctx.run_ui(raw, |ui| {
+                    if mode3d {
+                        v.toolbar_3d(ui, &d);
+                    } else {
+                        v.toolbar(ui, &d);
+                    }
+                    h = ui.min_rect().height();
+                })
+                .drop_without_applying_deltas();
+                // A row is about 20 high, two about 43.
+                if !mode3d {
+                    assert_eq!(if h > 30.0 { 2 } else { 1 }, rows, "{width} wide: {h} high");
+                }
             }
         }
     }

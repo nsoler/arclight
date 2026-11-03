@@ -18,6 +18,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.24 — 2026-11-02
+
+- Viewer: the real fix for the 2D toolbar's status overlapping its
+  controls (0.14.23 didn't cure it). The fit test read `available_width`,
+  which in a wrapping row is the whole row's width, so a long status
+  (viewing a 3D node, "(click … to go back)", a data window) always
+  looked as if it fitted and was drawn over the channel / Exposure / Fit
+  controls on narrower views (e.g. a 1728×1117 MacBook Pro); it now
+  measures what is left on the row and takes a row of its own.
+
 ## 0.14.23 — 2026-11-02
 
 - Viewer: the 2D toolbar's status ("Viewing …", the data window, size,
