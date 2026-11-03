@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.14.22 (2026-11-02). Done items are removed
+What's still open, as of 0.14.24 (2026-11-02). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -9,46 +9,7 @@ them when they ship. `ROADMAP.md` is the public summary.
 
 On Linux and on the Macs (the DMG), from the release builds.
 
-**Camera Tracker (0.14.20–0.14.21)**
-- [ ] Solve quality: after Track & Solve, the big error color (green /
-      amber / red) and its meaning line, worst frame and point count;
-      hover and click bars in the per-frame graph (the transport jumps);
-      points colored by error in the 2D viewer and the 3D view, with the
-      hover text; an old save without per-point errors draws blue points;
-      the floor how-to line
-- [ ] Delete points, **on real footage** (only synthetic tracks are
-      tested): set ground / origin / scale and Export (Linked); Select
-      worst, then ⌫: the error drops, the floor stays level, the Camera
-      doesn't jump, the exported Point Cloud and a Fit Plane on it follow;
-      ⌘Z restores it all at once; Re-solve after changing Max error keeps
-      the deleted points out, Track & Solve brings them back; save /
-      reopen keeps the deletions; ⌫ over the viewer never deletes the node
-
-**Viewer (0.14.22)**
-- [ ] "." pivot mode on a Transform: hint and crosshair; click / drag
-      moves only the crosshair, the picture stays put (try rotated and
-      scaled); animated Center / Translate: the hint names the frame, ⌘Z
-      undoes in one step; ⇧. returns to Auto; "." and Esc leave, Esc keeps
-      the node selected; typing "1.5" in a field doesn't toggle it. Roto /
-      Polygon: 2+ points, ".", click a corner, leave: the box's rotate stem
-      turns about it. ⇧. on a non-US keyboard layout
-
-**Roto (0.14.19)**
-- [ ] Shapes follow a Tracker: a Roto drawn on the reference frame rides
-      the track (turns and scales with 2+ tracks and Solve); a dragged
-      point is a correction on top; handles (feather handles too) sit on
-      the moved shape; motion blur follows; Follow reference frame and its
-      ↺; rename the Tracker (the link follows), delete it (the shape names
-      it); Rectangle / Ellipse / Polygon the same
-
 **Phase 14 (0.14.4–0.14.13)**
-- [ ] Viewer / Curve Editor / Properties in their own windows: play,
-      scrub, Tab, 3D orbit and G / R / S in the Viewer's window; full
-      screen (F11) on the second monitor, kept after a restart; GPU render
-      and lit preview show there; Curve Editor out: F, ⌫, key click seeks;
-      Properties out: edit, Look through, formula popups; dock each back
-- [ ] Help ▸ Examples ▸ Cameras: the 2 × 2 sheet plays; viewer_wide /
-      close / top; render_top's Camera menu; renaming cam_close follows
 - [ ] Cube UV layout atlas: each face its own cell; Bake Projection on a
       projected atlas cube renders like the live projection
 
@@ -83,8 +44,6 @@ On Linux and on the Macs (the DMG), from the release builds.
 - [ ] Area-light shadows at Quality 16: ~7 s a 4K frame with the GPU on
 
 **GPU and the Macs**
-- [ ] On the M4 Pro and the Intel Mac: `arclight gpu --check` (all rows)
-      and `cargo test --release` on Metal, before the next release
 - [ ] Transform / Corner Pin / Lens Distort / Keyer match with the GPU on
       and off; quitting never leaves a crash report behind
 - [ ] Scanline Render with shadows and motion blur: about a second at 4K

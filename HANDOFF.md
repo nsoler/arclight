@@ -14,10 +14,12 @@ Last updated 2026-11-02.
   `5d35db7`); `main` is fast-forwarded to it. Earlier phase branches are
   frozen (`wip-ns-geo`, `-gpu`, `-engine`, `-splats`, `-3dwork`, `-effects`).
 - **Nothing in flight.** Dev1 and Dev2 stood down at the user's word.
-- **Next: the user's hand testing** (TODO.md "To check by hand": Camera
-  Tracker first, deleting points on real footage, then Viewer, Roto and
-  the older lists). Then the user picks what's next (TODO.md "Known gaps
-  and follow-ups", phase 15, ROADMAP).
+- **Next: the rest of the user's hand testing** (TODO.md "To check by
+  hand"; Camera Tracker, "." pivot, Roto following a Tracker, detached
+  windows, the Cameras example and `gpu --check` on the Macs passed on
+  2026-11-02; left: the Cube UV atlas, the phase 13 list, the GPU / Mac
+  checks and the older ones). Then the user picks what's next (TODO.md
+  "Known gaps and follow-ups", phase 15, ROADMAP).
 - **Phase 15 (production readiness)** is proposed in
   `docs/production-plan.md` (OCIO, groups / gizmos, regions / disk cache
   / proxies, farm, EXR), awaiting the user's Q1–Q5. **The user said stay
