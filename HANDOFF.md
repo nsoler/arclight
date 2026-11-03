@@ -4,7 +4,9 @@ Last updated 2026-11-02.
 
 ## Status
 
-- **Version 0.14.22, released as v0.14.22** (2026-11-02: Linux tarball,
+- **Version 0.14.23** (2026-11-02: the 2D viewer toolbar's status no
+  longer overlaps its controls; the user checked it by hand). Not released.
+- **Latest release v0.14.22** (2026-11-02: Linux tarball,
   Windows zip, `arclt` wheel + sdist, macOS DMG; marked Latest). v0.14.21
   has no DMG on purpose (the user skipped it; its notes send Mac users to
   v0.14.22).

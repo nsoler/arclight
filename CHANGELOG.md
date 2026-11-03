@@ -18,6 +18,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.23 — 2026-11-02
+
+- Viewer: the 2D toolbar's status ("Viewing …", the data window, size,
+  frame) no longer draws over the channel / Exposure / Fit controls when
+  it grows longer (a 3D → 2D switch, "(click … to go back)", a new
+  render's data window). The fit test used last frame's width; when the
+  answer flips, the toolbar is now laid out again at once.
+
 ## 0.14.22 — 2026-11-02
 
 - Viewer: **"." sets a pivot.** With a Transform selected (or 2+ Roto /

@@ -691,6 +691,9 @@ impl Viewer {
 
     fn toolbar(&mut self, ui: &mut egui::Ui, d: &Display<'_>) {
         let mut fits = true;
+        let mut room = f32::INFINITY;
+        let gap = ui.spacing().item_spacing.x * 2.0;
+        let was = self.status_w;
         // Wrapped, as the 3D one.
         ui.horizontal_wrapped(|ui| {
             self.mode_switch(ui);
@@ -726,13 +729,22 @@ impl Viewer {
                 self.pan = Vec2::ZERO;
             }
             ui.label(format!("{:.0}%", self.zoom * 100.0));
-            fits = ui.available_width() >= self.status_w + ui.spacing().item_spacing.x * 2.0;
+            room = ui.available_width();
+            fits = room >= self.status_w + gap;
             if fits {
                 self.status(ui, d);
             }
         });
         if !fits {
             ui.horizontal(|ui| self.status(ui, d));
+        }
+        // The fit test used last frame's status width. When the status
+        // changed length (a new render's data window, "(click … to go
+        // back)", a 3D → 2D switch) so that the answer flips, this pass
+        // drew the status over the controls (or on a needless row): lay
+        // it out again at once rather than wait for the next input.
+        if self.status_w != was && fits != (room >= self.status_w + gap) {
+            ui.ctx().request_discard("viewer toolbar status width changed");
         }
     }
 
