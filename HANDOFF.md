@@ -44,6 +44,17 @@ Last updated 2026-11-02.
     help.md, README.md. Conditions: test instances under a transformed
     instancer in World, the tracker numbering vs scene.points, the note
     worded from ops.rs.
+  - **Found while pausing (2026-11-02):** no Dev edits in the tree. Dev1:
+    the viewer image's only reader outside viewer.rs is main.rs; the
+    worker will wait on the GPU after a lazy frame and pre-read the
+    picker's pixel; a baseline build is in `../.verify/dev1-base`. Dev2:
+    Scanline uses the background's format whenever input 2 is connected
+    (0 = project format otherwise); tracker picks index `sol.points` in
+    scene order; picking a cloud point doesn't select its node, so
+    Selected only = selected nodes plus nodes with picks; **MCP geo_info
+    stays byte-identical** (Supervisor's answer: Cloud only in the sheet's
+    own tab list, `Domain::ALL` / `counts()` / `from_key` unchanged, a
+    separate `View {world, picked}` instead of a new Filter field).
 - **Next: the rest of the user's hand testing** (TODO.md "To check by
   hand"; Camera Tracker, "." pivot, Roto following a Tracker, detached
   windows, the Cameras example and `gpu --check` on the Macs passed on
