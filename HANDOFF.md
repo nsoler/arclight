@@ -4,12 +4,11 @@ Last updated 2026-11-02.
 
 ## Status
 
-- **Version 0.14.24** (2026-11-02: the 2D viewer toolbar's status no
-  longer overlaps its controls on narrower views; 0.14.23 had only a
-  partial fix). Not released. The user to check it at 1728×1117.
-- **Latest release v0.14.22** (2026-11-02: Linux tarball,
-  Windows zip, `arclt` wheel + sdist, macOS DMG; marked Latest). v0.14.21
-  has no DMG on purpose (the user skipped it; its notes send Mac users to
+- **Version 0.14.24, released as v0.14.24** (2026-11-02: Linux tarball,
+  Windows zip, `arclt` wheel + sdist, macOS DMG; marked Latest): the 2D
+  viewer toolbar's status no longer overlaps its controls on narrower
+  views (0.14.23, unreleased, had only a partial fix). v0.14.21 has no
+  DMG on purpose (the user skipped it; its notes send Mac users to
   v0.14.22).
 - **Phase 14 (workspace and UI)** on branch `wip-ns-ui` (from 0.13.41,
   `5d35db7`); `main` is fast-forwarded to it. Earlier phase branches are
