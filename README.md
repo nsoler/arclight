@@ -450,6 +450,10 @@ applies everywhere and `mask_invert` does nothing.
 
 `examples/particledirectionalforce.json` (**Help ▸ Examples ▸ Particles**) has two streams off one card, each pushed its own way by its own force.
 
+![The Help ▸ Examples ▸ Particles: a swirling plasma beam project rendered: light-blue strands spiral round a white-hot core, throwing off sparks](examples/plasma-beam.gif)
+
+`examples/plasma-beam.json` (**Help ▸ Examples ▸ Particles: a swirling plasma beam**, first in the menu) fires a light-blue plasma beam: three strands spiral round a hot core (each strand's emitter circles the beam on keyed Translate), sparks swirl off it under a Vortex, and blurred copies of the render added back make the glow.
+
 `examples/projection-basic.json` (**Help ▸ Examples ▸ Projection: a plate on a card from the shot camera**) projects a plate made in the graph from the shot camera, held at frame 1, onto a wall and a block: frame 1 renders the plate, and as the camera moves the block's parallax shows.
 
 `examples/multi-projection.json` (**Help ▸ Examples ▸ Projection: two cameras blended on one set**) projects two checkerboards from two cameras onto a block and a wall, blended where they overlap (Project 3D's Blend with others and Fade).

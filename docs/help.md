@@ -797,6 +797,14 @@ the same card, teal and orange, each pushed its own way by its own
 Gravity used as a sideways force, with Wind (no wind, only drag) slowing
 them as they go. Press play.
 
+**Help ▸ Examples ▸ Particles: a swirling plasma beam**
+(`examples/plasma-beam.json`) fires a light-blue beam: three strands
+spiral round a white-hot core and throw off sparks. Each strand's Emitter
+circles the beam (its Translate is keyed round a ring), so the particles
+it fires straight ahead trace a turning spiral; a Vortex swirls the
+sparks, and blurred copies of the render added back make the glow
+(additive sprites, motion blur). Press play.
+
 - **Project 3D** projects an image from a camera onto your geometry, like
   a slide projector: connect the plate (or a painted patch) and a camera,
   and every mesh, card or instance it lands on shows it at full

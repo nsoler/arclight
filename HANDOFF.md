@@ -4,10 +4,11 @@ Last updated 2026-11-02.
 
 ## Status
 
-- **Version 0.14.24, released as v0.14.24** (2026-11-02: Linux tarball,
-  Windows zip, `arclt` wheel + sdist, macOS DMG; marked Latest): the 2D
-  viewer toolbar's status no longer overlaps its controls on narrower
-  views (0.14.23, unreleased, had only a partial fix). v0.14.21 has no
+- **Version 0.14.25, releasing as v0.14.25** (2026-11-02): Help ▸
+  Examples ▸ Particles: a swirling plasma beam (`examples/plasma-beam.json`,
+  first in the menu, GIF in the README). v0.14.24 fixed the 2D viewer
+  toolbar's status overlapping its controls on narrower views (0.14.23,
+  unreleased, had only a partial fix). v0.14.21 has no
   DMG on purpose (the user skipped it; its notes send Mac users to
   v0.14.22).
 - **Phase 14 (workspace and UI)** on branch `wip-ns-ui` (from 0.13.41,

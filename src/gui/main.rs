@@ -2223,6 +2223,7 @@ fn builtin_templates() -> Vec<arclight::templates::Template> {
 /// Help ▸ Examples: the example projects shipped with the app (menu
 /// label, file under examples/). Packaging copies the same files.
 const EXAMPLES: &[(&str, &str)] = &[
+    ("Particles: a swirling plasma beam", "plasma-beam.json"),
     ("Geometry nodes: rocks and bushes scattered", "geo-scatter.json"),
     ("Particles: two streams pushed apart", "particledirectionalforce.json"),
     ("Projection: a plate on a card from the shot camera", "projection-basic.json"),

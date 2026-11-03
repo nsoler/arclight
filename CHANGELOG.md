@@ -18,6 +18,18 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.25 — 2026-11-02
+
+- **Help ▸ Examples ▸ Particles: a swirling plasma beam**
+  (`examples/plasma-beam.json`): a light-blue beam whose three strands
+  spiral round a white-hot core, throwing off sparks. Each strand's
+  Emitter circles the beam on a keyed Translate, so the particles it
+  fires straight ahead trace a turning spiral; a Vortex swirls the sparks;
+  additive sprites with motion blur, and a two-blur glow added back over
+  a dark background. First in the Examples menu, with a GIF of it in the
+  README (`examples/plasma-beam.gif`); shipped in the Linux tarball, DMG
+  and Windows zip.
+
 ## 0.14.24 — 2026-11-02
 
 - Viewer: the real fix for the 2D toolbar's status overlapping its
