@@ -4,7 +4,8 @@ Last updated 2026-11-02.
 
 ## Status
 
-- **Version 0.14.25, releasing as v0.14.25** (2026-11-02): Help ▸
+- **Version 0.14.25, released as v0.14.25** (2026-11-02: Linux tarball,
+  Windows zip, `arclt` wheel + sdist, macOS DMG; marked Latest): Help ▸
   Examples ▸ Particles: a swirling plasma beam (`examples/plasma-beam.json`,
   first in the menu, GIF in the README). v0.14.24 fixed the 2D viewer
   toolbar's status overlapping its controls on narrower views (0.14.23,
