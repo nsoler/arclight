@@ -18,6 +18,13 @@ On Linux and on the Macs (the DMG), from the release builds.
       hidden; View ▸ Node thumbnails off stays off after a restart; play
       a video while its thumbnail first loads: at most one hitch
 
+**Phase 14 (0.14.28)**
+- [ ] Geo Info: World on a moved / scaled mesh changes P and N
+      (instances don't); a Camera Tracker's Cloud tab numbers match the
+      tracker's; pick cloud points in 3D + Selected only: just those
+      rows; a Scanline Render with a background shows the size note in
+      Properties
+
 **Phase 14 (0.14.4–0.14.13)**
 - [X] Cube UV layout atlas: each face its own cell; Bake Projection on a
       projected atlas cube renders like the live projection
@@ -66,10 +73,9 @@ On Linux and on the Macs (the DMG), from the release builds.
 
 ## Known gaps and follow-ups
 
-- [ ] Scanline Render's Width / Height are ignored when a background is
-      connected (the plate's size wins): say so in help, or let them win
-- [ ] Geo Info: per-point selection in the sheet's filter; world-space
-      values
+- [ ] Geo Info: picking individual point-set / mesh points in the 3D
+      view (to narrow Points / Mesh points like Cloud picks) isn't
+      supported; only Camera Tracker cloud points are pickable
 - [ ] Project 3D targets are node names fixed at the node: fine today
       (nothing renames or merges meshes under a new node); if such an op
       is added, carry projections on Card / Model as Instances do

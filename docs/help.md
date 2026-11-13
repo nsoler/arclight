@@ -134,6 +134,9 @@ one with its **Camera** param: the menu beside it lists the Camera nodes
 wired into the render (one on the camera input is looked for first).
 Renaming that Camera keeps the render on it; a name that matches no
 camera is an error saying which cameras there are.
+Its size: with a background wired in, the background's (Properties says
+so; Width and Height are then unused), else Width × Height (0: the
+project's).
 **Help ▸ Examples ▸ Cameras: one set, three views**
 (`examples/cameras-three-views.json`): one Scene holds a small lit set
 and three cameras (a wide one that moves, a close-up, an orthographic
@@ -553,8 +556,12 @@ selected object.
   green lines; instances as a box round each node's copies. Click one to
   select the node that made it. **Geo Info:** the viewer's **Sheet**
   toggle shows the viewed scene's geometry as a table under the view
-  (points, faces, instances, curves and their attributes); MCP / Python:
-  **geometry** (`node.geometry(frame, domain)`). **Transform Geo** moves, turns and scales
+  (points, faces, instances, curves and their attributes, and a **Cloud**
+  tab for Camera Trackers' points, numbered as the tracker numbers them).
+  **World** shows P and N in world space (attributes stay as stored);
+  under **Selected only**, cloud points picked in the 3D view narrow the
+  Cloud tab. MCP / Python:
+  **geometry** (`node.geometry(frame, domain)`; no Cloud, values in each object's own space). **Transform Geo** moves, turns and scales
   what's in a scene about a pivot, everything or one node's (Group: a name
   or a pattern like rock*); cameras and lights stay put unless you tick
   Cameras and lights. **Scatter** puts points over the meshes and cards

@@ -18,6 +18,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.28 — 2026-11-13
+
+- **Geo Info: a World toggle** shows P and N in world space (normals
+  through the inverse transpose; instances and tracker points are already
+  in world space), and a **Cloud tab** lists Camera Trackers' points,
+  numbered as the tracker numbers them; cloud points picked in the 3D
+  view narrow it under Selected only. MCP `geo_info` output is unchanged.
+- **Scanline Render:** with a background connected, Properties notes
+  that the background's size is used instead of Width × Height.
+
 ## 0.14.27 — 2026-11-13
 
 - **Node graph thumbnails:** Read and Media In nodes show their clip's

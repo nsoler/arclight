@@ -20,6 +20,14 @@ Last updated 2026-11-13.
   shared per-path decoder, so a first thumbnail of a playing video
   restarts its stream once (accepted; media.rs untouched).
 
+- **0.14.28 (2026-11-13, unreleased): Geo Info World + Cloud, Scanline
+  note.** `geo_table::View {world, picked}` and `Domain::Cloud` are the
+  sheet's only (`Domain::SHEET` / `sheet_counts` / `Table::with_view`);
+  MCP geometry still uses `Domain::ALL` / `counts` / `Table::new`,
+  byte-identical (tested). World transforms per visible cell (point:
+  world; normal: inverse transpose). Cloud picks come from
+  `viewport3d.points` (scene.points indices), validated against the
+  sheet's scene.
 - **Version 0.14.25, released as v0.14.25** (2026-11-02: Linux tarball,
   Windows zip, `arclt` wheel + sdist, macOS DMG; marked Latest): Help ▸
   Examples ▸ Particles: a swirling plasma beam (`examples/plasma-beam.json`,

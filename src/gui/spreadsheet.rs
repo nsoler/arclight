@@ -1,14 +1,16 @@
 //! Geo Info: the viewed node's 3D scene as a table (Blender's spreadsheet),
 //! in a strip under the viewer (its Sheet toggle). One domain at a time
 //! (tabs, with their counts): point sets' points, mesh points, faces,
-//! instances, curves' points; a row per element, a column per value (see
-//! `arclight::geo_table`). An object picker narrows it to one node's, and
-//! Selected only to the nodes selected in the graph or the 3D view. Only
-//! the rows on screen are built, so a million scroll as smoothly as ten.
+//! instances, curves' points, and the Cloud (Camera Trackers' points); a
+//! row per element, a column per value (see `arclight::geo_table`). An
+//! object picker narrows it to one node's, and Selected only to the nodes
+//! selected in the graph or the 3D view and the cloud points picked there.
+//! World shows P and N in world space. Only the rows on screen are built,
+//! so a million scroll as smoothly as ten.
 
 use crate::doc::Doc;
 use crate::worker::{SceneRequest, SceneWorker};
-use arclight::geo_table::{Cell, Domain, FieldKind, Filter, Table};
+use arclight::geo_table::{Cell, Domain, FieldKind, Filter, Table, View};
 use arclight::scene::Scene;
 use eframe::egui::{self, Align2, Color32, FontId, Rect, Sense, Vec2};
 use std::sync::Arc;
@@ -32,8 +34,10 @@ pub struct Spreadsheet {
     pub domain: Option<Domain>,
     /// One object's rows only (its node), else all.
     pub object: Option<String>,
-    /// Only the selected nodes' rows.
+    /// Only the selected nodes' rows (and the picked cloud points).
     pub selected_only: bool,
+    /// P and N in world space rather than each object's own.
+    pub world: bool,
     /// Cells built last frame (only the visible rows' are).
     cells_drawn: usize,
 }
@@ -58,6 +62,12 @@ fn grouped(n: usize) -> String {
         out.push(c);
     }
     out
+}
+
+/// The picks that are `scene`'s cloud points (the 3D view may show
+/// another node's scene): the rest are dropped.
+fn valid_picks(scene: &Scene, picks: &[(String, usize)]) -> Vec<(String, usize)> {
+    picks.iter().filter(|(n, i)| *i < scene.points.len() && scene.point_node(*i) == n).cloned().collect()
 }
 
 fn text(cell: Cell) -> String {
@@ -109,15 +119,37 @@ impl Spreadsheet {
         }
     }
 
-    /// The rows' filter: the picked object, the selection.
-    fn filter(&self, doc: &Doc) -> Filter {
-        Filter { object: self.object.clone(), nodes: self.selected_only.then(|| doc.selection()) }
+    /// The rows' filter: the picked object, the selection (with the nodes
+    /// of the cloud points picked in the 3D view: picking a point doesn't
+    /// select its node).
+    fn filter(&self, doc: &Doc, picks: &[(String, usize)]) -> Filter {
+        let nodes = self.selected_only.then(|| {
+            let mut nodes = doc.selection();
+            for (n, _) in picks {
+                if !nodes.contains(n) {
+                    nodes.push(n.clone());
+                }
+            }
+            nodes
+        });
+        Filter { object: self.object.clone(), nodes }
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, doc: &Doc, frame: i64) {
+    /// How the rows show: World, and under Selected only the picked cloud
+    /// points.
+    fn view(&self, picks: &[(String, usize)]) -> View {
+        View { world: self.world, picked: self.selected_only.then(|| picks.iter().map(|(_, i)| *i).collect()) }
+    }
+
+    /// `picks` (the 3D view's picked cloud points: node, index in the
+    /// scene's points) narrow the Cloud under Selected only.
+    pub fn ui(&mut self, ui: &mut egui::Ui, doc: &Doc, frame: i64, picks: &[(String, usize)]) {
         self.sync(ui.ctx(), doc, frame);
         match self.scene.clone() {
-            Some(scene) => self.draw(ui, doc, &scene),
+            Some(scene) => {
+                let picks = valid_picks(&scene, picks);
+                self.draw(ui, doc, &scene, &picks)
+            }
             None => {
                 let why = match (&self.error, &self.node) {
                     (Some(e), _) => e.clone(),
@@ -129,10 +161,11 @@ impl Spreadsheet {
         }
     }
 
-    /// The header (tabs, object, Selected only) and the table of `scene`.
-    fn draw(&mut self, ui: &mut egui::Ui, doc: &Doc, scene: &Scene) {
-        let filter = self.filter(doc);
-        let counts = arclight::geo_table::counts(scene, &Filter { object: None, ..filter.clone() });
+    /// The header (tabs, object, Selected only, World) and the table of
+    /// `scene`.
+    fn draw(&mut self, ui: &mut egui::Ui, doc: &Doc, scene: &Scene, picks: &[(String, usize)]) {
+        let (filter, view) = (self.filter(doc, picks), self.view(picks));
+        let counts = arclight::geo_table::sheet_counts(scene, &Filter { object: None, ..filter.clone() }, &view);
         // The chosen tab, else the first with rows.
         let domain = self.domain.unwrap_or_else(|| counts.iter().find(|(_, n)| *n > 0).map_or(Domain::Points, |(d, _)| *d));
         ui.horizontal_wrapped(|ui| {
@@ -144,7 +177,7 @@ impl Spreadsheet {
                 }
             }
             ui.separator();
-            let all = Table::new(scene, domain, &Filter { object: None, ..filter.clone() });
+            let all = Table::with_view(scene, domain, &Filter { object: None, ..filter.clone() }, &view);
             let objects = all.objects();
             // A picked object that's gone: all of them again.
             if self.object.as_ref().is_some_and(|o| !objects.iter().any(|(n, ..)| n == o)) {
@@ -157,9 +190,10 @@ impl Spreadsheet {
                     ui.selectable_value(&mut self.object, Some(node.to_string()), format!("{node} ({kind}) {}", grouped(*n)));
                 }
             });
-            ui.checkbox(&mut self.selected_only, "Selected only").on_hover_text("Only the rows of the nodes selected in the node graph or the 3D view");
+            ui.checkbox(&mut self.selected_only, "Selected only").on_hover_text("Only the rows of the nodes selected in the node graph or the 3D view (in Cloud, the points picked there)");
+            ui.checkbox(&mut self.world, "World").on_hover_text("P and N in world space (each object placed), rather than its own");
         });
-        let table = Table::new(scene, domain, &self.filter(doc));
+        let table = Table::with_view(scene, domain, &self.filter(doc, picks), &self.view(picks));
         self.table(ui, &table);
     }
 
@@ -265,7 +299,7 @@ mod tests {
         let ctx = egui::Context::default();
         for _ in 0..2 {
             let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(600.0, 400.0))), ..Default::default() };
-            ctx.run_ui(raw, |ui| sheet.draw(ui, doc, scene)).drop_without_applying_deltas();
+            ctx.run_ui(raw, |ui| sheet.draw(ui, doc, scene, &[])).drop_without_applying_deltas();
         }
     }
 
@@ -296,13 +330,38 @@ mod tests {
         draw(&mut sheet, &doc, &scene);
         assert_eq!(sheet.cells_drawn, 0, "nothing selected");
         doc.select_only(&a);
-        assert_eq!(Table::new(&scene, Domain::Points, &sheet.filter(&doc)).len(), 3);
+        assert_eq!(Table::new(&scene, Domain::Points, &sheet.filter(&doc, &[])).len(), 3);
         draw(&mut sheet, &doc, &scene);
         assert_eq!(sheet.cells_drawn, 3 * 4, "a's 3 rows: index and P (one object: no object column)");
         sheet.selected_only = false;
         sheet.object = Some("gone".into());
         draw(&mut sheet, &doc, &scene);
         assert_eq!(sheet.object, None);
+    }
+
+    /// Under Selected only, the 3D view's picked cloud points (their nodes
+    /// unselected) narrow the Cloud; picks from another scene are dropped;
+    /// World is passed on.
+    #[test]
+    fn picked_cloud_points_narrow_the_cloud_under_selected_only() {
+        let doc = Doc::new(Graph::default(), None);
+        let v = |x: f64| Vec3::new(x, 0.0, 0.0);
+        let scene = Scene { points: vec![v(0.0), v(1.0), v(2.0)], point_nodes: vec!["track".into(); 3], ..Scene::default() };
+        let picks = vec![("track".to_string(), 1), ("other".to_string(), 0), ("track".to_string(), 9)];
+        let picks = valid_picks(&scene, &picks);
+        assert_eq!(picks, [("track".to_string(), 1)], "only this scene's");
+        let mut sheet = Spreadsheet { domain: Some(Domain::Cloud), ..Spreadsheet::default() };
+        let rows = |sheet: &Spreadsheet| Table::with_view(&scene, Domain::Cloud, &sheet.filter(&doc, &picks), &sheet.view(&picks)).len();
+        assert_eq!(rows(&sheet), 3, "all, without Selected only");
+        sheet.selected_only = true;
+        assert_eq!(rows(&sheet), 1, "the picked one, its node not selected");
+        assert_eq!(Table::with_view(&scene, Domain::Cloud, &sheet.filter(&doc, &[]), &sheet.view(&[])).len(), 0, "nothing selected or picked");
+        sheet.world = true;
+        assert!(sheet.view(&picks).world);
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(600.0, 400.0))), ..Default::default() };
+        ctx.run_ui(raw, |ui| sheet.draw(ui, &doc, &scene, &picks)).drop_without_applying_deltas();
+        assert_eq!(sheet.cells_drawn, 4, "one row: index and P");
     }
 
     #[test]

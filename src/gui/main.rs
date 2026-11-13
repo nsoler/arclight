@@ -1616,7 +1616,7 @@ impl App {
         if self.viewer.sheet {
             egui::Panel::bottom("geo_sheet").resizable(true).default_size(240.0).min_size(80.0).show(ui, |ui| {
                 ui.add_space(4.0);
-                self.sheet.ui(ui, &self.doc, self.transport.frame);
+                self.sheet.ui(ui, &self.doc, self.transport.frame, &self.viewer.viewport3d.points);
             });
         }
         egui::CentralPanel::no_frame().show(ui, |ui| {

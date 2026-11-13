@@ -6,12 +6,15 @@
 //! tool (and Python's `geometry`) pages its columns, so they agree.
 //!
 //! Values are in each object's own space, as stored (its `world` places
-//! it); an instance's P, rotation and scale are its world matrix's.
+//! it); an instance's P, rotation and scale are its world matrix's. The
+//! sheet can also show P and N in world space ([`View::world`]) and a
+//! Cloud tab (Camera Trackers' points, [`Domain::Cloud`]); the MCP tool
+//! uses neither.
 
 use crate::geo::{Attr, Attrs};
 use crate::geom::{Mat4, Vec3};
 use crate::mesh::Mesh;
-use crate::scene::Scene;
+use crate::scene::{Model, Scene};
 use serde_json::{json, Value};
 
 /// What a row is.
@@ -26,10 +29,16 @@ pub enum Domain {
     Instances,
     /// The points of curves.
     CurvePoints,
+    /// The scene's point cloud (Camera Trackers' solved points), by node.
+    /// The sheet's only: not in [`Domain::ALL`], so the MCP tool's
+    /// domains stay as they were.
+    Cloud,
 }
 
 impl Domain {
     pub const ALL: [Domain; 5] = [Domain::Points, Domain::MeshPoints, Domain::Faces, Domain::Instances, Domain::CurvePoints];
+    /// The sheet's tabs: [`Domain::ALL`], then the Cloud.
+    pub const SHEET: [Domain; 6] = [Domain::Points, Domain::MeshPoints, Domain::Faces, Domain::Instances, Domain::CurvePoints, Domain::Cloud];
 
     /// Its name in the MCP tool and Python.
     pub fn key(self) -> &'static str {
@@ -39,6 +48,7 @@ impl Domain {
             Domain::Faces => "faces",
             Domain::Instances => "instances",
             Domain::CurvePoints => "curve_points",
+            Domain::Cloud => "cloud",
         }
     }
 
@@ -50,6 +60,7 @@ impl Domain {
             Domain::Faces => "Faces",
             Domain::Instances => "Instances",
             Domain::CurvePoints => "Curve points",
+            Domain::Cloud => "Cloud",
         }
     }
 
@@ -70,6 +81,19 @@ impl Filter {
     fn keeps(&self, node: &str) -> bool {
         self.object.as_deref().is_none_or(|o| o == node) && self.nodes.as_ref().is_none_or(|n| n.iter().any(|s| s == node))
     }
+}
+
+/// How the sheet shows the rows (the MCP tool uses the default).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct View {
+    /// P and N in world space: each object's `world` applied (a point
+    /// set's, a mesh's, a curve set's). Instances and the Cloud are in
+    /// world space already; attributes stay as stored.
+    pub world: bool,
+    /// Points of the scene's point cloud picked in the 3D view (indices
+    /// into `Scene::points`): a node with any picked shows only those in
+    /// the Cloud tab.
+    pub picked: Option<Vec<usize>>,
 }
 
 /// One value of a row.
@@ -135,22 +159,26 @@ enum Source {
 }
 
 /// One object's elements in a domain.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Part<'a> {
     Points(&'a crate::geo::PointSet),
-    MeshPoints(&'a Mesh, &'a str),
-    Faces(&'a Mesh, &'a str),
+    MeshPoints(&'a Model),
+    Faces(&'a Model),
     Instances(&'a crate::geo::Instances),
     Curves(&'a crate::geo::Curves),
+    /// A node's points of the scene's cloud: (index in `Scene::points`,
+    /// its number among the node's points) for each row.
+    Cloud(&'a [Vec3], &'a str, Vec<(usize, usize)>),
 }
 
 impl<'a> Part<'a> {
     fn node(&self) -> &'a str {
         match *self {
             Part::Points(p) => &p.node,
-            Part::MeshPoints(_, n) | Part::Faces(_, n) => n,
+            Part::MeshPoints(m) | Part::Faces(m) => &m.node,
             Part::Instances(i) => &i.node,
             Part::Curves(c) => &c.node,
+            Part::Cloud(_, n, _) => n,
         }
     }
 
@@ -160,45 +188,93 @@ impl<'a> Part<'a> {
             Part::MeshPoints(..) | Part::Faces(..) => "mesh",
             Part::Instances(_) => "instances",
             Part::Curves(_) => "curves",
+            Part::Cloud(..) => "point cloud",
         }
     }
 
     fn len(&self) -> usize {
-        match *self {
+        match self {
             Part::Points(p) => p.positions.len(),
-            Part::MeshPoints(m, _) => m.positions.len(),
-            Part::Faces(m, _) => m.triangles.len(),
+            Part::MeshPoints(m) => m.mesh.positions.len(),
+            Part::Faces(m) => m.mesh.triangles.len(),
             Part::Instances(i) => i.worlds.len(),
             Part::Curves(c) => c.positions.len(),
+            Part::Cloud(_, _, rows) => rows.len(),
         }
     }
 
-    fn attrs(&self) -> &'a Attrs {
+    fn attrs(&self) -> Option<&'a Attrs> {
         match *self {
-            Part::Points(p) => &p.attrs,
-            Part::MeshPoints(m, _) => &m.point_attrs,
-            Part::Faces(m, _) => &m.face_attrs,
-            Part::Instances(i) => &i.attrs,
-            Part::Curves(c) => &c.attrs,
+            Part::Points(p) => Some(&p.attrs),
+            Part::MeshPoints(m) => Some(&m.mesh.point_attrs),
+            Part::Faces(m) => Some(&m.mesh.face_attrs),
+            Part::Instances(i) => Some(&i.attrs),
+            Part::Curves(c) => Some(&c.attrs),
+            Part::Cloud(..) => None,
+        }
+    }
+
+    /// The matrix placing it in the scene, for [`View::world`] (None:
+    /// already in world space).
+    fn world(&self) -> Option<&'a Mat4> {
+        match *self {
+            Part::Points(p) => Some(&p.world),
+            Part::MeshPoints(m) | Part::Faces(m) => Some(&m.world),
+            Part::Curves(c) => Some(&c.world),
+            Part::Instances(_) | Part::Cloud(..) => None,
         }
     }
 }
 
+/// The scene's point cloud by node, in order of each node's first point:
+/// each point's index and its number among the node's points (a Camera
+/// Tracker's own numbering). With `picked`, a node that has any picked
+/// keeps only those.
+fn cloud<'a>(scene: &'a Scene, picked: Option<&[usize]>) -> Vec<Part<'a>> {
+    let mut nodes: Vec<(&'a str, Vec<(usize, usize)>)> = Vec::new();
+    for i in 0..scene.points.len() {
+        let node = scene.point_node(i);
+        let k = match nodes.iter().position(|(n, _)| *n == node) {
+            Some(k) => k,
+            None => {
+                nodes.push((node, Vec::new()));
+                nodes.len() - 1
+            }
+        };
+        let number = nodes[k].1.len();
+        nodes[k].1.push((i, number));
+    }
+    if let Some(picked) = picked {
+        for (_, rows) in &mut nodes {
+            if rows.iter().any(|(i, _)| picked.contains(i)) {
+                rows.retain(|(i, _)| picked.contains(i));
+            }
+        }
+    }
+    nodes.into_iter().map(|(n, rows)| Part::Cloud(&scene.points, n, rows)).collect()
+}
+
 /// The objects of `scene` with elements in `domain`, kept by `filter`.
-fn parts<'a>(scene: &'a Scene, domain: Domain, filter: &Filter) -> Vec<Part<'a>> {
+fn parts<'a>(scene: &'a Scene, domain: Domain, filter: &Filter, view: &View) -> Vec<Part<'a>> {
     let all: Vec<Part<'a>> = match domain {
         Domain::Points => scene.point_sets.iter().map(Part::Points).collect(),
-        Domain::MeshPoints => scene.meshes.iter().map(|m| Part::MeshPoints(&m.mesh, &m.node)).collect(),
-        Domain::Faces => scene.meshes.iter().map(|m| Part::Faces(&m.mesh, &m.node)).collect(),
+        Domain::MeshPoints => scene.meshes.iter().map(Part::MeshPoints).collect(),
+        Domain::Faces => scene.meshes.iter().map(Part::Faces).collect(),
         Domain::Instances => scene.instances.iter().map(Part::Instances).collect(),
         Domain::CurvePoints => scene.curves.iter().map(Part::Curves).collect(),
+        Domain::Cloud => cloud(scene, view.picked.as_deref()),
     };
     all.into_iter().filter(|p| p.len() > 0 && filter.keeps(p.node())).collect()
 }
 
 /// How many rows each domain has in `scene`, kept by `filter`.
 pub fn counts(scene: &Scene, filter: &Filter) -> Vec<(Domain, usize)> {
-    Domain::ALL.into_iter().map(|d| (d, parts(scene, d, filter).iter().map(Part::len).sum())).collect()
+    Domain::ALL.into_iter().map(|d| (d, parts(scene, d, filter, &View::default()).iter().map(Part::len).sum())).collect()
+}
+
+/// The sheet's tabs' counts ([`Domain::SHEET`]), as `view` shows them.
+pub fn sheet_counts(scene: &Scene, filter: &Filter, view: &View) -> Vec<(Domain, usize)> {
+    Domain::SHEET.into_iter().map(|d| (d, parts(scene, d, filter, view).iter().map(Part::len).sum())).collect()
 }
 
 /// The objects with rows in a domain: (node, kind, rows).
@@ -211,6 +287,8 @@ pub struct Table<'a> {
     /// Each part's first row, and the total after the last.
     starts: Vec<usize>,
     fields: Vec<Field>,
+    /// P and N in world space ([`View::world`]).
+    world: bool,
 }
 
 /// An attribute's components and whether it's a color.
@@ -237,7 +315,12 @@ fn field(name: &str, kind: FieldKind, comps: &[&'static str], source: Source) ->
 
 impl<'a> Table<'a> {
     pub fn new(scene: &'a Scene, domain: Domain, filter: &Filter) -> Table<'a> {
-        let parts = parts(scene, domain, filter);
+        Table::with_view(scene, domain, filter, &View::default())
+    }
+
+    /// The table as the sheet's `view` shows it: world space, picks.
+    pub fn with_view(scene: &'a Scene, domain: Domain, filter: &Filter, view: &View) -> Table<'a> {
+        let parts = parts(scene, domain, filter, view);
         let mut starts = vec![0];
         for p in &parts {
             starts.push(starts.last().unwrap() + p.len());
@@ -256,10 +339,10 @@ impl<'a> Table<'a> {
         fields.push(field("P", FieldKind::Float, &xyz, Source::Position));
         match domain {
             Domain::MeshPoints => {
-                if any(|p| matches!(p, Part::MeshPoints(m, _) if !m.normals.is_empty())) {
+                if any(|p| matches!(p, Part::MeshPoints(m) if !m.mesh.normals.is_empty())) {
                     fields.push(field("N", FieldKind::Float, &xyz, Source::Normal));
                 }
-                if any(|p| matches!(p, Part::MeshPoints(m, _) if !m.uvs.is_empty())) {
+                if any(|p| matches!(p, Part::MeshPoints(m) if !m.mesh.uvs.is_empty())) {
                     fields.push(field("uv", FieldKind::Float, &["u", "v"], Source::Uv));
                 }
             }
@@ -274,7 +357,7 @@ impl<'a> Table<'a> {
         // object to have it decides its kind).
         let mut names: Vec<(&str, &Attr)> = Vec::new();
         for p in &parts {
-            for (name, attr) in p.attrs().iter() {
+            for (name, attr) in p.attrs().into_iter().flat_map(Attrs::iter) {
                 if !names.iter().any(|(n, _)| *n == name) {
                     names.push((name, attr));
                 }
@@ -285,7 +368,7 @@ impl<'a> Table<'a> {
             let (kind, comps, color) = attr_comps(name, attr);
             fields.push(Field { name: name.to_string(), kind, comps, color, source: Source::Attr });
         }
-        Table { domain, parts, starts, fields }
+        Table { domain, parts, starts, fields, world: view.world }
     }
 
     /// Rows in all.
@@ -318,10 +401,26 @@ impl<'a> Table<'a> {
     /// Component `comp` of field `field` in row `row`.
     pub fn cell(&self, row: usize, field: usize, comp: usize) -> Cell<'a> {
         let (Some((k, i)), Some(f)) = (self.locate(row), self.fields.get(field)) else { return Cell::Empty };
-        let part = self.parts[k];
+        let part = &self.parts[k];
         let v3 = |v: Vec3| v.get(comp).map_or(Cell::Empty, |x| Cell::Float(*x));
+        // In world space (the sheet's World): points placed, normals
+        // turned (by the inverse transpose, kept unit length).
+        let world = part.world().filter(|_| self.world);
+        let point = |p: Vec3| v3(world.map_or(p, |m| crate::geom::transform_point(m, &p)));
+        let normal = |n: Vec3| {
+            v3(match world.and_then(|m| m.fixed_view::<3, 3>(0, 0).try_inverse()) {
+                Some(inv) => {
+                    let w = inv.transpose() * n;
+                    if w.norm() > 0.0 { w.normalize() } else { w }
+                }
+                None => n,
+            })
+        };
         match f.source {
-            Source::Index => Cell::Int(i as i64),
+            Source::Index => match part {
+                Part::Cloud(_, _, rows) => Cell::Int(rows[i].1 as i64),
+                _ => Cell::Int(i as i64),
+            },
             Source::Object => Cell::Text(part.node()),
             Source::Curve => match part {
                 Part::Curves(c) => Cell::Int((c.starts.partition_point(|&s| s as usize <= i) as i64) - 1),
@@ -332,19 +431,20 @@ impl<'a> Table<'a> {
                 _ => Cell::Empty,
             },
             Source::Position => match part {
-                Part::Points(p) => v3(p.positions[i]),
-                Part::MeshPoints(m, _) => v3(m.positions[i]),
-                Part::Faces(m, _) => v3(face(m, i).0),
+                Part::Points(p) => point(p.positions[i]),
+                Part::MeshPoints(m) => point(m.mesh.positions[i]),
+                Part::Faces(m) => point(face(&m.mesh, i).0),
                 Part::Instances(n) => v3(decompose(&n.worlds[i]).0),
-                Part::Curves(c) => v3(c.positions[i]),
+                Part::Curves(c) => point(c.positions[i]),
+                Part::Cloud(pts, _, rows) => v3(pts[rows[i].0]),
             },
             Source::Normal => match part {
-                Part::MeshPoints(m, _) => m.normals.get(i).map_or(Cell::Empty, |n| v3(*n)),
-                Part::Faces(m, _) => v3(face(m, i).1),
+                Part::MeshPoints(m) => m.mesh.normals.get(i).map_or(Cell::Empty, |n| normal(*n)),
+                Part::Faces(m) => normal(face(&m.mesh, i).1),
                 _ => Cell::Empty,
             },
             Source::Uv => match part {
-                Part::MeshPoints(m, _) => m.uvs.get(i).and_then(|uv| uv.get(comp)).map_or(Cell::Empty, |x| Cell::Float(*x)),
+                Part::MeshPoints(m) => m.mesh.uvs.get(i).and_then(|uv| uv.get(comp)).map_or(Cell::Empty, |x| Cell::Float(*x)),
                 _ => Cell::Empty,
             },
             Source::Rotation => match part {
@@ -355,7 +455,7 @@ impl<'a> Table<'a> {
                 Part::Instances(n) => v3(decompose(&n.worlds[i]).2),
                 _ => Cell::Empty,
             },
-            Source::Attr => attr_cell(part.attrs().get(&f.name), i, comp),
+            Source::Attr => attr_cell(part.attrs().and_then(|a| a.get(&f.name)), i, comp),
         }
     }
 
@@ -437,7 +537,6 @@ mod tests {
     use super::*;
     use crate::geo::{Curves, Instances, PointSet};
     use crate::geom::trs;
-    use crate::scene::Model;
     use std::sync::Arc;
 
     fn attrs(list: Vec<(&str, Attr)>) -> Attrs {
@@ -561,6 +660,80 @@ mod tests {
         let last = t.page(4, 1000);
         assert_eq!((last["count"].as_u64(), last["next_offset"].clone()), (Some(2), Value::Null));
         assert_eq!(t.page(99, 10)["count"], 0);
+    }
+
+    /// World shows P and N placed by each object's `world`; instances made
+    /// on points that were moved are in world space already, so the same.
+    #[test]
+    fn world_places_points_and_turns_normals() {
+        let mut s = scene();
+        let moved = trs([10.0, 0.0, 0.0], [0.0, 0.0, 90.0], [2.0, 1.0, 1.0]);
+        s.meshes[0].world = moved;
+        s.point_sets[0].world = trs([0.0, 5.0, 0.0], [0.0; 3], [1.0; 3]);
+        s.curves[0].world = trs([0.0, 0.0, -1.0], [0.0; 3], [3.0; 3]);
+        let world = View { world: true, picked: None };
+        let near = |c: Cell, v: f64| matches!(c, Cell::Float(x) if (x - v).abs() < 1e-9);
+        let rock = Filter { object: Some("rockA".into()), nodes: None };
+        let (local, placed) = (Table::new(&s, Domain::MeshPoints, &rock), Table::with_view(&s, Domain::MeshPoints, &rock, &world));
+        // (1, 0, 0): stretched ×2 along x, turned 90° about z, moved +10 x.
+        assert!(near(f(&local, 1, "P", 0), 1.0) && near(f(&placed, 1, "P", 0), 10.0) && near(f(&placed, 1, "P", 1), 2.0));
+        assert!(near(f(&placed, 0, "N", 2), 1.0), "+Z stays +Z");
+        let faces = Table::with_view(&s, Domain::Faces, &rock, &world);
+        assert!(near(f(&faces, 0, "P", 0), 10.0 - 1.0 / 3.0) && near(f(&faces, 0, "N", 2), 1.0));
+        // A normal under a non-uniform stretch: the inverse transpose, unit.
+        let mut tilted = scene();
+        tilted.meshes[0].world = trs([0.0; 3], [0.0; 3], [2.0, 1.0, 1.0]);
+        Arc::make_mut(&mut tilted.meshes[0].mesh).normals = vec![Vec3::new(1.0, 1.0, 0.0).normalize(); 3];
+        let t = Table::with_view(&tilted, Domain::MeshPoints, &rock, &world);
+        let n = Vec3::new(0.5, 1.0, 0.0).normalize();
+        assert!(near(f(&t, 0, "N", 0), n.x) && near(f(&t, 0, "N", 1), n.y));
+        let points = Table::with_view(&s, Domain::Points, &Filter::default(), &world);
+        assert!(near(f(&points, 0, "P", 1), 7.0) && near(f(&points, 0, "Cd", 0), 1.0), "attributes as stored");
+        let curves = Table::with_view(&s, Domain::CurvePoints, &Filter::default(), &world);
+        assert!(near(f(&curves, 2, "P", 1), 3.0) && near(f(&curves, 2, "P", 2), -1.0));
+        // Instances on points placed by a moved instancer: already world.
+        let mut pts = PointSet { positions: vec![Vec3::new(1.0, 0.0, 0.0)], node: "pts".into(), ..PointSet::default() };
+        pts.world = trs([0.0, 0.0, 4.0], [0.0, 90.0, 0.0], [1.0; 3]);
+        let protos = Scene { meshes: vec![Model { node: "cube".into(), ..Model::new(Arc::new(crate::mesh::cube([1.0; 3], [1; 3])), Mat4::identity(), Default::default()) }], ..Scene::default() };
+        let mut out = crate::ops::geo_ops::instance_on_points(&json!({}), Scene { point_sets: vec![pts], ..Scene::default() }, Some(&protos), None).unwrap();
+        out.instances[0].node = "inst".into();
+        let (a, b) = (Table::new(&out, Domain::Instances, &Filter::default()), Table::with_view(&out, Domain::Instances, &Filter::default(), &world));
+        fn row(t: &Table) -> Vec<String> {
+            (0..t.fields().len()).flat_map(|k| (0..t.fields()[k].width()).map(move |c| (k, c))).map(|(k, c)| format!("{:?}", t.cell(0, k, c))).collect()
+        }
+        assert_eq!(row(&a), row(&b), "instances the same in World");
+        assert!(near(f(&b, 0, "P", 0), 0.0) && near(f(&b, 0, "P", 2), 3.0), "(1, 0, 0) turned 90° about y, then +4 z: the instancer's move is in");
+    }
+
+    /// The Cloud: the scene's points by node, numbered as each Camera
+    /// Tracker numbers its own; picks narrow a node; the MCP domains don't
+    /// change.
+    #[test]
+    fn the_cloud_is_by_node_numbered_per_node_and_picks_narrow_it() {
+        let v = |x: f64| Vec3::new(x, 0.0, 0.0);
+        let s = Scene { points: vec![v(0.0), v(1.0), v(2.0), v(10.0), v(11.0)], point_nodes: ["trackA", "trackA", "trackA", "trackB", "trackB"].map(String::from).to_vec(), ..scene() };
+        let none = View::default();
+        let t = Table::with_view(&s, Domain::Cloud, &Filter::default(), &none);
+        assert_eq!(t.objects(), [("trackA", "point cloud", 3), ("trackB", "point cloud", 2)]);
+        assert_eq!(headers(&t), ["index", "object", "P.x", "P.y", "P.z"]);
+        assert_eq!((f(&t, 3, "index", 0), f(&t, 3, "P", 0)), (Cell::Int(0), Cell::Float(10.0)), "trackB's point 0 is scene point 3");
+        // Picks: trackA's scene point 2 (its number 2) and trackB's 4.
+        let picked = View { world: false, picked: Some(vec![2, 4]) };
+        let t = Table::with_view(&s, Domain::Cloud, &Filter::default(), &picked);
+        assert_eq!(t.len(), 2);
+        assert_eq!((f(&t, 0, "index", 0), f(&t, 0, "P", 0), f(&t, 1, "index", 0), f(&t, 1, "P", 0)), (Cell::Int(2), Cell::Float(2.0), Cell::Int(1), Cell::Float(11.0)));
+        // A node without picks keeps all its points.
+        let t = Table::with_view(&s, Domain::Cloud, &Filter::default(), &View { world: true, picked: Some(vec![0]) });
+        assert_eq!(t.objects(), [("trackA", "point cloud", 1), ("trackB", "point cloud", 2)]);
+        let sel = Filter { object: None, nodes: Some(vec!["trackB".into()]) };
+        assert_eq!(sheet_counts(&s, &sel, &none).last(), Some(&(Domain::Cloud, 2)));
+        // The MCP tool: no Cloud domain, and the same pages as before.
+        assert_eq!(counts(&s, &Filter::default()).len(), 5);
+        assert_eq!(Domain::from_key("cloud"), None);
+        assert_eq!(&sheet_counts(&s, &Filter::default(), &none)[..5], &counts(&s, &Filter::default())[..]);
+        for d in Domain::ALL {
+            assert_eq!(Table::new(&s, d, &Filter::default()).page(0, 100), Table::with_view(&s, d, &Filter::default(), &View { world: false, picked: Some(vec![1]) }).page(0, 100));
+        }
     }
 
     /// A million rows: any row is found without walking the others.

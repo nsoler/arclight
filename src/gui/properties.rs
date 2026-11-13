@@ -362,6 +362,12 @@ impl Properties {
                         self.param_widget(ui, doc, id, &op, spec);
                     }
                     ui.end_row();
+                    // A Scanline Render with a background renders in its frame.
+                    if op == "scanline_render" && spec.name == "height" && has_background(doc, id) {
+                        ui.label("");
+                        ui.label(RichText::new("The background is connected: its size is used, not Width × Height.").small().weak());
+                        ui.end_row();
+                    }
                     if op == "media_out" && spec.name == "path" {
                         media_out_format(ui, doc, id);
                         ui.end_row();
@@ -1731,6 +1737,12 @@ fn formula_help(ui: &mut egui::Ui) {
     ui.weak("Type to get suggestions: ↑/↓ to pick, Tab to take one. Enter applies the formula.");
 }
 
+/// Whether Scanline Render `id` has a background wired in (then it renders
+/// in the background's frame, Width and Height unused).
+fn has_background(doc: &Doc, id: &str) -> bool {
+    doc.node(id).is_some_and(|n| n.inputs.get(2).is_some_and(|s| !s.is_empty()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1762,6 +1774,11 @@ mod tests {
         ] })).unwrap();
         let doc = Doc::new(g, None);
         assert_eq!(camera_suggestions(&doc, "render"), ["", "head", "side"]);
+        assert!(!has_background(&doc, "render"), "no background: Width × Height");
+        let mut g = doc.graph.clone();
+        g.nodes.push(serde_json::from_value(serde_json::json!({ "id": "plate", "op": "constant" })).unwrap());
+        g.nodes.iter_mut().find(|n| n.id == "render").unwrap().inputs[2] = "plate".into();
+        assert!(has_background(&Doc::new(g, None), "render"), "a background: its size, and the note");
     }
 
     #[test]
