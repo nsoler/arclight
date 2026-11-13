@@ -30,6 +30,7 @@ mod thumbnails;
 mod solve_quality;
 mod spreadsheet;
 mod transport;
+mod view_frame;
 mod viewer;
 mod viewport3d;
 mod worker;
@@ -273,9 +274,12 @@ struct App {
     worker: Worker,
     /// The last request sent to the worker.
     requested: Option<RequestKey>,
-    image: Option<Arc<Image>>,
-    /// The same, still on the GPU when it was made there (see worker).
-    image_gpu: Option<Arc<arclight::gpu::Resident>>,
+    /// The frame shown: still on the GPU when it was made there (see
+    /// `view_frame.rs`).
+    image: Option<Arc<view_frame::ViewFrame>>,
+    /// The frame shown couldn't be read back from the GPU and was asked
+    /// for again on the CPU (once a request).
+    cpu_retry: bool,
     /// The selected Transform and its input's data window, for its overlay.
     probe: Option<(String, Arc<Image>)>,
     error: Option<NodeError>,
@@ -406,7 +410,7 @@ impl App {
             worker: Worker::spawn(ctx.clone(), eval.clone()),
             requested: None,
             image: None,
-            image_gpu: None,
+            cpu_retry: false,
             probe: None,
             error: None,
             shown_frame: 0,
@@ -1330,13 +1334,15 @@ impl App {
                         target: t.clone(),
                         frame: self.transport.frame,
                         probe,
+                        pick: self.viewer.pick_at(),
+                        cpu_only: false,
                     });
                     self.requested = Some(key);
+                    self.cpu_retry = false;
                 }
             }
             None => {
                 self.image = None;
-                self.image_gpu = None;
                 self.error = None;
                 self.requested = None;
                 self.cached.clear();
@@ -1348,7 +1354,6 @@ impl App {
                     Ok(img) => {
                         let new_frame = self.image.as_ref().is_none_or(|old| !Arc::ptr_eq(old, &img));
                         self.image = Some(img);
-                        self.image_gpu = resp.gpu;
                         self.error = None;
                         if new_frame {
                             self.transport.frame_shown();
@@ -1356,7 +1361,6 @@ impl App {
                     }
                     Err(e) => {
                         self.image = None;
-                        self.image_gpu = None;
                         self.error = Some(e);
                     }
                 }
@@ -1364,7 +1368,22 @@ impl App {
                 self.millis = resp.millis;
                 self.cached = resp.cached_frames;
                 self.probe = resp.probe;
-                self.doc.view_format = self.image.as_ref().map(|img| img.format);
+                self.doc.view_format = self.image.as_ref().map(|img| img.format());
+            }
+        }
+        // A frame the viewer couldn't read back from the GPU: asked for
+        // again, made on the CPU.
+        if let (Some(t), Some(f)) = (&target, &self.image) {
+            if !self.cpu_retry && f.read_failed().is_some() {
+                self.cpu_retry = true;
+                self.worker.request(Request {
+                    graph: Arc::new(self.doc.graph.clone()),
+                    target: t.clone(),
+                    frame: self.shown_frame,
+                    probe: self.requested.as_ref().and_then(|k| k.3.clone()),
+                    pick: None,
+                    cpu_only: true,
+                });
             }
         }
     }
@@ -1627,7 +1646,6 @@ impl App {
                 ui,
                 Display {
                     image: self.image.as_ref(),
-                    gpu: self.image_gpu.as_ref(),
                     error: error.as_deref(),
                     target: target.as_deref(),
                     returns_to: returns_to.as_deref(),

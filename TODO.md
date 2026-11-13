@@ -18,6 +18,14 @@ On Linux and on the Macs (the DMG), from the release builds.
       hidden; View ▸ Node thumbnails off stays off after a restart; play
       a video while its thumbnail first loads: at most one hitch
 
+**Phase 14 (0.14.29)**
+- [ ] Viewer, GPU on: play a heavy GPU comp (blur / grade on a 4K
+      plate): fps up; the picker follows the pointer, also while
+      playing; switch to a plane layer (depth): it shows; turn the GPU
+      off in Preferences mid-play: cached frames stay and scrub
+      instantly; old projects look the same; Macs: the same, plus
+      `gpu --check`
+
 **Phase 14 (0.14.28)**
 - [ ] Geo Info: World on a moved / scaled mesh changes P and N
       (instances don't); a Camera Tracker's Cloud tab numbers match the
@@ -82,8 +90,6 @@ On Linux and on the Macs (the DMG), from the release builds.
 - [ ] Particles to Points ids pack emitter (8 bits) + birth count (24
       bits): past ~16.7 M births ids wrap (only Instance on Points'
       random pick cares)
-- [ ] GPU playback: skip the target read-back, read back lazily for the
-      readout / picker (~5–10 ms a 1080p frame)
 - [ ] Splats: a GPU path; SOG / compressed PLY if asked
 - [ ] Alembic: curves, points, cameras, face sets as materials
 - [ ] A new logo: `assets/arclight.png` and the full logo still say

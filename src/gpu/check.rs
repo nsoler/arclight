@@ -341,6 +341,7 @@ fn image_rows(gpu: &super::Gpu, sizes: &[Sized]) -> Vec<CheckRow> {
             Ok(compare("window change", &size, &want, &got, 0.0, 0.0, cpu_ms, kernel_ms, total_ms))
         };
         rows.push(run().unwrap_or_else(|e| failed("window change", &size, e)));
+        rows.push(read_pixel_row(gpu, &img, &size).unwrap_or_else(|e| failed("read one pixel", &size, e)));
     }
     // The other transfer path, so both are exercised where the device can.
     if gpu.features.contains(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS) {
@@ -360,6 +361,30 @@ fn image_rows(gpu: &super::Gpu, sizes: &[Sized]) -> Vec<CheckRow> {
         }
     }
     rows
+}
+
+/// The viewer's color picker on a frame left on the GPU: single pixels
+/// read alone (`GpuImage::read_pixel`, exactly `Image::at`, past the data
+/// window too), each well under a millisecond (the times are per pixel).
+#[cfg(feature = "gpu")]
+fn read_pixel_row(gpu: &super::Gpu, img: &Image, size: &str) -> anyhow::Result<CheckRow> {
+    const PIXELS: usize = 64;
+    const LIMIT_MS: f64 = 1.0;
+    let w = img.window();
+    // Across the window, a few past its edges.
+    let at: Vec<(i32, i32)> = (0..PIXELS as i32).map(|i| (w.x0 - 2 + (i * 37) % (w.width() as i32 + 4), w.y0 - 2 + (i * 53) % (w.height() as i32 + 4))).collect();
+    let up = super::GpuImage::upload(gpu, img)?;
+    up.read_pixel(gpu, at[0].0, at[0].1)?;
+    let (want, cpu_ms) = timed(|| at.iter().map(|&(x, y)| img.at(x, y)).collect::<Vec<_>>());
+    let (got, gpu_ms) = timed(|| at.iter().map(|&(x, y)| up.read_pixel(gpu, x, y)).collect::<anyhow::Result<Vec<_>>>());
+    let row_of = |pixels: Vec<[f32; 4]>| Image { pixels, ..Image::blank(Size { width: PIXELS, height: 1 }, IRect::new(0, 0, PIXELS as i32, 1)) };
+    let per = PIXELS as f64;
+    let mut row = compare("read one pixel", size, &row_of(want), &row_of(got?), 0.0, 0.0, cpu_ms / per, 0.0, gpu_ms / per);
+    if row.pass && row.gpu_total_ms >= LIMIT_MS {
+        row.pass = false;
+        row.note = format!("{:.3} ms a pixel: the color picker wants under {LIMIT_MS} ms", row.gpu_total_ms);
+    }
+    Ok(row)
 }
 
 /// A Transform's params with 8 motion-blur samples (as

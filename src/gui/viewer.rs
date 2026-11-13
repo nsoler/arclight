@@ -8,6 +8,7 @@ use crate::doc::Doc;
 use crate::gizmo3d::{self, Handle, Layout, Mode, Space, Tool, Transforming};
 use crate::overlay::{Overlays, Xf};
 use crate::viewport3d::Shading;
+use crate::view_frame::ViewFrame;
 use arclight::color;
 use arclight::ops;
 use arclight::image::{IRect, Image, Plane, Size};
@@ -64,7 +65,7 @@ pub struct Viewer {
     native: Option<Native>,
     native_shown: bool,
     /// The image currently uploaded, and the display settings it used.
-    shown: Option<(Arc<Image>, Channel, f32, String)>,
+    shown: Option<(Arc<ViewFrame>, Channel, f32, String)>,
     /// What the texture covers, in frame pixels: the frame and the data window.
     region: IRect,
     nearest: bool,
@@ -185,10 +186,10 @@ impl Default for Viewer {
 
 /// What the viewer should display this frame.
 pub struct Display<'a> {
-    pub image: Option<&'a Arc<Image>>,
-    /// The same image still on the GPU, when it was made there: displayed
-    /// from there (the readout reads `image`).
-    pub gpu: Option<&'a Arc<arclight::gpu::Resident>>,
+    /// The frame: displayed from the GPU when it was made there; the
+    /// readout and picker read single pixels of it, and only what needs
+    /// its planes reads it back (see `view_frame.rs`).
+    pub image: Option<&'a Arc<ViewFrame>>,
     pub error: Option<&'a str>,
     pub target: Option<&'a str>,
     /// The Viewer node, while another node is shown in its place.
@@ -202,6 +203,12 @@ pub struct Display<'a> {
 impl Viewer {
     pub fn fit(&mut self) {
         self.fit_pending = true;
+    }
+
+    /// The color picker's pixel (frame position), for the worker to read
+    /// as it makes the next frame.
+    pub fn pick_at(&self) -> Option<(i32, i32)> {
+        self.picked.as_ref().map(|p| (p.x, p.y))
     }
 
     /// Select every vertex of the selected shape (see [`Overlays::select_all_points`]).
@@ -485,8 +492,8 @@ impl Viewer {
             }
             return;
         };
-        self.upload(ui.ctx(), img, d.gpu);
-        let size = Vec2::new(img.format.width as f32, img.format.height as f32);
+        self.upload(ui.ctx(), img);
+        let size = Vec2::new(img.format().width as f32, img.format().height as f32);
 
         if self.fit_pending {
             // Room above and below for the frame size labels.
@@ -529,7 +536,7 @@ impl Viewer {
         if nearest != self.nearest {
             self.nearest = nearest;
             self.shown = None;
-            self.upload(ui.ctx(), img, d.gpu);
+            self.upload(ui.ctx(), img);
         }
         // Frame pixels → screen.
         let on_screen = |r: IRect| {
@@ -554,14 +561,14 @@ impl Viewer {
             painter.add(egui::Shape::dashed_line(&ring, egui::Stroke::new(1.0, Color32::from_rgb(120, 170, 220)), 6.0, 4.0));
         }
         if self.show_frame_size {
-            for (pos, align, text) in frame_size_labels(img_rect, img.format) {
+            for (pos, align, text) in frame_size_labels(img_rect, img.format()) {
                 painter.text(pos, align, text, FontId::proportional(FRAME_SIZE_FONT), Color32::from_gray(120));
             }
         }
         self.overlays.draw(ui, &painter, &xf(self), size, doc, frame);
         self.pivot.draw(ui, &painter, &xf(self), size, doc, frame, &self.overlays); // pivot
         // A 3D scene has no pixels: say what's in it instead.
-        if let Some(scene) = &img.scene {
+        if let Some(scene) = img.scene() {
             let text = format!("3D scene: {}\nConnect it to a Scanline Render to see it.", scene.describe());
             painter.text(rect.center(), Align2::CENTER_CENTER, text, FontId::proportional(14.0), Color32::from_rgb(120, 190, 235));
         }
@@ -571,14 +578,19 @@ impl Viewer {
             let p = (hover - img_rect.min) / self.zoom;
             let (x, y) = (p.x.floor() as i32, p.y.floor() as i32);
             if self.region.contains(x, y) {
-                let px = img.at(x, y);
+                // (One pixel from the GPU, when the frame is there.)
+                let px = img.pixel(x, y).unwrap_or_default();
                 self.picked = Some(Picked { x, y, px, shown: Color32::BLACK });
                 let mut text = format!(
                     "x {:<5} y {:<5}   R {:.4}  G {:.4}  B {:.4}  A {:.4}",
                     x, y, px[0], px[1], px[2], px[3]
                 );
-                for plane in self.shown_planes(img) {
-                    text += &format!("   {} {:.4}", plane.name, img.plane_value(plane, x, y));
+                if self.wants_planes(img) {
+                    if let Ok(cpu) = img.image() {
+                        for plane in self.shown_planes(&cpu) {
+                            text += &format!("   {} {:.4}", plane.name, cpu.plane_value(plane, x, y));
+                        }
+                    }
                 }
                 let pos = rect.left_bottom() + Vec2::new(8.0, -8.0);
                 let galley = painter.layout_no_wrap(text, FontId::monospace(12.0), Color32::from_gray(220));
@@ -590,7 +602,7 @@ impl Viewer {
         // The picker's pixel, read from this frame (also after the pointer
         // left), shown as displayed: exposure applied, over black.
         if let Some(p) = &mut self.picked {
-            p.px = img.at(p.x, p.y);
+            p.px = img.pixel(p.x, p.y).unwrap_or(p.px);
             let gain = 2f32.powf(self.exposure);
             let enc = |v: f32| (color::linear_to_srgb(v * gain).clamp(0.0, 1.0) * 255.0).round() as u8;
             p.shown = Color32::from_rgb(enc(p.px[0]), enc(p.px[1]), enc(p.px[2]));
@@ -715,7 +727,7 @@ impl Viewer {
             }
             // The image's extra planes (a 3D render's depth and passes), a
             // button a layer.
-            for (layer, planes) in d.image.map_or(Vec::new(), |img| img.layers()) {
+            for (layer, planes) in d.image.map_or(Vec::new(), |img| img.layers().to_vec()) {
                 let on = self.channel == Channel::Plane && self.plane == layer;
                 let tip = if planes.len() == 1 {
                     format!("Show the {layer} plane as gray, lowest to highest value")
@@ -770,7 +782,7 @@ impl Viewer {
                 self.color_picker(ui);
                 ui.separator();
                 if let Some(img) = d.image {
-                    ui.label(format!("{}x{}  ·  frame {}  ·  {:.1} ms", img.format.width, img.format.height, d.frame, d.millis));
+                    ui.label(format!("{}x{}  ·  frame {}  ·  {:.1} ms", img.format().width, img.format().height, d.frame, d.millis));
                     let w = img.window();
                     if w != img.frame() {
                         let text = if w.is_empty() { "no data".to_string() } else { format!("data {},{} {}×{}", w.x0, w.y0, w.width(), w.height()) };
@@ -829,29 +841,44 @@ impl Viewer {
         img.layer(&self.plane).iter().filter_map(|n| img.plane(n)).collect()
     }
 
-    fn upload(&mut self, ctx: &egui::Context, img: &Arc<Image>, gpu: Option<&Arc<arclight::gpu::Resident>>) {
+    /// Whether the view shows planes of `frame` ([`Channel::Plane`] on a
+    /// layer it has), which needs it on the CPU.
+    fn wants_planes(&self, frame: &ViewFrame) -> bool {
+        self.channel == Channel::Plane && frame.layers().iter().any(|(l, planes)| *l == self.plane && !planes.is_empty())
+    }
+
+    fn upload(&mut self, ctx: &egui::Context, frame: &Arc<ViewFrame>) {
         let up_to_date = self.shown.as_ref().is_some_and(|(shown, ch, ex, plane)| {
-            Arc::ptr_eq(shown, img) && *ch == self.channel && *ex == self.exposure && *plane == self.plane
+            Arc::ptr_eq(shown, frame) && *ch == self.channel && *ex == self.exposure && *plane == self.plane
         });
         if up_to_date {
             return;
         }
         // A resolution change (e.g. a new clip) re-fits the view.
-        if self.shown.as_ref().is_none_or(|(s, ..)| s.format != img.format) {
+        if self.shown.as_ref().is_none_or(|(s, ..)| s.format() != frame.format()) {
             self.fit_pending = true;
         }
-        self.region = img.frame().union(&img.window());
+        self.region = frame.frame().union(&frame.window());
         // Past the GPU's texture size limit, show it at a fraction of its
         // resolution (the readout still reads full-resolution pixels).
         let max_side = ctx.input(|i| i.max_texture_side).max(1);
         let step = self.region.width().max(self.region.height()).div_ceil(max_side).max(1);
-        let planes = self.shown_planes(img);
-        // Still on the GPU, on the window's own device: displayed there.
-        self.native_shown = planes.is_empty() && gpu.is_some_and(|r| self.display_on_gpu(r, step));
+        // Still on the GPU, on the window's own device: displayed there,
+        // not read back.
+        let planes_wanted = self.wants_planes(frame);
+        self.native_shown = !planes_wanted && frame.gpu().is_some_and(|r| self.display_on_gpu(r, step));
         if self.native_shown {
-            self.shown = Some((img.clone(), self.channel, self.exposure, self.plane.clone()));
+            self.shown = Some((frame.clone(), self.channel, self.exposure, self.plane.clone()));
             return;
         }
+        // Else the CPU's way: read back (once) if it has to be. A failed
+        // read-back shows nothing; the app asks for the frame on the CPU.
+        let Ok(img) = frame.image() else {
+            self.shown = None;
+            return;
+        };
+        let img = &img;
+        let planes = self.shown_planes(img);
         let ci = match planes[..] {
             [] => to_color_image(img, self.region, self.channel, self.exposure, step),
             [plane] => plane_image(img, plane, self.region, step),
@@ -862,7 +889,7 @@ impl Viewer {
             Some(t) => t.set(ci, filter),
             None => self.texture = Some(ctx.load_texture("viewer", ci, filter)),
         }
-        self.shown = Some((img.clone(), self.channel, self.exposure, self.plane.clone()));
+        self.shown = Some((frame.clone(), self.channel, self.exposure, self.plane.clone()));
     }
 }
 
@@ -1394,8 +1421,8 @@ mod tests {
     #[test]
     fn the_toolbars_wrap_in_a_narrow_view() {
         use arclight::image::{IRect, Size};
-        let img = Arc::new(Image::blank(Size { width: 1920, height: 1080 }, IRect::new(0, 0, 1920, 1080)));
-        let d = Display { image: Some(&img), gpu: None, error: None, target: Some("v"), returns_to: None, frame: 1, millis: 56.2, input: None };
+        let img = Arc::new(ViewFrame::from_cpu(Arc::new(Image::blank(Size { width: 1920, height: 1080 }, IRect::new(0, 0, 1920, 1080)))));
+        let d = Display { image: Some(&img), error: None, target: Some("v"), returns_to: None, frame: 1, millis: 56.2, input: None };
         for mode3d in [false, true] {
             for width in [360.0, 520.0, 1400.0] {
                 let ctx = egui::Context::default();
@@ -1427,8 +1454,8 @@ mod tests {
     #[test]
     fn a_long_status_takes_its_own_row_when_it_does_not_fit() {
         use arclight::image::{IRect, Size};
-        let img = Arc::new(Image::blank(Size { width: 1920, height: 1080 }, IRect::new(0, -66, 1920, 1080)));
-        let d = Display { image: Some(&img), gpu: None, error: None, target: Some("scanline_render1"), returns_to: Some("viewer1"), frame: 97, millis: 6.2, input: None };
+        let img = Arc::new(ViewFrame::from_cpu(Arc::new(Image::blank(Size { width: 1920, height: 1080 }, IRect::new(0, -66, 1920, 1080)))));
+        let d = Display { image: Some(&img), error: None, target: Some("scanline_render1"), returns_to: Some("viewer1"), frame: 97, millis: 6.2, input: None };
         for (width, rows) in [(1150.0, 2), (2400.0, 1)] {
             let ctx = egui::Context::default();
             let mut v = Viewer::default();

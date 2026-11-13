@@ -485,6 +485,14 @@ enum Res {
     Gpu(Arc<crate::gpu::Resident>),
 }
 
+/// A target's result as [`Evaluator::evaluate_lazy`] leaves it: on the
+/// CPU, or on the GPU, not read back.
+#[derive(Clone)]
+pub enum Frame {
+    Cpu(Arc<Image>),
+    Gpu(Arc<crate::gpu::Resident>),
+}
+
 #[cfg(test)]
 impl Res {
     fn cpu_now(self) -> Arc<Image> {
@@ -592,6 +600,21 @@ impl Evaluator {
         let index = graph.index()?;
         let order = Graph::order(&index, graph.nodes.iter().map(|n| n.id.clone()))?;
         self.evaluate_order(&index, &order, &order, ctx, &graph.project)
+    }
+
+    /// Render `target` as [`evaluate`](Self::evaluate) does, but leave its
+    /// result where it was made: on the GPU it isn't read back (for a
+    /// viewer that draws it there, reading back only what it needs; see
+    /// `gui/view_frame.rs`). The GPU's work may still be running: wait on
+    /// its device for timings.
+    pub fn evaluate_lazy(&mut self, graph: &Graph, target: &str, ctx: &EvalContext) -> Result<Frame, NodeError> {
+        let index = graph.index()?;
+        let order = Graph::order(&index, [target.to_string()])?;
+        self.evaluate_order(&index, &order, &[], ctx, &graph.project)?;
+        Ok(match &self.cache[target].1 {
+            Res::Cpu(img) => Frame::Cpu(img.clone()),
+            Res::Gpu(r) => Frame::Gpu(r.clone()),
+        })
     }
 
     /// [`evaluate`](Self::evaluate), and the result still on the GPU when
@@ -1648,5 +1671,35 @@ mod tests {
         assert!(ev.cache.values().all(|(_, r)| matches!(r, Res::Cpu(_))));
         let again = ev.evaluate(&g, "off", &ctx).unwrap();
         assert!(Arc::ptr_eq(&again, &ev.cache["off"].1.clone().cpu_now()) && again.pixels == got.pixels);
+    }
+
+    /// evaluate_lazy leaves a GPU result on the GPU (no read-back), with
+    /// the same pixels as evaluate's once read; a CPU one comes as it is.
+    #[test]
+    fn lazy_results_stay_where_they_were_made() {
+        use serde_json::json;
+        let node = |id: &str, op: &str, inputs: &[&str], params: Value| NodeSpec { id: id.into(), op: op.into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), params, pos: None, disabled: false };
+        let g = Graph { nodes: vec![
+            node("checker", "checkerboard", &[], json!({ "width": 160, "height": 90, "size": 5 })),
+            node("soft", "blur", &["checker"], json!({ "radius": 4 })),
+        ], ..Graph::default() };
+        let ctx = EvalContext { frame: 1, write_outputs: false };
+        let want = crate::gpu::cpu_only(|| Evaluator::new().evaluate(&g, "soft", &ctx).unwrap());
+        let mut ev = Evaluator::new();
+        match crate::gpu::cpu_only(|| Evaluator::new().evaluate_lazy(&g, "soft", &ctx).unwrap()) {
+            Frame::Cpu(img) => assert_eq!(img.pixels, want.pixels),
+            Frame::Gpu(_) => panic!("on the CPU alone, a CPU result"),
+        }
+        match ev.evaluate_lazy(&g, "checker", &ctx).unwrap() {
+            Frame::Cpu(img) => assert_eq!(img.format.width, 160),
+            Frame::Gpu(_) => panic!("a checkerboard is made on the CPU"),
+        }
+        if crate::gpu::get().is_none() {
+            return eprintln!("skipped the GPU half: no GPU adapter");
+        }
+        let Frame::Gpu(r) = ev.evaluate_lazy(&g, "soft", &ctx).unwrap() else { panic!("a blur is made on the GPU") };
+        assert!(r.read_back_done().is_none(), "not read back");
+        let row = crate::gpu::check::compare("lazy", "", &want, &r.cpu().unwrap(), 1e-4, 1e-4, 0.0, 0.0, 0.0);
+        assert!(row.pass, "{row:?}");
     }
 }

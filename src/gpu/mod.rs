@@ -225,6 +225,31 @@ impl Resident {
         Ok(self.cpu.get_or_init(|| img).clone())
     }
 
+    /// The image on the CPU when it was read back already (or uploaded
+    /// from there), without reading it.
+    pub fn read_back_done(&self) -> Option<Arc<crate::image::Image>> {
+        self.cpu.get().cloned()
+    }
+
+    /// The pixel at frame position (`x`, `y`): from the CPU's copy when
+    /// there is one, else read alone (see [`GpuImage::read_pixel`]).
+    pub fn read_pixel(&self, x: i32, y: i32) -> anyhow::Result<[f32; 4]> {
+        match self.cpu.get() {
+            Some(img) => Ok(img.at(x, y)),
+            None => self.image.read_pixel(&self.gpu, x, y),
+        }
+    }
+
+    /// Its extra planes' names, in `Image`'s order (no read-back).
+    pub fn plane_names(&self) -> Vec<String> {
+        self.image.planes.iter().map(|(n, _)| n.clone()).collect()
+    }
+
+    /// The 3D scene it carries, if any (no read-back).
+    pub fn scene(&self) -> Option<Arc<crate::scene::Scene>> {
+        self.image.scene.clone()
+    }
+
     /// GPU memory held.
     pub fn bytes(&self) -> u64 {
         self.image.bytes()
@@ -264,6 +289,18 @@ impl Resident {
         match *self {}
     }
     pub fn color(&self) -> Resident {
+        match *self {}
+    }
+    pub fn read_back_done(&self) -> Option<Arc<crate::image::Image>> {
+        match *self {}
+    }
+    pub fn read_pixel(&self, _x: i32, _y: i32) -> anyhow::Result<[f32; 4]> {
+        match *self {}
+    }
+    pub fn plane_names(&self) -> Vec<String> {
+        match *self {}
+    }
+    pub fn scene(&self) -> Option<Arc<crate::scene::Scene>> {
         match *self {}
     }
 }

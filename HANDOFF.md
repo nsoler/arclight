@@ -28,6 +28,17 @@ Last updated 2026-11-13.
   world; normal: inverse transpose). Cloud picks come from
   `viewport3d.points` (scene.points indices), validated against the
   sheet's scene.
+- **0.14.29 (2026-11-13, unreleased): GPU playback without the
+  per-frame read-back.** `Evaluator::evaluate_lazy` + `gui/view_frame.rs`
+  (`ViewFrame`: format, window, layers and scene kept as made; `image()`
+  reads back once, memoised; `pixel()` reads single GPU pixels) replace
+  the viewer's read-back. `FrameCache` keeps GPU-only frames within the
+  GPU budget and reads them back past it or on GPU off. A failed
+  read-back triggers one `cpu_only` re-request (`App::cpu_retry`). The
+  worker waits on the device after a lazy frame and pre-reads the
+  picker's pixel (`Request.pick`). Bench: `cargo test --release --bin
+  arclight-gui playback_bench -- --ignored --nocapture`. Not yet tried:
+  the live GUI by hand, a forced read-back failure, Macs.
 - **Version 0.14.25, released as v0.14.25** (2026-11-02: Linux tarball,
   Windows zip, `arclt` wheel + sdist, macOS DMG; marked Latest): Help ▸
   Examples ▸ Particles: a swirling plasma beam (`examples/plasma-beam.json`,
@@ -39,46 +50,6 @@ Last updated 2026-11-13.
 - **Phase 14 (workspace and UI)** on branch `wip-ns-ui` (from 0.13.41,
   `5d35db7`); `main` is fast-forwarded to it. Earlier phase branches are
   frozen (`wip-ns-geo`, `-gpu`, `-engine`, `-splats`, `-3dwork`, `-effects`).
-- **In flight (plans approved 2026-11-02, work starts 2026-11-03 at the
-  user's word; paused before any code):** the TODO "Known gaps".
-  - **Dev1: GPU playback without the per-frame read-back.**
-    `Evaluator::evaluate_lazy` returns a `Frame` (Cpu / Gpu Resident)
-    without reading the target back; a new `src/gui/view_frame.rs`
-    (`ViewFrame`: metadata without a read-back, `cpu()` lazy and once,
-    `pixel()` via a new `GpuImage::read_pixel`, memoised); `Response`
-    carries it; the FrameCache keeps GPU-only entries, **read back on
-    eviction** (the user-facing cache unchanged; Supervisor's answer);
-    `drop_gpu` reads them back; a read-back error re-requests on the CPU.
-    CLI, Write / Media Out, MCP / scripting reads unchanged. Shared,
-    LOCKed: graph.rs, gpu/image.rs, gpu/mod.rs, gpu/check.rs (a
-    read_pixel row), gui/worker.rs, viewer.rs, main.rs. Conditions: list
-    every reader of the viewer image (bridge_calls etc.), color picker
-    read_pixel well under 1 ms, bench only #[ignore]d or in ../.verify,
-    before / after ms and fps at 1080p and 4K.
-  - **Dev2: Geo Info World toggle + a Cloud tab + the Scanline note.**
-    `src/geo_table.rs` (Dev2's, additive only: it feeds MCP geo_info)
-    gets `.in_world(bool)` (per-part world / normal matrices, only visible
-    cells transformed) and a Cloud domain (scene.points by node) that the
-    3D view's / Camera Tracker's point picks narrow under Selected only;
-    `spreadsheet.rs` a World checkbox. Per-point picking of point-set /
-    mesh points in the 3D view: not now (a new Known-gaps line). Scanline
-    Render: no render change; a note in Properties when a background is
-    connected ("the background's size is used"), plus help.md and the
-    README row. Shared, LOCKed: main.rs, viewport3d.rs, properties.rs,
-    help.md, README.md. Conditions: test instances under a transformed
-    instancer in World, the tracker numbering vs scene.points, the note
-    worded from ops.rs.
-  - **Found while pausing (2026-11-02):** no Dev edits in the tree. Dev1:
-    the viewer image's only reader outside viewer.rs is main.rs; the
-    worker will wait on the GPU after a lazy frame and pre-read the
-    picker's pixel; a baseline build is in `../.verify/dev1-base`. Dev2:
-    Scanline uses the background's format whenever input 2 is connected
-    (0 = project format otherwise); tracker picks index `sol.points` in
-    scene order; picking a cloud point doesn't select its node, so
-    Selected only = selected nodes plus nodes with picks; **MCP geo_info
-    stays byte-identical** (Supervisor's answer: Cloud only in the sheet's
-    own tab list, `Domain::ALL` / `counts()` / `from_key` unchanged, a
-    separate `View {world, picked}` instead of a new Filter field).
 - **Next: the rest of the user's hand testing** (TODO.md "To check by
   hand"; Camera Tracker, "." pivot, Roto following a Tracker, detached
   windows, the Cameras example and `gpu --check` on the Macs passed on

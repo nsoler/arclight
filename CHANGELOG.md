@@ -18,6 +18,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.29 — 2026-11-13
+
+- **GPU playback about 5× faster:** frames rendered on the GPU are shown
+  from there without being read back every frame (plate → blur → grade
+  on an RTX 5070: 1080p 4.8 → 0.8 ms a frame, 4K 25 → 4.6 ms). The color
+  picker reads single pixels (< 0.1 ms); only a plane layer or a frame
+  pushed out of the GPU cache is read back. `gpu --check` gains a
+  "read one pixel" row.
+
 ## 0.14.28 — 2026-11-13
 
 - **Geo Info: a World toggle** shows P and N in world space (normals

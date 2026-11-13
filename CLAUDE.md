@@ -54,9 +54,9 @@ which role you have if it isn't clear.
 cargo run --release --bin arclight-gui     # GUI
 cargo test --release
 cargo clippy --release --all-targets       # also --no-default-features --features gui
-cargo run --release -- render graph.json   # CLI render
-cargo run --release -- mcp                 # MCP server
-cargo run --release -- gpu --check         # every GPU path vs the CPU
+cargo run --release --bin arclight -- render graph.json   # CLI render
+cargo run --release --bin arclight -- mcp                 # MCP server
+cargo run --release --bin arclight -- gpu --check         # every GPU path vs the CPU
 ```
 
 Workspace: `.`, `plugins/example`, `python`. Version `0.<phase>.<n>`, bumped

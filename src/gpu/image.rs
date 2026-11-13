@@ -143,6 +143,32 @@ impl GpuImage {
         Ok(img)
     }
 
+    /// The pixel at frame position (`x`, `y`) without reading the image
+    /// back: `Image::at` (transparent outside the data window). Copies its
+    /// 16 bytes to a staging buffer and waits for that (and what's queued
+    /// before it).
+    pub fn read_pixel(&self, gpu: &Gpu, x: i32, y: i32) -> Result<[f32; 4]> {
+        let w = self.window;
+        if x < w.x0 || y < w.y0 || x >= w.x1 || y >= w.y1 {
+            return Ok([0.0; 4]);
+        }
+        let i = (y - w.y0) as u64 * w.width() as u64 + (x - w.x0) as u64;
+        let mut px = [0f32; 4];
+        gpu.scoped(|| {
+            let staging = gpu.take_staging(16);
+            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            encoder.copy_buffer_to_buffer(&self.rgba, i * 16, &staging, 0, 16);
+            gpu.queue.submit([encoder.finish()]);
+            let read = map_all(gpu, &[&staging], wgpu::MapMode::Read).and_then(|()| copy_out(&staging, bytemuck::cast_slice_mut(&mut px)));
+            // (One left mapped by a failure isn't reused.)
+            if read.is_ok() {
+                gpu.give_staging(staging);
+            }
+            read
+        })?;
+        Ok(px)
+    }
+
     /// The same pixels over data window `window` (transparent where this
     /// one has none): what `generate(format, window, |x, y| src.at(x, y))`
     /// is on the CPU. Planes come along.
@@ -290,6 +316,24 @@ mod tests {
             eprintln!("skipped: no GPU adapter");
         }
         gpu
+    }
+
+    /// One pixel read without a read-back is the CPU's `at`, inside the
+    /// offset window and outside it, by both transfer paths.
+    #[test]
+    fn a_pixel_reads_as_on_the_cpu() {
+        let Some(gpu) = device() else { return };
+        let img = check::noise(Size { width: 300, height: 200 }, IRect::new(-7, 13, 290, 211), true, 9);
+        let mut paths = vec![Transfer::Staging];
+        if gpu.features.contains(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS) {
+            paths.push(Transfer::Unified);
+        }
+        for transfer in paths {
+            let up = GpuImage::upload_via(&gpu, &img, transfer).unwrap();
+            for (x, y) in [(-7, 13), (0, 13), (150, 100), (289, 210), (-8, 13), (290, 50), (10, 12), (10, 211)] {
+                assert_eq!(up.read_pixel(&gpu, x, y).unwrap(), img.at(x, y), "({x}, {y}) by {transfer:?}");
+            }
+        }
     }
 
     /// Up and back unchanged by both transfer paths: pixels, a plane and
