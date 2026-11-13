@@ -10,7 +10,7 @@ them when they ship. `ROADMAP.md` is the public summary.
 On Linux and on the Macs (the DMG), from the release builds.
 
 **Phase 14 (0.14.27)**
-- [ ] Node graph: a Read of a still, a Read of a #### sequence and a
+- [X] Node graph: a Read of a still, a Read of a #### sequence and a
       Media In of a video each show their first frame above the node,
       aspect right, dimmed when the node is off; click selects,
       double-click views; rewrite the still on disk: it updates within a
@@ -19,7 +19,7 @@ On Linux and on the Macs (the DMG), from the release builds.
       a video while its thumbnail first loads: at most one hitch
 
 **Phase 14 (0.14.4–0.14.13)**
-- [ ] Cube UV layout atlas: each face its own cell; Bake Projection on a
+- [X] Cube UV layout atlas: each face its own cell; Bake Projection on a
       projected atlas cube renders like the live projection
 
 **Phase 13 (0.13.x)**
@@ -31,7 +31,7 @@ On Linux and on the Macs (the DMG), from the release builds.
 - [ ] Instance on Points: rocks and cards facing the camera, variant /
       random pick, pscale and Cd, shadows and motion blur; 100k cards stay
       quick with the GPU on
-- [ ] Delete Geo's box / sphere moved with G, sized with S; an expression
+- [X] Delete Geo's box / sphere moved with G, sized with S; an expression
       like `random(@id) < 0.3`
 - [ ] Curves in the 3D view: pick (⇧), drag, G / R / S, Bezier handles
       (Alt breaks), Ctrl/⌘-click adds or inserts, Delete; a Curve from a
