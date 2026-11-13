@@ -310,8 +310,9 @@ impl RecentFiles {
 /// How the GUI's views were last set up, so the next run starts the same:
 /// the 2D viewer's frame size labels, and the 3D view's shading ("solid" or
 /// "lit"; None: Lit when a scene has lights), wireframe and Lit shadows,
-/// for projects that haven't chosen their own; and whether playback plays
-/// sound. Kept apart from projects.
+/// for projects that haven't chosen their own; whether playback plays
+/// sound; and whether the node graph shows Read / Media In thumbnails.
+/// Kept apart from projects.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct ViewPrefs {
@@ -320,11 +321,12 @@ pub struct ViewPrefs {
     pub wireframe: bool,
     pub lit_shadows: bool,
     pub sound: bool,
+    pub node_thumbnails: bool,
 }
 
 impl Default for ViewPrefs {
     fn default() -> Self {
-        ViewPrefs { show_frame_size: true, shading: None, wireframe: false, lit_shadows: false, sound: true }
+        ViewPrefs { show_frame_size: true, shading: None, wireframe: false, lit_shadows: false, sound: true, node_thumbnails: true }
     }
 }
 
@@ -357,8 +359,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("arclight_view_prefs_{}", std::process::id()));
         let path = dir.join("state/view.json");
         assert_eq!(ViewPrefs::load(&path), ViewPrefs::default());
-        assert!(ViewPrefs::default().show_frame_size && ViewPrefs::default().sound, "frame size labels and sound on by default");
-        let p = ViewPrefs { show_frame_size: false, shading: Some("lit".into()), wireframe: true, lit_shadows: true, sound: false };
+        assert!(ViewPrefs::default().show_frame_size && ViewPrefs::default().sound && ViewPrefs::default().node_thumbnails, "frame size labels, sound and node thumbnails on by default");
+        let p = ViewPrefs { show_frame_size: false, shading: Some("lit".into()), wireframe: true, lit_shadows: true, sound: false, node_thumbnails: false };
         p.save(&path).unwrap();
         assert_eq!(ViewPrefs::load(&path), p);
         std::fs::write(&path, r#"{"wireframe": true}"#).unwrap();

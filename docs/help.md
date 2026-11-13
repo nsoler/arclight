@@ -23,6 +23,8 @@ selected node in **Properties** on the right. On macOS, ⌘ stands for Ctrl.
 
 Over the Node Graph: **Shift+Tab** opens the node browser at the pointer (like right-click); **Shift+R**, **Shift+T**, **Shift+M** add a Media In, Transform or Merge there, into the wire under the pointer (or the selected wire), else after the selected node.
 
+Read and Media In nodes show their clip's first frame above them (hidden when zoomed far out); click it to select the node, double-click to view it. **View ▸ Node thumbnails** turns them off.
+
 Each node's **switch** (the dot at its top-right) turns it off: it's
 bypassed, passing its input on unchanged (a Merge its background, a
 Scanline Render its background plate, a Scene its first input), or

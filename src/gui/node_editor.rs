@@ -25,6 +25,7 @@
 //! to rename it, click the swatch for its color.
 
 use crate::doc::{Doc, NODE_H, NODE_W};
+use crate::graph_thumbs;
 use crate::properties::{backdrop_color32, backdrop_palette};
 use arclight::graph::Backdrop;
 use arclight::ops::{self, Category};
@@ -129,6 +130,11 @@ pub struct NodeEditor {
     pub snap_to_grid: bool,
     /// Wires drawn straight rather than curved (Preferences ▸ Interface).
     pub straight_wires: bool,
+    /// Read and Media In nodes show their first frame above them (View ▸
+    /// Node thumbnails).
+    pub show_thumbnails: bool,
+    /// Those pictures, loaded as they're first shown.
+    pub thumbnails: crate::thumbnails::Thumbnails,
     /// The examples shipped with the app, listed in the browser as
     /// built-in templates after the user's own.
     pub builtin_templates: Vec<arclight::templates::Template>,
@@ -248,6 +254,8 @@ impl Default for NodeEditor {
             rect: Rect::NOTHING,
             snap_to_grid: false,
             straight_wires: false,
+            show_thumbnails: true,
+            thumbnails: Default::default(),
             builtin_templates: Vec::new(),
             template_error: None,
         }
@@ -786,8 +794,32 @@ impl NodeEditor {
 
         // Nodes.
         for (id, op, r, _) in &geo {
-            let resp = ui.interact(*r, Id::unique(("node", id)), Sense::click_and_drag());
             let toggle = mods.shift || mods.command;
+            // A Read's or Media In's thumbnail, just above it: a click
+            // selects the node, a double-click views it.
+            if self.show_thumbnails && graph_thumbs::has_thumbnail(op) && self.zoom >= graph_thumbs::MIN_ZOOM {
+                // (Placed for a typical frame first, to skip offscreen nodes
+                // before asking for the picture.)
+                let near = graph_thumbs::thumb_rect(*r, self.zoom, Vec2::new(16.0, 9.0)).expand2(Vec2::new(0.0, r.width()));
+                if graph_thumbs::visible(self.zoom, near, rect) {
+                    if let Some((tex, size)) = self.thumbnails.get(ui.ctx(), doc, id) {
+                        let t = graph_thumbs::thumb_rect(*r, self.zoom, size);
+                        let resp = ui.interact(t, Id::unique(("thumb", id)), Sense::click());
+                        if resp.clicked() {
+                            if toggle {
+                                doc.toggle_selected(id);
+                            } else {
+                                doc.select_only(id);
+                            }
+                        }
+                        if resp.double_clicked() {
+                            doc.view_node(id);
+                        }
+                        graph_thumbs::draw(&painter, tex, t, doc.node(id).is_some_and(|n| n.disabled));
+                    }
+                }
+            }
+            let resp = ui.interact(*r, Id::unique(("node", id)), Sense::click_and_drag());
             // Click: just this node; Shift / Cmd-click: add or remove it. A
             // drag takes an unselected node into the selection first.
             if resp.clicked() || (resp.drag_started_by(egui::PointerButton::Primary) && !doc.is_selected(id)) {

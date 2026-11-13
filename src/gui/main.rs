@@ -14,6 +14,7 @@ mod dialogs;
 mod doc;
 mod gizmo3d;
 mod gpu_check;
+mod graph_thumbs;
 mod help;
 mod node_editor;
 mod overlay;
@@ -25,6 +26,7 @@ mod properties;
 mod script_jobs;
 mod sound;
 mod templates;
+mod thumbnails;
 mod solve_quality;
 mod spreadsheet;
 mod transport;
@@ -214,17 +216,18 @@ fn apply_view3d(p: &arclight::config::View3dPrefs, v: &mut viewport3d::Viewport3
     };
 }
 
-/// The view preferences `viewer` shows now.
-fn view_prefs(viewer: &Viewer, transport: &Transport) -> ViewPrefs {
+/// The view preferences `viewer`, `transport` and `editor` show now.
+fn view_prefs(viewer: &Viewer, transport: &Transport, editor: &NodeEditor) -> ViewPrefs {
     let view = &viewer.viewport3d.view;
     let shading = view.shading.map(|s| if s == viewport3d::Shading::Lit { "lit" } else { "solid" }.to_string());
-    ViewPrefs { show_frame_size: viewer.show_frame_size, shading, wireframe: view.wireframe, lit_shadows: view.shadows, sound: transport.sound }
+    ViewPrefs { show_frame_size: viewer.show_frame_size, shading, wireframe: view.wireframe, lit_shadows: view.shadows, sound: transport.sound, node_thumbnails: editor.show_thumbnails }
 }
 
 /// Set `viewer` up as `prefs` say: its frame size labels now, and the 3D
-/// view for projects without their own.
-fn apply_prefs(prefs: &ViewPrefs, viewer: &mut Viewer) {
+/// view for projects without their own, and the node graph's thumbnails.
+fn apply_prefs(prefs: &ViewPrefs, viewer: &mut Viewer, editor: &mut NodeEditor) {
     viewer.show_frame_size = prefs.show_frame_size;
+    editor.show_thumbnails = prefs.node_thumbnails;
     let shading = match prefs.shading.as_deref() {
         Some("lit") => Some(viewport3d::Shading::Lit),
         Some("solid") => Some(viewport3d::Shading::Solid),
@@ -381,7 +384,8 @@ impl App {
         // The viewer's evaluator, which bridged calls share (see bridge_calls).
         let eval = Arc::new(std::sync::Mutex::new(arclight::graph::Evaluator::new()));
         let mut viewer = Viewer::default();
-        apply_prefs(&prefs, &mut viewer);
+        let mut editor = NodeEditor::default();
+        apply_prefs(&prefs, &mut viewer, &mut editor);
         apply_view3d(&settings.view3d, &mut viewer.viewport3d);
         // Until a project's own is restored (so the first frames don't
         // read as a change and save the defaults over them).
@@ -390,7 +394,7 @@ impl App {
         let settings_panels = settings.panels.clone();
         let mut app = App {
             doc,
-            editor: NodeEditor::default(),
+            editor,
             template_dialogs: templates::Dialogs::default(),
             curves: CurveEditor::default(),
             tab: BottomTab::Graph,
@@ -1368,11 +1372,11 @@ impl App {
     /// Save the view preferences when they've changed (also making them
     /// what a project without its own 3D view starts with).
     fn save_prefs(&mut self) {
-        let now = view_prefs(&self.viewer, &self.transport);
+        let now = view_prefs(&self.viewer, &self.transport, &self.editor);
         if now == self.prefs {
             return;
         }
-        apply_prefs(&now, &mut self.viewer);
+        apply_prefs(&now, &mut self.viewer, &mut self.editor);
         if let Some(path) = &self.prefs_path {
             if let Err(e) = now.save(path) {
                 eprintln!("arclight-gui: can't save {}: {e}", path.display());
@@ -1893,6 +1897,8 @@ impl App {
                 }
                 ui.checkbox(&mut self.viewer.show_frame_size, "Show frame size")
                     .on_hover_text("Label the viewed frame's corners with its size: 0,0 bottom-left, width,height top-right");
+                ui.checkbox(&mut self.editor.show_thumbnails, "Node thumbnails")
+                    .on_hover_text("Show each Read and Media In node's first frame above it in the node graph (hidden when zoomed far out)");
                 ui.separator();
                 // (Always here: the way back from a window out of reach.)
                 if ui.add_enabled(!self.panels.out().is_empty(), egui::Button::new("Dock all panels")).on_hover_text("Put every panel that has a window of its own back in this one").clicked() {
@@ -2783,23 +2789,27 @@ mod tests {
     fn view_prefs_come_from_the_viewer_and_set_it_up() {
         let mut viewer = Viewer::default();
         let mut transport = Transport::default();
-        assert_eq!(view_prefs(&viewer, &transport), ViewPrefs::default(), "the defaults are the viewer's and the transport's");
+        let mut editor = NodeEditor::default();
+        assert_eq!(view_prefs(&viewer, &transport, &editor), ViewPrefs::default(), "the defaults are the viewer's, the transport's and the editor's");
         viewer.show_frame_size = false;
         viewer.viewport3d.set_shading(viewport3d::Shading::Lit);
         viewer.viewport3d.view.wireframe = true;
         viewer.viewport3d.view.shadows = true;
         transport.sound = false;
-        let prefs = view_prefs(&viewer, &transport);
-        assert_eq!(prefs, ViewPrefs { show_frame_size: false, shading: Some("lit".into()), wireframe: true, lit_shadows: true, sound: false });
+        editor.show_thumbnails = false;
+        let prefs = view_prefs(&viewer, &transport, &editor);
+        assert_eq!(prefs, ViewPrefs { show_frame_size: false, shading: Some("lit".into()), wireframe: true, lit_shadows: true, sound: false, node_thumbnails: false });
         // Next run: the labels off, and a project without its own 3D view
         // starts Lit, wireframe, with shadows.
         let mut next = Viewer::default();
-        apply_prefs(&prefs, &mut next);
+        let mut next_editor = NodeEditor::default();
+        apply_prefs(&prefs, &mut next, &mut next_editor);
         let new = next.viewport3d.new_view;
         assert!(!next.show_frame_size && new.shading == Some(viewport3d::Shading::Lit) && new.wireframe && new.shadows);
-        apply_prefs(&ViewPrefs { shading: Some("solid".into()), ..ViewPrefs::default() }, &mut next);
+        assert!(!next_editor.show_thumbnails, "thumbnails stay off");
+        apply_prefs(&ViewPrefs { shading: Some("solid".into()), ..ViewPrefs::default() }, &mut next, &mut next_editor);
         assert_eq!(next.viewport3d.new_view.shading, Some(viewport3d::Shading::Solid));
-        assert!(next.show_frame_size);
+        assert!(next.show_frame_size && next_editor.show_thumbnails);
     }
 
     #[test]

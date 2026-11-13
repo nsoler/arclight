@@ -9,6 +9,15 @@ them when they ship. `ROADMAP.md` is the public summary.
 
 On Linux and on the Macs (the DMG), from the release builds.
 
+**Phase 14 (0.14.27)**
+- [ ] Node graph: a Read of a still, a Read of a #### sequence and a
+      Media In of a video each show their first frame above the node,
+      aspect right, dimmed when the node is off; click selects,
+      double-click views; rewrite the still on disk: it updates within a
+      second; a missing file: no thumbnail, no CPU spin; zoomed far out:
+      hidden; View ▸ Node thumbnails off stays off after a restart; play
+      a video while its thumbnail first loads: at most one hitch
+
 **Phase 14 (0.14.26)**
 - [ ] 3D view: select a card and press R: the rotate rings show and
       nothing follows the mouse; drag a ring: it turns; click another

@@ -18,6 +18,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.27 — 2026-11-13
+
+- **Node graph thumbnails:** Read and Media In nodes show their clip's
+  first frame above them (a still, a sequence's first frame, a video's
+  frame 0), loaded in the background and refreshed when the path changes
+  or the file is rewritten; click one to select its node, double-click to
+  view it. Hidden when zoomed far out; **View ▸ Node thumbnails** turns
+  them off (on by default, remembered).
+
 ## 0.14.26 — 2026-11-13
 
 - **3D view: objects move, rotate and scale only by dragging the gizmo's

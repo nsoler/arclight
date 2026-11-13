@@ -4,15 +4,22 @@ Last updated 2026-11-13.
 
 ## Status
 
-- **0.14.26 (2026-11-13, unreleased): gizmo-only 3D transforms.**
-  `Viewer::transform_keys` no longer starts object transforms; every
-  `Transforming` is a gizmo drag (`by_drag` removed, `start_many`
-  private). `Viewer::follow_selection` resets the tool to Move when the
-  sorted selection changes, unless Select is on. `PointsTransforming`
-  (a Curve's picked points) keeps keyboard G / R / S: points have no
-  gizmo. In flight next: node-graph thumbnails for Read / Media In
-  (Dev1 `src/gui/thumbnails.rs` loader, Dev2 `src/gui/graph_thumbs.rs`
-  + node_editor / View ▸ Node Thumbnails).
+- **0.14.26–0.14.27 (2026-11-13, unreleased).** 0.14.26: gizmo-only 3D
+  transforms. `Viewer::transform_keys` no longer starts object
+  transforms; every `Transforming` is a gizmo drag (`by_drag` removed,
+  `start_many` private). `Viewer::follow_selection` resets the tool to
+  Move when the sorted selection changes, unless Select is on.
+  `PointsTransforming` (a Curve's picked points) keeps keyboard G / R / S.
+  0.14.27: node-graph thumbnails. `gui/thumbnails.rs` (`Thumbnails::get`
+  never blocks; one decoder thread, catch_unwind per job; keyed on op,
+  path, first frame and file mtime; failures cached until the key
+  changes); `gui/graph_thumbs.rs` places and draws them; `NodeEditor`
+  owns the cache and only asks for on-screen read / media_in nodes at
+  zoom ≥ 0.4; the toggle is `ViewPrefs.node_thumbnails` (view.json).
+  Known: a video's thumbnail goes through `media::read_video_frame`'s
+  shared per-path decoder, so a first thumbnail of a playing video
+  restarts its stream once (accepted; media.rs untouched).
+
 - **Version 0.14.25, released as v0.14.25** (2026-11-02: Linux tarball,
   Windows zip, `arclt` wheel + sdist, macOS DMG; marked Latest): Help ▸
   Examples ▸ Particles: a swirling plasma beam (`examples/plasma-beam.json`,
