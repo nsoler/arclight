@@ -634,7 +634,7 @@ pub enum Outcome {
     Cancelled,
 }
 
-/// G / R / S on a node: the gesture, writing the node's param as it goes
+/// A gizmo drag on a node (releasing the button confirms): the gesture, writing the node's param as it goes
 /// (a key at the frame when it's animated), and putting it back exactly as
 /// it was (keys and all, or unset) on cancel.
 pub struct Transforming {
@@ -645,8 +645,6 @@ pub struct Transforming {
     frame: i64,
     /// The params last written, for the header.
     pub now: Trs,
-    /// Started by dragging a gizmo handle: releasing the button confirms.
-    pub by_drag: bool,
     /// Several objects at once: each of them, the gesture running about
     /// their pivot (empty for one object).
     group: Vec<Member>,
@@ -729,14 +727,14 @@ impl Transforming {
         }
         let start = trs_at(doc, node, frame);
         let stored = doc.node(node).and_then(|n| n.params.get(param(doc, node, mode)).cloned());
-        Ok(Transforming { node: node.into(), gesture: Gesture::new(mode, start, world, mouse), stored, frame, now: start, by_drag: false, group: Vec::new() })
+        Ok(Transforming { node: node.into(), gesture: Gesture::new(mode, start, world, mouse), stored, frame, now: start, group: Vec::new() })
     }
 
     /// Start `mode` on the selected `objects` (node, place in the scene),
     /// the primary last: one alone as [`Transforming::start`], several about
     /// their median point. Objects that can't take `mode` (see [`refusal`])
     /// are left out; Err when none can.
-    pub fn start_many(doc: &Doc, objects: &[(String, Mat4)], mode: Mode, mouse: Pos2, frame: i64) -> Result<Transforming, String> {
+    fn start_many(doc: &Doc, objects: &[(String, Mat4)], mode: Mode, mouse: Pos2, frame: i64) -> Result<Transforming, String> {
         let can: Vec<&(String, Mat4)> = objects.iter().filter(|(n, _)| refusal(doc, n, mode).is_none()).collect();
         let Some((lead, world)) = can.last().copied().or(objects.last()) else { return Err(format!("Select an object to {} it", mode.name().to_lowercase())) };
         let mut t = Transforming::start(doc, lead, mode, world, mouse, frame)?;
@@ -753,7 +751,7 @@ impl Transforming {
     pub fn drag_many(doc: &Doc, objects: &[(String, Mat4)], h: Handle, space: Space, mouse: Pos2, frame: i64) -> Result<Transforming, String> {
         let (mode, c) = h.gesture(space);
         let t = Transforming::start_many(doc, objects, mode, mouse, frame)?;
-        Ok(Transforming { gesture: t.gesture.with_constraint(c), by_drag: true, ..t })
+        Ok(Transforming { gesture: t.gesture.with_constraint(c), ..t })
     }
 
 
@@ -914,8 +912,8 @@ impl PointsTransforming {
 pub enum Tool {
     /// None: clicks only select.
     Select,
-    /// What a selected object shows until another tool is picked (G / R
-    /// / S pick Move / Rotate / Scale, as they start).
+    /// What a newly selected object shows until another tool is picked
+    /// (G / R / S pick Move / Rotate / Scale).
     #[default]
     Move,
     Rotate,
@@ -934,10 +932,10 @@ impl Tool {
         }
     }
     pub const ALL: [(Tool, &'static str, &'static str); 5] = [
-        (Tool::Select, "Select", "No gizmo: clicks select (G / R / S still move, rotate or scale, and pick that gizmo)"),
-        (Tool::Move, "Move", "Arrows move along an axis, squares in a plane, the center circle in the view plane (G)"),
-        (Tool::Rotate, "Rotate", "Rings turn about an axis, the outer ring about the view, inside like a trackball (R)"),
-        (Tool::Scale, "Scale", "Cubes scale along an axis, the center circle all of them (S)"),
+        (Tool::Select, "Select", "No gizmo: clicks select (G / R / S pick a gizmo)"),
+        (Tool::Move, "Move", "Arrows move along an axis, squares in a plane, the center circle in the view plane (G / R / S pick this gizmo)"),
+        (Tool::Rotate, "Rotate", "Rings turn about an axis, the outer ring about the view, inside like a trackball (G / R / S pick this gizmo)"),
+        (Tool::Scale, "Scale", "Cubes scale along an axis, the center circle all of them (G / R / S pick this gizmo)"),
         (Tool::All, "All", "Move, rotate and scale gizmos together"),
     ];
     fn moves(self) -> bool {

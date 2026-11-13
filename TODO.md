@@ -9,6 +9,13 @@ them when they ship. `ROADMAP.md` is the public summary.
 
 On Linux and on the Macs (the DMG), from the release builds.
 
+**Phase 14 (0.14.26)**
+- [ ] 3D view: select a card and press R: the rotate rings show and
+      nothing follows the mouse; drag a ring: it turns; click another
+      object: the Move arrows come back (with Select on, Select stays);
+      Alt + G still resets; F1 ▸ "Moving, rotating, scaling" shows both
+      tables cleanly
+
 **Phase 14 (0.14.4–0.14.13)**
 - [ ] Cube UV layout atlas: each face its own cell; Bake Projection on a
       projected atlas cube renders like the live projection

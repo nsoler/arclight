@@ -1,9 +1,18 @@
 # Arclight — handoff notes
 
-Last updated 2026-11-02.
+Last updated 2026-11-13.
 
 ## Status
 
+- **0.14.26 (2026-11-13, unreleased): gizmo-only 3D transforms.**
+  `Viewer::transform_keys` no longer starts object transforms; every
+  `Transforming` is a gizmo drag (`by_drag` removed, `start_many`
+  private). `Viewer::follow_selection` resets the tool to Move when the
+  sorted selection changes, unless Select is on. `PointsTransforming`
+  (a Curve's picked points) keeps keyboard G / R / S: points have no
+  gizmo. In flight next: node-graph thumbnails for Read / Media In
+  (Dev1 `src/gui/thumbnails.rs` loader, Dev2 `src/gui/graph_thumbs.rs`
+  + node_editor / View ▸ Node Thumbnails).
 - **Version 0.14.25, released as v0.14.25** (2026-11-02: Linux tarball,
   Windows zip, `arclt` wheel + sdist, macOS DMG; marked Latest): Help ▸
   Examples ▸ Particles: a swirling plasma beam (`examples/plasma-beam.json`,

@@ -18,6 +18,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.26 — 2026-11-13
+
+- **3D view: objects move, rotate and scale only by dragging the gizmo's
+  handles.** G / R / S now pick the Move / Rotate / Scale gizmo instead
+  of starting a free transform that follows the pointer, and a newly
+  selected object always shows the Move gizmo (unless the Select tool is
+  on). Alt + G / R / S still reset; G / R / S on a Curve's picked points
+  (which have no gizmo) still transform them. README and Help updated.
+
 ## 0.14.25 — 2026-11-02
 
 - **Help ▸ Examples ▸ Particles: a swirling plasma beam**

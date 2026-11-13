@@ -98,7 +98,7 @@ pub struct Viewer {
     pub sheet: bool,
     /// The 3D view (`mode3d`).
     pub viewport3d: crate::viewport3d::Viewport3d,
-    /// G / R / S, or a gizmo drag, in progress in the 3D view.
+    /// A gizmo drag in progress in the 3D view.
     transforming: Option<Transforming>,
     /// G / R / S on a Curve's picked points in progress.
     points_transforming: Option<gizmo3d::PointsTransforming>,
@@ -107,6 +107,9 @@ pub struct Viewer {
     pub space: Space,
     /// The gizmo handle being dragged.
     dragged: Option<Handle>,
+    /// The selection (sorted) last seen by the 3D view: a different one
+    /// puts the tool back to Move (see [`Viewer::follow_selection`]).
+    last_selection: Vec<String>,
     /// A message for the 3D view (why G / R / S can't), and when it was shown.
     notice: Option<(String, f64)>,
     /// Why the selection last had no (or a ghost's) gizmo, said once as a
@@ -168,6 +171,7 @@ impl Default for Viewer {
             tool: Tool::default(),
             space: Space::default(),
             dragged: None,
+            last_selection: Vec::new(),
             notice: None,
             gizmo_said: None,
             has_scene: false,
@@ -245,10 +249,12 @@ impl Viewer {
         self.transforming.is_some() || self.points_transforming.is_some()
     }
 
-    /// G / R / S over the 3D view (Blender's keys; see `gizmo3d`), each
-    /// picking its gizmo's tool as it starts, and Alt + G / R / S to reset
-    /// (the tool as it was). Runs before the viewport, so a gesture takes its
-    /// keys first; [`Viewer::transform_overlay`] draws the header after.
+    /// G / R / S over the 3D view: each picks its gizmo's tool (objects
+    /// move, turn and scale only by dragging a gizmo), or on a Curve's
+    /// picked points starts that gesture; Alt + G / R / S resets (the tool
+    /// as it was). Runs before the viewport, so a gesture (a gizmo drag)
+    /// takes its keys first; [`Viewer::transform_overlay`] draws the header
+    /// after.
     fn transform_keys(&mut self, ui: &mut egui::Ui, resp: &egui::Response, doc: &mut Doc, frame: i64) {
         let view = self.viewport3d.projector();
         if let Some(t) = &mut self.points_transforming {
@@ -264,8 +270,8 @@ impl Viewer {
             return;
         }
         if let Some(t) = &mut self.transforming {
-            let by_drag = t.by_drag;
-            let input = ui.input_mut(|i| gizmo3d::Input::take(i, by_drag));
+            // Always a gizmo drag: releasing the button confirms.
+            let input = ui.input_mut(|i| gizmo3d::Input::take(i, true));
             let outcome = match &view {
                 Some(v) => t.step(&input, v, doc),
                 None => gizmo3d::Outcome::Cancelled,
@@ -304,21 +310,27 @@ impl Viewer {
                     let results: Vec<Result<(), String>> = selection.iter().map(|n| gizmo3d::reset(doc, n, mode, frame)).collect();
                     if results.iter().any(Result::is_ok) { Ok(()) } else { results.into_iter().next().unwrap_or(Ok(())) }
                 } else {
-                    match (&view, resp.hover_pos()) {
-                        (Some(_), Some(at)) => {
-                            let objects = self.objects(doc, &selection, frame);
-                            // Its gizmo stays up after, for drag tweaks.
-                            Transforming::start_many(doc, &objects, mode, at, frame).map(|t| {
-                                self.transforming = Some(t);
-                                self.tool = Tool::of(mode);
-                            })
-                        }
-                        _ => Err("The 3D view isn't ready yet".into()),
-                    }
+                    // Only the gizmo: dragging its handles moves, turns or scales.
+                    self.tool = Tool::of(mode);
+                    Ok(())
                 };
                 if let Err(why) = result {
                     self.notice = Some((why, now));
                 }
+            }
+        }
+    }
+
+    /// A selection that isn't the one last seen (as a set) puts the tool
+    /// back to Move, so a newly selected object shows the Move gizmo;
+    /// unless the Select tool (no gizmos) was picked.
+    fn follow_selection(&mut self, doc: &Doc) {
+        let mut selection = doc.selection();
+        selection.sort();
+        if selection != self.last_selection {
+            self.last_selection = selection;
+            if self.tool != Tool::Select {
+                self.tool = Tool::Move;
             }
         }
     }
@@ -603,6 +615,7 @@ impl Viewer {
                 painter.text(rect.center(), Align2::CENTER_CENTER, text, FontId::proportional(14.0), Color32::GRAY);
             }
             Some(_) => {
+                self.follow_selection(doc);
                 self.transform_keys(ui, resp, doc, frame);
                 let why = self.gizmo_why(doc);
                 if why != self.gizmo_said {
@@ -671,7 +684,7 @@ impl Viewer {
                 ui.selectable_value(&mut self.tool, tool, label).on_hover_text(tip);
             }
             ui.separator();
-            let tip = "The gizmo's axes: the world's, or the object's own (G / R / S: press X / Y / Z twice for the object's)";
+            let tip = "The gizmo's axes: the world's, or the object's own (while dragging a gizmo: press X / Y / Z twice for the object's)";
             ui.selectable_value(&mut self.space, Space::Global, "Global").on_hover_text(tip);
             ui.selectable_value(&mut self.space, Space::Local, "Local").on_hover_text(tip);
             ui.separator();
@@ -1154,11 +1167,11 @@ mod tests {
         assert_eq!(pick(&mut v, &mut doc, "loose", None), (None, None));
     }
 
-    /// A selected object shows the Move gizmo; G / R / S start their
-    /// transform and pick that tool, which stays after Esc; Alt + a key
-    /// resets and leaves the tool alone.
+    /// A selected object shows the Move gizmo; G / R / S only pick that
+    /// tool (objects move by their gizmo's handles), with no transform;
+    /// Alt + a key resets and leaves the tool alone.
     #[test]
-    fn g_r_s_pick_the_gizmo_they_start() {
+    fn g_r_s_pick_the_gizmo() {
         use crate::viewport3d::ViewCam;
         let graph: Graph = serde_json::from_value(serde_json::json!({ "nodes": [
             { "id": "card", "op": "card" },
@@ -1188,25 +1201,62 @@ mod tests {
             .drop_without_applying_deltas();
         };
         frame(&mut v, &mut doc, vec![]);
+        let before = doc.param("card", "translate");
         for (k, tool) in [(egui::Key::R, Tool::Rotate), (egui::Key::S, Tool::Scale), (egui::Key::G, Tool::Move)] {
             for from in [Tool::Select, Tool::All, Tool::Move] {
                 v.tool = from;
                 frame(&mut v, &mut doc, vec![key(k, egui::Modifiers::NONE)]);
-                assert!(v.is_transforming(), "{k:?} from {from:?}: started");
+                assert!(!v.is_transforming(), "{k:?} from {from:?}: no transform");
                 assert_eq!(v.tool, tool, "{k:?} from {from:?}");
-                frame(&mut v, &mut doc, vec![key(egui::Key::Escape, egui::Modifiers::NONE)]);
-                assert!(!v.is_transforming(), "{k:?}: Esc cancels");
-                assert_eq!(v.tool, tool, "{k:?}: the tool stays after Esc");
+                assert_eq!(v.gizmo(&doc).map(|g| g.0.tool), Some(tool), "{k:?}: its gizmo shows");
+                // The pointer moving after doesn't move the card.
+                frame(&mut v, &mut doc, vec![egui::Event::PointerMoved(Pos2::new(500.0, 400.0))]);
+                assert_eq!(doc.param("card", "translate"), before, "{k:?}: nothing moved");
             }
         }
         v.tool = Tool::All;
         frame(&mut v, &mut doc, vec![key(egui::Key::R, egui::Modifiers::ALT)]);
         assert!(!v.is_transforming());
         assert_eq!(v.tool, Tool::All, "Alt + R resets, the tool as it was");
-        // Nothing selected: no transform, no change.
+        // Nothing selected: no change, and a notice says why.
         doc.clear_selection();
+        v.notice = None;
         frame(&mut v, &mut doc, vec![key(egui::Key::S, egui::Modifiers::NONE)]);
         assert_eq!(v.tool, Tool::All);
+        assert!(v.notice.as_ref().is_some_and(|(n, _)| n == "Select an object to scale it"), "{:?}", v.notice);
+    }
+
+    /// A different selection puts the tool back to Move (a new object shows
+    /// the Move gizmo), the same set in another order doesn't, and the
+    /// Select tool stays.
+    #[test]
+    fn a_new_selection_shows_the_move_gizmo() {
+        let graph: Graph = serde_json::from_value(serde_json::json!({ "nodes": [
+            { "id": "a", "op": "card" },
+            { "id": "b", "op": "card" },
+        ] }))
+        .unwrap();
+        let mut doc = Doc::new(graph, None);
+        let mut v = Viewer::default();
+        doc.select_only("a");
+        v.follow_selection(&doc);
+        assert_eq!(v.tool, Tool::Move);
+        v.tool = Tool::Rotate;
+        v.follow_selection(&doc);
+        assert_eq!(v.tool, Tool::Rotate, "same selection: the tool stays");
+        doc.select_only("b");
+        v.follow_selection(&doc);
+        assert_eq!(v.tool, Tool::Move, "another object: Move");
+        v.tool = Tool::Scale;
+        doc.clear_selection();
+        v.follow_selection(&doc);
+        doc.select_only("b");
+        v.follow_selection(&doc);
+        assert_eq!(v.tool, Tool::Move, "selected again after nothing: Move");
+        v.tool = Tool::Select;
+        doc.select_only("a");
+        v.follow_selection(&doc);
+        assert_eq!(v.tool, Tool::Select, "Select is kept");
     }
 
     /// G / R / S with some of a Curve's points picked move, turn or scale
@@ -1258,11 +1308,15 @@ mod tests {
         frame(&mut v, &mut doc, vec![key(egui::Key::X), key(egui::Key::Num5)]);
         frame(&mut v, &mut doc, vec![key(egui::Key::Escape)]);
         assert_eq!(xs(&doc), vec![-2.0, 2.0, 2.0]);
-        // Nothing picked: the curve itself (its translate) moves.
+        // Nothing picked: G only picks the curve's Move gizmo; nothing moves.
         v.viewport3d.curve_points.clear();
+        v.tool = Tool::Rotate;
+        let before = doc.param("road", "translate");
         frame(&mut v, &mut doc, vec![key(egui::Key::G)]);
+        assert!(!v.is_transforming());
+        assert_eq!(v.tool, Tool::Move);
         frame(&mut v, &mut doc, vec![key(egui::Key::Y), key(egui::Key::Num1), key(egui::Key::Enter)]);
-        assert_eq!(doc.param("road", "translate"), serde_json::json!([0.0, 1.0, 0.0]));
+        assert_eq!(doc.param("road", "translate"), before);
         assert_eq!(xs(&doc), vec![-2.0, 2.0, 2.0]);
     }
 

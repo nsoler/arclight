@@ -421,7 +421,7 @@ The number row works as well as the numpad. Axis views switch to
 orthographic until you orbit away. Orbiting leaves a camera view for the
 free view from where the camera was. Looking through a spot or area light
 shows where it shines (a spot's cone just fills the frame's height): move
-or rotate it with G / R or the gizmo to aim it.
+or rotate it with the gizmo to aim it.
 
 - **Solid / Lit** (⇧Z, the 3D toolbar, View ▸ Lit shading): Solid lights meshes from the view, for working fast; Lit lights them by the scene's lights and materials as Scanline Render does (from the view if there are no lights). Lit is the default when the scene has lights. **Shadows** (toolbar, View ▸ Lit shadows) adds the lights' shadows in Lit, once the view stops moving.
 
@@ -452,29 +452,36 @@ or rotate it with G / R or the gizmo to aim it.
 
 ### Moving, rotating, scaling
 
+Selected objects move, rotate and scale only by dragging their gizmo's
+handles.
+
 | Key | Does |
 |---|---|
-| **G** / **R** / **S** | Move / rotate / scale the selection: it follows the mouse |
+| **G** / **R** / **S** | Switch the gizmo to Move / Rotate / Scale |
+| **⌥G** / **⌥R** / **⌥S** | Reset translate / rotate / scale |
+
+On a Curve's picked points (points have no gizmo), G / R / S follow the
+mouse:
+
+| Key | Does |
+|---|---|
+| **G** / **R** / **S** | Move / rotate / scale the picked points: they follow the mouse |
 | **X** / **Y** / **Z** | Constrain to that axis (press twice for the object's own axis) |
 | **⇧X** / **⇧Y** / **⇧Z** | Every axis but that one |
 | A number, then **Enter** | That exact amount (`G X 2 Enter`, `R Z 90 Enter`, `S 0.5 Enter`; **-** negates) |
 | **⌘** (held) | Snap: 1 unit, 15°, 0.1 scale |
 | Click or **Enter** | Confirm |
 | Right-click or **Esc** | Cancel |
-| **⌥G** / **⌥R** / **⌥S** | Reset translate / rotate / scale |
 
 The viewer's toolbar picks a gizmo for the selected object: **Move** (the
 default: axis arrows, plane squares, a center circle), **Rotate** (axis
 rings, an outer view ring, a trackball inside), **Scale** (axis cubes, the
 center for all axes), **All** (arrows, rings and cubes together), or
-**Select** for none; **Global / Local** sets the axes. G, R and S also
-switch the gizmo to Move, Rotate or Scale as they start, and it stays
-after Esc: after R the rings stay up to tweak the turn. Drag a
-ring along its length to turn about its axis (it turns the same way
-however the ring is seen, even edge-on); with **R**, start with the
-pointer away from the object: close to its center the turn is damped. Gizmo
-drags and G / R / S key animated parameters at the current frame and are
-one undo step each. A parameter linked to another node can't be moved
+**Select** for none; **Global / Local** sets the axes. G, R and S switch
+it too; selecting a different object brings back Move (unless Select is
+on). Drag a ring along its length to turn about its axis (it turns the
+same way however the ring is seen, even edge-on). Gizmo drags key
+animated parameters at the current frame and are one undo step each. A parameter linked to another node can't be moved
 until it's unlinked.
 
 A selected **Spot Light** shows four square handles on the edge of its
@@ -533,8 +540,8 @@ selected object.
   (Center, Size, Rotate; **Invert** keeps those outside), to cut it down
   or clear floaters; everything else in the scene passes through. Its
   box or sphere shows in the 3D view (purple; orange when selected):
-  click its middle to select it, then G / R / S or the gizmo place, turn
-  and size it.
+  click its middle to select it, then its gizmo places, turns and sizes
+  it (G / R / S pick which).
 - **Splat Color** grades captures (**Exposure**, **Saturation**, **Gain**,
   exact from every viewing angle) and their **Opacity**; **View
   independent** drops the color's change with the angle (quicker, and
@@ -577,7 +584,7 @@ selected object.
   0 stay put, and all go when there's no such attribute. The walls get
   the face attribute `side` = 1, to color or delete them.
   **Delete Geo** removes points, faces or instances inside or outside a
-  box or sphere you place in the 3D view (G moves it, S sizes it), or
+  box or sphere you place in the 3D view (its gizmo moves and sizes it), or
   where an expression is true: `@P.y < 0` drops everything below the
   ground, `random(@id) < 0.3` thins a scatter by a third, the same third
   every time. **Attribute Set** works out attributes for every point (or
@@ -626,9 +633,10 @@ selected object.
   no end caps (caps close a tube's ends only). With a Curve selected,
   its points show as squares in the 3D view. Click one to pick it
   (Shift-click for more), drag it, or press G, R or S to move, turn or
-  scale the picked points about their middle (with nothing picked, G, R
-  and S move the whole curve). A Bezier curve's picked points show their
-  handles: drag one to shape the curve, holding Alt to move it alone.
+  scale the picked points about their middle (with nothing picked, the
+  curve's gizmo moves the whole curve; G / R / S pick which). A Bezier
+  curve's picked points show their handles: drag one to shape the curve,
+  holding Alt to move it alone.
   Ctrl-click (Cmd on a Mac) adds a point after the picked one, on
   whatever is under the pointer; Ctrl-click on the curve itself inserts a
   point there. Delete removes the picked points. **Particles to Points**
@@ -786,8 +794,8 @@ editing a param re-simulates from the first frame it changes.
 
 In the **3D view**, Particle Emitters show their shape and direction,
 Attractors a star (and their reach), Vortices a ring round their axis,
-and Bounce planes a square and normal: click to select, then **G / R /
-S** or the gizmos to place them (Attractor, Vortex and Bounce only
+and Bounce planes a square and normal: click to select, then drag the
+gizmos to place them (Attractor, Vortex and Bounce only
 move). In **2D**, while viewing a Particles 2D, select its Emitter to
 drag its position, size and angle in the viewer.
 

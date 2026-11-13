@@ -179,24 +179,24 @@ project.
   way round. Right-click a Camera Tracker's selected points to Place Card
   here or Place locator.
 
-**Transforming in 3D** (Blender-style). With an object selected and the
-pointer over the 3D view: **G** moves, **R** rotates, **S** scales it,
-following the pointer (Move: in the view plane at the object's depth;
-Rotate: by how far the pointer turns about the object's center, damped
-within 60 points of it so a pointer near the object doesn't swing it; Scale: by
-how much farther from its center the pointer is). Then **X / Y / Z**
-constrains to that world axis (press it again for the object's own axis,
-a third time to free it), **⇧ X / Y / Z** excludes that axis, typing a
-number sets the amount exactly (`G X 2 Enter`, `R Z 90 Enter`,
-`S 0.5 Enter`; **-** negates, Backspace edits), **Ctrl** snaps (1 unit,
-15°, 0.1); **Enter** or a click confirms, **Esc** or a right-click
-cancels and puts everything back. **Alt + G / R / S** resets translate /
-rotate / scale. Curves: pick points (Shift for more), drag or G/R/S
-them, drag Bezier handles (Alt breaks), Ctrl/Cmd-click adds or inserts,
-Delete removes. The viewer toolbar's **Select / Move / Rotate / Scale /
+**Transforming in 3D.** A selected object moves, rotates and scales only
+by dragging its gizmo's handles. With the pointer over the 3D view,
+**G / R / S** switch the gizmo to Move / Rotate / Scale; selecting a
+different object brings back Move (unless the toolbar's Select is on).
+**Alt + G / R / S** resets translate / rotate / scale. Curves: pick
+points (Shift for more) and drag them, or press **G / R / S** to move,
+rotate or scale them about their middle, following the pointer (points
+have no gizmo; with nothing picked, the curve's gizmo moves the whole
+curve). Then **X / Y / Z** constrains to that world axis (press it
+again for the object's own axis, a third time to free it), **⇧ X / Y /
+Z** excludes that axis, typing a number sets the amount exactly
+(`G X 2 Enter`, `R Z 90 Enter`, `S 0.5 Enter`; **-** negates, Backspace
+edits), **Ctrl** snaps (1 unit, 15°, 0.1); **Enter** or a click
+confirms, **Esc** or a right-click cancels and puts everything back.
+Drag Bezier handles (Alt breaks), Ctrl/Cmd-click adds or inserts, Delete
+removes. The viewer toolbar's **Select / Move / Rotate / Scale /
 All** pick the gizmo on the selected object (**Move**, the default;
-**G / R / S** also pick Move / Rotate / Scale as they start, so the gizmo
-stays up for tweaks; **All** shows arrows, rings and cubes together): drag an arrow to move along
+**All** shows arrows, rings and cubes together): drag an arrow to move along
 an axis, a square to move in that plane, the center circle to move in the
 view plane; a colored ring to rotate about that axis (by how far the
 pointer moves along the ring, so it turns smoothly even seen edge-on), the white outer
@@ -408,7 +408,7 @@ applies everywhere and `mask_invert` does nothing.
 | `read_geo` | 0 | `file`, `frame_rate`, `frame_offset` (Alembic: the time read is (frame + offset) / rate), `translate`/`rotate`/`scale` [3], `opacity` (0–1, animatable: fades every material, shadows too), `override_material` with `shading`, `specular`, `roughness`, `emission`; `holdout`, `casts_shadows`, `receives_shadows` | 3D: imports a mesh: `.obj` (with its `.mtl` materials), glTF `.gltf` / `.glb` (node transforms applied, PBR materials mapped) or an Alembic `.abc` cache (Ogawa; animated transforms and deforming polygon/subdivision meshes, read at each frame); outputs a scene |
 | `write_geo` | 1 (scene) | `path` (`.obj` / `.gltf` / `.glb`, `####` = frame), `include` (meshes, cards, instances, points, curves), `group`, `instances` (instance / realize), `attributes` | 3D: writes the scene's geometry when rendered (as `write`): OBJ baked in place with its MTL, or glTF with placements, shared prototype meshes, materials and textures, Cd as vertex colors and other point attributes as `_name`; passes the scene through |
 | `read_splat` | 0 | `file`, `up` (-y default, y, z), `translate`/`rotate`/`scale` [3], `opacity`, `sh_degree` (0–3), `holdout` | 3D: reads a Gaussian splat capture (`.ply`: INRIA 3DGS layout, binary or ASCII, spherical harmonics up to degree 3; `.splat`: the antimatter15 web format; `.spz`: Niantic's compressed format, versions 2 and 3) into the scene; samples are `examples/geo/splats.ply` (synthetic) and `examples/geo/hornedlizard.spz` (a real capture from Niantic's SPZ repository, MIT; `examples/hornedlizard.json` sets it up). Scanline Render draws splats mixed by depth with cards and meshes (holdouts cut them, and a Holdout Read Splat cuts what's behind it; self-lit, so emission only; depth / P where half opaque, N, motion, id and a matte per Read Splat; motion blur); the 3D view shows their centers as dots while moving and renders them in full once it settles |
-| `splat_crop` | 1 (scene) | `shape` (box, sphere), `center`, `size`, `rotate`, `invert` | 3D: keeps the scene's splats whose centers are inside the region (outside with Invert), to cut a capture down or clear floaters; everything else passes through; its region shows in the 3D view, moved / turned / sized with G / R / S or the gizmo |
+| `splat_crop` | 1 (scene) | `shape` (box, sphere), `center`, `size`, `rotate`, `invert` | 3D: keeps the scene's splats whose centers are inside the region (outside with Invert), to cut a capture down or clear floaters; everything else passes through; its region shows in the 3D view, moved / turned / sized with its gizmo (G / R / S pick Move / Rotate / Scale) |
 | `splat_color` | 1 (scene) | `exposure` (stops), `saturation`, `gain` (color), `opacity`, `view_independent` | 3D: grades the scene's splats (exact from every viewing angle) and their opacity; View independent drops the color's change with the angle |
 | `transform_geo` | 1 (scene) | `translate`, `rotate`, `scale`, `pivot`, `group`, `cameras_lights` | 3D: moves, turns and scales what's in the scene about Pivot (scene space): meshes, cards, point sets, curves, instances, splat captures and regions, each placed anew (nothing rebuilt); Group narrows it to one node's (its name, or a pattern with `*`: `rock*`); cameras and lights stay unless Cameras and lights is on |
 | `scatter` | 1 (scene), 2 density image (optional), 3 camera (optional) | `source` (surface, volume, tracker points), `group`, `density`, `density_attr`, `image_via` (uv, camera), `channel` (alpha, luminance), `min_distance`, `seed` | 3D: adds a point set scattered over the scene's meshes and cards (evenly by area, Density a unit of area), inside its closed meshes (a unit of volume) or at its tracker points (Density the share kept); a mesh attribute and a mask image (at the uvs or through a camera) thin it; points keep their place and id when the density or mask changes; attributes id, N, uv and the surface's own |
@@ -462,7 +462,7 @@ applies everywhere and `mask_invert` does nothing.
 
 `examples/cameras-three-views.json` (**Help ▸ Examples ▸ Cameras: one set, three views**) renders one Scene through three of its cameras (wide and moving, close-up, orthographic top), each Scanline Render picking its camera by name with its Camera param, with a Viewer per view and a contact sheet of the three.
 
-In the 3D view, emitters (shape and direction), attractors, vortices and bounce planes are drawn, picked and moved with G / R / S and the gizmos (forces move only); in 2D, an emitter feeding a viewed Particles 2D shows box or point handles in the viewer.
+In the 3D view, emitters (shape and direction), attractors, vortices and bounce planes are drawn, picked and moved with the gizmos (forces move only); in 2D, an emitter feeding a viewed Particles 2D shows box or point handles in the viewer.
 
 3D nodes (Camera, Card, Scene) build a 3D scene: their blue wires carry
 scenes, not images, and only connect to scene inputs (the node editor,
