@@ -52,6 +52,26 @@ Last updated 2026-11-13.
   nothing in flight. Next candidates: phase 15 (Q1–Q5 in
   `docs/production-plan.md`), the channel combine / routing node and the Roto
   pen (TODO, user's requests), the 3D pivot, Geo Info per-point picking.
+- **Mac findings (2026-11-13, Apple M4, v0.14.29 DMG; TODO "Known gaps",
+  first three items).** The DMG already runs native arm64 on Metal
+  (`lipo`: x86_64 + arm64; `arclight gpu`: `Apple M4 (Metal,
+  IntegratedGpu)`, unified memory), so an Apple-Silicon-only build
+  wouldn't be faster. The user's project
+  `examples/Pond-Martian-LizardSplat-Combo.json` (splat + two cards over
+  a plate, Scanline Render 1280×720) plays at ~1 fps with the GPU and
+  ~3 fps without: 1017 vs 321 ms/frame warm (Evaluator kept across
+  frames, `evaluate_lazy` + `gpu.wait()`); the CPU idles in
+  `__psynch_cvwait`, so a GPU pass is slow, likely splats mixed with
+  surfaces (`sort_tiles` past `LOCAL`, or the merge in `raster.wgsl`).
+  The plate's size doesn't matter (4K or 720p: same). A one-frame Media
+  In (the still PNG) makes the render time-varying, so the static splat
+  redraws every frame. `gpu --check` fails 13 / 81 there, all 3D, on the
+  depth plane (the 2026-11-02 Mac run passed). Workaround for the user:
+  GPU off. Next: the same project and `gpu --check` on Linux / the RTX
+  5070, to tell Metal from general. The example is committed with
+  relative paths; its plate `examples/media/pond-720.mp4` (36 MB) is a
+  720p transcode of the user's 4K original. `main` is now at
+  `wip-ns-tinyshiny` (TODO + the example on top of `wip-ns-ui`).
 - **Next: the rest of the user's hand testing** (TODO.md "To check by
   hand"; Camera Tracker, "." pivot, Roto following a Tracker, detached
   windows, the Cameras example and `gpu --check` on the Macs passed on
@@ -408,8 +428,9 @@ Workspace: `.`, `python/` (crate `arclt`, pyo3 abi3-py310; public API in
 ## Known issues and gaps
 
 - Much interaction is verified by tests and screenshots, not by hand
-  (TODO.md lists it). Nothing tested on real Windows; the Macs haven't run
-  `arclight gpu --check`. Camera Tracker deletion / re-solve alignment not
+  (TODO.md lists it). Nothing tested on real Windows; `arclight gpu
+  --check` on the Apple M4 fails 13 / 81 (3D depth, 2026-11-13; see
+  Status). Camera Tracker deletion / re-solve alignment not
   tried on real footage.
 - Overlay handles misalign when the node's input format differs from the
   viewed image (view the node itself).
