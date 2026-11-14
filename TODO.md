@@ -90,9 +90,10 @@ On Linux and on the Macs (the DMG), from the release builds.
       Backspace removes the last point while drawing. Until it's closed
       it's an open path: Feather, feather strength / falloff, cut-off
       (and per-point feather handles) are grayed out in Properties and
-      in the viewer, and enable once the curve is closed. Either a new
-      node (Roto Pen) or a draw mode on today's Roto (Roto already has
-      Bezier points, Feather and Point feather); the plan decides. Adds
+      in the viewer, and enable once the curve is closed. A draw mode on
+      today's Roto, not a new node (user's decision, 2026-11-13): Roto
+      already has Bezier points, Feather and Point feather, and existing
+      projects' Rotos must load and render unchanged. Adds
       falloff controls Roto doesn't have yet (strength / curve of the
       feather, a cut-off)
 - [ ] **Channel combine / routing node** (user, 2026-11-13): several
