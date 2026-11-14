@@ -81,6 +81,47 @@ On Linux and on the Macs (the DMG), from the release builds.
 
 ## Known gaps and follow-ups
 
+- [ ] **Apple Silicon: 3D render with splats + cards is ~3× slower on the
+      GPU than the CPU** (user, 2026-11-13; M4, Metal, v0.14.29 DMG).
+      Project `examples/Pond-Martian-LizardSplat-Combo.json` (Read Splat
+      `geo/hornedlizard.spz` → Splat Crop, two Cards with Media Ins:
+      `media/pond-720.mp4` and the still `mad-martian.png`, a Camera,
+      Scanline Render 1280×720; the user's original plate was 3840×2160,
+      timed below). Compare on Linux / the RTX 5070 to tell a Metal
+      problem from a general one.
+      Warm playback, Evaluator kept across frames: full project 1017
+      ms/frame on the GPU vs 321 ms with `ARCLIGHT_GPU=0`; splat + still
+      card 451 vs 164; two cards, no splat 146 vs 113; the plate alone 22
+      ms. A 720p plate changes nothing (992 vs 313). The CPU sits ~80% in
+      `__psynch_cvwait` (waiting on the GPU), so it's a GPU pass, not
+      host code; `gpu --check` has 3D renders 4–22× faster on the GPU, so
+      it's specific to splats mixed with surfaces. Profile with Xcode's
+      Metal capture; suspects: `sort_tiles` in `splat_view.wgsl` when a
+      tile holds more than `LOCAL` (2048) pairs (the in-place path), and
+      how `raster.wgsl` merges splats with surfaces. Done when the GPU is
+      at least as quick as the CPU on this project and `gpu --check`
+      passes. The build is native arm64 + Metal already (universal DMG,
+      `arclight gpu` says `Apple M4 (Metal)`): an Apple-Silicon-only build
+      wouldn't help
+- [ ] **Scanline Render redraws a static splat every frame** (same
+      project): a Media In of a single still (first = last frame) counts
+      as time-varying, so the whole 3D render, splat included, re-runs
+      each frame; the splat with nothing else caches after frame 1.
+      Treat a one-frame Media In / Read as static in
+      `ops::is_time_varying`, and consider caching a render's static
+      layers (the prepared splats, a static card) so only the moving
+      card redraws. Old projects must render the same
+- [ ] **`gpu --check` fails 13 / 81 on Apple M4 (Metal)** (2026-11-13,
+      v0.14.29 DMG): every failing case is a 3D render or 3D view (lit AA,
+      every pass, orthographic, shadows, see-through shadows, Project 3D,
+      motion blur, 200k splats, 10k instanced cards, instances with
+      shadows, 3D view solid), all on the **depth** plane (mean diff
+      2.3–3.8, 46–75% of values off; rgba matches except see-through
+      shadows, 4% off). The 2026-11-02 Mac run passed, so either new in
+      0.14.26–0.14.29 or specific to this Mac. 46–75% of values off looks
+      like background / far-plane pixels (inf vs a far value, or a
+      depth-format / clear difference on Metal). The 0.14.29 hand check
+      above, "Macs: … plus `gpu --check`", doesn't hold yet
 - [ ] **Roto pen: draw a shape point by point** (user, 2026-11-13).
       Today a new Roto starts as a default circle that has to be dragged
       and reshaped into place. Instead: a pen mode in the 2D viewer where
@@ -113,7 +154,7 @@ On Linux and on the Macs (the DMG), from the release builds.
 - [ ] Particles to Points ids pack emitter (8 bits) + birth count (24
       bits): past ~16.7 M births ids wrap (only Instance on Points'
       random pick cares)
-- [ ] Splats: a GPU path; SOG / compressed PLY if asked
+- [ ] Splats: SOG / compressed PLY if asked
 - [ ] Alembic: curves, points, cameras, face sets as materials
 - [ ] A new logo: `assets/arclight.png` and the full logo still say
       ARCLIGHT

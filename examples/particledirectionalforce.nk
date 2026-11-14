@@ -1,0 +1,175 @@
+Root {
+ inputs 0
+}
+Camera2 {
+ inputs 0
+ translate {-4.041593075 3.406004429 6.260117054}
+ rotate {-17.30209541 -32.57871628 0}
+ name Camera1
+ xpos 1913
+ ypos 34
+}
+Constant {
+ inputs 0
+ channels {rgba.red rgba.green rgba.blue rgba.alpha}
+ color {1 0.5791472197 0.003982091323 1}
+ format "40 40 0 0 40 40 1 tiny"
+ name Constant2
+ xpos 2217
+ ypos -286
+}
+Card2 {
+ inputs 0
+ rows 1
+ columns 1
+ rotate {-90 0 0}
+ control_points {3 3 3 6 
+
+1 {-0.5 -0.5 0} 0 {0.1666666865 0 0} 0 {0 0 0} 0 {0 0.1666666865 0} 0 {0 0 0} 0 {0 0 0} 
+1 {0 -0.5 0} 0 {0.1666666716 0 0} 0 {-0.1666666716 0 0} 0 {0 0.1666666865 0} 0 {0 0 0} 0 {0.5 0 0} 
+1 {0.5 -0.5 0} 0 {0 0 0} 0 {-0.1666666865 0 0} 0 {0 0.1666666865 0} 0 {0 0 0} 0 {1 0 0} 
+1 {-0.5 0 0} 0 {0.1666666865 0 0} 0 {0 0 0} 0 {0 0.1666666716 0} 0 {0 -0.1666666716 0} 0 {0 0.5 0} 
+1 {0 0 0} 0 {0.1666666716 0 0} 0 {-0.1666666716 0 0} 0 {0 0.1666666716 0} 0 {0 -0.1666666716 0} 0 {0.5 0.5 0} 
+1 {0.5 0 0} 0 {0 0 0} 0 {-0.1666666865 0 0} 0 {0 0.1666666716 0} 0 {0 -0.1666666716 0} 0 {1 0.5 0} 
+1 {-0.5 0.5 0} 0 {0.1666666865 0 0} 0 {0 0 0} 0 {0 0 0} 0 {0 -0.1666666865 0} 0 {0 1 0} 
+1 {0 0.5 0} 0 {0.1666666716 0 0} 0 {-0.1666666716 0 0} 0 {0 0 0} 0 {0 -0.1666666865 0} 0 {0.5 1 0} 
+1 {0.5 0.5 0} 0 {0 0 0} 0 {-0.1666666865 0 0} 0 {0 0 0} 0 {0 -0.1666666865 0} 0 {1 1 0} }
+ name Card2
+ xpos 2077
+ ypos -323
+}
+push 0
+ParticleEmitter {
+ inputs 3
+ emit_channels {b}
+ emit_from faces
+ rate 100
+ lifetime 85
+ halflife 10
+ velocity 0.115
+ size 0.025
+ name ParticleEmitter2
+ tile_color 0xffaa35ff
+ label "channel (b)"
+ xpos 2077
+ ypos -267
+}
+Constant {
+ inputs 0
+ channels {rgba.red rgba.green rgba.blue rgba.alpha}
+ color {0 0.3212000132 0.4399999976 1}
+ format "40 40 0 0 40 40 1 tiny"
+ name Constant1
+ xpos 1808
+ ypos -285
+}
+Card2 {
+ inputs 0
+ rows 1
+ columns 1
+ rotate {-90 0 0}
+ control_points {3 3 3 6 
+
+1 {-0.5 -0.5 0} 0 {0.1666666865 0 0} 0 {0 0 0} 0 {0 0.1666666865 0} 0 {0 0 0} 0 {0 0 0} 
+1 {0 -0.5 0} 0 {0.1666666716 0 0} 0 {-0.1666666716 0 0} 0 {0 0.1666666865 0} 0 {0 0 0} 0 {0.5 0 0} 
+1 {0.5 -0.5 0} 0 {0 0 0} 0 {-0.1666666865 0 0} 0 {0 0.1666666865 0} 0 {0 0 0} 0 {1 0 0} 
+1 {-0.5 0 0} 0 {0.1666666865 0 0} 0 {0 0 0} 0 {0 0.1666666716 0} 0 {0 -0.1666666716 0} 0 {0 0.5 0} 
+1 {0 0 0} 0 {0.1666666716 0 0} 0 {-0.1666666716 0 0} 0 {0 0.1666666716 0} 0 {0 -0.1666666716 0} 0 {0.5 0.5 0} 
+1 {0.5 0 0} 0 {0 0 0} 0 {-0.1666666865 0 0} 0 {0 0.1666666716 0} 0 {0 -0.1666666716 0} 0 {1 0.5 0} 
+1 {-0.5 0.5 0} 0 {0.1666666865 0 0} 0 {0 0 0} 0 {0 0 0} 0 {0 -0.1666666865 0} 0 {0 1 0} 
+1 {0 0.5 0} 0 {0.1666666716 0 0} 0 {-0.1666666716 0 0} 0 {0 0 0} 0 {0 -0.1666666865 0} 0 {0.5 1 0} 
+1 {0.5 0.5 0} 0 {0 0 0} 0 {-0.1666666865 0 0} 0 {0 0 0} 0 {0 -0.1666666865 0} 0 {1 1 0} }
+ name Card1
+ xpos 1936
+ ypos -328
+}
+push 0
+ParticleEmitter {
+ inputs 3
+ emit_from faces
+ rate 100
+ lifetime 85
+ halflife 10
+ velocity 0.115
+ size 0.025
+ name ParticleEmitter1
+ tile_color 0x37a3ccff
+ label "channel (a)"
+ xpos 1936
+ ypos -266
+}
+ParticleMerge {
+ inputs 2
+ name ParticleMerge1
+ xpos 2011
+ ypos -209
+}
+ParticleDirectionalForce {
+ strength {0.01 0 0}
+ channels {a}
+ name ParticleDirectionalForce1
+ tile_color 0x37a3ccff
+ xpos 2011
+ ypos -157
+}
+ParticleDirectionalForce {
+ strength {-0.01 0 0}
+ channels {b}
+ name ParticleDirectionalForce2
+ tile_color 0xffaa35ff
+ xpos 2011
+ ypos -98
+}
+Scene {
+ name Scene1
+ xpos 2021
+ ypos -39
+}
+Constant {
+ inputs 0
+ channels rgb
+ format "640 480 0 0 640 480 1 PC_Video"
+ name Constant3
+ xpos 2134
+ ypos 31
+}
+ScanlineRender {
+ inputs 3
+ motion_vectors_type velocity
+ name ScanlineRender1
+ xpos 2011
+ ypos 55
+}
+Viewer {
+ input_process false
+ name Viewer1
+ xpos 2011
+ ypos 119
+}
+StickyNote {
+ inputs 0
+ name StickyNote2
+ tile_color 0x9b9b9bff
+ label "This example places the particles into separate channels\nand then makes individual ParticleDirectionalForce\nnodes affect each channel separately downstream.\n"
+ note_font_size 18
+ xpos 1844
+ ypos -453
+}
+StickyNote {
+ inputs 0
+ name StickyNote3
+ tile_color 0x9b9b9bff
+ label "Because 'channels' is set to 'b' on the Conditions tab, \nthis node only applies a directional force to particles in channel b."
+ note_font_size 18
+ xpos 2118
+ ypos -103
+}
+StickyNote {
+ inputs 0
+ name StickyNote1
+ tile_color 0x9b9b9bff
+ label "Because 'channels' is set to 'a' on the Conditions tab, \nthis node only applies a directional force to particles in channel a."
+ note_font_size 18
+ xpos 2115
+ ypos -165
+}
