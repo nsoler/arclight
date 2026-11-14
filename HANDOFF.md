@@ -4,7 +4,7 @@ Last updated 2026-11-13.
 
 ## Status
 
-- **0.14.26–0.14.27 (2026-11-13, unreleased).** 0.14.26: gizmo-only 3D
+- **0.14.26–0.14.27 (2026-11-13, in v0.14.29).** 0.14.26: gizmo-only 3D
   transforms. `Viewer::transform_keys` no longer starts object
   transforms; every `Transforming` is a gizmo drag (`by_drag` removed,
   `start_many` private). `Viewer::follow_selection` resets the tool to
@@ -20,7 +20,7 @@ Last updated 2026-11-13.
   shared per-path decoder, so a first thumbnail of a playing video
   restarts its stream once (accepted; media.rs untouched).
 
-- **0.14.28 (2026-11-13, unreleased): Geo Info World + Cloud, Scanline
+- **0.14.28 (2026-11-13, in v0.14.29): Geo Info World + Cloud, Scanline
   note.** `geo_table::View {world, picked}` and `Domain::Cloud` are the
   sheet's only (`Domain::SHEET` / `sheet_counts` / `Table::with_view`);
   MCP geometry still uses `Domain::ALL` / `counts` / `Table::new`,
@@ -28,7 +28,7 @@ Last updated 2026-11-13.
   world; normal: inverse transpose). Cloud picks come from
   `viewport3d.points` (scene.points indices), validated against the
   sheet's scene.
-- **0.14.29 (2026-11-13, unreleased): GPU playback without the
+- **0.14.29 (2026-11-13, in v0.14.29): GPU playback without the
   per-frame read-back.** `Evaluator::evaluate_lazy` + `gui/view_frame.rs`
   (`ViewFrame`: format, window, layers and scene kept as made; `image()`
   reads back once, memoised; `pixel()` reads single GPU pixels) replace
@@ -39,14 +39,11 @@ Last updated 2026-11-13.
   picker's pixel (`Request.pick`). Bench: `cargo test --release --bin
   arclight-gui playback_bench -- --ignored --nocapture`. Not yet tried:
   the live GUI by hand, a forced read-back failure, Macs.
-- **Version 0.14.25, released as v0.14.25** (2026-11-02: Linux tarball,
-  Windows zip, `arclt` wheel + sdist, macOS DMG; marked Latest): Help ▸
-  Examples ▸ Particles: a swirling plasma beam (`examples/plasma-beam.json`,
-  first in the menu, GIF in the README). v0.14.24 fixed the 2D viewer
-  toolbar's status overlapping its controls on narrower views (0.14.23,
-  unreleased, had only a partial fix). v0.14.21 has no
-  DMG on purpose (the user skipped it; its notes send Mac users to
-  v0.14.22).
+- **Version 0.14.29, released as v0.14.29** (2026-11-13: Linux tarball,
+  Windows zip, `arclt` wheel + sdist; marked Latest; **macOS DMG to
+  follow from the user**, then update the notes' Assets line). It
+  carries 0.14.26–0.14.29 (below). v0.14.25 (2026-11-02) was the plasma
+  beam example; v0.14.21 has no DMG on purpose.
 - **Phase 14 (workspace and UI)** on branch `wip-ns-ui` (from 0.13.41,
   `5d35db7`); `main` is fast-forwarded to it. Earlier phase branches are
   frozen (`wip-ns-geo`, `-gpu`, `-engine`, `-splats`, `-3dwork`, `-effects`).
