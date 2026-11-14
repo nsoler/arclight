@@ -81,6 +81,20 @@ On Linux and on the Macs (the DMG), from the release builds.
 
 ## Known gaps and follow-ups
 
+- [ ] **Roto pen: draw a shape point by point** (user, 2026-11-13).
+      Today a new Roto starts as a default circle that has to be dragged
+      and reshaped into place. Instead: a pen mode in the 2D viewer where
+      each click places a Bezier point (click-drag pulls out its handles,
+      Alt breaks them), starting wherever the user clicks; clicking the
+      first point (or Enter / a Close button) closes the curve; Esc or
+      Backspace removes the last point while drawing. Until it's closed
+      it's an open path: Feather, feather strength / falloff, cut-off
+      (and per-point feather handles) are grayed out in Properties and
+      in the viewer, and enable once the curve is closed. Either a new
+      node (Roto Pen) or a draw mode on today's Roto (Roto already has
+      Bezier points, Feather and Point feather); the plan decides. Adds
+      falloff controls Roto doesn't have yet (strength / curve of the
+      feather, a cut-off)
 - [ ] **Channel combine / routing node** (user, 2026-11-13): several
       inputs, each listing its available channels (rgba and every plane:
       depth, N, specular, matte.*, …), and a routing table that sends any

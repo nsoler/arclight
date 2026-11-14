@@ -50,8 +50,8 @@ Last updated 2026-11-13.
 - **Paused 2026-11-13 after v0.14.29** for the user's hand testing (TODO
   "To check by hand": 0.14.28, 0.14.29 incl. the Macs). Dev1 / Dev2 idle,
   nothing in flight. Next candidates: phase 15 (Q1–Q5 in
-  `docs/production-plan.md`), the channel combine / routing node (TODO,
-  user's request), the 3D pivot, Geo Info per-point picking.
+  `docs/production-plan.md`), the channel combine / routing node and the Roto
+  pen (TODO, user's requests), the 3D pivot, Geo Info per-point picking.
 - **Next: the rest of the user's hand testing** (TODO.md "To check by
   hand"; Camera Tracker, "." pivot, Roto following a Tracker, detached
   windows, the Cameras example and `gpu --check` on the Macs passed on
