@@ -19,7 +19,7 @@ On Linux and on the Macs (the DMG), from the release builds.
       a video while its thumbnail first loads: at most one hitch
 
 **Phase 14 (0.14.29)**
-- [ ] Viewer, GPU on: play a heavy GPU comp (blur / grade on a 4K
+- [X] Viewer, GPU on: play a heavy GPU comp (blur / grade on a 4K
       plate): fps up; the picker follows the pointer, also while
       playing; switch to a plane layer (depth): it shows; turn the GPU
       off in Preferences mid-play: cached frames stay and scrub
@@ -38,17 +38,17 @@ On Linux and on the Macs (the DMG), from the release builds.
       projected atlas cube renders like the live projection
 
 **Phase 13 (0.13.x)**
-- [ ] Scatter with a painted / keyed mask: raising density or painting
+- [X] Scatter with a painted / keyed mask: raising density or painting
       the mask doesn't make existing points jump; Min distance; tracker
       points as the source
-- [ ] Attribute Set / Noise / Falloff / from Image / Transfer, checked in
+- [X] Attribute Set / Noise / Falloff / from Image / Transfer, checked in
       the viewer's Sheet (Geo Info)
-- [ ] Instance on Points: rocks and cards facing the camera, variant /
+- [X] Instance on Points: rocks and cards facing the camera, variant /
       random pick, pscale and Cd, shadows and motion blur; 100k cards stay
       quick with the GPU on
 - [X] Delete Geo's box / sphere moved with G, sized with S; an expression
       like `random(@id) < 0.3`
-- [ ] Curves in the 3D view: pick (⇧), drag, G / R / S, Bezier handles
+- [X] Curves in the 3D view: pick (⇧), drag, G / R / S, Bezier handles
       (Alt breaks), Ctrl/⌘-click adds or inserts, Delete; a Curve from a
       solved camera's path
 - [ ] Curve to Mesh (tube, ribbon, profile, pscale taper); Points on Curve
@@ -75,12 +75,20 @@ On Linux and on the Macs (the DMG), from the release builds.
 - [ ] A 2D chain with big blurs feels quicker with the GPU on
 
 **Older**
-- [ ] Several Viewer nodes (the active one shows, eye icon); 3D view
+- [X] Several Viewer nodes (the active one shows, eye icon); 3D view
       motion-blur preview (particle streaks, a moving camera); Scanline
       Render Jitter shutter on / off
 
 ## Known gaps and follow-ups
 
+- [ ] **Channel combine / routing node** (user, 2026-11-13): several
+      inputs, each listing its available channels (rgba and every plane:
+      depth, N, specular, matte.*, …), and a routing table that sends any
+      input channel to any output channel or pass: input 1's red → out
+      green, input 2's alpha → out specular, etc. Today's Shuffle has one
+      input; this generalises it (likely Shuffle growing inputs, or a new
+      node). Fold into P5b's Shuffle or do ahead of phase 15: the user's
+      call
 - [ ] Geo Info: picking individual point-set / mesh points in the 3D
       view (to narrow Points / Mesh points like Cloud picks) isn't
       supported; only Camera Tracker cloud points are pickable

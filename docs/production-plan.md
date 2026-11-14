@@ -164,7 +164,9 @@ Nothing else matters if the colors are wrong, so this is first.
   Channels: rgba, all, or chosen layers, as one part or a part each).
 - **P5b, Shuffle.** A **Shuffle** node moving channels between layers
   (rgba ← a render pass, depth into alpha, …), with presets for the
-  common AOV rebuilds.
+  common AOV rebuilds. The user (2026-11-13) wants it to take several inputs and
+  route any input's channel to any output channel or pass (TODO.md,
+  "Channel combine / routing node").
 - **P5c, compression and metadata.** Every compression the format has
   (zip, zips, piz, dwaa / dwab with a level, b44, rle, none), half or
   float per layer; metadata (timecode, camera, lens, frame rate, the
