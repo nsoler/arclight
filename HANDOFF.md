@@ -40,8 +40,8 @@ Last updated 2026-11-13.
   arclight-gui playback_bench -- --ignored --nocapture`. Not yet tried:
   the live GUI by hand, a forced read-back failure, Macs.
 - **Version 0.14.29, released as v0.14.29** (2026-11-13: Linux tarball,
-  Windows zip, `arclt` wheel + sdist; marked Latest; **macOS DMG to
-  follow from the user**, then update the notes' Assets line). It
+  Windows zip, `arclt` wheel + sdist, macOS universal DMG; marked
+  Latest). It
   carries 0.14.26–0.14.29 (below). v0.14.25 (2026-11-02) was the plasma
   beam example; v0.14.21 has no DMG on purpose.
 - **Phase 14 (workspace and UI)** on branch `wip-ns-ui` (from 0.13.41,
