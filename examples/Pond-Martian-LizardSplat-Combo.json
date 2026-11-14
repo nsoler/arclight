@@ -1,0 +1,227 @@
+{
+  "nodes": [
+    {
+      "id": "lizard",
+      "op": "read_splat",
+      "inputs": [],
+      "params": {
+        "file": "geo/hornedlizard.spz"
+      },
+      "pos": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "id": "crop",
+      "op": "splat_crop",
+      "inputs": [
+        "lizard"
+      ],
+      "params": {
+        "shape": "box",
+        "size": [
+          6,
+          6,
+          6
+        ]
+      },
+      "pos": [
+        200.0,
+        0.0
+      ]
+    },
+    {
+      "id": "camera",
+      "op": "camera",
+      "inputs": [],
+      "params": {
+        "rotate": [
+          -15,
+          0,
+          0
+        ],
+        "translate": [
+          0.4949240607747339,
+          0.6551336960453711,
+          2.6151223277531326
+        ]
+      },
+      "pos": [
+        0.0,
+        86.0
+      ]
+    },
+    {
+      "id": "render",
+      "op": "scanline_render",
+      "inputs": [
+        "crop",
+        "camera",
+        "",
+        "card1",
+        "card2",
+        ""
+      ],
+      "params": {
+        "height": 720,
+        "width": 1280
+      },
+      "pos": [
+        412.09845,
+        -0.83147323
+      ]
+    },
+    {
+      "id": "viewer",
+      "op": "viewer",
+      "inputs": [
+        "render"
+      ],
+      "params": null,
+      "pos": [
+        666.8025,
+        0.78124994
+      ]
+    },
+    {
+      "id": "media_in1",
+      "op": "media_in",
+      "inputs": [],
+      "params": {
+        "first_frame": 1,
+        "fit": "fit",
+        "last_frame": 1794,
+        "path": "media/pond-720.mp4"
+      },
+      "pos": [
+        -279.55353,
+        206.82475
+      ]
+    },
+    {
+      "id": "card1",
+      "op": "card",
+      "inputs": [
+        "media_in1"
+      ],
+      "params": {
+        "casts_shadows": true,
+        "emission": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "opacity": 1.0,
+        "receives_shadows": true,
+        "rotate": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "roughness": 0.5,
+        "scale": [
+          6.708134128469275,
+          6.708134128469275,
+          6.708134128469275
+        ],
+        "shading": "unlit",
+        "size": null,
+        "specular": 0.0,
+        "translate": [
+          0.0,
+          0.0,
+          -2.119657750313127
+        ]
+      },
+      "pos": [
+        -38.54074,
+        208.06136
+      ]
+    },
+    {
+      "id": "media_in2",
+      "op": "media_in",
+      "inputs": [],
+      "params": {
+        "first_frame": 1,
+        "fit": "fit",
+        "last_frame": 1,
+        "path": "mad-martian.png"
+      },
+      "pos": [
+        40.0,
+        360.0
+      ]
+    },
+    {
+      "id": "card2",
+      "op": "card",
+      "inputs": [
+        "media_in2"
+      ],
+      "params": {
+        "casts_shadows": true,
+        "emission": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "opacity": 1.0,
+        "receives_shadows": true,
+        "rotate": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "roughness": 0.5,
+        "scale": [
+          1.3980124012827733,
+          1.6246425504583002,
+          1.0
+        ],
+        "shading": "unlit",
+        "size": null,
+        "specular": 0.0,
+        "translate": [
+          0.9208832563359729,
+          0.0,
+          0.0
+        ]
+      },
+      "pos": [
+        240.0,
+        280.0
+      ]
+    }
+  ],
+  "project": {
+    "first_frame": 1,
+    "last_frame": 1794,
+    "fps": 29.97002997002997,
+    "format": {
+      "width": 1280,
+      "height": 720
+    },
+    "folder": "."
+  },
+  "view": {
+    "viewport3d": {
+      "auto_ortho": false,
+      "center": [
+        -4.765092743748587,
+        -5.260805864211074,
+        -17.91700890948158
+      ],
+      "distance": 25.496388552637264,
+      "ortho": false,
+      "pitch": 17.449999999999985,
+      "shading": "Solid",
+      "shadows": false,
+      "wireframe": false,
+      "yaw": 14.699999999999939
+    }
+  }
+}
