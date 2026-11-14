@@ -83,10 +83,12 @@ On Linux and on the Macs (the DMG), from the release builds.
 
 - [ ] **Apple Silicon: 3D render with splats + cards is ~3× slower on the
       GPU than the CPU** (user, 2026-11-13; M4, Metal, v0.14.29 DMG).
-      Project `examples/Pond-Martian-LizardSplat-Combo.json` (untracked;
-      Read Splat `geo/hornedlizard.spz` → Splat Crop, two Cards with
-      Media Ins: a 3840×2160 h264 plate and a still PNG, a Camera,
-      Scanline Render 1280×720; the plate and PNG are outside the repo).
+      Project `examples/Pond-Martian-LizardSplat-Combo.json` (Read Splat
+      `geo/hornedlizard.spz` → Splat Crop, two Cards with Media Ins:
+      `media/pond-720.mp4` and the still `mad-martian.png`, a Camera,
+      Scanline Render 1280×720; the user's original plate was 3840×2160,
+      timed below). Compare on Linux / the RTX 5070 to tell a Metal
+      problem from a general one.
       Warm playback, Evaluator kept across frames: full project 1017
       ms/frame on the GPU vs 321 ms with `ARCLIGHT_GPU=0`; splat + still
       card 451 vs 164; two cards, no splat 146 vs 113; the plate alone 22
