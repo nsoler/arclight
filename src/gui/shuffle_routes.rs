@@ -56,7 +56,7 @@ pub fn new_route(connected: &[bool]) -> (String, String) {
 
 /// A text field that keeps what's typed (in egui's memory, under `id`)
 /// and gives it back on Enter or when it loses focus.
-fn committed_text(ui: &mut egui::Ui, id: egui::Id, current: &str, width: f32) -> Option<String> {
+pub(crate) fn committed_text(ui: &mut egui::Ui, id: egui::Id, current: &str, width: f32) -> Option<String> {
     let mut buf: String = ui.data_mut(|d| d.get_temp(id)).unwrap_or_else(|| current.to_string());
     let resp = ui.add(egui::TextEdit::singleline(&mut buf).id(id).desired_width(width));
     if resp.has_focus() {

@@ -632,6 +632,14 @@ impl Properties {
         (spec.name == "center").then(|| json!([(w.x0 + w.x1) as f32 / 2.0, (w.y0 + w.y1) as f32 / 2.0]))
     }
 
+    /// Node `id`'s inputs' layers, input 1's then its further ones' (as
+    /// probed for a Shuffle or Matte Combine; None where unknown).
+    fn all_input_layers(&self, id: &str) -> Vec<Option<Vec<Layer>>> {
+        let mut layers: Vec<Option<Vec<Layer>>> = vec![self.input_layers.as_ref().filter(|(n, _)| n == id).map(|(_, l)| l.clone())];
+        layers.extend(self.more_layers.as_ref().filter(|(n, _)| n == id).map_or(Vec::new(), |(_, m)| m.clone()));
+        layers
+    }
+
     fn param_widget(&mut self, ui: &mut egui::Ui, doc: &mut Doc, id: &str, op: &str, spec: &ParamSpec) {
         let mut value = doc.param_at(id, spec.name, self.frame);
         // Unset with an automatic default: show what it stands for.
@@ -712,6 +720,11 @@ impl Properties {
             ParamKind::Bool => {
                 let mut b = value.as_bool().unwrap_or(false);
                 ui.checkbox(&mut b, "").changed().then(|| json!(b))
+            }
+            ParamKind::Points { stride: 1 } if op == "matte_combine" => {
+                let keyed = anim::is_animated(&doc.param(id, spec.name));
+                ui.weak(if keyed { "keyed (steps) · set per input above" } else { "set per input above" });
+                None
             }
             ParamKind::Points { stride: 1 } if spec.name == "point_feather" => {
                 // Roto / Polygon: each point's own feather, numbered as the
@@ -797,10 +810,17 @@ impl Properties {
             }
             // A Shuffle's routing table (`shuffle_routes`).
             ParamKind::Text if op == "shuffle" && spec.name == "routes" => {
-                let mut layers: Vec<Option<Vec<Layer>>> = vec![self.input_layers.as_ref().filter(|(n, _)| n == id).map(|(_, l)| l.clone())];
-                layers.extend(self.more_layers.as_ref().filter(|(n, _)| n == id).map_or(Vec::new(), |(_, m)| m.clone()));
+                let layers = self.all_input_layers(id);
                 let connected: Vec<bool> = doc.node(id).map_or(Vec::new(), |n| n.inputs.iter().map(|i| !i.is_empty()).collect());
                 crate::shuffle_routes::edit(ui, id, &value, &layers, &connected)
+            }
+            // Matte Combine's per-input rows (`matte_combine_panel`): its
+            // channels, inverts and operations; the latter two keep their
+            // own rows below for the key diamond.
+            ParamKind::Text if op == "matte_combine" && spec.name == "channels" => {
+                let layers = self.all_input_layers(id);
+                crate::matte_combine_panel::edit(ui, doc, id, self.frame, &layers);
+                None
             }
             ParamKind::Text => {
                 let key = (id.to_string(), spec.name.to_string());

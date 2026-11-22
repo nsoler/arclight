@@ -18,6 +18,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.33 — 2026-11-21
+
+- **New Matte Combine node:** combines any number of mattes (inputs 2,
+  3, … up to 32) by union, subtract, intersect or difference, in port
+  order. Per input: a matte channel (alpha / red / green / blue /
+  luminance / any pass) and Invert; Invert and the operation are
+  keyable and switch at keys, never blend. Soft switches to
+  multiplicative forms for smoother soft edges. Output a white matte or
+  input 1 with the result as alpha, optionally also into a pass. Also
+  from MCP / Python. CPU only.
+
 ## 0.14.32 — 2026-11-21
 
 - A Media In that reads one frame (first = last) or a still image no

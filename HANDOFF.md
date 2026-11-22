@@ -4,6 +4,21 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.14.33 (2026-11-21): Matte Combine** (Dev2; the user's request,
+  plan approved with the user's answers: min/max + Soft switch, white
+  matte default, keyable stepped Invert / operation). `matte_combine.rs`;
+  params `channels` (strings), `inverts` / `operations` (number lists,
+  codes 0/1 and 0–3; MCP / Python names → codes in
+  `session::matte_combine_list`), `soft`, `output`, `plane`.
+  `ops::STEPPED` makes `resolve_at` evaluate those two lists with
+  `anim::evaluate_step` whatever their curve's interp; the panel
+  (`gui/matte_combine_panel.rs`) resets their curves to Step only when
+  they aren't (a hand-edited smooth-keyed file is marked modified the
+  first time its panel shows). Growable image ports are shared with
+  Shuffle (`NUMBERED_PORTS`; `session::input_cap` for any image-growable
+  op). Window: whole frame when the fold of the inputs' outsides
+  (inverted → 1) is above 0. CPU only.
+
 - **0.14.32 (2026-11-21): static one-frame Media In + GPU depth race**
   (Dev1). `ops::is_time_varying("media_in")`: time-varying only when
   last_frame > first_frame and the path is a video / sequence (Read

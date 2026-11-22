@@ -38,6 +38,7 @@ pub mod graph_merge;
 pub mod image;
 pub mod key_color;
 pub mod light2d;
+pub mod matte_combine;
 pub mod link;
 pub mod media;
 pub mod mesh;

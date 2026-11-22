@@ -814,6 +814,18 @@ color).
   read the inputs as they come in, run after the fields above and before
   **Remove**; the output keeps input 1's frame. Shuffles reading other
   inputs run on the CPU.
+- **Matte Combine** merges several mattes into one: input 1 is the base,
+  and each further input (a spare port waits below the last) is combined
+  into the result so far, in port order. Properties has a row per input:
+  its channel (alpha, red, green, blue, luminance, or any pass such as
+  `matte.hero`, typed or picked), **Invert**, and from input 2 its
+  operation: **union**, **subtract**, **intersect** or **difference**.
+  Invert and operation can be keyed (the diamonds beside **Inverts** and
+  **Operations**): they switch at each key, never blend in between.
+  The operations are max / min ones, exact for hard mattes; **Soft**
+  switches to multiplicative ones, smoother where soft edges overlap.
+  **Output** gives a white matte, or input 1 with the result as its alpha;
+  **Also into pass** writes the result into a pass as well.
 - **Merge** with **zmerge** combines two renders by their depth: the nearer
   is in front at each pixel, its soft edges blended over what's behind.
 - Writing **EXR** keeps every pass as a layer (`P.x`, `N.x`, `depth.Z`,

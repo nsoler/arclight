@@ -256,6 +256,19 @@ pub fn is_animated(v: &Value) -> bool {
     Curve::parse(v).is_some()
 }
 
+/// [`evaluate`] holding each key's value until the next, whatever the
+/// curve's own interpolation: for params whose values are codes (on / off,
+/// a choice), which must never blend.
+pub fn evaluate_step(v: &Value, frame: f64) -> Value {
+    match Curve::parse(v) {
+        Some(mut c) => {
+            c.interp = Interp::Step;
+            unflatten(&c.sample(frame), c.scalar)
+        }
+        None => v.clone(),
+    }
+}
+
 /// The value of a (possibly animated) parameter at `frame`.
 pub fn evaluate(v: &Value, frame: f64) -> Value {
     match Curve::parse(v) {
@@ -540,5 +553,15 @@ mod tests {
         let (i, o) = slopes(&u, 10).unwrap();
         assert_eq!(i[0], o[0]);
         assert_eq!(o[0], -2.0);
+    }
+
+    #[test]
+    fn evaluate_step_holds_and_leaves_static_values() {
+        let c = json!({"keys": [[1, [0, 10]], [5, [4, 20]]], "interp": "smooth"});
+        assert_eq!(evaluate_step(&c, 3.0), json!([0.0, 10.0]));
+        assert_eq!(evaluate_step(&c, 5.0), json!([4.0, 20.0]));
+        assert_eq!(evaluate_step(&json!([1, 2]), 3.0), json!([1, 2]));
+        // The curve itself isn't changed: evaluate still blends.
+        assert!(evaluate(&c, 3.0)[0].as_f64().unwrap() > 0.0);
     }
 }

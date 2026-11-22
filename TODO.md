@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.14.32 (2026-11-21). Done items are removed
+What's still open, as of 0.14.33 (2026-11-21). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -8,6 +8,16 @@ them when they ship. `ROADMAP.md` is the public summary.
 ## To check by hand (user)
 
 On Linux and on the Macs (the DMG), from the release builds.
+
+**Phase 14 (0.14.33)**
+- [ ] Matte Combine: an Ellipse into input 1, a Rectangle into 2 set to
+      subtract, another Ellipse into 3 (union) → the ellipse with a
+      hole, plus the circle; Invert on input 2; key input 2's operation
+      at 1 (subtract) and 10 (union) → switches at 10, no blend at 5, the
+      curve editor shows Step; Soft on with feathered edges; channel =
+      a matte.<node> pass from a 3D render; selecting it in a saved
+      project doesn't mark it modified; `arclt`:
+      create_node("matte_combine", a, b, operations=["union", "subtract"])
 
 **Phase 14 (0.14.32)**
 - [ ] On a Mac (Apple M4, Metal): `arclight gpu --check` passes 81/81+
@@ -133,15 +143,8 @@ On Linux and on the Macs (the DMG), from the release builds.
       (0.14.30: 1 / 8 lib-test runs with `__GL_SHADER_DISK_CACHE=0`).
       Candidate: an atexit hook in `gpu/mod.rs` waiting on the device
       before the ICD tears down (Dev1, measured with a fast repro)
-- [ ] **Matte combine node** (user, 2026-11-21; plan approved, Dev2):
-      "Matte Combine" (`matte_combine`), inputs growing like Shuffle's;
-      per input a matte channel (alpha / r / g / b / luminance or a
-      plane), invert and operation (union / subtract / intersect /
-      difference), invert and operation keyable (stepped); min/max math
-      with a node-wide Soft switch (multiplicative); output a white
-      matte by default (or input 1 + alpha), optionally into a plane
-- [ ] Shuffle: a multi-source GPU kernel (routes reading input 2+ run
-      on the CPU today)
+- [ ] Shuffle / Matte Combine: a multi-source GPU kernel (routes
+      reading input 2+ and Matte Combine run on the CPU today)
 - [ ] Geo Info: picking individual point-set / mesh points in the 3D
       view (to narrow Points / Mesh points like Cloud picks) isn't
       supported; only Camera Tracker cloud points are pickable

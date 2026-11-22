@@ -17,6 +17,7 @@ mod gpu_check;
 mod graph_thumbs;
 mod help;
 mod node_editor;
+mod matte_combine_panel;
 mod overlay;
 mod pen;
 mod pivot;
@@ -1330,11 +1331,11 @@ impl App {
                 // a Corner Pin, its input's frame; a Shuffle, its layers.
                 let probe = self.doc.selected.as_ref().and_then(|id| self.doc.node(id)).filter(|n| {
                     use arclight::ops::Overlay;
-                    n.op == "shuffle" || arclight::ops::info(&n.op).is_some_and(|i| matches!(i.overlay, Overlay::Transform { .. } | Overlay::Pick(_) | Overlay::CornerPin { .. }))
+                    matches!(n.op.as_str(), "shuffle" | "matte_combine") || arclight::ops::info(&n.op).is_some_and(|i| matches!(i.overlay, Overlay::Transform { .. } | Overlay::Pick(_) | Overlay::CornerPin { .. }))
                 });
                 // A Shuffle's further inputs too, for its routing table
                 // (only a selected Shuffle's: nothing more for other nodes).
-                let probe_more = probe.filter(|n| n.op == "shuffle").map(|n| n.inputs.iter().skip(1).cloned().collect::<Vec<_>>()).unwrap_or_default();
+                let probe_more = probe.filter(|n| matches!(n.op.as_str(), "shuffle" | "matte_combine")).map(|n| n.inputs.iter().skip(1).cloned().collect::<Vec<_>>()).unwrap_or_default();
                 let probe = probe.and_then(|n| n.inputs.first().filter(|i| !i.is_empty()).map(|i| (n.id.clone(), i.clone())));
                 let key = (self.doc.revision, t.clone(), self.transport.frame, probe.clone());
                 if self.requested.as_ref() != Some(&key) {
@@ -1392,7 +1393,7 @@ impl App {
                     target: t.clone(),
                     frame: self.shown_frame,
                     probe: self.requested.as_ref().and_then(|k| k.3.clone()),
-                    probe_more: self.doc.selected.as_ref().and_then(|id| self.doc.node(id)).filter(|n| n.op == "shuffle").map(|n| n.inputs.iter().skip(1).cloned().collect()).unwrap_or_default(),
+                    probe_more: self.doc.selected.as_ref().and_then(|id| self.doc.node(id)).filter(|n| matches!(n.op.as_str(), "shuffle" | "matte_combine")).map(|n| n.inputs.iter().skip(1).cloned().collect()).unwrap_or_default(),
                     pick: None,
                     cpu_only: true,
                 });

@@ -1100,6 +1100,12 @@ pub fn validate_param(info: &OpInfo, name: &str, value: &Value) -> Result<Value>
         }
         return Ok(value.clone());
     }
+    // Matte Combine's per-input lists: channel names; inverts and
+    // operations as names / bools or their codes, stored as codes (a
+    // keyed list's keys likewise).
+    if info.name == "matte_combine" && matches!(name, "channels" | "inverts" | "operations") {
+        return matte_combine_list(name, value);
+    }
     // Null puts back an automatic default (a Transform's center).
     if value.is_null() && spec.default_value().is_null() {
         return Ok(Value::Null);
@@ -1169,12 +1175,46 @@ pub fn validate_param(info: &OpInfo, name: &str, value: &Value) -> Result<Value>
     })
 }
 
-/// How many inputs a script may give `op`: a Shuffle as many as its ports
-/// are labeled for (`ops::port`: "input", "2" … "32"); every other op, its
-/// fixed ones (scripts don't grow a Scanline Render).
+/// A Matte Combine per-input list (`channels`, `inverts` or `operations`)
+/// checked, inverts and operations turned into their codes; a keyed one
+/// (`{"keys": [[frame, list], …]}`) key by key.
+fn matte_combine_list(name: &str, value: &Value) -> Result<Value> {
+    use crate::matte_combine::{invert_code, operation_code};
+    if value.is_null() {
+        return Ok(json!([]));
+    }
+    let one = |list: &Value| -> Result<Value> {
+        let items = list.as_array().ok_or_else(|| anyhow!("'{name}' needs a list, one entry per input"))?;
+        let out: Vec<Value> = items
+            .iter()
+            .map(|v| match name {
+                "channels" => v.as_str().map(|s| json!(s.trim())).ok_or_else(|| anyhow!("'channels' entries are names: alpha, red, green, blue, luminance or a pass")),
+                "inverts" => invert_code(v).map(|c| json!(c)).ok_or_else(|| anyhow!("'inverts' entries are true / false (or 1 / 0), not {v}")),
+                _ => operation_code(v).map(|c| json!(c)).ok_or_else(|| anyhow!("'operations' entries are union, subtract, intersect or difference (or 0 to 3), not {v}")),
+            })
+            .collect::<Result<_>>()?;
+        Ok(Value::Array(out))
+    };
+    if name != "channels" && anim::is_animated(value) {
+        let mut v = value.clone();
+        for key in v["keys"].as_array_mut().into_iter().flatten() {
+            if let Some(slot) = key.get_mut(1) {
+                *slot = one(slot)?;
+            }
+        }
+        return Ok(v);
+    }
+    one(value)
+}
+
+/// How many inputs a script may give `op`: an op growing image inputs
+/// (Shuffle, Matte Combine) as many as its ports are labeled for
+/// (`ops::port`: then "2" … "32"); every other op, its fixed ones (scripts
+/// don't grow a Scanline Render).
 fn input_cap(op: &str) -> usize {
     let fixed = ops::info(op).map_or(0, |i| i.inputs.len());
-    if op == "shuffle" {
+    let grows_images = ops::growable(op).is_some_and(|n| ops::port(op, n).is_some_and(|p| p.kind == ops::Kind::Image));
+    if grows_images {
         (0..64).take_while(|&i| ops::port(op, i).is_some_and(|p| p.label != "+")).count()
     } else {
         fixed
@@ -1204,6 +1244,14 @@ pub fn op_schema(info: &OpInfo) -> Value {
             v["kind"] = json!(kind);
             if let Value::Object(m) = extra {
                 v.as_object_mut().unwrap().extend(m);
+            }
+            if info.name == "matte_combine" {
+                match p.name {
+                    "channels" => v["note"] = json!("one per input in port order: alpha (default), red, green, blue, luminance or a pass name (\"matte.hero\")"),
+                    "inverts" => v["note"] = json!("one per input in port order: true / false (stored as 1 / 0); keyable, always stepping"),
+                    "operations" => v["note"] = json!("one per input in port order (the first unused): union, subtract, intersect, difference (stored as 0 to 3); keyable, always stepping"),
+                    _ => {}
+                }
             }
             if info.name == "shuffle" && p.name == "routes" {
                 v["kind"] = json!("routes");
@@ -1355,6 +1403,27 @@ mod tests {
         let schema = op_schema(ops::info("shuffle").unwrap());
         assert_eq!((schema["more_inputs"]["max_inputs"].as_u64(), schema["params"].as_array().unwrap().iter().any(|p| p["kind"] == "routes")), (Some(32), true));
         assert!(op_schema(ops::info("blur").unwrap()).get("more_inputs").is_none());
+    }
+
+    /// Scripts make a Matte Combine with three inputs; names become codes,
+    /// keyed lists too; bad entries are refused.
+    #[test]
+    fn matte_combine_from_scripts() {
+        let mut s = Session::default();
+        let a = s.create_node("constant", None, &map(json!({"color": [1, 1, 1, 1]})), &[]).unwrap();
+        let b = s.create_node("constant", None, &map(json!({"color": [0, 0, 0, 1]})), &[]).unwrap();
+        let p = map(json!({"operations": ["union", "subtract", "union"], "inverts": [false, true], "channels": ["alpha", "luminance"]}));
+        let mc = s.create_node("matte_combine", None, &p, &[a.clone(), b.clone(), b.clone()]).unwrap();
+        let params = &s.describe_node(&mc).unwrap()["params"];
+        assert_eq!((params["operations"].clone(), params["inverts"].clone()), (json!([0.0, 1.0, 0.0]), json!([0.0, 1.0])));
+        // White minus (black's luminance inverted = 1): nothing; union black's alpha (1): white.
+        assert_eq!(s.render(&mc, 1).unwrap().get(0, 0), [1.0; 4]);
+        let keyed = map(json!({"operations": {"keys": [[1, ["union", "intersect"]], [5, [0, 3]]]}}));
+        s.set_params(&mc, &keyed).unwrap();
+        assert_eq!(s.describe_node(&mc).unwrap()["params"]["operations"]["keys"][0][1], json!([0.0, 2.0]));
+        assert!(s.set_params(&mc, &map(json!({"operations": ["xor"]}))).unwrap_err().to_string().contains("union"));
+        assert!(s.set_params(&mc, &map(json!({"inverts": [2]}))).is_err());
+        assert_eq!(op_schema(ops::info("matte_combine").unwrap())["more_inputs"]["max_inputs"].as_u64(), Some(32));
     }
 
     #[test]

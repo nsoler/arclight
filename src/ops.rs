@@ -157,13 +157,14 @@ pub fn article(k: Kind) -> &'static str {
 pub fn growable(op: &str) -> Option<usize> {
     match op {
         "scanline_render" => Some(3),
-        "shuffle" => Some(1),
+        "shuffle" | "matte_combine" => Some(1),
         _ => None,
     }
 }
 
-/// A Shuffle's extra inputs' labels: its routes name them by number.
-const SHUFFLE_PORTS: [&str; 31] = [
+/// The labels of a Shuffle's or Matte Combine's extra inputs, by number
+/// (a Shuffle's routes name them so).
+const NUMBERED_PORTS: [&str; 31] = [
     "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30",
     "31", "32",
 ];
@@ -174,7 +175,7 @@ pub fn port(op: &str, i: usize) -> Option<Port> {
     let fixed = info(op)?.inputs;
     match fixed.get(i) {
         Some(p) => Some(*p),
-        None => growable(op).filter(|&n| i >= n).map(|n| if op == "shuffle" { opt(SHUFFLE_PORTS.get(i - n).copied().unwrap_or("+")) } else { scene_in("scene") }),
+        None => growable(op).filter(|&n| i >= n).map(|n| if op == "scanline_render" { scene_in("scene") } else { opt(NUMBERED_PORTS.get(i - n).copied().unwrap_or("+")) }),
     }
 }
 
@@ -860,6 +861,34 @@ pub static OPS: &[OpInfo] = &[
                pass, e.g. input 2's alpha into the alpha, input 3's depth into depth, input 1's N.x \
                into specular.R. Routes read the inputs as they come in and run after the fields above, \
                before Remove.",
+    },
+    OpInfo {
+        name: "matte_combine",
+        label: "Matte Combine",
+        category: Category::Channel,
+        inputs: &[req("matte")],
+        params: &[
+            // Per input, in port order (missing: the default): the channel
+            // its matte is read from, whether it's inverted (0 / 1), and how
+            // it combines into the result so far (0 union, 1 subtract, 2
+            // intersect, 3 difference; input 1's is unused). Inverts and
+            // operations key as one list each, always stepping (`STEPPED`).
+            fixed!("channels", "Channels", ParamKind::Text, Value::Array(Vec::new())),
+            p!("inverts", "Inverts", ParamKind::Points { stride: 1 }, Vec::<f64>::new()),
+            p!("operations", "Operations", ParamKind::Points { stride: 1 }, Vec::<f64>::new()),
+            fixed!("soft", "Soft", ParamKind::Bool, false),
+            fixed!("output", "Output", ParamKind::Choice(crate::matte_combine::OUTPUTS), "matte"),
+            fixed!("plane", "Also into pass", ParamKind::Text, ""),
+        ],
+        overlay: Overlay::None,
+        mask_base: None,
+        help: "Combines several mattes into one. Input 1 is the base; connect more (2, 3, …) and each is \
+               combined into the result so far, in port order: union, subtract, intersect or difference. Per \
+               input, its matte comes from alpha, red, green, blue, luminance or any pass (matte.hero), and \
+               can be inverted; invert and operation can be keyed (they switch at the key, never blend). \
+               The operations are max / min ones, exact for hard mattes; Soft uses multiplicative ones \
+               (screen-like union, multiply intersect), smoother where soft edges overlap. Output: a white \
+               matte, or input 1 with the result as its alpha; Also into pass writes it into a pass too.",
     },
     OpInfo {
         name: "switch",
@@ -2434,6 +2463,10 @@ fn resolve_linked(op: &str, params: &Value, frame: i64, links: Links) -> Value {
 }
 
 /// `map`'s values at time `t` (a frame, or between frames).
+/// Params whose values are codes (on / off, a choice) and so hold each
+/// key's value until the next, whatever their curve says: never blended.
+pub const STEPPED: &[(&str, &str)] = &[("matte_combine", "inverts"), ("matte_combine", "operations")];
+
 fn resolve_at(op: &str, map: &Map<String, Value>, t: f64, links: Links) -> Value {
     let specs = info(op).map(|i| i.params).unwrap_or(&[]);
     let resolved = map
@@ -2441,6 +2474,7 @@ fn resolve_at(op: &str, map: &Map<String, Value>, t: f64, links: Links) -> Value
         .map(|(k, v)| {
             let mut v = match links {
                 Some(follow) if crate::link::is_link(v) => follow(v, t),
+                _ if STEPPED.contains(&(op, k.as_str())) => anim::evaluate_step(v, t),
                 _ => anim::evaluate(v, t),
             };
             // A link giving one number for a list param: every component.
@@ -2729,6 +2763,7 @@ fn eval_op(op: &str, params: &Value, inputs: &[Option<&Image>], ctx: &EvalContex
         "unpremult" => Ok(mapped(input(inputs, 0, op)?, color::unpremultiply)),
         "channel_select" => channel_select(params, inputs),
         "shuffle" => shuffle(params, inputs),
+        "matte_combine" => crate::matte_combine::eval(params, inputs),
         "switch" => switch(params, inputs),
         "dissolve" => dissolve(params, inputs),
         "keymix" => keymix(inputs),
@@ -5900,6 +5935,39 @@ mod tests {
         }
         assert_eq!(port("scanline_render", 5).map(|p| (p.label, p.kind, p.optional)), Some(("scene", Kind::Scene, true)));
         assert!(port("merge", 7).is_none());
+    }
+
+    /// Matte Combine's inverts and operations hold each key's value until
+    /// the next even on a smooth curve; every other param resolves as
+    /// before (a smooth-keyed Transform rotate and Matte Combine's own
+    /// keyed lists checked against `anim::evaluate` / step by hand).
+    #[test]
+    fn stepped_params_hold_and_others_interpolate_as_before() {
+        let smooth = json!({"keys": [[1, [0, 0, 0]], [11, [1, 3, 1]]], "interp": "smooth"});
+        let p = json!({"inverts": smooth, "operations": smooth});
+        for f in [1, 4, 10] {
+            let r = resolve_params("matte_combine", &p, f);
+            assert_eq!(r["inverts"], json!([0.0, 0.0, 0.0]), "frame {f}");
+            assert_eq!(r["operations"], json!([0.0, 0.0, 0.0]), "frame {f}");
+        }
+        assert_eq!(resolve_params("matte_combine", &p, 11)["operations"], json!([1.0, 3.0, 1.0]));
+        let rotate = json!({"keys": [[1, 0], [7, 45], [20, 10]], "interp": "smooth"});
+        for f in [1, 3, 9, 15, 20] {
+            let r = resolve_params("transform", &json!({"rotate": rotate}), f);
+            assert_eq!(r["rotate"].as_f64().unwrap().to_bits(), anim::evaluate(&rotate, f as f64).as_f64().unwrap().to_bits(), "frame {f}");
+        }
+    }
+
+    /// Matte Combine grows inputs as Shuffle does: "matte", then "2", "3", …
+    #[test]
+    fn matte_combine_ports_and_render() {
+        assert_eq!(port("matte_combine", 0).map(|p| (p.label, p.optional)), Some(("matte", false)));
+        assert_eq!(port("matte_combine", 2).map(|p| (p.label, p.kind, p.optional)), Some(("3", Kind::Image, true)));
+        let a = solid(2, 1, [1.0; 4]);
+        let mut b = solid(2, 1, [0.0; 4]);
+        b.pixels[1] = [1.0; 4];
+        let out = eval("matte_combine", &resolve_params("matte_combine", &json!({"operations": [0, 1]}), 1), &[Some(&a), Some(&b)], &CTX).unwrap();
+        assert_eq!((out.get(0, 0), out.get(1, 0)), ([1.0; 4], [0.0; 4]));
     }
 
     #[test]
