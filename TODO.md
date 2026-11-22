@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.14.33 (2026-11-21). Done items are removed
+What's still open, as of 0.14.34 (2026-11-21). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -8,6 +8,12 @@ them when they ship. `ROADMAP.md` is the public summary.
 ## To check by hand (user)
 
 On Linux and on the Macs (the DMG), from the release builds.
+
+**Phase 14 (0.14.34)**
+- [ ] On a Mac (Apple M4, Metal): `examples/Pond-Martian-LizardSplat-Combo.json`
+      plays at least as fast with the GPU as with it off (was 1017 vs
+      321 ms/frame), and `arclight gpu --check` passes 85/85 (new
+      splats-over-a-card row)
 
 **Phase 14 (0.14.33)**
 - [ ] Matte Combine: an Ellipse into input 1, a Rectangle into 2 set to
@@ -111,31 +117,6 @@ On Linux and on the Macs (the DMG), from the release builds.
 
 ## Known gaps and follow-ups
 
-- [ ] **Apple Silicon: 3D render with splats + cards is ~3× slower on the
-      GPU than the CPU** (user, 2026-11-13; M4, Metal, v0.14.29 DMG).
-      Project `examples/Pond-Martian-LizardSplat-Combo.json` (Read Splat
-      `geo/hornedlizard.spz` → Splat Crop, two Cards with Media Ins:
-      `media/pond-720.mp4` and the still `mad-martian.png`, a Camera,
-      Scanline Render 1280×720; the user's original plate was 3840×2160,
-      timed below). **Not Metal-specific** (2026-11-21, RTX 5070: GPU
-      188–354 vs CPU 137–147 ms/frame at samples 3, scaling with the AA
-      samples): the splat/surface merge in `raster.wgsl` restarts the
-      tile's splat walk for every sample; Dev1 fixing (front cursor +
-      batched walk).
-      Warm playback, Evaluator kept across frames: full project 1017
-      ms/frame on the GPU vs 321 ms with `ARCLIGHT_GPU=0`; splat + still
-      card 451 vs 164; two cards, no splat 146 vs 113; the plate alone 22
-      ms. A 720p plate changes nothing (992 vs 313). The CPU sits ~80% in
-      `__psynch_cvwait` (waiting on the GPU), so it's a GPU pass, not
-      host code; `gpu --check` has 3D renders 4–22× faster on the GPU, so
-      it's specific to splats mixed with surfaces. Profile with Xcode's
-      Metal capture; suspects: `sort_tiles` in `splat_view.wgsl` when a
-      tile holds more than `LOCAL` (2048) pairs (the in-place path), and
-      how `raster.wgsl` merges splats with surfaces. Done when the GPU is
-      at least as quick as the CPU on this project and `gpu --check`
-      passes. The build is native arm64 + Metal already (universal DMG,
-      `arclight gpu` says `Apple M4 (Metal)`): an Apple-Silicon-only build
-      wouldn't help
 - [ ] **NVIDIA/Linux: a process can SIGSEGV at exit** inside the
       driver (libnvidia-gpucomp, a background shader compile racing the
       ICD teardown), after its work is done; mostly with shaders cold in

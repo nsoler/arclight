@@ -284,6 +284,7 @@ pub(crate) fn rows(gpu: &Gpu) -> Vec<CheckRow> {
         blur_row(Size { width: 960, height: 540 }, "3D render, motion blur 6, projections", &moving(&projected(PERSPECTIVE))),
         sprites_row(Size { width: 960, height: 540 }),
         splats_row(hd),
+        splats_over_card_row(hd),
         instances_row(gpu, hd, false),
         instances_row(gpu, hd, true),
         row(gpu, "3D view, solid", &scene, &cam, hd, 1, Passes::DEPTH, true),
@@ -387,6 +388,31 @@ fn splats_row(size: Size) -> CheckRow {
     let (cpu, cpu_ms) = timed(|| crate::gpu::cpu_only(|| render(0.2)));
     let (out, gpu_ms) = timed(|| render(0.2));
     judge("3D render, 200k splats", format!("{}x{}", size.width, size.height), &cpu, Ok(Some(out)), cpu_ms, gpu_ms)
+}
+
+/// Splats over a surface at the default anti-aliasing: the 200k cloud in
+/// front of a plate card filling the frame, 3 × 3 samples (each sample's
+/// merge takes up the splats in front from the pixel's walk; see
+/// raster.wgsl's `front_batched`).
+fn splats_over_card_row(size: Size) -> CheckRow {
+    let (plate, _) = scene_of(&format!(
+        r#"{{"nodes": [
+        {{"id": "tex", "op": "checkerboard", "params": {{"width": 256, "height": 256, "size": 16}}}},
+        {{"id": "plate", "op": "card", "inputs": ["tex"], "params": {{"translate": [0, 0, -9], "scale": [24, 24, 1]}}}},
+        {{"id": "scene", "op": "scene", "inputs": ["plate"]}},
+        {PERSPECTIVE}
+        ]}}"#
+    ));
+    let scene = Scene { splats: vec![cloud(200_000)], ..(*plate).clone() };
+    let render = |turn: f64| {
+        // (Each render from a camera turned a little: a view not kept.)
+        let cam = Camera { world: crate::geom::trs([0.0; 3], [0.0, turn, 0.0], [1.0; 3]), ..Camera::default() };
+        super::super::render_passes(&scene, &cam, size, 3, None, Passes::DEPTH)
+    };
+    let _ = render(0.1);
+    let (cpu, cpu_ms) = timed(|| crate::gpu::cpu_only(|| render(0.2)));
+    let (out, gpu_ms) = timed(|| render(0.2));
+    judge("3D render, splats over a card, AA 3×3", format!("{}x{}", size.width, size.height), &cpu, Ok(Some(out)), cpu_ms, gpu_ms)
 }
 
 /// A row from a CPU render and the GPU's (`out`), and their times.

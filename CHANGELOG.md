@@ -18,6 +18,18 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.34 — 2026-11-21
+
+- **GPU 3D renders mixing Gaussian splats with surfaces (cards, meshes)
+  are much faster with anti-aliasing:** the splats in front of a
+  pixel's surfaces are blended once per row of samples, the whole
+  tile's splats loaded together, instead of once for every sample. On
+  the Pond example (a splat in front of a video card) the default 3×3
+  anti-aliasing went from 185 to 103 ms a frame on an RTX 5070, now
+  faster than the CPU (144 ms). Pictures are unchanged: color, depth,
+  normals and ids are the same to the bit. `gpu --check` has a new row
+  for splats over a card.
+
 ## 0.14.33 — 2026-11-21
 
 - **New Matte Combine node:** combines any number of mattes (inputs 2,

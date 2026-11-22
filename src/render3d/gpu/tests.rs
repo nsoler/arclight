@@ -809,6 +809,44 @@ fn splats_blend_on_the_gpu_as_on_the_cpu() {
     }
 }
 
+/// Splats over surfaces at the default anti-aliasing (3 × 3 samples),
+/// where each sample takes up the splats in front of its surface from
+/// the pixel's walk instead of its own (raster.wgsl's `front_batched`):
+/// a plate card behind the whole frame, a see-through card cutting
+/// through the capture (samples meeting it nearer than the walk got
+/// start over) and one at its edge, every pass but mattes, then mattes
+/// (each sample on its own, as before), match the CPU.
+#[test]
+fn splats_in_front_of_surfaces_match_at_every_sample() {
+    if crate::gpu::test_device().is_none() {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    }
+    let (lizard, cam) = lizard();
+    let (cards, _) = scene_of(&format!(
+        r#"{{"project": {{"format": {{"width": 320, "height": 180}}, "fps": 24.0, "first_frame": 1, "last_frame": 10}}, "nodes": [
+        {{"id": "tex", "op": "checkerboard", "params": {{"width": 256, "height": 256, "size": 16}}}},
+        {{"id": "plate", "op": "card", "inputs": ["tex"], "params": {{"translate": [0, 0, -3], "scale": [14, 14, 1]}}}},
+        {{"id": "glass", "op": "card", "inputs": ["tex"], "params": {{"translate": [0.2, 0.3, 0.2], "rotate": [0, 50, 10], "scale": [1.5, 1.5, 1], "opacity": 0.5}}}},
+        {{"id": "edge", "op": "card", "inputs": ["tex"], "params": {{"translate": [-1.0, 0.4, 0.6], "rotate": [0, -30, 0], "scale": [0.6, 0.6, 1]}}}},
+        {{"id": "scene", "op": "scene", "inputs": ["plate", "glass", "edge"]}},
+        {PERSPECTIVE}
+        ]}}"#
+    ));
+    let mut scene = (*lizard).clone();
+    scene.extend(&cards);
+    let format = Size { width: 240, height: 140 };
+    let every_but_mattes = Passes::from_names(Passes::NAMES.iter().copied().filter(|n| *n != "mattes"));
+    for passes in [every_but_mattes, Passes::from_names(["depth", "mattes"])] {
+        let cpu = crate::gpu::cpu_only(|| super::super::render_passes(&scene, &cam, format, 3, None, passes));
+        let out = with_gpu(|| super::super::render_passes(&scene, &cam, format, 3, None, passes));
+        for (name, mean, off) in differences(&cpu, &out) {
+            let (most_mean, most_off) = super::check::allowed(&name);
+            assert!(mean <= most_mean && off <= most_off, "{name}: mean {mean:.2e}, {:.3} % of values off", off * 100.0);
+        }
+    }
+}
+
 /// The 3D view's picture left on the GPU (render_preview_gpu) is
 /// render_preview's: Solid, Lit with shadows, and splats; motion blur goes
 /// the other way (None); each call a fresh image.

@@ -1248,6 +1248,100 @@ fn alone_batched(a: ptr<function, Alone>, tile: u32, li: u32, in_frame: bool, pq
 fn splat_object(k: u32) -> u32 { return words[P.splat.z + k * SPLAT_SET_WORDS]; }
 fn splat_holdout(k: u32) -> bool { return words[P.splat.z + k * SPLAT_SET_WORDS + 1u] != 0u; }
 
+// A pixel's splats nearer than `bound` (its samples' nearest surface in
+// this row, or -FAR_AWAY: none wanted), blended front to back as each
+// sample's merge in `main` does, a batch at a time for the whole
+// workgroup (as `alone_batched`); every thread must call it. Leaves the
+// stream where it stopped and the first splat at or past `bound` pending,
+// as `next_frag` would have.
+var<private> fb_st: Stream;
+var<private> fb_f: Frag;
+var<private> fb_acc: vec4<f32>;
+var<private> fb_held: f32;
+var<private> fb_half: vec4<u32>;
+var<private> fb_emit: vec3<f32>;
+var<private> fb_done: bool;
+var<workgroup> batch_cap: array<u32, 256>;
+
+fn front_batched(tile: u32, li: u32, bound: f32, pq: vec2<f32>) {
+    if (li == 0u) {
+        wg_start = lists[tile];
+        wg_end = lists[tile + 1u];
+    }
+    let start = workgroupUniformLoad(&wg_start);
+    let end = workgroupUniformLoad(&wg_end);
+    fb_st = Stream(end, end, 1.0);
+    fb_f.valid = false;
+    fb_acc = vec4<f32>(0.0);
+    fb_held = 0.0;
+    fb_half = vec4<u32>(0u);
+    fb_emit = vec3<f32>(0.0);
+    fb_done = false;
+    var through = 1.0;
+    var walking = bound > -FAR_AWAY;
+    for (var b = start; b < end; b += BATCH) {
+        let k = b + li;
+        if (k < end) {
+            let g = lists[P.splat.y + 2u * k + 1u];
+            batch_a[li] = vec4<f32>(pjf(g, 0u), pjf(g, 1u), pjf(g, 2u), pjf(g, 3u));
+            batch_b[li] = vec4<f32>(pjf(g, 4u), pjf(g, 5u), pjf(g, 9u), 0.0);
+            batch_c[li] = vec4<f32>(pjf(g, 6u), pjf(g, 7u), pjf(g, 8u), 0.0);
+            batch_g[li] = g;
+            batch_cap[li] = proj[g * PROJ_WORDS + 11u] - 1u;
+        }
+        workgroupBarrier();
+        if (walking) {
+            let n = min(BATCH, end - b);
+            for (var i = 0u; i < n; i++) {
+                // (`next_frag`: nothing more once too little shows through.)
+                if (through < T_MIN) {
+                    fb_st = Stream(b + i, end, through);
+                    walking = false;
+                    break;
+                }
+                let ba = batch_a[i];
+                let bb = batch_b[i];
+                let d = pq - ba.xy;
+                let power = -0.5 * (ba.z * d.x * d.x + bb.x * d.y * d.y) - ba.w * d.x * d.y;
+                if (!(power >= -4.5 && power <= 0.0)) { continue; }
+                let alpha = bb.z * exp(power);
+                if (alpha < SPLAT_ALPHA_MIN) { continue; }
+                let f = Frag(bb.y, vec4<f32>(batch_c[i].rgb * alpha, alpha), batch_g[i], batch_cap[i], true);
+                through *= 1.0 - alpha;
+                if (!(f.depth < bound)) {
+                    fb_f = f;
+                    fb_st = Stream(b + i + 1u, end, through);
+                    walking = false;
+                    break;
+                }
+                let kk = 1.0 - fb_acc.a - fb_held;
+                if (splat_holdout(f.capture)) {
+                    fb_held += f.color.a * kk;
+                } else {
+                    fb_acc += f.color * kk;
+                    fb_emit += f.color.rgb * kk;
+                }
+                if (fb_half.x == 0u && fb_acc.a >= 0.5) { fb_half = vec4<u32>(1u, bitcast<u32>(f.depth), f.g, 0u); }
+                if (fb_acc.a + fb_held >= 1.0) {
+                    fb_done = true;
+                    fb_st = Stream(b + i + 1u, end, through);
+                    walking = false;
+                    break;
+                }
+            }
+            if (walking) { fb_st = Stream(b + n, end, through); }
+        }
+        // On while any pixel still walks.
+        if (walking) { atomicOr(&wg_live, 1u); }
+        workgroupBarrier();
+        if (li == 0u) {
+            wg_live_n = atomicLoad(&wg_live);
+            atomicStore(&wg_live, 0u);
+        }
+        if (workgroupUniformLoad(&wg_live_n) == 0u) { break; }
+    }
+}
+
 // ---- the pixel --------------------------------------------------------
 
 struct Hit {
@@ -1352,6 +1446,37 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
     if (P.splat.x != 0u && side == 0u && last_row) {
         alone_batched(&alone, wid.y * P.size.w + wid.x, li, in_frame, pq, (flags & MATTES) != 0u);
     }
+    // The splats in front of the row's surfaces, walked by the workgroup
+    // together up to the nearest surface any of the pixel's samples meets
+    // in this row (a bound each sample's own nearest is never nearer than;
+    // not with instances here: they'd need their own pass).
+    let front_batch = P.splat.x != 0u && side == 0u && (flags & MATTES) == 0u;
+    var bound = -FAR_AWAY;
+    if (front_batch && in_frame) {
+        let tile0 = (g.y / TILE) * P.size.w + g.x / TILE;
+        let bin0 = (g.y / INST_BIN) * ((P.size.x + INST_BIN - 1u) / INST_BIN) + g.x / INST_BIN;
+        let no_inst = P.inst.x == 0u || lists[P.inst.z + bin0] == lists[P.inst.z + bin0 + 1u];
+        if (no_inst) {
+            let n0 = P.size.z;
+            let x0 = i32(g.x);
+            let y0 = i32(g.y);
+            var nearest = FAR_AWAY;
+            for (var i = 0u; i < n0; i++) {
+                for (var k = words[P.tables.x + tile0]; k < words[P.tables.x + tile0 + 1u]; k++) {
+                    let t = words[k];
+                    if (x0 < ti(t, 14u) || x0 >= ti(t, 16u) || y0 < ti(t, 15u) || y0 >= ti(t, 17u)) { continue; }
+                    let q = vec2<f32>(f32(x0 - ti(t, 12u)), f32(y0 - ti(t, 13u))) + vec2<f32>((f32(i) + 0.5) / f32(n0), (f32(P.cell.w) + 0.5) / f32(n0));
+                    let c = cover(tri_at(t, tu(t, 10u)), q);
+                    if (c.x < 0.0) { continue; }
+                    nearest = min(nearest, c.x);
+                }
+            }
+            if (nearest < FAR_AWAY) { bound = nearest; }
+        }
+    }
+    if (front_batch) {
+        front_batched(wid.y * P.size.w + wid.x, li, bound, pq);
+    }
     if (!in_frame) { return; }
     let px = g.y * w + g.x;
     let tile = (g.y / TILE) * P.size.w + g.x / TILE;
@@ -1394,6 +1519,34 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
     }
     let any_splat = alone.any;
     let dominant = alone.dominant;
+    // The splats in front of every surface a sample meets are the same
+    // for each of the pixel's samples (all taken at its middle): blended
+    // once, nearest first, up to the nearest surface so far (`fr_d`), and
+    // taken up from there by each sample whose nearest surface is no
+    // nearer (else it starts over). Not with mattes (their sums would be
+    // a copy a thread too many).
+    let front_on = P.splat.x != 0u && (flags & MATTES) == 0u;
+    var fr_st = splat_tile;
+    var fr_f: Frag;
+    fr_f.valid = false;
+    var fr_started = false;
+    var fr_done = false;
+    var fr_d = -FAR_AWAY;
+    var fr_acc = vec4<f32>(0.0);
+    var fr_held = 0.0;
+    var fr_half = vec4<u32>(0u);
+    var fr_emit = vec3<f32>(0.0);
+    if (bound > -FAR_AWAY) {
+        fr_st = fb_st;
+        fr_f = fb_f;
+        fr_started = true;
+        fr_done = fb_done;
+        fr_d = bound;
+        fr_acc = fb_acc;
+        fr_held = fb_held;
+        fr_half = fb_half;
+        fr_emit = fb_emit;
+    }
 
     for (var i = 0u; i < n; i++) {
         // This sample's surfaces, nearest first (ties by triangle).
@@ -1453,11 +1606,44 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
         var held = 0.0;
         var half = vec4<u32>(0u);
         var st = splat_tile;
-        var f = next_frag(&st, pq);
+        var f: Frag;
+        var skip = false;
+        if (front_on && hits[0].depth >= fr_d) {
+            if (!fr_started) {
+                fr_f = next_frag(&fr_st, pq);
+                fr_started = true;
+            }
+            let d1 = hits[0].depth;
+            while (!fr_done && fr_f.valid && fr_f.depth < d1) {
+                let k = 1.0 - fr_acc.a - fr_held;
+                if (splat_holdout(fr_f.capture)) {
+                    fr_held += fr_f.color.a * k;
+                } else {
+                    fr_acc += fr_f.color * k;
+                    fr_emit += fr_f.color.rgb * k;
+                }
+                if (fr_half.x == 0u && fr_acc.a >= 0.5) { fr_half = vec4<u32>(1u, bitcast<u32>(fr_f.depth), fr_f.g, 0u); }
+                if (fr_acc.a + fr_held >= 1.0) {
+                    fr_done = true;
+                    break;
+                }
+                fr_f = next_frag(&fr_st, pq);
+            }
+            fr_d = d1;
+            acc = fr_acc;
+            held = fr_held;
+            half = fr_half;
+            st = fr_st;
+            f = fr_f;
+            skip = fr_done;
+            if ((flags & ANY_PART) != 0u) { sums.parts[2] += fr_emit; }
+        } else {
+            f = next_frag(&st, pq);
+        }
         var m = 0u;
         loop {
             let has_hit = m < count;
-            if (!has_hit && !f.valid) { break; }
+            if (skip || (!has_hit && !f.valid)) { break; }
             if (f.valid && (!has_hit || f.depth < hits[m].depth)) {
                 let k = 1.0 - acc.a - held;
                 let o = splat_object(f.capture);

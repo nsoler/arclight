@@ -4,6 +4,21 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.14.34 (2026-11-21): GPU splats over surfaces** (Dev1). The Mac
+  slowness was general: with AA, each sample re-walked its tile's splat
+  list wherever it met a surface (9 walks a pixel at samples 3).
+  `raster.wgsl` now walks the splats in front of the row's nearest
+  surface once per pixel as a workgroup batch (`front_batched`, bound =
+  nearest cover depth over the row's samples) and each sample continues
+  from that front cursor: same arithmetic and order, bit-identical.
+  Fallbacks to the per-sample path: MATTES on, instances in the bin (no
+  bound; cursor unbatched), a jitter cell, or a sample whose surface is
+  nearer than the front; splats behind a see-through surface still walk
+  per sample. Pond 1280×720 samples 3: 185 → 103 ms (CPU 144). Further:
+  keep the front between rows (~50 B a pixel) or one dispatch for all
+  rows. Test `splats_in_front_of_surfaces_match_at_every_sample`; check
+  row "3D render, splats over a card, AA 3×3". Mac timing pending (TODO).
+
 - **0.14.33 (2026-11-21): Matte Combine** (Dev2; the user's request,
   plan approved with the user's answers: min/max + Soft switch, white
   matte default, keyable stepped Invert / operation). `matte_combine.rs`;
