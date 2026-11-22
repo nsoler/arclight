@@ -36,6 +36,11 @@ pub struct Spreadsheet {
     pub object: Option<String>,
     /// Only the selected nodes' rows (and the picked cloud points).
     pub selected_only: bool,
+    /// The 3D view's picked point-set points / mesh vertices, valid in the
+    /// shown scene (domain, object, index) and their nodes: under Selected
+    /// only they narrow Points / Mesh points (set by [`Spreadsheet::ui`]).
+    elements: Vec<(Domain, usize, usize)>,
+    element_nodes: Vec<String>,
     /// P and N in world space rather than each object's own.
     pub world: bool,
     /// Cells built last frame (only the visible rows' are).
@@ -125,7 +130,7 @@ impl Spreadsheet {
     fn filter(&self, doc: &Doc, picks: &[(String, usize)]) -> Filter {
         let nodes = self.selected_only.then(|| {
             let mut nodes = doc.selection();
-            for (n, _) in picks {
+            for n in picks.iter().map(|(n, _)| n).chain(&self.element_nodes) {
                 if !nodes.contains(n) {
                     nodes.push(n.clone());
                 }
@@ -138,16 +143,26 @@ impl Spreadsheet {
     /// How the rows show: World, and under Selected only the picked cloud
     /// points.
     fn view(&self, picks: &[(String, usize)]) -> View {
-        View { world: self.world, picked: self.selected_only.then(|| picks.iter().map(|(_, i)| *i).collect()) }
+        View {
+            world: self.world,
+            picked: self.selected_only.then(|| picks.iter().map(|(_, i)| *i).collect()),
+            picked_elements: (self.selected_only && !self.elements.is_empty()).then(|| self.elements.clone()),
+        }
     }
 
     /// `picks` (the 3D view's picked cloud points: node, index in the
     /// scene's points) narrow the Cloud under Selected only.
-    pub fn ui(&mut self, ui: &mut egui::Ui, doc: &Doc, frame: i64, picks: &[(String, usize)]) {
+    /// `elements` (its picked point-set points and mesh vertices) narrow
+    /// Points / Mesh points likewise.
+    pub fn ui(&mut self, ui: &mut egui::Ui, doc: &Doc, frame: i64, picks: &[(String, usize)], elements: &[crate::element_pick::ElementPick]) {
         self.sync(ui.ctx(), doc, frame);
         match self.scene.clone() {
             Some(scene) => {
                 let picks = valid_picks(&scene, picks);
+                let valid: Vec<&crate::element_pick::ElementPick> = elements.iter().filter(|e| crate::element_pick::valid(&scene, e)).collect();
+                self.elements = valid.iter().map(|e| (e.domain, e.object, e.index)).collect();
+                self.element_nodes = valid.iter().map(|e| e.node.clone()).collect();
+                self.element_nodes.dedup();
                 self.draw(ui, doc, &scene, &picks)
             }
             None => {
@@ -190,7 +205,7 @@ impl Spreadsheet {
                     ui.selectable_value(&mut self.object, Some(node.to_string()), format!("{node} ({kind}) {}", grouped(*n)));
                 }
             });
-            ui.checkbox(&mut self.selected_only, "Selected only").on_hover_text("Only the rows of the nodes selected in the node graph or the 3D view (in Cloud, the points picked there)");
+            ui.checkbox(&mut self.selected_only, "Selected only").on_hover_text("Only the rows of the nodes selected in the node graph or the 3D view (in Cloud, and in Points / Mesh points with the 3D view's Points on, the points picked there)");
             ui.checkbox(&mut self.world, "World").on_hover_text("P and N in world space (each object placed), rather than its own");
         });
         let table = Table::with_view(scene, domain, &self.filter(doc, picks), &self.view(picks));
@@ -368,4 +383,22 @@ mod tests {
     fn counts_are_grouped_by_thousands() {
         assert_eq!([grouped(0), grouped(999), grouped(1000), grouped(1_234_567)], ["0", "999", "1,000", "1,234,567"]);
     }
+
+    /// Under Selected only, the 3D view's picked points (Points mode)
+    /// narrow their point set to those rows, and bring in its node; off,
+    /// or with none picked, nothing changes.
+    #[test]
+    fn picked_elements_narrow_points_under_selected_only() {
+        let doc = Doc::new(Graph::default(), None);
+        let scene = Scene { point_sets: vec![points("cloud", 5), points("other", 3)], ..Scene::default() };
+        let mut sheet = Spreadsheet { elements: vec![(Domain::Points, 0, 3), (Domain::Points, 0, 1)], element_nodes: vec!["cloud".into()], ..Spreadsheet::default() };
+        let rows = |sheet: &Spreadsheet| Table::with_view(&scene, Domain::Points, &sheet.filter(&doc, &[]), &sheet.view(&[])).len();
+        assert_eq!(rows(&sheet), 8, "Selected only off: everything");
+        sheet.selected_only = true;
+        assert_eq!(rows(&sheet), 2, "the picked two; 'other' isn't selected");
+        sheet.elements.clear();
+        sheet.element_nodes.clear();
+        assert_eq!(rows(&sheet), 0, "nothing selected or picked");
+    }
+
 }

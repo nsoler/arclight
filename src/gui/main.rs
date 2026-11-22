@@ -12,6 +12,7 @@ mod bridge_calls;
 mod curve_editor;
 mod dialogs;
 mod doc;
+mod element_pick;
 mod gizmo3d;
 mod gpu_check;
 mod graph_thumbs;
@@ -1675,7 +1676,7 @@ impl App {
         if self.viewer.sheet {
             egui::Panel::bottom("geo_sheet").resizable(true).default_size(240.0).min_size(80.0).show(ui, |ui| {
                 ui.add_space(4.0);
-                self.sheet.ui(ui, &self.doc, self.transport.frame, &self.viewer.viewport3d.points);
+                self.sheet.ui(ui, &self.doc, self.transport.frame, &self.viewer.viewport3d.points, &self.viewer.viewport3d.elements);
             });
         }
         egui::CentralPanel::no_frame().show(ui, |ui| {

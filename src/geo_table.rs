@@ -94,6 +94,10 @@ pub struct View {
     /// into `Scene::points`): a node with any picked shows only those in
     /// the Cloud tab.
     pub picked: Option<Vec<usize>>,
+    /// Points of point sets and mesh vertices picked in the 3D view:
+    /// (domain, index into `Scene::point_sets` / `Scene::meshes`, element).
+    /// An object with any picked shows only those in its tab.
+    pub picked_elements: Option<Vec<(Domain, usize, usize)>>,
 }
 
 /// One value of a row.
@@ -274,7 +278,25 @@ pub fn counts(scene: &Scene, filter: &Filter) -> Vec<(Domain, usize)> {
 
 /// The sheet's tabs' counts ([`Domain::SHEET`]), as `view` shows them.
 pub fn sheet_counts(scene: &Scene, filter: &Filter, view: &View) -> Vec<(Domain, usize)> {
-    Domain::SHEET.into_iter().map(|d| (d, parts(scene, d, filter, view).iter().map(Part::len).sum())).collect()
+    Domain::SHEET
+        .into_iter()
+        .map(|d| (d, parts(scene, d, filter, view).iter().map(|p| subset(scene, p, view).map_or(p.len(), |r| r.len())).sum()))
+        .collect()
+}
+
+/// The elements of `part` a view's picks keep (sorted), when it has any
+/// picked ([`View::picked_elements`]); None: all of them.
+fn subset(scene: &Scene, part: &Part, view: &View) -> Option<Vec<usize>> {
+    let picks = view.picked_elements.as_ref()?;
+    let (domain, object) = match *part {
+        Part::Points(g) => (Domain::Points, scene.point_sets.iter().position(|x| std::ptr::eq(x, g))?),
+        Part::MeshPoints(m) => (Domain::MeshPoints, scene.meshes.iter().position(|x| std::ptr::eq(x, m))?),
+        _ => return None,
+    };
+    let mut rows: Vec<usize> = picks.iter().filter(|(d, o, i)| *d == domain && *o == object && *i < part.len()).map(|p| p.2).collect();
+    rows.sort_unstable();
+    rows.dedup();
+    (!rows.is_empty()).then_some(rows)
 }
 
 /// The objects with rows in a domain: (node, kind, rows).
@@ -286,6 +308,8 @@ pub struct Table<'a> {
     parts: Vec<Part<'a>>,
     /// Each part's first row, and the total after the last.
     starts: Vec<usize>,
+    /// Each part's picked elements, when only those show ([`subset`]).
+    subsets: Vec<Option<Vec<usize>>>,
     fields: Vec<Field>,
     /// P and N in world space ([`View::world`]).
     world: bool,
@@ -321,9 +345,10 @@ impl<'a> Table<'a> {
     /// The table as the sheet's `view` shows it: world space, picks.
     pub fn with_view(scene: &'a Scene, domain: Domain, filter: &Filter, view: &View) -> Table<'a> {
         let parts = parts(scene, domain, filter, view);
+        let subsets: Vec<Option<Vec<usize>>> = parts.iter().map(|p| subset(scene, p, view)).collect();
         let mut starts = vec![0];
-        for p in &parts {
-            starts.push(starts.last().unwrap() + p.len());
+        for (p, sub) in parts.iter().zip(&subsets) {
+            starts.push(starts.last().unwrap() + sub.as_ref().map_or(p.len(), Vec::len));
         }
         let xyz = ["x", "y", "z"];
         let mut fields = vec![field("index", FieldKind::Int, &[""], Source::Index)];
@@ -368,7 +393,7 @@ impl<'a> Table<'a> {
             let (kind, comps, color) = attr_comps(name, attr);
             fields.push(Field { name: name.to_string(), kind, comps, color, source: Source::Attr });
         }
-        Table { domain, parts, starts, fields, world: view.world }
+        Table { domain, parts, starts, subsets, fields, world: view.world }
     }
 
     /// Rows in all.
@@ -386,7 +411,7 @@ impl<'a> Table<'a> {
 
     /// The objects the rows come from, in row order.
     pub fn objects(&self) -> Vec<Object<'a>> {
-        self.parts.iter().map(|p| (p.node(), p.kind(), p.len())).collect()
+        self.parts.iter().enumerate().map(|(k, p)| (p.node(), p.kind(), self.starts[k + 1] - self.starts[k])).collect()
     }
 
     /// Row `row`'s object (by its place in [`Table::objects`]) and element.
@@ -395,7 +420,9 @@ impl<'a> Table<'a> {
             return None;
         }
         let k = self.starts.partition_point(|&s| s <= row) - 1;
-        Some((k, row - self.starts[k]))
+        let i = row - self.starts[k];
+        // Only the picked elements: the row's element.
+        Some((k, self.subsets[k].as_ref().map_or(i, |r| r[i])))
     }
 
     /// Component `comp` of field `field` in row `row`.
@@ -671,7 +698,7 @@ mod tests {
         s.meshes[0].world = moved;
         s.point_sets[0].world = trs([0.0, 5.0, 0.0], [0.0; 3], [1.0; 3]);
         s.curves[0].world = trs([0.0, 0.0, -1.0], [0.0; 3], [3.0; 3]);
-        let world = View { world: true, picked: None };
+        let world = View { world: true, picked: None, ..View::default() };
         let near = |c: Cell, v: f64| matches!(c, Cell::Float(x) if (x - v).abs() < 1e-9);
         let rock = Filter { object: Some("rockA".into()), nodes: None };
         let (local, placed) = (Table::new(&s, Domain::MeshPoints, &rock), Table::with_view(&s, Domain::MeshPoints, &rock, &world));
@@ -718,12 +745,12 @@ mod tests {
         assert_eq!(headers(&t), ["index", "object", "P.x", "P.y", "P.z"]);
         assert_eq!((f(&t, 3, "index", 0), f(&t, 3, "P", 0)), (Cell::Int(0), Cell::Float(10.0)), "trackB's point 0 is scene point 3");
         // Picks: trackA's scene point 2 (its number 2) and trackB's 4.
-        let picked = View { world: false, picked: Some(vec![2, 4]) };
+        let picked = View { world: false, picked: Some(vec![2, 4]), ..View::default() };
         let t = Table::with_view(&s, Domain::Cloud, &Filter::default(), &picked);
         assert_eq!(t.len(), 2);
         assert_eq!((f(&t, 0, "index", 0), f(&t, 0, "P", 0), f(&t, 1, "index", 0), f(&t, 1, "P", 0)), (Cell::Int(2), Cell::Float(2.0), Cell::Int(1), Cell::Float(11.0)));
         // A node without picks keeps all its points.
-        let t = Table::with_view(&s, Domain::Cloud, &Filter::default(), &View { world: true, picked: Some(vec![0]) });
+        let t = Table::with_view(&s, Domain::Cloud, &Filter::default(), &View { world: true, picked: Some(vec![0]), ..View::default() });
         assert_eq!(t.objects(), [("trackA", "point cloud", 1), ("trackB", "point cloud", 2)]);
         let sel = Filter { object: None, nodes: Some(vec!["trackB".into()]) };
         assert_eq!(sheet_counts(&s, &sel, &none).last(), Some(&(Domain::Cloud, 2)));
@@ -732,7 +759,7 @@ mod tests {
         assert_eq!(Domain::from_key("cloud"), None);
         assert_eq!(&sheet_counts(&s, &Filter::default(), &none)[..5], &counts(&s, &Filter::default())[..]);
         for d in Domain::ALL {
-            assert_eq!(Table::new(&s, d, &Filter::default()).page(0, 100), Table::with_view(&s, d, &Filter::default(), &View { world: false, picked: Some(vec![1]) }).page(0, 100));
+            assert_eq!(Table::new(&s, d, &Filter::default()).page(0, 100), Table::with_view(&s, d, &Filter::default(), &View { world: false, picked: Some(vec![1]), ..View::default() }).page(0, 100));
         }
     }
 
@@ -750,4 +777,41 @@ mod tests {
         assert_eq!(f(&t, n + 2, "P", 0), Cell::Float((n - 1) as f64));
         assert!(t0.elapsed().as_millis() < 500, "{:?}", t0.elapsed());
     }
+
+    /// Points and mesh vertices picked in the 3D view narrow their tabs:
+    /// an object with any picked shows only those (by index), the others
+    /// all theirs; other tabs and the MCP tool's tables are untouched.
+    #[test]
+    fn picked_elements_narrow_points_and_mesh_points() {
+        let s = scene();
+        let rock_a = s.meshes[0].mesh.positions.len();
+        let view = View { picked_elements: Some(vec![(Domain::MeshPoints, 1, 0), (Domain::Points, 0, 1), (Domain::Points, 0, 99)]), ..View::default() };
+        let pts = Table::with_view(&s, Domain::Points, &Filter::default(), &view);
+        assert_eq!(pts.len(), 1);
+        assert_eq!((f(&pts, 0, "index", 0), f(&pts, 0, "P", 0)), (Cell::Int(1), Cell::Float(4.0)));
+        let mesh = Table::with_view(&s, Domain::MeshPoints, &Filter::default(), &view);
+        assert_eq!(mesh.len(), rock_a + 1, "rockA whole, rockB's one picked");
+        assert_eq!(mesh.objects(), [("rockA", "mesh", rock_a), ("rockB", "mesh", 1)]);
+        assert_eq!(f(&mesh, rock_a, "index", 0), Cell::Int(0));
+        let tabs = sheet_counts(&s, &Filter::default(), &view);
+        assert_eq!(tabs[0], (Domain::Points, 1));
+        assert_eq!(tabs[1], (Domain::MeshPoints, rock_a + 1));
+        // Other tabs, and no picks at all: as before.
+        for d in Domain::SHEET {
+            if !matches!(d, Domain::Points | Domain::MeshPoints) {
+                assert_eq!(Table::with_view(&s, d, &Filter::default(), &view).page(0, 100), Table::new(&s, d, &Filter::default()).page(0, 100));
+            }
+        }
+        for d in Domain::ALL {
+            let none = View { picked_elements: None, ..View::default() };
+            assert_eq!(Table::new(&s, d, &Filter::default()).page(0, 100), Table::with_view(&s, d, &Filter::default(), &none).page(0, 100));
+        }
+        assert_eq!(counts_of(&s), counts(&s, &Filter::default()));
+    }
+
+    /// The MCP tool's counts, worked out as before picks existed.
+    fn counts_of(s: &Scene) -> Vec<(Domain, usize)> {
+        Domain::ALL.into_iter().map(|d| (d, Table::new(s, d, &Filter::default()).len())).collect()
+    }
+
 }

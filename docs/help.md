@@ -580,7 +580,14 @@ selected object.
   tab for Camera Trackers' points, numbered as the tracker numbers them).
   **World** shows P and N in world space (attributes stay as stored);
   under **Selected only**, cloud points picked in the 3D view narrow the
-  Cloud tab. MCP / Python:
+  Cloud tab. To pick single points of point sets or mesh vertices, turn on
+  **Points** in the 3D toolbar: a click picks the nearest point (not
+  through a surface), **⇧**-click adds or removes one, a drag boxes them
+  (mesh vertices facing the camera), a click on nothing or **Esc** clears
+  the picks (Esc again then deselects as usual). Picked points show
+  orange; under **Selected only** a point set or mesh with picks shows
+  just those rows in **Points** / **Mesh points**. Picks aren't saved;
+  with Points off, clicks pick objects as before. MCP / Python:
   **geometry** (`node.geometry(frame, domain)`; no Cloud, values in each object's own space). **Transform Geo** moves, turns and scales
   what's in a scene about a pivot, everything or one node's (Group: a name
   or a pattern like rock*); cameras and lights stay put unless you tick

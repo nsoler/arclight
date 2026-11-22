@@ -18,6 +18,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.36 — 2026-11-21
+
+- **Pick single points in the 3D view:** a Points toggle in the 3D
+  toolbar picks points of point sets and mesh vertices (click, ⇧-click
+  to add or remove, drag a box, Esc or a click on nothing to clear);
+  Geo Info's Selected only then shows just those rows in Points / Mesh
+  points, as it does for Camera Tracker cloud points. With Points off,
+  picking is as before.
+
 ## 0.14.35 — 2026-11-21
 
 - **Merge gains subtract, difference, stencil and mask:** subtract

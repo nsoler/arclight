@@ -833,7 +833,7 @@ fn nearest_projected(points: impl Iterator<Item = Vec3>, p: &Projector, at: Pos2
 
 /// How far along ray (`o`, unit `d`) it first meets model `m`'s triangles
 /// (Möller–Trumbore, in the scene), if it does.
-fn ray_mesh(m: &arclight::scene::Model, o: &Vec3, d: &Vec3) -> Option<f64> {
+pub(crate) fn ray_mesh(m: &arclight::scene::Model, o: &Vec3, d: &Vec3) -> Option<f64> {
     let (lo, hi) = m.bounds()?;
     // Past the box around it: no need to try each triangle.
     let (mut t0, mut t1) = (0.0f64, f64::INFINITY);
@@ -1263,6 +1263,11 @@ pub struct Viewport3d {
     error: Option<String>,
     /// Selected points (of point clouds and Camera Trackers): node, index.
     pub points: Vec<(String, usize)>,
+    /// The toolbar's Points: clicks and boxes pick points of point sets and
+    /// mesh vertices (`element_pick`) instead of objects.
+    pub points_mode: bool,
+    /// Those picks (UI state, not saved), for Geo Info's Selected only.
+    pub elements: Vec<crate::element_pick::ElementPick>,
     /// A box selection being dragged: screen start and now, and whether it
     /// adds to the selection.
     marquee: Option<(Pos2, Pos2, bool)>,
@@ -1324,6 +1329,8 @@ impl Default for Viewport3d {
             splats_shown: false,
             error: None,
             points: Vec::new(),
+            points_mode: false,
+            elements: Vec::new(),
             marquee: None,
             message: None,
             restored: None,
@@ -1800,6 +1807,9 @@ impl Viewport3d {
         if self.nav.emulate_three_button && alt {
             return;
         }
+        if self.points_mode {
+            return self.select_elements(ui, resp, &scene, p, shift);
+        }
         if resp.clicked_by(PointerButton::Primary) {
             if let Some(s) = resp.interact_pointer_pos() {
                 let hit = self.click(&scene, p, aspect, s, shift, doc);
@@ -1835,6 +1845,33 @@ impl Viewport3d {
                 }
                 self.points.extend(points.into_iter().filter(|pt| !self.points.contains(pt)).collect::<Vec<_>>());
                 doc.select_nodes(&objects, add);
+            }
+        }
+    }
+
+    /// Points mode: a click picks the nearest point-set point or mesh
+    /// vertex (⇧ toggles it; on nothing, clears the picks only); a drag
+    /// box-picks (⇧ adds).
+    fn select_elements(&mut self, ui: &egui::Ui, resp: &Response, scene: &Scene, p: &Projector, shift: bool) {
+        use crate::element_pick;
+        self.hover = None;
+        if resp.clicked_by(PointerButton::Primary) {
+            if let Some(s) = resp.interact_pointer_pos() {
+                let hit = element_pick::pick(scene, p, s, &|k, o, d| ray_mesh(&scene.meshes[k], o, d));
+                element_pick::apply(&mut self.elements, hit, shift);
+            }
+        }
+        if resp.drag_started_by(PointerButton::Primary) {
+            if let Some(o) = ui.input(|i| i.pointer.press_origin()) {
+                self.marquee = Some((o, o, shift));
+            }
+        }
+        if let (Some(m), Some(now)) = (&mut self.marquee, resp.interact_pointer_pos()) {
+            m.1 = now;
+        }
+        if resp.drag_stopped_by(PointerButton::Primary) {
+            if let Some((a, b, add)) = self.marquee.take() {
+                element_pick::apply_box(&mut self.elements, element_pick::in_box(scene, p, a, b), add);
             }
         }
     }
@@ -2261,9 +2298,14 @@ impl Viewport3d {
                 Key::Z => self.view.wireframe = !self.view.wireframe,
                 Key::Backtick if self.pie.is_none() => self.pie = ui.input(|i| i.pointer.hover_pos()),
                 // Esc cancels a box first, else deselects.
+                // (In Points mode, Esc clears the picked points first.)
                 Key::Escape if self.marquee.take().is_none() => {
-                    self.points.clear();
-                    doc.clear_selection();
+                    if self.points_mode && !self.elements.is_empty() {
+                        self.elements.clear();
+                    } else {
+                        self.points.clear();
+                        doc.clear_selection();
+                    }
                 }
                 _ => {}
             }
@@ -2545,6 +2587,8 @@ impl Viewport3d {
         if !dots.is_empty() {
             painter.add(egui::Shape::mesh(dots));
         }
+        // Points mode's picks, over the dots and meshes.
+        crate::element_pick::draw(painter, &scene, p, &self.elements);
         for c in &scene.curves {
             let stroke = if selected(&c.node) { Stroke::new(2.0, SELECTED) } else { Stroke::new(1.2, CURVE) };
             c.segments().into_iter().for_each(|(a, b)| line(a, b, stroke));

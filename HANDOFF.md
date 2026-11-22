@@ -4,6 +4,20 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.14.36 (2026-11-21): Geo Info per-point picking** (Dev2). Element
+  picks live in `viewport3d.elements` (UI state: domain, node, index
+  into scene.point_sets / meshes, element), validated against the
+  sheet's scene by `element_pick::valid`; the 3D toolbar's Points toggle
+  (`points_mode`) routes clicks / box / Esc to `gui/element_pick.rs`.
+  `geo_table::View.picked_elements` narrows Points / MeshPoints per
+  object through `Table.subsets` (row → element index in `locate`);
+  MCP's `Table::new` / `counts` untouched (tested). CPU screen-space
+  hit-testing only on click / box release; the click skips mesh
+  vertices behind the nearest `ray_mesh` surface; a box keeps
+  camera-facing vertices but doesn't test occlusion (known limit; a GPU
+  id pass if ever needed). Seen once: `gpu::check::tests::the_self_test_passes`
+  failed in a full run while other GPU work ran; passed on rerun.
+
 - **0.14.35 (2026-11-21): Merge modes + any pass as a mask** (Dev2).
   New modes in `ops::blend` plus GPU codes 7–10 (`gpu/ops.rs`
   merge_mode order = the `pointwise.wgsl` switch; min is `case 6u`,

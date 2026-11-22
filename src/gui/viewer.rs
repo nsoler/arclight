@@ -716,6 +716,11 @@ impl Viewer {
                 ui.selectable_value(&mut self.tool, tool, label).on_hover_text(tip);
             }
             ui.separator();
+            let tip = "Points: clicks pick single points of point sets and mesh vertices (⇧ adds or removes, drag a box), for Geo Info's Selected only; off, clicks pick objects";
+            if ui.selectable_label(self.viewport3d.points_mode, "Points").on_hover_text(tip).clicked() {
+                self.viewport3d.points_mode = !self.viewport3d.points_mode;
+            }
+            ui.separator();
             let tip = "The gizmo's axes: the world's, or the object's own (while dragging a gizmo: press X / Y / Z twice for the object's)";
             ui.selectable_value(&mut self.space, Space::Global, "Global").on_hover_text(tip);
             ui.selectable_value(&mut self.space, Space::Local, "Local").on_hover_text(tip);

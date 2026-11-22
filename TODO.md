@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.14.35 (2026-11-21). Done items are removed
+What's still open, as of 0.14.36 (2026-11-21). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -8,6 +8,15 @@ them when they ship. `ROADMAP.md` is the public summary.
 ## To check by hand (user)
 
 On Linux and on the Macs (the DMG), from the release builds.
+
+**Phase 14 (0.14.36)**
+- [ ] Geo Info picking: Scatter points (or a Cube), 3D toolbar Points
+      on: click a point → orange dot, Geo Info (Sheet) Selected only →
+      just that row in Points (or Mesh points); ⇧-click two more; box
+      over part of a sphere → front vertices only; Esc clears the picks,
+      Esc again deselects; Points off → clicks select objects again;
+      cloud picks, curve ⇧-picks and G / R / S unchanged; ~200k points:
+      a click picks without a hitch
 
 **Phase 14 (0.14.35)**
 - [ ] Merge an Ellipse (A) over a plate (B) with each of subtract /
@@ -125,6 +134,11 @@ On Linux and on the Macs (the DMG), from the release builds.
 
 ## Known gaps and follow-ups
 
+- [ ] **`gpu::check::tests::the_self_test_passes` flakes under GPU
+      load:** a timing row ("read one pixel" must be < 1 ms) fails the
+      unit test when other GPU work runs (12 ms seen 2026-11-21 while a
+      crash-repro loop ran); values were exact. Keep timing bars in
+      `gpu --check`, not as a unit-test failure
 - [ ] **NVIDIA/Linux: a process can SIGSEGV at exit** inside the
       driver (libnvidia-gpucomp, a background shader compile racing the
       ICD teardown), after its work is done; mostly with shaders cold in
@@ -134,9 +148,6 @@ On Linux and on the Macs (the DMG), from the release builds.
       before the ICD tears down (Dev1, measured with a fast repro)
 - [ ] Shuffle / Matte Combine: a multi-source GPU kernel (routes
       reading input 2+ and Matte Combine run on the CPU today)
-- [ ] Geo Info: picking individual point-set / mesh points in the 3D
-      view (to narrow Points / Mesh points like Cloud picks) isn't
-      supported; only Camera Tracker cloud points are pickable
 - [ ] Project 3D targets are node names fixed at the node: fine today
       (nothing renames or merges meshes under a new node); if such an op
       is added, carry projections on Card / Model as Instances do
