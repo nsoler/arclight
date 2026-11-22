@@ -19,6 +19,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.16.1 — 2026-11-22
+
+- **Wire bends snap square:** a bend added or dragged nearly level or
+  plumb with the bend or port beside it lands exactly level or plumb,
+  with a guide line, so right-angle routes are exactly 90° (Alt places
+  freely). Dropping an output onto a bent wire now splits its bends
+  between the new Merge's wires, with the Merge at the drop point.
+
 ## 0.16.0 — 2026-11-22
 
 - **Phase 16 starts: polish**, on branch `wip-ns-polish` (from 0.15.8):

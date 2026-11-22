@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.16.0 (2026-11-22). Done items are removed
+What's still open, as of 0.16.1 (2026-11-22). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -8,6 +8,12 @@ them when they ship. `ROADMAP.md` is the public summary.
 ## To check by hand (user)
 
 On Linux and on the Macs (the DMG), from the release builds.
+
+**Phase 16 (0.16.1)**
+- [ ] Bend a wire into an L / U route: legs within a few degrees snap
+      square, with a guide line; Alt-drag stays free; grid on: still
+      level with the port; drag an output onto a bent wire: the Merge
+      is at the drop, bends on both sides
 
 **Phase 15 (0.15.8)**
 - [X] Straight wires: ⌘-click a wire twice, drag the bends into a
@@ -201,9 +207,8 @@ On Linux and on the Macs (the DMG), from the release builds.
 
 ## Known gaps and follow-ups
 
-- [ ] Wire bends: dragging an output onto a bent wire (merge into wire)
-      drops its bends instead of splitting them; bends not in the
-      minimap; Shift+R/T/M into a bent wire has no test of its own
+- [ ] Wire bends: not shown in the minimap; Shift+R/T/M into a bent
+      wire has no test of its own
 - [ ] 2D handles: mapping through a Card + Camera (homography) to drag
       on the rendered card; a first pen click for a new Roto fed by an
       auto-pivot Transform can be off until the worker reports that

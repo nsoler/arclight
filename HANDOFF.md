@@ -4,14 +4,22 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.16.1 (2026-11-22): wire bends snap square** (Dev1). Squaring is
+  `wire_path::snap_square` (pure, graph space; tolerance max(6 px /
+  zoom, tan 4° · leg)) called from `NodeEditor::squared`. A bend drag
+  keeps its raw pointer position in `bend_drag` so snapping never
+  sticks; on release with grid snapping, square wins on the axes it
+  caught. Merge into wire splits bends in node_editor
+  (`split_bends_at`) in the same frame as `Doc::merge_into_wire`: one
+  undo step.
+
 - **Phase 16: polish, 0.16.x on `wip-ns-polish`** (from 0.15.8
   `5733539`, the user's call 2026-11-22); `main` follows it;
   `wip-ns-gapfixes` frozen at 0.15.8 (released v0.15.8 with DMG).
   Scope: wire bends snapping to exact right angles + merge-into-wire
   split, Collect Media from MCP, handles dragged on a rendered card
-  (Card + Camera homography). "Read Nuke scripts" asked about: it
-  conflicts with CLAUDE.md's originality rule and TODO "Not planned";
-  waiting for the user.
+  (Card + Camera homography). "Read Nuke scripts" / a .nk translator:
+  the user decided to keep the originality rule (stays "Not planned").
 
 - **0.15.8 (2026-11-22): wire bend points** (Dev2; the user chose
   "smooth through" for curved wires). Bends live in `Graph.bends`

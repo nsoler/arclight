@@ -118,6 +118,9 @@ pub struct NodeEditor {
     target_wire: Option<WireRef>,
     /// The wire a dragged, unconnected node would be dropped into.
     drop_wire: Option<WireRef>,
+    /// A bend being dragged: its wire (input node, port), index and where
+    /// the pointer has taken it (graph), before squaring it up.
+    bend_drag: Option<(String, usize, usize, Pos2)>,
     shake: Shake,
     /// The minimap's graph bounds, held while dragging in it.
     minimap_bounds: Option<Rect>,
@@ -252,6 +255,7 @@ impl Default for NodeEditor {
             browser: None,
             target_wire: None,
             drop_wire: None,
+            bend_drag: None,
             shake: Shake::default(),
             minimap_bounds: None,
             select_box: None,
@@ -754,9 +758,9 @@ impl NodeEditor {
         // A click on a wire selects it; elsewhere it deselects.
         if bg.clicked() {
             match bg.interact_pointer_pos().and_then(|p| Some((self.wire_at(doc, p, None)?, p))) {
-                // ⌘/Ctrl-click: a bend there.
+                // ⌘/Ctrl-click: a bend there (squared up unless Alt).
                 Some((w, p)) if mods.command => {
-                    self.add_bend(doc, &w, p);
+                    self.add_bend(doc, &w, p, mods.alt);
                     doc.select_wire(&w.src, &w.dst, w.port);
                 }
                 Some((w, _)) => doc.select_wire(&w.src, &w.dst, w.port),
@@ -1015,8 +1019,23 @@ impl NodeEditor {
                                 doc.connect(&src, &dst, i);
                             }
                         } else if let Some(w) = self.wire_at(doc, ptr, Some(&src)).filter(|w| !is_scene(doc, &src) && !is_scene(doc, &w.src)) {
-                            // Onto a wire: a Merge joins the two there.
+                            // Onto a wire: a Merge joins the two there. On a
+                            // bent wire, at the drop (the middle may be off
+                            // its route), each side keeping its bends: the
+                            // same frame, so one undo step.
+                            let split = self.split_bends_at(doc, &w, ptr);
                             if let Some(m) = doc.merge_into_wire(&src, &w.src, &w.dst, w.port) {
+                                if let Some((before, after)) = split {
+                                    let g = self.to_graph(ptr);
+                                    let pos = [g.x - NODE_W / 2.0, g.y - NODE_H / 2.0];
+                                    let pos = if self.snap_to_grid { [snap(pos[0]), snap(pos[1])] } else { pos };
+                                    if let Some(n) = doc.node_mut(&m) {
+                                        n.pos = Some(pos);
+                                    }
+                                    doc.graph.set_bends(&m, 1, before);
+                                    doc.graph.set_bends(&w.dst, w.port, after);
+                                    doc.touched();
+                                }
                                 doc.selected = Some(m);
                             }
                         }
@@ -1142,24 +1161,54 @@ impl NodeEditor {
     }
 
     /// A bend in wire `w` at screen point `p`, between the bends either
-    /// side of it along the wire.
-    fn add_bend(&self, doc: &mut Doc, w: &WireRef, p: Pos2) {
+    /// side of it along the wire, squared up with them (see
+    /// [`NodeEditor::squared`]) unless `free`.
+    fn add_bend(&self, doc: &mut Doc, w: &WireRef, p: Pos2, free: bool) {
         let Some(segs) = self.wire_ref_segments(doc, w) else { return };
         let (seg, _) = wire_path::nearest(&segs, p);
         let mut pts = doc.graph.bends_of(&w.dst, w.port).to_vec();
-        pts.insert(seg.min(pts.len()), self.bend_point(p));
+        let k = seg.min(pts.len());
+        let at = self.bend_point(p);
+        pts.insert(k, at);
+        pts[k] = self.squared(doc, (&w.dst, w.port), &pts, k, Pos2::new(at[0], at[1]), free).0;
         doc.graph.set_bends(&w.dst, w.port, pts);
         doc.touched();
+    }
+
+    /// Bend `k` of the wire into input `port` of `dst` (`wire`; its bends
+    /// `pts`) at graph point `g`, put level or plumb with the bend or port
+    /// either side of it where its leg is nearly so
+    /// (`wire_path::snap_square`), unless `free`: the point, and which axes
+    /// it took ([x, y]).
+    fn squared(&self, doc: &Doc, (dst, port): (&str, usize), pts: &[[f32; 2]], k: usize, g: Pos2, free: bool) -> ([f32; 2], [bool; 2]) {
+        let ends = || {
+            let to = doc.node(dst)?;
+            let from = doc.node(to.inputs.get(port)?)?;
+            let (fr, tr) = (self.node_rect(from.pos.unwrap_or([0.0, 0.0])), self.node_rect(to.pos.unwrap_or([0.0, 0.0])));
+            Some((self.to_graph(Self::out_port(fr)), self.to_graph(Self::in_port(tr, port, to.inputs.len()))))
+        };
+        let Some((a, b)) = ends().filter(|_| !free) else { return ([g.x, g.y], [false; 2]) };
+        let at = |i: usize| Pos2::new(pts[i][0], pts[i][1]);
+        let prev = if k == 0 { a } else { at(k - 1) };
+        let next = if k + 1 >= pts.len() { b } else { at(k + 1) };
+        let (p, axes) = wire_path::snap_square(g, prev, next, wire_path::SQUARE_PX / self.zoom);
+        ([p.x, p.y], axes)
     }
 
     /// Before `node` goes into wire `w`: the wire's bends split where the
     /// node sits (those before it, those after), if it has any.
     fn split_bends(&self, doc: &Doc, node: &str, w: &WireRef) -> Option<wire_path::Split> {
+        let at = self.node_rect(doc.node(node)?.pos.unwrap_or([0.0, 0.0])).center();
+        self.split_bends_at(doc, w, at)
+    }
+
+    /// Wire `w`'s bends split at screen point `at` (those before it along
+    /// the wire, those after), if it has any.
+    fn split_bends_at(&self, doc: &Doc, w: &WireRef, at: Pos2) -> Option<wire_path::Split> {
         let pts = doc.graph.bends_of(&w.dst, w.port).to_vec();
         if pts.is_empty() {
             return None;
         }
-        let at = self.node_rect(doc.node(node)?.pos.unwrap_or([0.0, 0.0])).center();
         let (seg, _) = wire_path::nearest(&self.wire_ref_segments(doc, w)?, at);
         Some(wire_path::split(&pts, seg))
     }
@@ -1175,8 +1224,10 @@ impl NodeEditor {
     }
 
     /// Wire bends: a dot on each (bigger on a selected or hovered wire's);
-    /// drag one to move it (onto the grid when snapping), ⌘/Ctrl-click it
-    /// to take it out, click it to select its wire.
+    /// drag one to move it (squared up with its neighbours where its legs
+    /// are nearly level or plumb, a guide showing it, unless Alt is held;
+    /// onto the grid when snapping, where not squared), ⌘/Ctrl-click it to
+    /// take it out, click it to select its wire.
     fn bends_ui(&mut self, ui: &egui::Ui, painter: &egui::Painter, doc: &mut Doc, mods: Modifiers) {
         let live: Vec<(String, usize, Vec<[f32; 2]>)> = doc.graph.bends.iter().filter(|b| !doc.graph.bends_of(&b.dst, b.port).is_empty()).map(|b| (b.dst.clone(), b.port, b.points.clone())).collect();
         let hovered_wire = ui.input(|i| i.pointer.hover_pos()).and_then(|p| self.wire_at(doc, p, None));
@@ -1195,14 +1246,23 @@ impl NodeEditor {
                     doc.select_wire(&src, &dst, port);
                 }
                 if resp.dragged_by(egui::PointerButton::Primary) {
-                    let d = resp.drag_delta() / self.zoom;
+                    // Where the pointer has taken it, squared up only as
+                    // shown (so it doesn't stick).
+                    let held = self.bend_drag.as_ref().filter(|(d, q, i, _)| *d == dst && *q == port && *i == k).map(|b| b.3);
+                    let raw = held.unwrap_or(Pos2::new(p[0], p[1])) + resp.drag_delta() / self.zoom;
+                    self.bend_drag = Some((dst.clone(), port, k, raw));
                     let mut moved = pts.clone();
-                    moved[k] = [p[0] + d.x, p[1] + d.y];
+                    let (at, axes) = self.squared(doc, (&dst, port), &pts, k, raw, mods.alt);
+                    moved[k] = at;
+                    self.square_guides(painter, at, axes);
                     edit = Some((dst.clone(), port, moved));
                 }
-                if resp.drag_stopped() && self.snap_to_grid {
+                if resp.drag_stopped() {
+                    let raw = self.bend_drag.take().filter(|(d, q, i, _)| *d == dst && *q == port && *i == k).map_or(Pos2::new(p[0], p[1]), |b| b.3);
+                    let (at, axes) = self.squared(doc, (&dst, port), &pts, k, raw, mods.alt);
                     let mut moved = pts.clone();
-                    moved[k] = [snap(p[0]), snap(p[1])];
+                    // The grid where it isn't squared up.
+                    moved[k] = if self.snap_to_grid { [if axes[0] { at[0] } else { snap(raw.x) }, if axes[1] { at[1] } else { snap(raw.y) }] } else { at };
                     edit = Some((dst.clone(), port, moved));
                 }
                 let hot = resp.hovered() || resp.dragged();
@@ -1215,6 +1275,19 @@ impl NodeEditor {
             // (Layout only: nothing renders differently.)
             doc.graph.set_bends(&dst, port, pts);
             doc.touched();
+        }
+    }
+
+    /// Faint lines through bend `at` (graph) along the axes it was squared
+    /// up on, across the editor.
+    fn square_guides(&self, painter: &egui::Painter, at: [f32; 2], axes: [bool; 2]) {
+        let p = self.to_screen(Pos2::new(at[0], at[1]));
+        let stroke = Stroke::new(1.0, SELECTED.gamma_multiply(0.45));
+        if axes[0] {
+            painter.line_segment([Pos2::new(p.x, self.rect.top()), Pos2::new(p.x, self.rect.bottom())], stroke);
+        }
+        if axes[1] {
+            painter.line_segment([Pos2::new(self.rect.left(), p.y), Pos2::new(self.rect.right(), p.y)], stroke);
         }
     }
 
@@ -2682,7 +2755,8 @@ mod tests {
         h.frame(&mut doc, vec![]);
         let (a, b) = (NodeEditor::out_port(h.rect(&doc, &plate)), NodeEditor::in_port(h.rect(&doc, &grade), 0, 2));
         let mid = a.lerp(b, 0.5);
-        h.mods = Modifiers::COMMAND;
+        // (Alt: where it's clicked, not squared up with the ports.)
+        h.mods = Modifiers::COMMAND | Modifiers::ALT;
         h.click(&mut doc, mid);
         h.mods = Modifiers::NONE;
         let bend = doc.graph.bends_of(&grade, 0).to_vec();
@@ -2717,6 +2791,89 @@ mod tests {
         h.click(&mut doc, mid);
         h.mods = Modifiers::NONE;
         assert_eq!(doc.graph.bends_of(&grade, 0).len(), 1);
+    }
+
+    /// Bends dragged or added nearly level with a port or plumb under
+    /// another bend come out exactly so (beating the grid on that axis);
+    /// with Alt they go where they're put.
+    #[test]
+    fn bends_square_up_with_their_neighbours_unless_alt() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let plate = doc.add_node("checkerboard", [100.0, 100.0]);
+        let grade = doc.add_node("grade", [600.0, 400.0]);
+        doc.connect(&plate, &grade, 0);
+        let mut h = Harness::new();
+        h.ed.straight_wires = true;
+        h.frame(&mut doc, vec![]);
+        let (a, b) = (NodeEditor::out_port(h.rect(&doc, &plate)), NodeEditor::in_port(h.rect(&doc, &grade), 0, 2));
+        let (ga, gb) = (h.ed.to_graph(a), h.ed.to_graph(b));
+        // ⌘-click the wire's middle, drag the bend to just under the
+        // output's level: level with it, exactly.
+        let mid = a.lerp(b, 0.5);
+        h.mods = Modifiers::COMMAND;
+        h.click(&mut doc, mid);
+        h.mods = Modifiers::NONE;
+        let first = Pos2::new(b.x - 4.0, a.y + 4.0);
+        h.drag(&mut doc, mid, first);
+        let one = doc.graph.bends_of(&grade, 0).to_vec();
+        assert_eq!(one, [[gb.x, ga.y]], "level with the output, plumb over the input: a right angle each side");
+        // Alt: where it's put.
+        h.mods = Modifiers::ALT;
+        h.drag(&mut doc, h.screen(one[0]), first + Vec2::new(-60.0, 0.0));
+        h.mods = Modifiers::NONE;
+        let free = doc.graph.bends_of(&grade, 0)[0];
+        assert!(h.screen(free).distance(first + Vec2::new(-60.0, 0.0)) < 1e-3, "{free:?}");
+        // A second bend, ⌘-clicked on the leg to the input near plumb
+        // under the first: plumb, exactly.
+        h.drag(&mut doc, h.screen(free), Pos2::new(a.x + 150.0, a.y + 2.0));
+        let one = doc.graph.bends_of(&grade, 0)[0];
+        assert_eq!(one[1], ga.y);
+        let leg = h.screen(one).lerp(b, 0.5);
+        h.mods = Modifiers::COMMAND;
+        h.click(&mut doc, leg);
+        h.mods = Modifiers::NONE;
+        let two = doc.graph.bends_of(&grade, 0).to_vec();
+        assert_eq!(two.len(), 2);
+        h.drag(&mut doc, h.screen(two[1]), Pos2::new(h.screen(one).x + 3.0, b.y - 3.0));
+        let two = doc.graph.bends_of(&grade, 0).to_vec();
+        assert_eq!(two[1], [one[0], gb.y], "plumb under the first, level with the input");
+        // With the grid on, squared beats the grid on that axis.
+        h.ed.snap_to_grid = true;
+        h.drag(&mut doc, h.screen(two[0]), Pos2::new(a.x + 233.0, a.y + 3.0));
+        let snapped = doc.graph.bends_of(&grade, 0)[0];
+        assert_eq!(snapped[1], ga.y, "level with the port, not the grid");
+        assert_eq!(snapped[0], snap(snapped[0]), "the grid on the other axis");
+    }
+
+    /// An output dropped onto a bent wire: the Merge joining them sits at
+    /// the drop, its B wire taking the bends before it and the input's the
+    /// rest, all one undo step.
+    #[test]
+    fn a_merge_into_a_bent_wire_splits_its_bends() {
+        let mut doc = Doc::new(Graph::default(), None);
+        let plate = doc.add_node("checkerboard", [100.0, 100.0]);
+        let grade = doc.add_node("grade", [600.0, 400.0]);
+        let other = doc.add_node("constant", [100.0, 600.0]);
+        doc.connect(&plate, &grade, 0);
+        doc.graph.set_bends(&grade, 0, vec![[400.0, 150.0], [400.0, 350.0]]);
+        doc.commit(false);
+        let before = doc.graph.clone();
+        let mut h = Harness::new();
+        h.ed.straight_wires = true;
+        h.frame(&mut doc, vec![]);
+        let drop = h.screen([400.0, 250.0]);
+        let from = NodeEditor::out_port(h.rect(&doc, &other));
+        h.drag(&mut doc, from, drop);
+        let merge = doc.node(&grade).unwrap().inputs[0].clone();
+        let m = doc.node(&merge).unwrap();
+        assert_eq!(m.op, "merge");
+        assert_eq!(m.inputs[..2], [other.clone(), plate.clone()]);
+        assert_eq!(m.pos, Some([400.0 - NODE_W / 2.0, 250.0 - NODE_H / 2.0]), "at the drop");
+        assert_eq!(doc.graph.bends_of(&merge, 1), &[[400.0, 150.0]]);
+        assert_eq!(doc.graph.bends_of(&grade, 0), &[[400.0, 350.0]]);
+        doc.commit(false);
+        doc.undo();
+        assert_eq!(doc.graph, before, "one undo step");
     }
 
     /// A wire's bends move with it when both its ends move, not one; a node

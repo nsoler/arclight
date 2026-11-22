@@ -72,6 +72,39 @@ pub fn distance(segs: &[[Pos2; 4]], p: Pos2) -> f32 {
     nearest(segs, p).1
 }
 
+/// How near square a leg snaps to: within this many screen points of
+/// level or plumb, or this angle (whichever reaches further, so long legs
+/// a few degrees off square snap too).
+pub const SQUARE_PX: f32 = 6.0;
+pub const SQUARE_DEGREES: f32 = 4.0;
+
+/// Bend `p` between its neighbours along the wire (`prev`: the bend before
+/// it or the source's port; `next`: the bend after it or the input's port)
+/// moved onto the same x or y as one of them where its leg to that one is
+/// nearly plumb or level (within `px` points, or [`SQUARE_DEGREES`] of its
+/// length), the nearer one winning, so right-angle routes come out exactly
+/// square. Which axes it snapped ([x, y]).
+pub fn snap_square(p: Pos2, prev: Pos2, next: Pos2, px: f32) -> (Pos2, [bool; 2]) {
+    let slack = SQUARE_DEGREES.to_radians().tan();
+    // The coordinate `axis` takes from `n`, and how far off it is, if the
+    // leg from `n` is nearly along the other axis.
+    let near = |n: Pos2, axis: usize| {
+        let (off, along) = if axis == 0 { (p.x - n.x, p.y - n.y) } else { (p.y - n.y, p.x - n.x) };
+        let tol = px.max(along.abs() * slack);
+        (off.abs() <= tol).then_some((off.abs(), if axis == 0 { n.x } else { n.y }))
+    };
+    let mut out = p;
+    let mut snapped = [false; 2];
+    for (axis, snapped) in snapped.iter_mut().enumerate() {
+        let best = [near(prev, axis), near(next, axis)].into_iter().flatten().min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((_, v)) = best {
+            if axis == 0 { out.x = v } else { out.y = v }
+            *snapped = true;
+        }
+    }
+    (out, snapped)
+}
+
 /// A wire's bend points split in two: those before a node dropped into it
 /// (graph coordinates), and those after.
 pub type Split = (Vec<[f32; 2]>, Vec<[f32; 2]>);
@@ -125,6 +158,25 @@ mod tests {
         assert_eq!(segs[0][1].y, a.y);
         assert_eq!(segs[2][2].y, b.y);
         assert!(segs[0][1].x > a.x && segs[2][2].x < b.x);
+    }
+
+    /// Nearly level or plumb legs come out exactly so; others stay.
+    #[test]
+    fn bends_snap_to_square_legs() {
+        let (a, b) = (Pos2::new(0.0, 0.0), Pos2::new(400.0, 300.0));
+        // 3 points under the port's level over 100: level.
+        assert_eq!(snap_square(Pos2::new(100.0, 3.0), a, b, SQUARE_PX), (Pos2::new(100.0, 0.0), [false, true]));
+        // 95°: 4° of a 300-point leg is 21 points, more than the 6.
+        let (p, s) = snap_square(Pos2::new(385.0, 0.0), a, b, SQUARE_PX);
+        assert_eq!((p, s), (Pos2::new(400.0, 0.0), [true, true]), "a corner under the input, level with the output");
+        // 10° off isn't snapped.
+        let off = Pos2::new(200.0, 200.0 * 10f32.to_radians().tan());
+        assert_eq!(snap_square(off, a, Pos2::new(900.0, 900.0), SQUARE_PX).1, [false, false]);
+        // The nearer neighbour wins.
+        let (p, _) = snap_square(Pos2::new(50.0, 100.0), Pos2::new(48.0, 0.0), Pos2::new(53.0, 200.0), SQUARE_PX);
+        assert_eq!(p.x, 48.0);
+        let (p, _) = snap_square(Pos2::new(52.0, 100.0), Pos2::new(48.0, 0.0), Pos2::new(53.0, 200.0), SQUARE_PX);
+        assert_eq!(p.x, 53.0);
     }
 
     #[test]
