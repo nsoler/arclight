@@ -19,6 +19,19 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.16.3 — 2026-11-22
+
+- **Viewer: handles go onto a rendered card.** A node's handles now
+  follow it onto a Card it's the image of in a Scanline Render: they
+  sit where the render shows it, in perspective, at the current frame
+  (animated cards and cameras included), and drags edit the node's own
+  values; pen points and pivots land there too. Of several cards
+  showing the same image, the largest on screen is used and named
+  ("transform2's handles on card2"). A Transform / Crop / Resize after
+  the render composes with it. Still dimmed with a "press V" note: a
+  card behind the camera or edge-on, Corner Pin, Lens Distort, textures
+  on other meshes, Project 3D, two renders on the way.
+
 ## 0.16.2 — 2026-11-22
 
 - **Collect Media from scripts:** MCP `survey_media` (a dry run: every

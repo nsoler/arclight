@@ -4,6 +4,17 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.16.3 (2026-11-22): handles onto a rendered card** (Dev2). The
+  overlay map is projective: `card_map::Proj` in `Xf.down` / `Xf.proj`
+  (third row = depth). `card_map` builds H from the evaluated scene's
+  Card (texture uv = pixel / format) and the camera the render uses
+  (`ops::render_view`, factored out of `scanline_render_frames`: the
+  same choice, named cameras included; pixels proven identical).
+  `overlay_space` walks the jump from the card to the single render
+  after it (scene nodes pass it through); of several cards the largest
+  on screen wins and is named. The worker answers (card, render) pairs
+  only when a card lies between the selected and viewed nodes.
+
 - **0.16.2 (2026-11-22): Collect Media from MCP / Python** (Dev1).
   `Session::survey_media` / `collect_media` over `arclight::collect`
   (JSON in `collect::survey_json` / `plan_json`; `collect::target`

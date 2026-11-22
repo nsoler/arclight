@@ -552,7 +552,7 @@ mod tests {
         let (mut pm, mut ov) = (PivotMode::default(), Overlays::default());
         let mut d = doc_with(json!({ "rotate": 45, "scale": [2, 2] }));
         let plain = Xf::new(egui::Rect::from_min_size(Pos2::ZERO, SIZE), 1.0);
-        let down = Xf { down: Some([2.0, 0.0, 30.0, 0.0, 2.0, 10.0]), ..plain };
+        let down = Xf { down: Some(crate::card_map::Proj::affine(&[2.0, 0.0, 30.0, 0.0, 2.0, 10.0])), ..plain };
         let blocked = Xf { blocked: true, ..plain };
         run_with(&ctx, &mut pm, &mut ov, &mut d, vec![], false, &blocked, 1);
         assert!(!run_with(&ctx, &mut pm, &mut ov, &mut d, vec![period(false)], false, &blocked, 1).0);

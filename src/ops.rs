@@ -4359,12 +4359,22 @@ fn render_scene(inputs: &[Option<&Image>], name: &str) -> Result<(Option<std::sy
 /// A Scanline Render, given also its inputs at `others` frames (offset,
 /// inputs then; see [`other_frames`]): the next for the motion pass, those
 /// round the shutter for motion blur (unconnected or missing: as now).
-pub fn scanline_render_frames(params: &Value, inputs: &[Option<&Image>], others: &[(i64, Vec<Option<&Image>>)]) -> Result<Image> {
+/// What a Scanline Render with (resolved) `params` and `inputs` renders:
+/// its scene, the camera it looks through, and its frame (the
+/// background's, else its width × height).
+pub fn render_view(params: &Value, inputs: &[Option<&Image>]) -> Result<(Option<std::sync::Arc<Scene>>, crate::geom::Camera, Size)> {
     let p: ScanlineRender = parse(params, "scanline_render")?;
     let (scene, camera) = render_scene(inputs, &p.camera)?;
     let camera = camera.context("no camera: connect a Camera to the camera input, or put one in the scene")?;
     let bg = inputs.get(2).copied().flatten();
     let format = bg.map_or(source_size(p.width, p.height), |b| b.format);
+    Ok((scene, camera, format))
+}
+
+pub fn scanline_render_frames(params: &Value, inputs: &[Option<&Image>], others: &[(i64, Vec<Option<&Image>>)]) -> Result<Image> {
+    let p: ScanlineRender = parse(params, "scanline_render")?;
+    let (scene, camera, format) = render_view(params, inputs)?;
+    let bg = inputs.get(2).copied().flatten();
     let empty = Scene::default();
     let scene = scene.as_deref().unwrap_or(&empty);
     let passes = p.passes.as_ref().map_or(render3d::Passes::DEPTH, |n| render3d::Passes::from_names(n.iter().map(String::as_str)));

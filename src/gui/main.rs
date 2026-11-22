@@ -5,6 +5,7 @@
 //! properties on the right.
 
 mod camera_points;
+mod card_map;
 mod camera_tracker;
 mod clipboard;
 mod crash_dialog;
@@ -64,7 +65,7 @@ use worker::{Request, Worker};
 
 /// What a render request depends on: (revision, target, frame, probe,
 /// the input shapes the selected node's handles need).
-type RequestKey = (u64, String, i64, Option<(String, String)>, Vec<(String, String)>);
+type RequestKey = (u64, String, i64, Option<(String, String)>, Vec<(String, String)>, Vec<(String, String)>);
 
 const OPEN: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
 const SAVE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
@@ -295,6 +296,8 @@ struct App {
     probe_more: Vec<Option<worker::Layers>>,
     /// The worker's answer to the request's `shapes`.
     shapes: overlay_space::Shapes,
+    /// The worker's answer to the request's `cards`.
+    cards: overlay_space::Cards,
     /// The selected node's mask input's layers, for its Mask channel picker.
     mask_layers: Option<(String, worker::Layers)>,
     error: Option<NodeError>,
@@ -431,6 +434,7 @@ impl App {
             probe: None,
             probe_more: Vec::new(),
             shapes: overlay_space::Shapes::new(),
+            cards: overlay_space::Cards::new(),
             mask_layers: None,
             error: None,
             shown_frame: 0,
@@ -1382,11 +1386,12 @@ impl App {
                 let probe = probe.and_then(|n| n.inputs.first().filter(|i| !i.is_empty()).map(|i| (n.id.clone(), i.clone())));
                 // The Transforms, Crops and Resizes between the selected
                 // node and the viewed one, for its handles (usually none).
-                let shapes = match (self.doc.selected.as_deref(), self.doc.viewed()) {
-                    (Some(sel), Some(viewed)) => overlay_space::wanted(&self.doc, sel, &viewed),
-                    _ => Vec::new(),
+                // And the Cards a render shows it on.
+                let (shapes, cards) = match (self.doc.selected.as_deref(), self.doc.viewed()) {
+                    (Some(sel), Some(viewed)) => (overlay_space::wanted(&self.doc, sel, &viewed), overlay_space::wanted_cards(&self.doc, sel, &viewed)),
+                    _ => (Vec::new(), Vec::new()),
                 };
-                let key = (self.doc.revision, t.clone(), self.transport.frame, probe.clone(), shapes.clone());
+                let key = (self.doc.revision, t.clone(), self.transport.frame, probe.clone(), shapes.clone(), cards.clone());
                 if self.requested.as_ref() != Some(&key) {
                     self.worker.request(Request {
                         graph: Arc::new(self.doc.graph.clone()),
@@ -1398,6 +1403,7 @@ impl App {
                         pick: self.viewer.pick_at(),
                         cpu_only: false,
                         shapes,
+                        cards,
                     });
                     self.requested = Some(key);
                     self.cpu_retry = false;
@@ -1432,6 +1438,7 @@ impl App {
                 self.probe = resp.probe;
                 self.probe_more = resp.probe_more;
                 self.shapes = resp.shapes;
+                self.cards = resp.cards;
                 self.mask_layers = resp.mask_layers.and_then(|l| self.mask_probe_node().map(|n| (n, l)));
                 self.doc.view_format = self.image.as_ref().map(|img| img.format());
             }
@@ -1451,6 +1458,7 @@ impl App {
                     pick: None,
                     cpu_only: true,
                     shapes: self.requested.as_ref().map(|k| k.4.clone()).unwrap_or_default(),
+                    cards: self.requested.as_ref().map(|k| k.5.clone()).unwrap_or_default(),
                 });
             }
         }
@@ -1723,6 +1731,7 @@ impl App {
                     millis: self.millis,
                     input: self.probe.as_ref(),
                     shapes: Some(&self.shapes),
+                    cards: Some(&self.cards),
                 },
                 &mut self.doc,
                 self.transport.frame,

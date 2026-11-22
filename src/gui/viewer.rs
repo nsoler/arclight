@@ -205,6 +205,9 @@ pub struct Display<'a> {
     /// The input shapes of the Transforms, Crops and Resizes between the
     /// selected node and the viewed one (see `overlay_space::wanted`).
     pub shapes: Option<&'a crate::overlay_space::Shapes>,
+    /// The views of the Cards a render shows the selected node's image on
+    /// (see `overlay_space::wanted_cards`).
+    pub cards: Option<&'a crate::overlay_space::Cards>,
 }
 
 impl Viewer {
@@ -531,12 +534,12 @@ impl Viewer {
         // note) past what they can't follow.
         let viewed = doc.viewed();
         let space = match (doc.selected.as_deref(), viewed.as_deref()) {
-            (Some(sel), Some(viewed)) => overlay_space::space(doc, sel, viewed, frame, d.shapes.unwrap_or(&overlay_space::Shapes::new())),
+            (Some(sel), Some(viewed)) => overlay_space::space(doc, sel, viewed, frame, d.shapes.unwrap_or(&overlay_space::Shapes::new()), d.cards.unwrap_or(&overlay_space::Cards::new())),
             _ => ViewSpace::Same,
         };
         let (down, blocked) = match &space {
             ViewSpace::Same => (None, false),
-            ViewSpace::Affine(m) => (Some(*m), false),
+            ViewSpace::Map { proj, .. } => (Some(*proj), false),
             ViewSpace::Other { .. } => (None, true),
         };
         // Overlay handles take a drag before panning does.
@@ -604,6 +607,14 @@ impl Viewer {
         self.overlays.draw(ui, &painter, &xf(self), size, doc, frame);
         self.pivot.draw(ui, &painter, &xf(self), size, doc, frame, &self.overlays); // pivot
         self.pen.draw(ui, &painter, &xf(self), doc, frame);
+        // Which card the handles went on, when there were several.
+        if let (ViewSpace::Map { on: Some(card), .. }, Some(sel)) = (&space, doc.selected.as_deref()) {
+            let text = format!("{sel}'s handles on {card}");
+            let pos = rect.left_top() + Vec2::new(8.0, 8.0);
+            let galley = painter.layout_no_wrap(text, FontId::proportional(13.0), Color32::from_rgb(150, 210, 255));
+            painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand(4.0), 3.0, Color32::from_black_alpha(170));
+            painter.galley(pos, galley, Color32::from_rgb(150, 210, 255));
+        }
         if let (ViewSpace::Other { why, .. }, Some(sel), Some(viewed)) = (&space, doc.selected.as_deref(), viewed.as_deref()) {
             let text = overlay_space::notice(sel, viewed, why);
             let pos = rect.left_top() + Vec2::new(8.0, 8.0);
@@ -1476,7 +1487,7 @@ mod tests {
     fn the_toolbars_wrap_in_a_narrow_view() {
         use arclight::image::{IRect, Size};
         let img = Arc::new(ViewFrame::from_cpu(Arc::new(Image::blank(Size { width: 1920, height: 1080 }, IRect::new(0, 0, 1920, 1080)))));
-        let d = Display { image: Some(&img), error: None, target: Some("v"), returns_to: None, frame: 1, millis: 56.2, input: None, shapes: None };
+        let d = Display { image: Some(&img), error: None, target: Some("v"), returns_to: None, frame: 1, millis: 56.2, input: None, shapes: None, cards: None };
         for mode3d in [false, true] {
             for width in [360.0, 520.0, 1400.0] {
                 let ctx = egui::Context::default();
@@ -1509,7 +1520,7 @@ mod tests {
     fn a_long_status_takes_its_own_row_when_it_does_not_fit() {
         use arclight::image::{IRect, Size};
         let img = Arc::new(ViewFrame::from_cpu(Arc::new(Image::blank(Size { width: 1920, height: 1080 }, IRect::new(0, -66, 1920, 1080)))));
-        let d = Display { image: Some(&img), error: None, target: Some("scanline_render1"), returns_to: Some("viewer1"), frame: 97, millis: 6.2, input: None, shapes: None };
+        let d = Display { image: Some(&img), error: None, target: Some("scanline_render1"), returns_to: Some("viewer1"), frame: 97, millis: 6.2, input: None, shapes: None, cards: None };
         for (width, rows) in [(1150.0, 2), (2400.0, 1)] {
             let ctx = egui::Context::default();
             let mut v = Viewer::default();
@@ -1597,7 +1608,12 @@ mod tests {
     /// in the app) on a 1920×1080 frame, with `events` in the last of a few
     /// settled frames; returns that frame's painted shapes.
     fn run_view(v: &mut Viewer, doc: &mut Doc, ppp: f32, shapes: &crate::overlay_space::Shapes, events: Vec<Vec<egui::Event>>) -> Vec<egui::epaint::ClippedShape> {
-        let img = Arc::new(ViewFrame::from_cpu(Arc::new(Image::blank(Size { width: 1920, height: 1080 }, IRect::new(0, 0, 1920, 1080)))));
+        run_view_on(v, doc, ppp, Size { width: 1920, height: 1080 }, shapes, &Default::default(), events)
+    }
+
+    /// [`run_view`] on a frame of `size`, with the card views `cards`.
+    fn run_view_on(v: &mut Viewer, doc: &mut Doc, ppp: f32, size: Size, shapes: &crate::overlay_space::Shapes, cards: &crate::overlay_space::Cards, events: Vec<Vec<egui::Event>>) -> Vec<egui::epaint::ClippedShape> {
+        let img = Arc::new(ViewFrame::from_cpu(Arc::new(Image::blank(size, IRect::frame(size)))));
         let ctx = egui::Context::default();
         let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(1400.0, 900.0));
         let mut out = Vec::new();
@@ -1609,7 +1625,7 @@ mod tests {
             let full = ctx.run_ui(raw, |ui| {
                 egui::Panel::left("side").exact_size(400.0).show(ui, |ui| ui.label("properties"));
                 egui::CentralPanel::default().show(ui, |ui| {
-                    let d = Display { image: Some(&img), error: None, target: target.as_deref(), returns_to: None, frame: 1, millis: 0.0, input: None, shapes: Some(shapes) };
+                    let d = Display { image: Some(&img), error: None, target: target.as_deref(), returns_to: None, frame: 1, millis: 0.0, input: None, shapes: Some(shapes), cards: Some(cards) };
                     v.ui(ui, d, doc, 1);
                 });
             });
@@ -1708,7 +1724,7 @@ mod tests {
         let none = crate::overlay_space::Shapes::new();
         let drawn = run_view(&mut v, &mut doc, 1.0, &none, Vec::new());
         let note = texts(&drawn);
-        assert!(note.contains("r's handles are in its own space") && note.contains("card takes it into a 3D scene") && note.contains("Press V to view r"), "{note}");
+        assert!(note.contains("r's handles are in its own space") && note.contains("card's place in render isn't known yet") && note.contains("Press V to view r"), "{note}");
         let (image, _) = painted(&drawn, 6.0);
         let at = image.min + Vec2::new(100.0, 50.0) * (image.width() / 1920.0);
         let pan = v.pan;
@@ -1718,5 +1734,56 @@ mod tests {
         // Viewing the node itself (V): its own space, no note.
         doc.view_node("r");
         assert!(!texts(&run_view(&mut v, &mut doc, 1.0, &none, Vec::new())).contains("Press V"));
+    }
+
+    /// A Rectangle on a Card turned 35° and tipped, rendered through a
+    /// Camera, viewed through a Viewer: its handles sit where the render
+    /// shows it, and a drag moves its center by the screen motion mapped
+    /// back through the card (at 1 and 2 pixels per point). With the card
+    /// chosen among several, the viewer names it.
+    #[test]
+    fn handles_go_onto_a_rendered_card_and_drag_through_it() {
+        use arclight::ops::EvalContext;
+        let graph: Graph = serde_json::from_value(serde_json::json!({ "nodes": [
+            { "id": "r", "op": "rectangle", "inputs": [""], "params": { "width": 400, "height": 300, "center": [200, 150], "size": [80, 50] } },
+            { "id": "card", "op": "card", "inputs": ["r"], "params": { "rotate": [15, 35, 0], "translate": [0.2, 0, 0] } },
+            { "id": "scene", "op": "scene", "inputs": ["card"] },
+            { "id": "cam", "op": "camera", "params": { "translate": [0, 0, 2] } },
+            { "id": "render", "op": "scanline_render", "inputs": ["scene", "cam", ""], "params": { "width": 640, "height": 360 } },
+            { "id": "v", "op": "viewer", "inputs": ["render"] },
+        ] })).unwrap();
+        let ctx = EvalContext { frame: 1, write_outputs: false };
+        let mut ev = arclight::graph::Evaluator::new();
+        let (scene, cam) = (ev.evaluate(&graph, "scene", &ctx).unwrap(), ev.evaluate(&graph, "cam", &ctx).unwrap());
+        let params = ops::resolve_params("scanline_render", &graph.node("render").unwrap().params, 1);
+        let (s, c, format) = ops::render_view(&params, &[Some(&scene), Some(&cam), None]).unwrap();
+        let view = crate::card_map::view_of(&s.unwrap(), &c, format, "card").unwrap();
+        let cards: crate::overlay_space::Cards = [(("card".to_string(), "render".to_string()), Ok(view.clone()))].into();
+        let none = crate::overlay_space::Shapes::new();
+        for ppp in [1.0, 2.0] {
+            let mut doc = Doc::new(graph.clone(), None);
+            doc.select_only("r");
+            let mut v = Viewer::default();
+            let drawn = run_view_on(&mut v, &mut doc, ppp, format, &none, &cards, Vec::new());
+            let note = texts(&drawn);
+            assert!(!note.contains("Press V") && !note.contains("handles on"), "{note}");
+            let (image, _) = painted(&drawn, 6.0);
+            let zoom = image.width() / 640.0;
+            let at = view.proj.apply([200.0, 150.0]).unwrap();
+            let shown = image.min + Vec2::new(at[0] as f32, at[1] as f32) * zoom;
+            let d = Vec2::new(30.0, 12.0);
+            run_view_on(&mut v, &mut doc, ppp, format, &none, &cards, press_drag(shown, shown + d));
+            let c = doc.param("r", "center");
+            let got = [c[0].as_f64().unwrap(), c[1].as_f64().unwrap()];
+            let want = view.proj.unapply([at[0] + (d.x / zoom) as f64, at[1] + (d.y / zoom) as f64]).unwrap();
+            assert!((got[0] - want[0]).abs() < 0.05 && (got[1] - want[1]).abs() < 0.05, "ppp {ppp}: {got:?} vs {want:?}");
+            assert!((got[0] - 200.0).abs() > 5.0, "it moved");
+        }
+        // Chosen among several cards: named.
+        let among: crate::overlay_space::Cards = [(("card".to_string(), "render".to_string()), Ok(crate::card_map::CardView { among: 2, ..view }))].into();
+        let mut doc = Doc::new(graph, None);
+        doc.select_only("r");
+        let note = texts(&run_view_on(&mut Viewer::default(), &mut doc, 1.0, format, &none, &among, Vec::new()));
+        assert!(note.contains("r's handles on card"), "{note}");
     }
 }

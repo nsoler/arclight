@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.16.2 (2026-11-22). Done items are removed
+What's still open, as of 0.16.3 (2026-11-22). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -8,6 +8,14 @@ them when they ship. `ROADMAP.md` is the public summary.
 ## To check by hand (user)
 
 On Linux and on the Macs (the DMG), from the release builds.
+
+**Phase 16 (0.16.3)**
+- [ ] Pond-Martian-Comp, viewer1 on the render: select transform2 → its
+      gizmo sits on the martian on card2, in perspective; drag it there
+      and the martian follows; the same for roto1's points; tilt or
+      animate card2 / camera1 → the handles follow each frame; move the
+      camera so card2 is behind it → dimmed with the note; duplicate
+      card2 → "handles on card2" (the larger); Mac (Retina) and Linux
 
 **Phase 16 (0.16.2)**
 - [ ] `arclight mcp` on the Pond comp: survey_media, then collect_media;
@@ -214,8 +222,9 @@ On Linux and on the Macs (the DMG), from the release builds.
 
 - [ ] Wire bends: not shown in the minimap; Shift+R/T/M into a bent
       wire has no test of its own
-- [ ] 2D handles: mapping through a Card + Camera (homography) to drag
-      on the rendered card; a first pen click for a new Roto fed by an
+- [ ] 2D handles on cards: with motion blur they follow the frame, not
+      the shutter-averaged image; a card partly behind the camera is
+      blocked as a whole; a first pen click for a new Roto fed by an
       auto-pivot Transform can be off until the worker reports that
       Transform's input shape (one render later)
 - [ ] Project 3D targets are node names fixed at the node: fine today

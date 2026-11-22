@@ -443,7 +443,7 @@ mod tests {
     fn drawing_through_a_downstream_map_or_not_at_all() {
         use egui::{Event, Modifiers, PointerButton, Rect};
         let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(512.0, 512.0));
-        let down = Xf { down: Some([2.0, 0.0, 30.0, 0.0, 2.0, 10.0]), ..Xf::new(rect, 1.0) };
+        let down = Xf { down: Some(crate::card_map::Proj::affine(&[2.0, 0.0, 30.0, 0.0, 2.0, 10.0])), ..Xf::new(rect, 1.0) };
         let ctx = egui::Context::default();
         let frame = |pen: &mut PenMode, d: &mut Doc, xf: &Xf, events: Vec<Event>| {
             let raw = egui::RawInput { screen_rect: Some(rect), events, ..Default::default() };

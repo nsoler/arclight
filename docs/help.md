@@ -262,10 +262,13 @@ included.
   Tracker shows its handles where the track has moved it.
   When the viewer shows a node downstream of the selected one (through a
   Viewer node), its handles follow the Transforms, Crops, Resizes and
-  match-moving Trackers in between, and drags still edit the node's own
-  values; past something they can't follow (a 3D render, a Corner Pin, a
-  Lens Distort) they're dimmed and take no clicks, and a note names what's
-  in the way: press **V** to view the node itself.
+  match-moving Trackers in between, and a Card it's the image of in a
+  Scanline Render (the handles sit where the render shows it, in
+  perspective; of several cards, the largest on screen, named in a note),
+  and drags still edit the node's own values; past something they can't
+  follow (a Corner Pin, a Lens Distort, another mesh's texture, a card
+  behind the camera or edge-on) they're dimmed and take no clicks, and a
+  note names what's in the way: press **V** to view the node itself.
   A selected Roto or Polygon point also shows a blue feather handle out
   from the curve: drag it to soften the edge near that point alone (**⇧**
   for every selected point); Feather stays as an overall amount on top.

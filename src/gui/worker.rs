@@ -46,6 +46,11 @@ pub struct Request {
     /// and no extra work, unless a Transform / Crop / Resize lies between
     /// the selected node and the viewed one).
     pub shapes: Vec<(String, String)>,
+    /// (Card, Scanline Render) pairs whose views the selected node's
+    /// handles need (`overlay_space::wanted_cards`; empty, and no extra
+    /// work, unless a Card lies between the selected node and the viewed
+    /// one).
+    pub cards: Vec<(String, String)>,
 }
 
 pub struct Response {
@@ -66,6 +71,8 @@ pub struct Response {
     pub mask_layers: Option<Layers>,
     /// `shapes`' answers, by node (those whose input failed left out).
     pub shapes: crate::overlay_space::Shapes,
+    /// `cards`' answers.
+    pub cards: crate::overlay_space::Cards,
 }
 
 /// An image's layers, as `Image::layers` lists them: each name with its
@@ -281,6 +288,7 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
                     Some((node.clone(), shaped[&key]))
                 })
                 .collect();
+            let cards = req.cards.iter().map(|(card, render)| ((card.clone(), render.clone()), card_view(&req.graph, card, render, &ctx, &evaluate))).collect();
 
             let p = &req.graph.project;
             let cached_frames = (p.first_frame..=p.last_frame.max(p.first_frame))
@@ -289,16 +297,16 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
                     Evaluator::key(&req.graph, &req.target, &c).is_ok_and(|k| frames.contains(k))
                 })
                 .collect();
-            (result, millis, probe, probe_more, mask_layers, cached_frames, shapes)
+            (result, millis, probe, probe_more, mask_layers, cached_frames, shapes, cards)
         }));
-        let (result, millis, probe, probe_more, mask_layers, cached_frames, shapes) = match done {
+        let (result, millis, probe, probe_more, mask_layers, cached_frames, shapes, cards) = match done {
             Ok(done) => done,
             Err(payload) => {
                 *eval.lock().unwrap_or_else(|e| e.into_inner()) = Evaluator::new();
                 frames = FrameCache::new();
                 probed.clear();
                 shaped.clear();
-                (Err(NodeError { node: None, message: arclight::crash::caught(&*payload) }), 0.0, None, Vec::new(), None, Vec::new(), HashMap::new())
+                (Err(NodeError { node: None, message: arclight::crash::caught(&*payload) }), 0.0, None, Vec::new(), None, Vec::new(), HashMap::new(), HashMap::new())
             }
         };
 
@@ -312,12 +320,29 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
             probe_more,
             mask_layers,
             shapes,
+            cards,
         };
         if tx.send(resp).is_err() {
             break;
         }
         repaint.request_repaint();
     }
+}
+
+/// The worker's evaluation (through its shared evaluator).
+type Evaluate<'a> = dyn Fn(&Graph, &str, &EvalContext) -> Result<Arc<Image>, NodeError> + 'a;
+
+/// How render `render` shows card `card`'s image at `ctx`'s frame (see
+/// `card_map::view_of`): its inputs evaluated (cached from the render), its
+/// scene, camera and frame as it renders them.
+fn card_view(graph: &Graph, card: &str, render: &str, ctx: &EvalContext, evaluate: &Evaluate) -> Result<crate::card_map::CardView, String> {
+    let n = graph.node(render).ok_or_else(|| format!("{render} is gone"))?;
+    let inputs: Vec<Option<Arc<Image>>> = n.inputs.iter().map(|i| if i.is_empty() { Ok(None) } else { evaluate(graph, i, ctx).map(Some) }).collect::<Result<_, _>>().map_err(|e| e.to_string())?;
+    let refs: Vec<Option<&Image>> = inputs.iter().map(|i| i.as_deref()).collect();
+    let params = arclight::ops::resolve_params(&n.op, &n.params, ctx.frame);
+    let (scene, cam, format) = arclight::ops::render_view(&params, &refs).map_err(|e| format!("{render}: {e}"))?;
+    let scene = scene.ok_or_else(|| format!("{render} has no scene"))?;
+    crate::card_map::view_of(&scene, &cam, format, card)
 }
 
 /// Wait for a frame left on the GPU to be done there, so its time is
@@ -646,7 +671,7 @@ mod tests {
         let eval = Arc::new(Mutex::new(Evaluator::new()));
         let worker = Worker::spawn(eframe::egui::Context::default(), eval);
         let ask = |w: &Worker| {
-            w.request(Request { graph: graph.clone(), target: "panicky_c".into(), frame: 1, probe: None, probe_more: Vec::new(), probe_mask: None, pick: None, cpu_only: false, shapes: Vec::new() });
+            w.request(Request { graph: graph.clone(), target: "panicky_c".into(), frame: 1, probe: None, probe_more: Vec::new(), probe_mask: None, pick: None, cpu_only: false, shapes: Vec::new(), cards: Vec::new() });
             let t0 = Instant::now();
             loop {
                 if let Some(r) = w.poll() {
@@ -726,7 +751,7 @@ mod tests {
         ] })).unwrap());
         let worker = Worker::spawn(eframe::egui::Context::default(), Arc::new(Mutex::new(Evaluator::new())));
         let ask = |shapes: Vec<(String, String)>| {
-            worker.request(Request { graph: graph.clone(), target: "t".into(), frame: 1, probe: None, probe_more: Vec::new(), probe_mask: None, pick: None, cpu_only: false, shapes });
+            worker.request(Request { graph: graph.clone(), target: "t".into(), frame: 1, probe: None, probe_more: Vec::new(), probe_mask: None, pick: None, cpu_only: false, shapes, cards: Vec::new() });
             let t0 = Instant::now();
             loop {
                 if let Some(r) = worker.poll() {
@@ -741,6 +766,41 @@ mod tests {
         assert_eq!((format.width, format.height), (200, 100));
         assert!(window.x0 <= 40 && window.x1 >= 60 && window.y0 <= 25 && window.y1 >= 35 && window.width() < 40, "{window:?}");
         assert!(ask(Vec::new()).is_empty());
+    }
+
+    /// Asked for a card's view in a render, the worker answers it as
+    /// `card_map` makes it from the render's scene and camera; a card
+    /// behind the camera, with why; asked for none, none.
+    #[test]
+    fn the_worker_answers_the_card_views_asked_for() {
+        let graph = |cam_z: f64| Arc::new(serde_json::from_value::<Graph>(serde_json::json!({ "nodes": [
+            { "id": "r", "op": "rectangle", "inputs": [""], "params": { "width": 200, "height": 100 } },
+            { "id": "card", "op": "card", "inputs": ["r"], "params": { "rotate": [0, 30, 0] } },
+            { "id": "scene", "op": "scene", "inputs": ["card"] },
+            { "id": "cam", "op": "camera", "params": { "translate": [0, 0, cam_z] } },
+            { "id": "render", "op": "scanline_render", "inputs": ["scene", "cam", ""], "params": { "width": 320, "height": 180 } },
+        ] })).unwrap());
+        let worker = Worker::spawn(eframe::egui::Context::default(), Arc::new(Mutex::new(Evaluator::new())));
+        let ask = |graph: Arc<Graph>, cards: Vec<(String, String)>| {
+            worker.request(Request { graph, target: "render".into(), frame: 1, probe: None, probe_more: Vec::new(), probe_mask: None, pick: None, cpu_only: false, shapes: Vec::new(), cards });
+            let t0 = Instant::now();
+            loop {
+                if let Some(r) = worker.poll() {
+                    break r.cards;
+                }
+                assert!(t0.elapsed().as_secs() < 30, "no answer");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        let pair = ("card".to_string(), "render".to_string());
+        let g = graph(2.0);
+        let got = ask(g.clone(), vec![pair.clone()]);
+        let ctx = EvalContext { frame: 1, write_outputs: false };
+        let ev = Mutex::new(Evaluator::new());
+        let want = card_view(&g, "card", "render", &ctx, &|g: &Graph, id: &str, c: &EvalContext| ev.lock().unwrap().evaluate(g, id, c)).unwrap();
+        assert_eq!(got[&pair], Ok(want));
+        assert_eq!(ask(graph(-3.0), vec![pair.clone()])[&pair], Err("card reaches behind the camera".into()));
+        assert!(ask(g, Vec::new()).is_empty());
     }
 
     /// A frame the worker rendered on the GPU comes back without a
@@ -759,7 +819,7 @@ mod tests {
         ] })).unwrap());
         let worker = Worker::spawn(eframe::egui::Context::default(), Arc::new(Mutex::new(Evaluator::new())));
         let ask = |target: &str, pick: Option<(i32, i32)>, cpu_only: bool| {
-            worker.request(Request { graph: graph.clone(), target: target.into(), frame: 1, probe: None, probe_more: Vec::new(), probe_mask: None, pick, cpu_only, shapes: Vec::new() });
+            worker.request(Request { graph: graph.clone(), target: target.into(), frame: 1, probe: None, probe_more: Vec::new(), probe_mask: None, pick, cpu_only, shapes: Vec::new(), cards: Vec::new() });
             let t0 = Instant::now();
             loop {
                 if let Some(r) = worker.poll() {
