@@ -4,6 +4,21 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.14.32 (2026-11-21): static one-frame Media In + GPU depth race**
+  (Dev1). `ops::is_time_varying("media_in")`: time-varying only when
+  last_frame > first_frame and the path is a video / sequence (Read
+  already was). `raster.wgsl` / `blur.wgsl`: the hits buffer is
+  `array<u32>` with `hit_at` / `set_hit`; depth is one word at
+  `16*pixels + px`. Before, each depth went into one lane of a
+  `vec4<u32>` shared by 4 pixels, which naga's MSL leaves as a dynamic
+  lane store into a device uint4 (can compile to a 16-byte RMW → race:
+  "depth only, 46–75% off" on the M4). Linux was never affected; not yet
+  confirmed on a Mac. Static-layer caching inside a render: skipped on
+  purpose (not exact with AA / see-through surfaces; prepared splats are
+  already kept). The splat slowness is general, not Metal: being fixed
+  in `raster.wgsl` (Dev1, next). The intermittent SIGSEGV at test exit
+  is an NVIDIA driver race, pre-existing (TODO).
+
 - **0.14.31 (2026-11-21): Shuffle routing** (Dev2; the user's channel
   combine request, decided as "grow Shuffle"). `routes` (Shuffle only,
   default []) = [["<input>:<channel>", "<dest>"]], inputs numbered from
@@ -16,11 +31,7 @@ Last updated 2026-11-21.
   describe_node lists the extra ports. GUI: the worker's `probe_more`
   probes a selected Shuffle's ports 2+ only (`gui/shuffle_routes.rs`).
   GPU: routes reading input 2+ run on the CPU; within input 1 they stay
-  on the GPU. In flight: Dev1's static one-frame Media In + Metal depth
-  race (`raster.wgsl` / `blur.wgsl` word-addressed hits), held: the
-  lib test process intermittently SIGSEGVs at the end inside NVIDIA's
-  shader compiler (libnvidia-gpucomp) with those shaders; Dev2 next:
-  Matte Combine (TODO).
+  on the GPU.
 
 - **0.14.30 (2026-11-21): Roto pen + feather falloff** (Dev2). Roto
   `closed` (default true; false = open path: `shape_op` returns the

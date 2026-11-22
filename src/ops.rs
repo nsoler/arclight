@@ -2511,7 +2511,12 @@ fn add_reference_tracks(params: &Value, resolved: &mut Value) {
 pub fn is_time_varying(op: &str, params: &Value) -> bool {
     let path = params.get("path").and_then(Value::as_str).unwrap_or("");
     match op {
-        "media_in" => true,
+        // A still, or a one-frame range, reads the same at every frame.
+        "media_in" => {
+            let p = params_with_defaults(op, params);
+            let range = |k: &str| p.get(k).and_then(Value::as_i64).unwrap_or(1);
+            range("last_frame") > range("first_frame") && (media::is_sequence_pattern(path) || media::is_video(Path::new(path)))
+        }
         "read" => media::is_sequence_pattern(path) || media::is_video(Path::new(path)),
         "write" | "write_geo" => media::is_sequence_pattern(path),
         // A geometry formula reading the frame or time.
@@ -5112,6 +5117,13 @@ mod tests {
         std::fs::copy(&src, &clip).unwrap();
         let path = clip.to_string_lossy().to_string();
         assert!(is_time_varying("read", &json!({ "path": path })));
+        // A still, or one frame of a clip or sequence, is the same at every
+        // frame (cached once); a longer clip or sequence isn't.
+        let media_varies = |p: &str, first: i64, last: i64| is_time_varying("media_in", &json!({ "path": p, "first_frame": first, "last_frame": last }));
+        assert!(media_varies(&path, 1, 120) && !media_varies(&path, 1, 1) && !media_varies(&path, 5, 3));
+        assert!(media_varies("plates/bg.####.exr", 1, 10) && !media_varies("plates/bg.####.exr", 7, 7));
+        assert!(!media_varies("mad-martian.png", 1, 1794) && !is_time_varying("media_in", &json!({ "path": path })));
+        assert!(!is_time_varying("read", &json!({ "path": "mad-martian.png" })) && is_time_varying("read", &json!({ "path": "plates/bg.####.exr" })));
         let at = |op: &str, params: Value, frame: i64| eval_op(op, &params, &[], &EvalContext { frame, write_outputs: false }).unwrap();
         let read = |frame| at("read", json!({ "path": path }), frame);
         let media = |frame| at("media_in", json!({ "path": path, "first_frame": 1, "last_frame": 120 }), frame);

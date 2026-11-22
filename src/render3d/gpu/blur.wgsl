@@ -28,7 +28,8 @@ const OVERFLOWED: u32 = 0xffffffffu;
 // The frame summing every time (raster.wgsl's layout).
 @group(0) @binding(6) var<storage, read_write> sum_color: array<vec4<f32>>;
 @group(0) @binding(7) var<storage, read_write> sum_extra: array<f32>;
-@group(0) @binding(8) var<storage, read_write> sum_hits: array<vec4<u32>>;
+// (Words: the depths are stored one by one; see raster.wgsl's out_hits.)
+@group(0) @binding(8) var<storage, read_write> sum_hits: array<u32>;
 
 fn in_cell(x: u32, y: u32) -> bool {
     let side = P.cell.x;
@@ -63,6 +64,6 @@ fn add(@builtin(global_invocation_id) gid: vec3<u32>) {
         sum_extra[px * stride + k] += time_extra[px * stride + k];
     }
     if (time_hits[4u * pixels + px / 4u][px % 4u] == OVERFLOWED) {
-        sum_hits[4u * pixels + px / 4u][px % 4u] = OVERFLOWED;
+        sum_hits[16u * pixels + px] = OVERFLOWED;
     }
 }

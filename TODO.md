@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.14.31 (2026-11-21). Done items are removed
+What's still open, as of 0.14.32 (2026-11-21). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -8,6 +8,11 @@ them when they ship. `ROADMAP.md` is the public summary.
 ## To check by hand (user)
 
 On Linux and on the Macs (the DMG), from the release builds.
+
+**Phase 14 (0.14.32)**
+- [ ] On a Mac (Apple M4, Metal): `arclight gpu --check` passes 81/81+
+      (the 13 depth-plane failures of 2026-11-13 gone); the Pond
+      example's still Media In no longer redraws the splat every frame
 
 **Phase 14 (0.14.31)**
 - [ ] Shuffle routing: wire a plate into a Shuffle, an Ellipse into its
@@ -102,8 +107,11 @@ On Linux and on the Macs (the DMG), from the release builds.
       `geo/hornedlizard.spz` → Splat Crop, two Cards with Media Ins:
       `media/pond-720.mp4` and the still `mad-martian.png`, a Camera,
       Scanline Render 1280×720; the user's original plate was 3840×2160,
-      timed below). Compare on Linux / the RTX 5070 to tell a Metal
-      problem from a general one.
+      timed below). **Not Metal-specific** (2026-11-21, RTX 5070: GPU
+      188–354 vs CPU 137–147 ms/frame at samples 3, scaling with the AA
+      samples): the splat/surface merge in `raster.wgsl` restarts the
+      tile's splat walk for every sample; Dev1 fixing (front cursor +
+      batched walk).
       Warm playback, Evaluator kept across frames: full project 1017
       ms/frame on the GPU vs 321 ms with `ARCLIGHT_GPU=0`; splat + still
       card 451 vs 164; two cards, no splat 146 vs 113; the plate alone 22
@@ -118,25 +126,13 @@ On Linux and on the Macs (the DMG), from the release builds.
       passes. The build is native arm64 + Metal already (universal DMG,
       `arclight gpu` says `Apple M4 (Metal)`): an Apple-Silicon-only build
       wouldn't help
-- [ ] **Scanline Render redraws a static splat every frame** (same
-      project): a Media In of a single still (first = last frame) counts
-      as time-varying, so the whole 3D render, splat included, re-runs
-      each frame; the splat with nothing else caches after frame 1.
-      Treat a one-frame Media In / Read as static in
-      `ops::is_time_varying`, and consider caching a render's static
-      layers (the prepared splats, a static card) so only the moving
-      card redraws. Old projects must render the same
-- [ ] **`gpu --check` fails 13 / 81 on Apple M4 (Metal)** (2026-11-13,
-      v0.14.29 DMG): every failing case is a 3D render or 3D view (lit AA,
-      every pass, orthographic, shadows, see-through shadows, Project 3D,
-      motion blur, 200k splats, 10k instanced cards, instances with
-      shadows, 3D view solid), all on the **depth** plane (mean diff
-      2.3–3.8, 46–75% of values off; rgba matches except see-through
-      shadows, 4% off). The 2026-11-02 Mac run passed, so either new in
-      0.14.26–0.14.29 or specific to this Mac. 46–75% of values off looks
-      like background / far-plane pixels (inf vs a far value, or a
-      depth-format / clear difference on Metal). The 0.14.29 hand check
-      above, "Macs: … plus `gpu --check`", doesn't hold yet
+- [ ] **NVIDIA/Linux: a process can SIGSEGV at exit** inside the
+      driver (libnvidia-gpucomp, a background shader compile racing the
+      ICD teardown), after its work is done; mostly with shaders cold in
+      the NVIDIA cache (first runs after a WGSL change). Pre-existing
+      (0.14.30: 1 / 8 lib-test runs with `__GL_SHADER_DISK_CACHE=0`).
+      Candidate: an atexit hook in `gpu/mod.rs` waiting on the device
+      before the ICD tears down (Dev1, measured with a fast repro)
 - [ ] **Matte combine node** (user, 2026-11-21; plan approved, Dev2):
       "Matte Combine" (`matte_combine`), inputs growing like Shuffle's;
       per input a matte channel (alpha / r / g / b / luminance or a

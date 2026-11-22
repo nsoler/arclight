@@ -162,8 +162,24 @@ struct Params {
 // its number, depth last); where the samples' blends first got half
 // opaque, nearest (1 if any, depth bits, the splat there or NONE), kept
 // from row to row; and every pixel's depth, four to an entry (0 nothing;
-// all bits set: overflowed). The buffers start cleared.
-@group(0) @binding(6) var<storage, read_write> out_hits: array<vec4<u32>>;
+// all bits set: overflowed). The buffers start cleared. Words, not
+// vec4s: a thread storing one lane of a vec4 its neighbours store into
+// too (the depths) may write back all four on Metal and lose theirs; see
+// hit_at / set_hit.
+@group(0) @binding(6) var<storage, read_write> out_hits: array<u32>;
+
+fn hit_at(i: u32) -> vec4<u32> {
+    let b = 4u * i;
+    return vec4<u32>(out_hits[b], out_hits[b + 1u], out_hits[b + 2u], out_hits[b + 3u]);
+}
+
+fn set_hit(i: u32, v: vec4<u32>) {
+    let b = 4u * i;
+    out_hits[b] = v.x;
+    out_hits[b + 1u] = v.y;
+    out_hits[b + 2u] = v.z;
+    out_hits[b + 3u] = v.w;
+}
 // The view's splats (splat_view.wgsl): each splat seen, PROJ_WORDS a
 // splat; and each tile's start, then the (depth, splat) pairs nearest
 // first.
@@ -1355,13 +1371,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
     let step = 1.0 / f32(n);
 
     let pixels = w * h;
-    seen[0] = out_hits[px];
-    seen[1] = out_hits[pixels + px];
+    seen[0] = hit_at(px);
+    seen[1] = hit_at(pixels + px);
     var overflowed = (seen[0].x & OVERFLOW) != 0u;
     seen[0].x = seen[0].x & ~OVERFLOW;
     // Where the samples' blends first got half opaque, nearest (kept from
     // row to row): 1 if any, depth bits, the splat there or NONE.
-    var median = out_hits[3u * pixels + px];
+    var median = hit_at(3u * pixels + px);
     // How many of this render's samples so far met no surface (kept in
     // the median's last word from row to row; from 0 at a render's first
     // row: motion blur adds many renders into one frame).
@@ -1595,9 +1611,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
     if (layers_short) { overflowed = true; }
     var nearest = seen[0];
     if (overflowed) { nearest.x = nearest.x | OVERFLOW; }
-    out_hits[px] = nearest;
-    out_hits[pixels + px] = seen[1];
-    out_hits[3u * pixels + px] = median;
+    set_hit(px, nearest);
+    set_hit(pixels + px, seen[1]);
+    set_hit(3u * pixels + px, median);
     if (j + 1u == n) {
         // The surface the passes take, and the depth: with splats here,
         // where the blend got half opaque (the splat giving the most, if
@@ -1613,9 +1629,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(workgroup_id) wi
                 chosen = vec4<u32>(SPLAT | top, 0u, 0u, median.y);
             }
         }
-        out_hits[2u * pixels + px] = chosen;
+        set_hit(2u * pixels + px, chosen);
         if (overflowed) { depth = 0xffffffffu; }
-        out_hits[4u * pixels + px / 4u][px % 4u] = depth;
+        // (Entry 4 * pixels on: word 16 * pixels + px.)
+        out_hits[16u * pixels + px] = depth;
     }
 }
 

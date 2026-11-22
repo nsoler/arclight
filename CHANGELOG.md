@@ -18,6 +18,18 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.32 — 2026-11-21
+
+- A Media In that reads one frame (first = last) or a still image no
+  longer counts as changing over time, so a 3D render whose only
+  "moving" input was such a still (e.g. a splat with a still card)
+  renders once and is cached instead of redrawn every frame. Pictures
+  are unchanged.
+- GPU 3D renders store each pixel's depth on its own instead of four to
+  a shared vector. On Metal, neighbouring pixels could overwrite each
+  other's depth, the likely cause of `gpu --check` failing on the depth
+  plane on Apple M4. Pictures and the CPU path are unchanged.
+
 ## 0.14.31 — 2026-11-21
 
 - **Shuffle combines channels from several images:** connect more
