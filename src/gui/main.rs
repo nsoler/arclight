@@ -688,6 +688,7 @@ impl App {
     fn finish_call(&mut self, tool: &str, done: bridge_calls::Done, revision: u64) -> anyhow::Result<Value> {
         let out = done.result.map_err(|e| anyhow::anyhow!(e))?;
         let edited = self.doc.revision != revision;
+        let collected_to = if tool == "collect_media" { done.path.clone() } else { None };
         match tool {
             "load_graph" | "new_graph" if edited => anyhow::bail!("the graph was edited in the ArclightVFX window while {tool} ran; call it again"),
             "load_graph" | "new_graph" => self.load(Doc::new(done.graph, done.path)),
@@ -696,6 +697,7 @@ impl App {
                 // (What was saved is the graph as the call found it.)
                 self.doc.dirty = edited;
             }
+            "collect_media" if done.changed && edited => anyhow::bail!("the graph was edited in the ArclightVFX window while collect_media ran: the files were copied, nothing was relinked; call it again (the copies are reused)"),
             _ if done.changed && edited => anyhow::bail!("the graph was edited in the ArclightVFX window while {tool} ran; nothing changed, call it again"),
             _ if done.changed => {
                 self.doc.commit(false);
@@ -709,6 +711,11 @@ impl App {
                 self.props.invalidate();
             }
             _ => {}
+        }
+        // Collected and saved: the window's project is saved as it now is.
+        if tool == "collect_media" && !edited && out["saved"].is_string() {
+            self.doc.path = collected_to;
+            self.doc.dirty = false;
         }
         Ok(out)
     }
@@ -2881,6 +2888,18 @@ mod tests {
         let done = bridge_calls::Done { result: Ok(json!({})), graph: other, changed: true, path: None };
         assert!(app.finish_call("delete_node", done, stale).unwrap_err().to_string().contains("edited in the ArclightVFX window"));
         assert!(app.doc.node("emit").is_some());
+        // collect_media: refused the same way, saying the copies stay; done
+        // and saved, the window's project is clean, one undo step.
+        let mut moved = app.doc.graph.clone();
+        moved.project.folder = Some(dir.join("show"));
+        let done = bridge_calls::Done { result: Ok(json!({ "saved": dir.join("show/comp.json") })), graph: moved.clone(), changed: true, path: Some(dir.join("show/comp.json")) };
+        assert!(app.finish_call("collect_media", done, stale).unwrap_err().to_string().contains("nothing was relinked"));
+        let done = bridge_calls::Done { result: Ok(json!({ "saved": dir.join("show/comp.json") })), graph: moved, changed: true, path: Some(dir.join("show/comp.json")) };
+        let now = app.doc.revision;
+        app.finish_call("collect_media", done, now).unwrap();
+        assert_eq!((app.doc.graph.project.folder.clone(), app.doc.path.clone(), app.doc.dirty), (Some(dir.join("show")), Some(dir.join("show/comp.json")), false));
+        app.undo();
+        assert_eq!(app.doc.graph.project.folder, None);
         drop(app);
         std::fs::remove_dir_all(&dir).ok();
     }

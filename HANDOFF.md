@@ -4,6 +4,14 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.16.2 (2026-11-22): Collect Media from MCP / Python** (Dev1).
+  `Session::survey_media` / `collect_media` over `arclight::collect`
+  (JSON in `collect::survey_json` / `plan_json`; `collect::target`
+  resolves the folder argument). Through an attached GUI they run on the
+  bridge worker; `finish_call` clears dirty after a saving collect and
+  refuses one whose window was edited meanwhile (copies stay and are
+  reused). No CLI command (the user's call).
+
 - **0.16.1 (2026-11-22): wire bends snap square** (Dev1). Squaring is
   `wire_path::snap_square` (pure, graph space; tolerance max(6 px /
   zoom, tan 4° · leg)) called from `NodeEditor::squared`. A bend drag

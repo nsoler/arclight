@@ -200,6 +200,26 @@ class ArcltTest(unittest.TestCase):
             arclt.load(path)
             self.assertEqual([n.name for n in arclt.nodes()], ["checks"])
 
+    def test_collect_media(self):
+        with tempfile.TemporaryDirectory() as d:
+            src, show = os.path.join(d, "elsewhere"), os.path.join(d, "show")
+            os.makedirs(src)
+            arclt.create_node("checkerboard", name="checks", width=8, height=8, size=2)
+            arclt.render("checks", path=os.path.join(src, "plate.png"))
+            arclt.create_node("read", name="plate", path=os.path.join(src, "plate.png"))
+            with self.assertRaises(arclt.ArcltError):
+                arclt.collect_media()  # unsaved, no folder
+            arclt.save(os.path.join(show, "comp.json"))
+            dry = arclt.survey_media()
+            self.assertEqual((dry["plan"]["copies"], dry["fits"]), (1, True))
+            self.assertFalse(os.path.exists(os.path.join(show, "media")))
+            done = arclt.collect_media()
+            self.assertEqual(done["copied"], 1)
+            self.assertTrue(os.path.isfile(os.path.join(show, "media", "plate.png")))
+            self.assertTrue(os.path.isfile(os.path.join(src, "plate.png")))
+            self.assertEqual(arclt.node("plate")["path"], os.path.join(show, "media", "plate.png"))
+            self.assertGreater(mean_rgba("plate")[3], 0.0)  # reads the copy
+
     def test_project_format(self):
         arclt.project(width=320, height=200)
         self.assertEqual(arclt.project()["format"], {"width": 320, "height": 200})

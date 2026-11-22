@@ -36,7 +36,7 @@ __all__ = [
     "save", "load", "new", "render", "pixels", "to_numpy", "ops", "op_info", "project",
     "undo", "redo", "metadata", "graph", "plugins", "instances", "attach", "detach",
     "select", "view", "view_state", "Backdrop", "backdrops", "backdrop", "create_backdrop",
-    "set_positions", "layout", "gpu_info", "gpu_check",
+    "set_positions", "layout", "gpu_info", "gpu_check", "survey_media", "collect_media",
 ]
 
 
@@ -458,6 +458,34 @@ def disconnect(target: "Node | str", port: int | str = 0) -> None:
 def save(path: str | None = None) -> str:
     """Save the graph (to ``path``, or where it was loaded from). Returns the path."""
     return _call("save_graph", path=path)["path"]
+
+
+def survey_media(folder: str | None = None, outputs: bool = False) -> dict:
+    """What :func:`collect_media` would do, changing nothing.
+
+    Every file the project reads and writes (``refs``: node, param, role,
+    path, files, bytes, state ``inside`` / ``outside`` / ``missing``), the
+    warning a save would show (``summary``) and, for the folder it would
+    collect into (``folder``: absolute or relative to the project file's
+    folder; default the project's folder, else its file's), the ``plan``
+    (copies, bytes, reused, relinks, skipped), ``free_bytes`` and ``fits``.
+    """
+    return _call("survey_media", folder=folder, outputs=outputs)
+
+
+def collect_media(folder: str | None = None, outputs: bool = False, save: bool = True) -> dict:
+    """Copy the project's media from outside its folder into ``<folder>/media/``.
+
+    Sequences go frame by frame, videos whole, OBJ / glTF files with their
+    companions. The nodes then point at the copies and the project takes
+    that folder (one undo step); with ``save`` it's saved, so it opens on
+    another machine. Originals are never moved, deleted or overwritten;
+    ``outputs`` also points write / media_out / write_geo into ``out/``.
+    Raises :class:`ArcltError` before copying anything when there's no
+    folder, ``save`` is on and the project was never saved, or it won't fit.
+    Returns what it did (copied, bytes, reused, folder, plan, saved).
+    """
+    return _call("collect_media", folder=folder, outputs=outputs, save=save)
 
 
 def load(path: str) -> None:

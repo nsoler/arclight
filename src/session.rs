@@ -101,6 +101,60 @@ impl Session {
         Ok(path)
     }
 
+    /// What collecting the project's media into `folder` (see
+    /// [`collect::target`](crate::collect::target)) would do, changing
+    /// nothing (MCP's survey_media).
+    pub fn survey_media(&self, folder: Option<&str>, outputs: bool) -> Value {
+        let file = self.path.as_deref();
+        let survey = crate::collect::survey(&self.graph, file);
+        crate::collect::survey_json(&survey, crate::collect::target(&self.graph, file, folder).as_deref(), outputs)
+    }
+
+    /// Copy the project's media from outside `folder` into it, point the
+    /// nodes at the copies and give the project that folder (one undo
+    /// step), then save when `save` (see `arclight::collect`; originals are
+    /// never moved, deleted or written over). Refused before anything's
+    /// copied when there's no folder, nowhere to save, or too little space.
+    /// Copying reports files done / total to `progress`, and stops when
+    /// it's cancelled.
+    pub fn collect_media(&mut self, folder: Option<&str>, outputs: bool, save: bool, progress: &Progress) -> Result<Value> {
+        use crate::collect;
+        use std::sync::atomic::Ordering;
+        let file = self.path.clone();
+        let Some(target) = collect::target(&self.graph, file.as_deref(), folder) else {
+            bail!("no folder to collect into: pass `folder` (or set the project's folder with set_project, or save the project first)");
+        };
+        if save && file.is_none() {
+            bail!("save is on but the project has never been saved: call save_graph with a path first, or pass save: false");
+        }
+        if target.exists() && !target.is_dir() {
+            bail!("{} isn't a folder", target.display());
+        }
+        let plan = collect::plan(&collect::survey(&self.graph, file.as_deref()), &target, outputs);
+        if let Some(why) = collect::wont_fit(&plan) {
+            bail!(why);
+        }
+        progress.total.store(plan.copies.len() as i64, Ordering::Relaxed);
+        progress.done.store(0, Ordering::Relaxed);
+        let report = collect::copy(&plan, |p| progress.done.store(p.files_done as i64, Ordering::Relaxed), &progress.cancel)?;
+        let refolder = self.graph.project.folder.as_deref() != Some(target.as_path());
+        if !plan.relinks.is_empty() || refolder {
+            self.checkpoint();
+            collect::relink(&mut self.graph, &plan);
+            self.dirty = true;
+        }
+        let saved = if save { Some(self.save(None)?) } else { None };
+        Ok(json!({
+            "copied": report.copied,
+            "bytes": report.bytes,
+            "size": collect::size(report.bytes),
+            "reused": report.reused,
+            "folder": target,
+            "plan": collect::plan_json(&plan),
+            "saved": saved,
+        }))
+    }
+
     // -- undo ---------------------------------------------------------------
 
     /// Record the current graph as an undo step before an edit.

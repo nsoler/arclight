@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.16.1 (2026-11-22). Done items are removed
+What's still open, as of 0.16.2 (2026-11-22). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -8,6 +8,11 @@ them when they ship. `ROADMAP.md` is the public summary.
 ## To check by hand (user)
 
 On Linux and on the Macs (the DMG), from the release builds.
+
+**Phase 16 (0.16.2)**
+- [ ] `arclight mcp` on the Pond comp: survey_media, then collect_media;
+      attached to the GUI: the window's project is relinked, saved and
+      clean; Undo reverts; `arclt.collect_media(folder=…)` likewise
 
 **Phase 16 (0.16.1)**
 - [ ] Bend a wire into an L / U route: legs within a few degrees snap
@@ -213,7 +218,6 @@ On Linux and on the Macs (the DMG), from the release builds.
       on the rendered card; a first pen click for a new Roto fed by an
       auto-pivot Transform can be off until the worker reports that
       Transform's input shape (one render later)
-- [ ] MCP / Python / CLI "collect media" (`arclight::collect` has it all)
 - [ ] Project 3D targets are node names fixed at the node: fine today
       (nothing renames or merges meshes under a new node); if such an op
       is added, carry projections on Card / Model as Instances do

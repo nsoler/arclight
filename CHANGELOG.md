@@ -19,6 +19,15 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.16.2 — 2026-11-22
+
+- **Collect Media from scripts:** MCP `survey_media` (a dry run: every
+  file the project reads and writes, sizes, what would be copied, free
+  space) and `collect_media` (copy into `<folder>/media/`, relink as one
+  undo step, save), and `arclt.survey_media()` / `arclt.collect_media()`.
+  Refused with a clear message before anything's copied; originals are
+  never moved or overwritten.
+
 ## 0.16.1 — 2026-11-22
 
 - **Wire bends snap square:** a bend added or dragged nearly level or

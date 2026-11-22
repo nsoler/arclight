@@ -361,7 +361,8 @@ written over (a name taken by another file gets `_2`; the same file
 already there is used as is), files already in the folder stay, and
 missing files are left as they are. Outputs (Write, Media Out, Write Geo)
 aren't copied; tick **Also point outputs** to send them into the folder's
-`out/`.
+`out/`. Scripts and agents do the same with MCP's **survey_media** (a dry
+run) and **collect_media**, or `arclt.survey_media()` / `arclt.collect_media()`.
 
 **File ▸ Project Settings…** (**⇧⌘P**) sets the project's frame size, frame
 rate and frame range. Pick a format (HD, UHD, 2K or 4K DCI, 720p, PAL,

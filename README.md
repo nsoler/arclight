@@ -608,6 +608,7 @@ Tools: `list_ops`, `describe_op`, `get_graph`, `describe_node`, `create_node`,
 `set_disabled` (turn nodes off, bypassed, or on; `describe_node` gives `disabled`), `set_node_position` / `layout_nodes` (place nodes in the node editor, one or many at once, or lay out the unplaced ones, or `all`, by depth left to right; `create_node` also takes a `pos`), `list_backdrops` / `create_backdrop` / `update_backdrop` / `delete_backdrop` (the node editor's group boxes: create one around nodes, or at `pos` with `size`; set `title`, `color` (palette name, index or [r, g, b]), `font_size` (8–72), `pos`, `size`, or refit it `around` nodes; deleting a box keeps its nodes; `list_backdrops` also gives the nodes fully inside each box), `delete_node`, `rename_node`, `set_params`, `set_key`, `export_tracker` (a Tracker's motion as a keyed Transform or Corner Pin), `track_camera`, `camera_points`, `orient_camera`, `export_camera`, `place_on_points` (the Camera Tracker: solve, read the points, set origin/ground/scale, export (`export_camera` links the Camera to the solve live by default; `"linked": false` keys a copy), place cards, locators and planes: `what` "plane" adds a Fit Plane), `scene_objects` (what a 3D node's scene holds: cameras, cards, meshes, splat captures, and lights with their type, world position and direction, color, intensity and settings), `particles` (a particle node's particles at a frame: ids, positions, velocities, ages, lives, sizes, colors, in pages of up to 100000), `splats` (a scene's Gaussian splats in pages: positions in the scene, scales, rotations (w,x,y,z), opacities, colors (linear RGB), and which capture (`sets`: node, count, SH degree, world)), `geometry` (a 3D node's points, mesh points, faces, instances or curve points as paged columns: P, N, uv, attributes; `domains` counts each), `connect`, `disconnect`,
 `set_project` (incl. `folder`: relative paths are in it), `render_frame` (stats, optional file and PNG preview the model can
 see), `render_output`, `probe_media`, `new_graph`, `load_graph`, `save_graph`,
+`survey_media` (a dry run: every file the project reads and writes, inside its folder or not, and what collecting would copy, with sizes and free space) / `collect_media` (copy them into `<folder>/media/`, relink, save; originals untouched),
 `undo`, `redo`, `list_plugins`, `list_instances`, `attach_instance`,
 `detach_instance`, `gpu_info` (GPU acceleration in use or why not, the
 adapter and limits), `gpu_check` (the GPU self-test; `"quick": true` for
@@ -652,7 +653,8 @@ Also: `node`, `nodes`, `delete`, `connect`, `disconnect`, `load`, `new`,
 `pixels`, `ops`, `op_info`, `project`, `undo`, `redo`, `metadata` (media file
 info), `graph`, `plugins`, `instances`, `detach`, `set_positions({node: [x, y]})`, `layout(all=False)`, `backdrops()`, `backdrop(id)`,
 `gpu_info()`, `gpu_check(quick=False)` (see GPU acceleration; `render(..., cpu=True)`
-renders on the CPU only),
+renders on the CPU only), `survey_media(folder=None, outputs=False)` /
+`collect_media(folder=None, outputs=False, save=True)` (File ▸ Collect Media's dry run and collect),
 `create_backdrop(*nodes, title=, color=, font_size=, pos=, size=)` (a
 `Backdrop` with `title` / `color` / `font_size` / `pos` / `size`, `set`, `fit(*nodes)`,
 `nodes()`, `delete()`), and, when attached,

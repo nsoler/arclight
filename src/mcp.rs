@@ -188,6 +188,17 @@ static TOOLS: &[Tool] = &[
         {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}),
     tool!("save_graph", "Save the graph, to 'path' or to where it was loaded from.",
         {"type": "object", "properties": {"path": {"type": "string"}}}),
+    tool!("survey_media", "Dry run of collect_media, changing nothing: every file the project reads and writes (node, param, input/output, path, files, bytes, state: inside the project folder, outside, or missing), the warning a save would show, and what collecting into 'folder' (default: the project's folder, else its file's) would copy, reuse, relink and skip, with the free space there and whether it fits.",
+        {"type": "object", "properties": {
+            "folder": {"type": "string", "description": "Folder to collect into: absolute, or relative to the project file's folder. Default: the project's folder, else its file's."},
+            "outputs": {"type": "boolean", "description": "Also point outputs (write, media_out, write_geo) into the folder's out/ (default false)."}
+        }}),
+    tool!("collect_media", "Copy the files the project reads from outside its folder into <folder>/media/ (sequences frame by frame, videos whole, OBJ / glTF with their material, texture and buffer files), point the nodes at the copies and give the project that folder (one undo step), then save (default) so it opens on another machine. Originals are never moved, deleted or overwritten; outputs are only pointed into <folder>/out/ with 'outputs'. Refused before copying when there's no folder, save is on and the project was never saved, or the copies won't fit. See survey_media for a dry run.",
+        {"type": "object", "properties": {
+            "folder": {"type": "string", "description": "Folder to collect into: absolute, or relative to the project file's folder. Default: the project's folder, else its file's."},
+            "outputs": {"type": "boolean", "description": "Also point outputs into the folder's out/ (default false)."},
+            "save": {"type": "boolean", "description": "Save the project afterwards (default true)."}
+        }}),
     tool!("undo", "Undo the last edit.", {"type": "object", "properties": {}}),
     tool!("redo", "Redo the last undone edit.", {"type": "object", "properties": {}}),
     tool!("list_plugins", "Plugin libraries found at startup and the ops each added (or why it failed).",
@@ -500,6 +511,11 @@ fn run_tool(s: &mut Session, tool: &str, args: &Value, progress: &Progress) -> R
             json!({"nodes": s.graph.nodes.len()})
         }
         "save_graph" => json!({"path": s.save(opt_str(args, "path").map(Path::new))?}),
+        "survey_media" => s.survey_media(opt_str(args, "folder"), args.get("outputs").and_then(Value::as_bool).unwrap_or(false)),
+        "collect_media" => {
+            let flag = |name: &str, default: bool| args.get(name).and_then(Value::as_bool).unwrap_or(default);
+            s.collect_media(opt_str(args, "folder"), flag("outputs", false), flag("save", true), progress)?
+        }
         "undo" => json!({"undone": s.undo()}),
         "redo" => json!({"redone": s.redo()}),
         "list_plugins" => json!(plugin::reports()
@@ -844,6 +860,63 @@ mod tests {
 
     fn call(server: &mut Server, name: &str, args: Value) -> Value {
         rpc(server, 1, "tools/call", json!({"name": name, "arguments": args}))["result"].clone()
+    }
+
+    /// survey_media is a dry run; collect_media copies media from outside
+    /// the folder into it, relinks (one undo step) and saves relative
+    /// paths; its refusals come before anything is copied.
+    #[test]
+    fn media_are_surveyed_and_collected_through_mcp() {
+        let tmp = std::env::temp_dir().join(format!("arclight_mcp_collect_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let (src, show) = (tmp.join("elsewhere"), tmp.join("show"));
+        std::fs::create_dir_all(src.join("plates")).unwrap();
+        for f in 1..=3 {
+            crate::image::Image::filled(4, 2, [0.25, 0.5, 0.75, 1.0]).write(&src.join(format!("plates/bg.{f:04}.png"))).unwrap();
+        }
+        let mut s = Server::new(Session::default());
+        let ok = |r: Value| {
+            assert_eq!(r["isError"], false, "{r}");
+            r["structuredContent"].clone()
+        };
+        let err = |r: Value| {
+            assert_eq!(r["isError"], true, "{r}");
+            r["content"][0]["text"].as_str().unwrap().to_string()
+        };
+        ok(call(&mut s, "create_node", json!({"op": "read", "name": "plate", "params": {"path": src.join("plates/bg.####.png")}})));
+        ok(call(&mut s, "create_node", json!({"op": "write", "name": "out", "inputs": ["plate"], "params": {"path": "/renders/comp.png"}})));
+        // Unsaved, no folder: nowhere to collect.
+        let dry = ok(call(&mut s, "survey_media", json!({})));
+        assert_eq!(dry["plan"], Value::Null);
+        assert_eq!(dry["refs"].as_array().unwrap().len(), 2);
+        assert_eq!(dry["refs"][0]["files"], 3);
+        assert!(err(call(&mut s, "collect_media", json!({}))).contains("no folder"));
+        assert!(err(call(&mut s, "collect_media", json!({"folder": show}))).contains("never been saved"));
+        assert!(!show.exists(), "nothing copied");
+        // Saved in show/: a dry run there, then the real thing.
+        ok(call(&mut s, "save_graph", json!({"path": show.join("comp.json")})));
+        let dry = ok(call(&mut s, "survey_media", json!({"outputs": true})));
+        assert_eq!(dry["target"], json!(show));
+        assert_eq!((&dry["plan"]["copies"], &dry["fits"]), (&json!(3), &json!(true)));
+        assert_eq!(dry["plan"]["relinks"].as_array().unwrap().len(), 2, "the plate and the output");
+        assert!(!show.join("media").exists(), "a dry run copies nothing");
+        let done = ok(call(&mut s, "collect_media", json!({})));
+        assert_eq!((&done["copied"], &done["saved"]), (&json!(3), &json!(show.join("comp.json"))));
+        assert!(show.join("media/bg/bg.0003.png").is_file() && src.join("plates/bg.0001.png").is_file());
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(show.join("comp.json")).unwrap()).unwrap();
+        assert_eq!(saved["project"]["folder"], ".");
+        assert_eq!(saved["nodes"][0]["params"]["path"], "media/bg/bg.####.png");
+        assert_eq!(saved["nodes"][1]["params"]["path"], "/renders/comp.png", "outputs only when asked");
+        // One undo step back; collected again, the copies are reused.
+        assert_eq!(ok(call(&mut s, "undo", json!({})))["undone"], true);
+        let graph = ok(call(&mut s, "get_graph", json!({})))["graph"].clone();
+        assert_eq!(graph["nodes"][0]["params"]["path"], json!(src.join("plates/bg.####.png")));
+        let again = ok(call(&mut s, "collect_media", json!({"save": false})));
+        assert_eq!((&again["copied"], &again["reused"], &again["saved"]), (&json!(0), &json!(3), &Value::Null));
+        // A folder that's a file is refused.
+        std::fs::write(tmp.join("afile"), b"x").unwrap();
+        assert!(err(call(&mut s, "collect_media", json!({"folder": tmp.join("afile")}))).contains("isn't a folder"));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// Through MCP as in the GUI: with a project folder, paths given

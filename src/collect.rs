@@ -563,6 +563,69 @@ pub fn relink(graph: &mut Graph, plan: &Plan) {
     graph.project.folder = Some(plan.folder.clone());
 }
 
+/// Where to collect `graph`'s media (the project saved at `file`): the
+/// `folder` given (whole, or relative to the project file's folder, else
+/// to the working folder), else the project's folder, else its file's.
+pub fn target(graph: &Graph, file: Option<&Path>, folder: Option<&str>) -> Option<PathBuf> {
+    match folder.map(str::trim).filter(|f| !f.is_empty()) {
+        Some(f) if Path::new(f).is_absolute() => Some(clean(Path::new(f))),
+        Some(f) => {
+            let base = file.map(whole).and_then(|p| p.parent().map(Path::to_path_buf));
+            Some(base.map_or_else(|| whole(Path::new(f)), |b| clean(&b.join(f))))
+        }
+        None => survey(graph, file).folder.or_else(|| graph.project.folder_for(file).map(|f| whole(&f))),
+    }
+}
+
+/// `survey` and what collecting into `target` (if any) with `outputs`
+/// would do, as JSON (MCP's survey_media): nothing is changed.
+pub fn survey_json(survey: &Survey, target: Option<&Path>, outputs: bool) -> Value {
+    let role = |r: Role| if r == Role::Input { "input" } else { "output" };
+    let state = |s: State| match s {
+        State::Inside => "inside",
+        State::Outside => "outside",
+        State::Missing => "missing",
+    };
+    let refs: Vec<Value> = survey
+        .refs
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "node": r.node, "op": r.op, "param": r.param, "role": role(r.role), "path": r.path,
+                "files": r.files.len(), "bytes": r.bytes, "size": size(r.bytes), "state": state(r.state), "strays": r.strays,
+            })
+        })
+        .collect();
+    let mut out = serde_json::json!({ "project_folder": survey.folder, "target": target, "summary": survey.summary(), "refs": refs });
+    match target {
+        Some(t) => {
+            let p = plan(survey, t, outputs);
+            let free = free_space(t);
+            out["plan"] = plan_json(&p);
+            out["free_bytes"] = serde_json::json!(free);
+            out["fits"] = serde_json::json!(free.is_none_or(|f| p.bytes() <= f));
+        }
+        None => {
+            out["plan"] = Value::Null;
+            out["note"] = "no folder to collect into: pass `folder` (or set the project's folder, or save the project first)".into();
+        }
+    }
+    out
+}
+
+/// `plan` as JSON: what it copies, reuses, relinks and leaves.
+pub fn plan_json(plan: &Plan) -> Value {
+    serde_json::json!({
+        "folder": plan.folder,
+        "copies": plan.copies.len(),
+        "bytes": plan.bytes(),
+        "size": size(plan.bytes()),
+        "reused": plan.reused.len(),
+        "relinks": plan.relinks.iter().map(|r| serde_json::json!({"node": r.node, "param": r.param, "path": r.path})).collect::<Vec<_>>(),
+        "skipped": plan.skipped.iter().map(|(r, why)| serde_json::json!({"node": r.node, "param": r.param, "path": r.path, "reason": why})).collect::<Vec<_>>(),
+    })
+}
+
 /// A size for people: `289.4 MB`.
 pub fn size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["bytes", "KB", "MB", "GB", "TB"];
