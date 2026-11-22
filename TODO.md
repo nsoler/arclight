@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.15.6 (2026-11-21). Done items are removed
+What's still open, as of 0.15.7 (2026-11-22). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -8,6 +8,13 @@ them when they ship. `ROADMAP.md` is the public summary.
 ## To check by hand (user)
 
 On Linux and on the Macs (the DMG), from the release builds.
+
+**Phase 15 (0.15.7)**
+- [ ] Open a project with media outside its folder (the Pond comp),
+      save: the menu-bar warning; File ▸ Collect Media…: sizes and free
+      space, Collect with progress, the nodes point into media/, it
+      saves, Undo reverts; copy the folder to another machine or path
+      and reopen
 
 **Phase 15 (0.15.6)**
 - [ ] Pen-draw a Roto that a Transform feeds into a Viewer: the points
@@ -197,11 +204,7 @@ On Linux and on the Macs (the DMG), from the release builds.
       on the rendered card; a first pen click for a new Roto fed by an
       auto-pivot Transform can be off until the worker reports that
       Transform's input shape (one render later)
-- [ ] **Projects without a folder save media paths absolute, silently**
-      (user, 2026-11-21: a comp made on the Mac had `/Users/...` paths on
-      Linux). Warn when a project references files outside its folder
-      (or has none), and / or offer "Collect media into the project
-      folder" on save, so it opens on another machine
+- [ ] MCP / Python / CLI "collect media" (`arclight::collect` has it all)
 - [ ] Project 3D targets are node names fixed at the node: fine today
       (nothing renames or merges meshes under a new node); if such an op
       is added, carry projections on Card / Model as Instances do

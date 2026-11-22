@@ -123,6 +123,12 @@ pub struct ProjectSettings {
     defaults: Option<Project>,
     /// The folder dialog Browse… opened, if any.
     browse: Option<dialogs::Pending<()>>,
+    /// Files that won't move with the project under the folder being
+    /// edited (that folder, and what `collect::Survey::summary` says):
+    /// surveyed on opening and when the folder changes, not every frame.
+    media: Option<(Option<std::path::PathBuf>, Option<String>)>,
+    /// Collect media… was clicked (see [`take_collect`](Self::take_collect)).
+    collect: bool,
 }
 
 impl ProjectSettings {
@@ -130,6 +136,13 @@ impl ProjectSettings {
     pub fn open(&mut self, doc: &Doc) {
         self.draft = Some(doc.graph.project.clone());
         self.message = None;
+        self.media = None;
+    }
+
+    /// Whether Collect media… was clicked since last asked: File ▸
+    /// Collect Media into Project Folder… should open.
+    pub fn take_collect(&mut self) -> bool {
+        std::mem::take(&mut self.collect)
     }
 
     /// Close, dropping any edits.
@@ -272,6 +285,19 @@ impl ProjectSettings {
                         ui.weak(match d.folder_for(doc.path.as_deref()) {
                             Some(dir) => format!("None: the project file's folder, {}", dir.display()),
                             None => "None (until the project is saved: then the folder its file is in)".to_string(),
+                        });
+                    }
+                    // Files that won't move with it, for this folder.
+                    if self.media.as_ref().is_none_or(|(f, _)| *f != d.folder) {
+                        let mut g = doc.graph.clone();
+                        g.project.folder = d.folder.clone();
+                        self.media = Some((d.folder.clone(), arclight::collect::survey(&g, doc.path.as_deref()).summary()));
+                    }
+                    if let Some((_, Some(s))) = &self.media {
+                        ui.horizontal(|ui| {
+                            ui.colored_label(egui::Color32::from_rgb(235, 180, 80), format!("⚠ {s}"));
+                            let tip = "Copy them into the project folder and point the nodes at the copies (File ▸ Collect Media into Project Folder…)";
+                            self.collect |= ui.button("Collect media…").on_hover_text(tip).clicked();
                         });
                     }
                 });

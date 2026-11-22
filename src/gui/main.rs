@@ -26,6 +26,7 @@ mod pen;
 mod pivot;
 mod panels;
 mod preferences;
+mod collect_media;
 mod project_settings;
 mod properties;
 mod shuffle_routes;
@@ -362,6 +363,8 @@ struct App {
     gpu_test: gpu_check::SelfTest,
     /// File ▸ Project Settings…
     project_settings: project_settings::ProjectSettings,
+    /// File ▸ Collect Media into Project Folder… and its warning.
+    collect: collect_media::CollectMedia,
     /// The window icon as a texture, for the About dialog (made on first use).
     /// and the part of it with artwork (UV), its transparent border cut off.
     logo: Option<(egui::TextureHandle, egui::Rect)>,
@@ -465,6 +468,7 @@ impl App {
             gpu_status: Default::default(),
             gpu_test: Default::default(),
             project_settings: Default::default(),
+            collect: Default::default(),
             logo: None,
             starting: None,
             // (Screenshot runs: everything in the main window.)
@@ -743,6 +747,7 @@ impl App {
         self.viewer.fit();
         self.props.reset();
         self.project_settings.cancel();
+        self.collect.close();
         self.requested = None;
     }
 
@@ -977,6 +982,8 @@ impl App {
                 self.doc.path = Some(path);
                 self.doc.dirty = false;
                 self.status = None;
+                // Files that won't move with it: said in the menu bar.
+                self.collect.saved(&self.doc);
             }
             Err(e) => self.status = Some(format!("{e:#}")),
         }
@@ -1840,6 +1847,11 @@ impl App {
                     ui.close();
                     self.project_settings.open(&self.doc);
                 }
+                let tip = "Copy the files this project reads into its folder (media/) and point the nodes at the copies, so it opens on another machine";
+                if ui.button("Collect Media into Project Folder…").on_hover_text(tip).clicked() {
+                    ui.close();
+                    self.collect.open(&self.doc);
+                }
                 ui.separator();
                 if ui.add(egui::Button::new("Save").shortcut_text(ui.ctx().format_shortcut(&SAVE))).clicked() {
                     ui.close();
@@ -2037,6 +2049,7 @@ impl App {
                 ui.label(s);
                 ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
             }
+            self.collect.bar_ui(ui, &self.doc);
             if let Some(s) = &self.status {
                 ui.separator();
                 // As much as fits the bar; all of it on hover.
@@ -2260,6 +2273,12 @@ impl eframe::App for App {
             self.status = Some(e);
         }
         self.project_settings.ui(&ctx, &mut self.doc);
+        if self.project_settings.take_collect() {
+            self.collect.open(&self.doc);
+        }
+        if self.collect.ui(&ctx, &mut self.doc) {
+            self.save(false);
+        }
         if let Some(project) = self.project_settings.take_defaults() {
             let settings = Settings { new_project: new_project_prefs(&project), ..self.settings.clone() };
             self.set_settings(&ctx, settings);

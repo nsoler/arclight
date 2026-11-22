@@ -4,6 +4,16 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.15.7 (2026-11-22): media outside the project folder** (Dev1).
+  `arclight::collect` (survey / plan / copy / relink) is the one place
+  that knows which files a project references, sequences' frames and
+  model companions (OBJ mtl / textures, glTF uris) included; reuse it
+  for an MCP / Python / CLI collect. Survey stats files and walks
+  sequence folders: never per frame (on save, opening the window /
+  Project Settings, folder change). Copy writes `.part` then renames,
+  never overwrites, refuses past free space (statvfs /
+  GetDiskFreeSpaceExW). GUI: `gui/collect_media.rs`.
+
 - **0.15.6 (2026-11-21): pen / pivot through downstream maps** (Dev2).
   Pen and pivot map the pointer through `Xf::for_node`, as the overlay's
   handles do, and obey `Xf::blocked`. Pen's first click for a new Roto

@@ -18,6 +18,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.15.7 — 2026-11-22
+
+- **Projects warn when they read files outside their folder** (or have
+  no folder), so their paths are saved absolute: in the menu bar after
+  a save and in Project Settings. **File ▸ Collect Media into Project
+  Folder…** copies them (frames, videos, models with their materials
+  and textures) into `<folder>/media/`, shows sizes and free space
+  first, relinks the nodes (one undo) and saves. Originals are never
+  moved or overwritten; outputs can optionally be pointed into
+  `<folder>/out/`.
+
 ## 0.15.6 — 2026-11-21
 
 - **Viewer: pen and pivot modes work in the selected node's own space**

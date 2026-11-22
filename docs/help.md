@@ -343,6 +343,25 @@ relative, in a File field or through MCP / Python, means relative to the
 project's folder; File fields show paths in the folder relative to it
 (hover for the full path).
 
+Files outside the folder (or every file, when the project has no folder)
+are saved with absolute paths, so the project won't find them on another
+machine. After a save that leaves such files, the menu bar says so (once
+for the same files; × dismisses it), and Project Settings shows it under
+**Folder**. **File ▸ Collect Media into Project Folder…** lists every file
+the project reads and writes, with frames and sizes, what collecting does
+with each, the total to copy and the free space in the folder (it refuses
+if they won't fit). **Collect** copies them into the folder's `media/`
+(a sequence's frames, or a model with its material and texture files, in
+a folder of their own there), with progress and Cancel, then points the
+nodes at the copies, gives the project that folder if it had none
+(**Choose…**; it starts in the project file's folder) and saves; one
+**Undo** puts the paths back. Originals are never moved, deleted or
+written over (a name taken by another file gets `_2`; the same file
+already there is used as is), files already in the folder stay, and
+missing files are left as they are. Outputs (Write, Media Out, Write Geo)
+aren't copied; tick **Also point outputs** to send them into the folder's
+`out/`.
+
 **File ▸ Project Settings…** (**⇧⌘P**) sets the project's frame size, frame
 rate and frame range. Pick a format (HD, UHD, 2K or 4K DCI, 720p, PAL,
 NTSC, square, vertical…) or type the width and height (⇄ swaps them), and

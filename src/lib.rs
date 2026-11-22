@@ -17,6 +17,7 @@ pub mod bundle;
 pub mod camtrack;
 pub mod camtrack_tracks;
 pub mod bridge;
+pub mod collect;
 pub mod color;
 pub mod config;
 pub mod crash;

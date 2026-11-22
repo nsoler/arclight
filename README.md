@@ -349,7 +349,10 @@ anywhere in the graph. The GUI also stores a `pos` per node and a top-level
 default 1920×1080), and `backdrops` when there are any: `{ "id", "title",
 "pos": [x, y], "size": [w, h], "color": [r, g, b] (sRGB 0–1), "font_size" }`
 (files without them load as before); the engine ignores `pos` and
-`backdrops`. Sources with no input
+`backdrops`. With `project.folder` set, file params inside it are saved relative
+to it, so the folder can move; others stay absolute (the GUI warns, and
+**File ▸ Collect Media into Project Folder…** copies them into
+`<folder>/media/` and relinks). Sources with no input
 (`constant`, `checkerboard`, shapes without a background) whose `width` /
 `height` is 0 (the default for new nodes) take the project format. Images
 carry a frame (format) and a data window, the part where pixels are stored,
