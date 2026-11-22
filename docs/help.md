@@ -11,7 +11,8 @@ selected node in **Properties** on the right. On macOS, ⌘ stands for Ctrl.
 | Add a node | Right-click (the node browser; type to search) |
 | Connect | Drag from an output (circle) to an input (square), or the other way; or drop the wire anywhere on a node: it takes the first free input that fits, not the mask (or the node's output) |
 | Select a wire | Click it (it lights up); **⌫** disconnects it |
-| Wire menu | Right-click a wire: **Insert 3D Camera Setup**, **Insert Node…**, **Delete connection** |
+| Wire menu | Right-click a wire: **Insert 3D Camera Setup**, **Insert Node…**, **Delete connection** (and **Remove bends** on a bent wire) |
+| Bend a wire | **⌘/Ctrl-click** a wire to add a bend point; drag it to move it, **⌘/Ctrl-click** it to take it out. Straight wires run in legs between bends, curved ones pass smoothly through them |
 | Disconnect / reroute | Drag a connected input away |
 | View a node | Double-click it, or **V** |
 | Delete | **⌫** (Backspace) or **Delete** |

@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
@@ -236,6 +236,17 @@ impl Backdrop {
     }
 }
 
+/// Bend points of one wire in the node editor (graph coordinates, from
+/// the source's end): the wire from `src` into `dst`'s input `port`. Kept
+/// only while that wire exists (see [`Graph::prune_bends`]).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct WireBend {
+    pub src: String,
+    pub dst: String,
+    pub port: usize,
+    pub points: Vec<[f32; 2]>,
+}
+
 /// A whole graph document.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct Graph {
@@ -245,6 +256,9 @@ pub struct Graph {
     /// Group boxes in the node editor, back to front.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub backdrops: Vec<Backdrop>,
+    /// Wires' bend points in the node editor (ignored by the engine).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bends: Vec<WireBend>,
     /// How the GUI's views were left (the 3D viewport's camera), saved with
     /// the project but not part of it (see [`ViewState`]).
     #[serde(default, skip_serializing_if = "ViewState::is_empty")]
@@ -380,6 +394,9 @@ impl Graph {
         if self.nodes.iter().all(|n| n.pos.is_some()) {
             return;
         }
+        // Wires to or from a node being placed lose their bends.
+        let placed: HashSet<String> = self.nodes.iter().filter(|n| n.pos.is_none()).map(|n| n.id.clone()).collect();
+        self.bends.retain(|b| !placed.contains(&b.src) && !placed.contains(&b.dst));
         let mut depth: HashMap<String, usize> = HashMap::new();
         // Longest-path depth; bounded passes so a malformed cyclic file can't hang.
         for _ in 0..self.nodes.len() {
@@ -402,6 +419,44 @@ impl Graph {
                 let row = rows.entry(col).or_insert(0);
                 n.pos = Some([col as f32 * (NODE_W + 50.0), *row as f32 * (NODE_H + 40.0)]);
                 *row += 1;
+            }
+        }
+    }
+
+    /// The bend points of the wire into `dst`'s input `port` (none when
+    /// it has none, or the wire there isn't the one they were made on).
+    pub fn bends_of(&self, dst: &str, port: usize) -> &[[f32; 2]] {
+        let src = self.node(dst).and_then(|n| n.inputs.get(port));
+        self.bends.iter().find(|b| b.dst == dst && b.port == port && Some(&b.src) == src).map_or(&[], |b| &b.points)
+    }
+
+    /// Set (or with none, remove) the bend points of the wire into `dst`'s
+    /// input `port`.
+    pub fn set_bends(&mut self, dst: &str, port: usize, points: Vec<[f32; 2]>) {
+        let Some(src) = self.node(dst).and_then(|n| n.inputs.get(port)).filter(|s| !s.is_empty()).cloned() else { return };
+        self.bends.retain(|b| !(b.dst == dst && b.port == port));
+        if !points.is_empty() {
+            self.bends.push(WireBend { src, dst: dst.to_string(), port, points });
+        }
+    }
+
+    /// Drop the bends of wires that no longer exist (a node deleted, an
+    /// input disconnected or wired to another node) and empty ones.
+    pub fn prune_bends(&mut self) {
+        let wired = |b: &WireBend| self.node(&b.dst).and_then(|n| n.inputs.get(b.port)) == Some(&b.src);
+        let keep: Vec<bool> = self.bends.iter().map(|b| !b.points.is_empty() && wired(b)).collect();
+        let mut k = keep.into_iter();
+        self.bends.retain(|_| k.next().unwrap_or(false));
+    }
+
+    /// A node renamed from `old` to `new`: its wires keep their bends.
+    pub fn rename_in_bends(&mut self, old: &str, new: &str) {
+        for b in &mut self.bends {
+            if b.src == old {
+                b.src = new.to_string();
+            }
+            if b.dst == old {
+                b.dst = new.to_string();
             }
         }
     }
@@ -1176,6 +1231,58 @@ fn node_key(node: &NodeSpec, params: &Value, keys: &HashMap<&str, u64>, ctx: &Ev
 
 #[cfg(test)]
 mod tests {
+    /// Wire bends: saved only when there are some (old projects save as
+    /// they did), round-tripped, kept on a rename, dropped with their wire
+    /// (deleted, disconnected, rewired) and by a layout placing an end.
+    #[test]
+    fn wire_bends_save_follow_renames_and_go_with_their_wire() {
+        use serde_json::json;
+        let mut g: Graph = serde_json::from_value(json!({ "nodes": [
+            { "id": "a", "op": "constant", "pos": [0, 0] },
+            { "id": "b", "op": "blur", "inputs": ["a"], "pos": [200, 0] },
+            { "id": "c", "op": "grade", "inputs": ["b"], "pos": [400, 0] },
+        ] }))
+        .unwrap();
+        assert!(!g.to_json().contains("bends"), "none: no field");
+        g.set_bends("b", 0, vec![[100.0, 50.0], [150.0, 50.0]]);
+        g.set_bends("c", 0, vec![[300.0, -20.0]]);
+        g.set_bends("a", 0, vec![[1.0, 1.0]]);
+        assert_eq!(g.bends.len(), 2, "no wire into a: nothing kept");
+        let back: Graph = g.to_json().parse().unwrap();
+        assert_eq!(back, g);
+        assert_eq!(back.bends_of("b", 0), &[[100.0, 50.0], [150.0, 50.0]]);
+        // Renamed: still there.
+        for n in &mut g.nodes {
+            if n.id == "b" {
+                n.id = "soft".into();
+            }
+            for i in &mut n.inputs {
+                if i == "b" {
+                    *i = "soft".into();
+                }
+            }
+        }
+        g.rename_in_bends("b", "soft");
+        assert_eq!(g.bends_of("soft", 0).len(), 2);
+        assert_eq!(g.bends_of("c", 0), &[[300.0, -20.0]]);
+        // Rewired: the old bends don't apply (and are pruned).
+        g.nodes[2].inputs[0] = "a".into();
+        assert!(g.bends_of("c", 0).is_empty());
+        g.prune_bends();
+        assert_eq!(g.bends.len(), 1);
+        // Setting none removes them.
+        g.set_bends("soft", 0, Vec::new());
+        assert!(g.bends.is_empty() && !g.to_json().contains("bends"));
+        // A layout placing an end drops its wires' bends; others stay.
+        g.set_bends("soft", 0, vec![[5.0, 5.0]]);
+        g.set_bends("c", 0, vec![[6.0, 6.0]]);
+        g.nodes[2].pos = None;
+        g.layout(false);
+        assert!(g.bends_of("c", 0).is_empty() && g.bends_of("soft", 0).len() == 1);
+        g.layout(true);
+        assert!(g.bends.is_empty());
+    }
+
     /// A project folder with its plates, geometry and renders, saved, moved
     /// whole and opened again: what's in it is found where it went (read
     /// and written there); what's elsewhere stays put; a project without a

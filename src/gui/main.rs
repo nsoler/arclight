@@ -40,6 +40,7 @@ mod transport;
 mod view_frame;
 mod viewer;
 mod viewport3d;
+mod wire_path;
 mod worker;
 
 use arclight::bridge;

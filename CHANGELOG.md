@@ -18,6 +18,20 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.15.8 — 2026-11-22
+
+- **Node graph: bend points on wires.** ⌘/Ctrl-click a wire to add one
+  where you clicked, drag to move it (snapping to the grid when Snap to
+  grid is on), ⌘/Ctrl-click it to remove it, or right-click ▸ Remove
+  bends. Straight wires turn at the bends; curved wires pass smoothly
+  through them. Bends move with a wire when both its ends move, are
+  split between the two wires when a node is dropped into a bent wire,
+  stay through renames (GUI and MCP) and come along in copy / paste,
+  duplicate and Import project; they go when the wire is deleted,
+  disconnected or rewired, or when auto-layout places an end. Saved as
+  an optional `bends` list, so projects without bends load and save
+  unchanged.
+
 ## 0.15.7 — 2026-11-22
 
 - **Projects warn when they read files outside their folder** (or have

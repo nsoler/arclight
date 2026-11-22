@@ -278,6 +278,15 @@ impl Doc {
                 p[1] += d[1];
             }
         }
+        // A wire with both ends moved takes its bends along.
+        for b in &mut self.graph.bends {
+            if ids.contains(&b.src) && ids.contains(&b.dst) {
+                for p in &mut b.points {
+                    p[0] += d[0];
+                    p[1] += d[1];
+                }
+            }
+        }
         self.touched();
     }
 
@@ -410,6 +419,8 @@ impl Doc {
                 n.inputs.push(String::new());
             }
         }
+        // Bends go with their wire (deleted, disconnected, rewired).
+        self.graph.prune_bends();
     }
 
     pub fn unique_id(&self, base: &str) -> String {
@@ -764,6 +775,7 @@ impl Doc {
             }
             arclight::graph_merge::rename_refs(&n.op, &mut n.params, old, new);
         }
+        self.graph.rename_in_bends(old, new);
         let lists = [&mut self.selected, &mut self.view_override, &mut self.active_viewer, &mut self.selection_for].into_iter().flatten();
         for id in lists.chain(self.selection.iter_mut()) {
             if id == old {

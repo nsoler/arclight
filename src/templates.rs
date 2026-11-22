@@ -51,6 +51,8 @@ pub fn excerpt(graph: &Graph, file: Option<&Path>, nodes: &[String], backdrops: 
         })
         .cloned()
         .collect();
+    // Bends of the wires among what's taken.
+    out.bends = graph.bends.iter().filter(|b| taken(&b.src) && taken(&b.dst)).cloned().collect();
     out
 }
 

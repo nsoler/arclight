@@ -112,6 +112,12 @@ pub fn merge(target: &mut Graph, source: &Graph, how: &Merge) -> Merged {
         added.nodes.push(n.id.clone());
         target.nodes.push(n);
     }
+    // Bends of the wires among the taken nodes, renamed and moved with them.
+    let name = |id: &str| renamed.get(id).cloned().unwrap_or_else(|| id.to_string());
+    for b in source.bends.iter().filter(|b| taken.contains(b.src.as_str()) && taken.contains(b.dst.as_str())) {
+        let points = b.points.iter().map(|[x, y]| [x + offset[0], y + offset[1]]).collect();
+        target.bends.push(crate::graph::WireBend { src: name(&b.src), dst: name(&b.dst), port: b.port, points });
+    }
     let mut backdrop_ids: HashSet<String> = target.backdrops.iter().map(|b| b.id.clone()).collect();
     for b in backdrops {
         let mut b = b.clone();
@@ -198,6 +204,28 @@ pub fn rename_refs(op: &str, params: &mut Value, old: &str, new: &str) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Copied and pasted (an excerpt merged back in), a wire's bends come
+    /// along when both its ends do, renamed and moved with the nodes; a
+    /// wire left behind brings none.
+    #[test]
+    fn bends_come_along_with_both_ends() {
+        let mut g: Graph = serde_json::from_value(json!({ "nodes": [
+            { "id": "a", "op": "constant", "pos": [0, 0] },
+            { "id": "b", "op": "blur", "inputs": ["a"], "pos": [200, 0] },
+            { "id": "c", "op": "grade", "inputs": ["b"], "pos": [400, 0] },
+        ] })).unwrap();
+        g.set_bends("b", 0, vec![[100.0, 50.0]]);
+        g.set_bends("c", 0, vec![[300.0, 50.0]]);
+        let copied = crate::templates::excerpt(&g, None, &["a".into(), "b".into()], &[]);
+        assert_eq!(copied.bends.len(), 1, "only a → b");
+        let added = merge(&mut g, &copied, &Merge { only: None, place: Place::At([0.0, 100.0]) });
+        let (a2, b2) = (&added.renamed["a"], &added.renamed["b"]);
+        assert_eq!(g.node(b2).unwrap().inputs[0], *a2);
+        assert_eq!(g.bends_of(b2, 0), &[[100.0, 150.0]]);
+        assert_eq!(g.bends_of("b", 0), &[[100.0, 50.0]], "the originals stay");
+        assert_eq!(g.bends.len(), 3);
+    }
 
     fn graph(nodes: Value) -> Graph {
         serde_json::from_value(json!({ "nodes": nodes })).unwrap()

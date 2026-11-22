@@ -439,6 +439,7 @@ impl Session {
             }
             crate::graph_merge::rename_refs(&n.op, &mut n.params, old, new);
         }
+        self.graph.rename_in_bends(old, new);
         Ok(())
     }
 
@@ -1487,6 +1488,20 @@ mod tests {
         s.delete_node("plate-2").unwrap();
         let e = s.render(&b, 1).err().unwrap().to_string();
         assert!(e.contains("'color'") && e.contains("plate-2"), "{e}");
+    }
+
+    /// A rename (as MCP's rename_node does it) keeps the node's wires' bends.
+    #[test]
+    fn a_rename_keeps_wire_bends() {
+        let g: Graph = serde_json::from_value(json!({ "nodes": [
+            { "id": "a", "op": "constant" },
+            { "id": "b", "op": "blur", "inputs": ["a"] },
+        ], "bends": [{ "src": "a", "dst": "b", "port": 0, "points": [[10, 20]] }] })).unwrap();
+        let mut s = Session::new(g);
+        s.rename("a", "plate").unwrap();
+        assert_eq!(s.graph.bends_of("b", 0), &[[10.0, 20.0]]);
+        s.rename("b", "soft").unwrap();
+        assert_eq!(s.graph.bends_of("soft", 0), &[[10.0, 20.0]]);
     }
 
     /// A rename reaches every reference, not only inputs and links:

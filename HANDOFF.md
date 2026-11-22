@@ -4,6 +4,17 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.15.8 (2026-11-22): wire bend points** (Dev2; the user chose
+  "smooth through" for curved wires). Bends live in `Graph.bends`
+  (graph coordinates, keyed by src / dst / port; `bends_of` ignores
+  stale entries, `Doc::normalize` prunes them). Geometry in
+  `gui/wire_path.rs`; every wire hit-test goes through
+  `NodeEditor::wire_segments`. Bend edits are layout-only
+  (`doc.touched()`: an undo step, no re-render). Engine, Evaluator::key,
+  MCP and Python ignore or round-trip the field. Renames:
+  `rename_in_bends` (Doc and Session); copy / import: `templates::excerpt`
+  and `graph_merge::merge`.
+
 - **0.15.7 (2026-11-22): media outside the project folder** (Dev1).
   `arclight::collect` (survey / plan / copy / relink) is the one place
   that knows which files a project references, sequences' frames and

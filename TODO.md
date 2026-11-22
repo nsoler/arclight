@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.15.7 (2026-11-22). Done items are removed
+What's still open, as of 0.15.8 (2026-11-22). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -8,6 +8,14 @@ them when they ship. `ROADMAP.md` is the public summary.
 ## To check by hand (user)
 
 On Linux and on the Macs (the DMG), from the release builds.
+
+**Phase 15 (0.15.8)**
+- [ ] Straight wires: ⌘-click a wire twice, drag the bends into a
+      right-angle route; switch to curved: it flows through the same
+      points; move both nodes → the route follows, one → bends stay;
+      drop a free Blur onto the bent wire → each side keeps its bends;
+      ⌘C / ⌘V the pair → the copy has them; save, reopen, undo / redo a
+      bend drag; an old project saves byte-identical
 
 **Phase 15 (0.15.7)**
 - [ ] Open a project with media outside its folder (the Pond comp),
@@ -193,13 +201,9 @@ On Linux and on the Macs (the DMG), from the release builds.
 
 ## Known gaps and follow-ups
 
-- [ ] **Bend points on wires** (user, 2026-11-21): with Preferences ▸
-      wire style Straight, Ctrl/⌘-click a connector to add a bend point
-      there, so wires can turn at angles for cleaner layouts; drag a
-      bend to move it; a way to remove one (Ctrl-click it again or
-      Delete). Saved with the project (per connection); old projects
-      unchanged; decide how curved wires treat bends. Queued for Dev2
-      after the pen / pivot fix
+- [ ] Wire bends: dragging an output onto a bent wire (merge into wire)
+      drops its bends instead of splitting them; bends not in the
+      minimap; Shift+R/T/M into a bent wire has no test of its own
 - [ ] 2D handles: mapping through a Card + Camera (homography) to drag
       on the rendered card; a first pen click for a new Roto fed by an
       auto-pivot Transform can be off until the worker reports that
