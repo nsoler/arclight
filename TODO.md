@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.14.36 (2026-11-21). Done items are removed
+What's still open, as of 0.14.37 (2026-11-21). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -8,6 +8,12 @@ them when they ship. `ROADMAP.md` is the public summary.
 ## To check by hand (user)
 
 On Linux and on the Macs (the DMG), from the release builds.
+
+**Phase 14 (0.14.37)**
+- [ ] A Shuffle with 3 inputs routing 2:A → A and 3:depth → depth, and a
+      Matte Combine of 4 mattes (one Soft, one inverted), with the GPU
+      on and off (Preferences): identical; playback stays on the GPU;
+      Macs: the same, plus `gpu --check`
 
 **Phase 14 (0.14.36)**
 - [ ] Geo Info picking: Scatter points (or a Cube), 3D toolbar Points
@@ -134,6 +140,16 @@ On Linux and on the Macs (the DMG), from the release builds.
 
 ## Known gaps and follow-ups
 
+- [ ] **3D view: textured cards don't draw until something is
+      selected** (user, 2026-11-21; reproduced on Linux, GPU on, with
+      the user's `~/Videos/Pond-Martian-Comp.json`: Viewer → Scanline
+      Render ← Scene(Camera) + two Cards on Media In comps). Open it in
+      2D (renders fine), press Tab: the cards stay orange outlines, no
+      texture, still after 30 s; selecting the Camera makes the textured
+      cards appear. Likely the 3D view's card / shaded render
+      (viewport3d's worker render) isn't requested on the first switch
+      to 3D, only on a selection / view change. Top of the queue for
+      the first free Dev
 - [ ] **`gpu::check::tests::the_self_test_passes` flakes under GPU
       load:** a timing row ("read one pixel" must be < 1 ms) fails the
       unit test when other GPU work runs (12 ms seen 2026-11-21 while a
@@ -146,8 +162,6 @@ On Linux and on the Macs (the DMG), from the release builds.
       (0.14.30: 1 / 8 lib-test runs with `__GL_SHADER_DISK_CACHE=0`).
       Candidate: an atexit hook in `gpu/mod.rs` waiting on the device
       before the ICD tears down (Dev1, measured with a fast repro)
-- [ ] Shuffle / Matte Combine: a multi-source GPU kernel (routes
-      reading input 2+ and Matte Combine run on the CPU today)
 - [ ] Project 3D targets are node names fixed at the node: fine today
       (nothing renames or merges meshes under a new node); if such an op
       is added, carry projections on Card / Model as Instances do

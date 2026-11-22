@@ -21,6 +21,8 @@ pub mod edge_extend;
 #[cfg(feature = "gpu")]
 pub mod image;
 #[cfg(feature = "gpu")]
+mod multi;
+#[cfg(feature = "gpu")]
 pub mod ops;
 
 #[cfg(feature = "gpu")]
@@ -163,6 +165,7 @@ pub fn wanted() -> bool {
 pub const OPS: &[&str] = &[
     "grade", "exposure", "saturation", "invert", "clamp", "premult", "unpremult", "channel_select", "switch", "dissolve", "keymix", "constant",
     "checkerboard", "merge", "blur", "transform", "corner_pin", "tracker", "lens_distort", "resize", "keyer", "color_difference_key", "edge_extend", "shuffle",
+    "matte_combine",
 ];
 
 /// What a node's cache key mixes in for the backend: 1 when `op` has a

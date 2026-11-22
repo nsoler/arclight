@@ -18,6 +18,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.37 — 2026-11-21
+
+- **Shuffle routes reading other inputs and Matte Combine run on the
+  GPU:** one pass per route / input, so any number of inputs on every
+  adapter, Macs included; results match the CPU (routes and min / max
+  exactly, Soft / luminance within 1e-6). 32 inputs at 4K: ~11 ms on
+  an RTX 5070. `gpu --check` gains three rows.
+
 ## 0.14.36 — 2026-11-21
 
 - **Pick single points in the 3D view:** a Points toggle in the 3D

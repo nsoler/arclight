@@ -4,6 +4,17 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.14.37 (2026-11-21): multi-input Shuffle routes + Matte Combine
+  on the GPU** (Dev2). `gpu/multi.rs` + `multi.wgsl`: each pass reads
+  one source (one input's rgba or one plane) and writes the output
+  being built (≤ 4 storage buffers: no binding-count issue on Metal /
+  WebGPU-baseline adapters). Routes write into fresh buffers; Matte
+  Combine folds into an f32 accumulator (also the `plane` output);
+  `matte_combine::Plan` (settings + window rule) is shared by CPU and
+  GPU; Remove uses the CPU's `remove_layers` on a probe of the names.
+  32 inputs at 4K: ~0.35 ms a pass, linear. Last version on
+  `wip-ns-ui`; phase 15 (gap fixes) continues on `wip-ns-gapfixes`.
+
 - **0.14.36 (2026-11-21): Geo Info per-point picking** (Dev2). Element
   picks live in `viewport3d.elements` (UI state: domain, node, index
   into scene.point_sets / meshes, element), validated against the

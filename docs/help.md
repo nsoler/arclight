@@ -822,8 +822,8 @@ color).
   output channel or pass (**R**, **G**, **B**, **A**, `depth`,
   `specular.R`, a new name), with **+ Add route** and ✕ to remove. Routes
   read the inputs as they come in, run after the fields above and before
-  **Remove**; the output keeps input 1's frame. Shuffles reading other
-  inputs run on the CPU.
+  **Remove**; the output keeps input 1's frame. With a GPU, routes from
+  any input run there too (a pass per route, so any number of inputs).
 - **Matte Combine** merges several mattes into one: input 1 is the base,
   and each further input (a spare port waits below the last) is combined
   into the result so far, in port order. Properties has a row per input:
@@ -836,6 +836,7 @@ color).
   switches to multiplicative ones, smoother where soft edges overlap.
   **Output** gives a white matte, or input 1 with the result as its alpha;
   **Also into pass** writes the result into a pass as well.
+  With a GPU it runs there, a pass per input.
 - **Merge** also has **subtract** (B − A, B's alpha kept; **Swap A / B**
   for A − B), **difference** (|A − B|), **stencil** (B only where A is
   transparent) and **mask** (B only inside A); stencil and mask keep B's

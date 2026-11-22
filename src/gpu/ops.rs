@@ -262,11 +262,17 @@ fn eval_op(gpu: &Gpu, op: &str, params: &Value, inputs: &[Option<&GpuImage>], cp
         }
         "shuffle" => {
             let Some(src) = input(0) else { return Ok(None) };
-            // Routes reading inputs 2, 3, … (`shuffle_route`) run on the
-            // CPU; input 1's own routes are moves the plan below covers.
-            let routes = crate::shuffle_route::parse(params.get("routes").unwrap_or(&Value::Null)).unwrap_or_default();
-            if crate::shuffle_route::inputs_read(&routes).iter().any(|&k| k > 0) {
-                return Ok(None);
+            // Routes reading inputs 2, 3, … (`shuffle_route`): input 1's
+            // part as below with no routes and no Remove, then the routes
+            // and Remove in chained passes (`multi`). Input 1's own routes
+            // are moves the plan below covers.
+            if super::multi::reads_other_inputs(params) {
+                let mut first = params.clone();
+                first["routes"] = Value::Array(Vec::new());
+                first["remove"] = Value::String(String::new());
+                let Some(plan) = shuffle_plan(&first, src) else { return Ok(None) };
+                let base = shuffle(gpu, src, &plan)?;
+                return super::multi::shuffle(gpu, params, base, inputs);
             }
             let Some(plan) = shuffle_plan(params, src) else { return Ok(None) };
             shuffle(gpu, src, &plan)?
@@ -301,6 +307,7 @@ fn eval_op(gpu: &Gpu, op: &str, params: &Value, inputs: &[Option<&GpuImage>], cp
             keyer(gpu, &p, &plan, screen, src, plate)?
         }
         "color_difference_key" => return crate::key_color::gpu::eval(gpu, params, inputs, cpu),
+        "matte_combine" => return super::multi::matte_combine(gpu, params, inputs),
         "edge_extend" => {
             let Some(src) = input(0) else { return Ok(None) };
             return super::edge_extend::eval(gpu, params, src, input(1));
@@ -1191,9 +1198,9 @@ mod tests {
             let p = ops::params_with_defaults("shuffle", &missing);
             assert!(eval(&gpu, "shuffle", &p, &[Some(&up)], &none).unwrap().is_none(), "{missing}");
         }
-        // Routes reading another input: left to the CPU.
+        // Routes reading another input run here too (`multi`, tested there).
         let p = ops::params_with_defaults("shuffle", &json!({"routes": [["2:A", "A"]]}));
-        assert!(eval(&gpu, "shuffle", &p, &[Some(&up), Some(&up)], &none).unwrap().is_none());
+        assert!(eval(&gpu, "shuffle", &p, &[Some(&up), Some(&up)], &none).unwrap().is_some());
         // The plain one shares the input's color.
         let p = ops::params_with_defaults("shuffle", &json!({}));
         let out = eval(&gpu, "shuffle", &p, &[Some(&up)], &none).unwrap().unwrap();

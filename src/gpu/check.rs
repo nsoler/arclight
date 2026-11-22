@@ -416,6 +416,10 @@ fn op_rows(gpu: &super::Gpu, sizes: &[Sized]) -> Vec<CheckRow> {
         ("merge mask", "merge", json!({"operation": "mask"}), POINT, true, false, false),
         ("shuffle", "shuffle", json!({"red": "G", "green": "R", "blue": "0", "alpha": "1"}), (0.0, 0.0), false, false, false),
         ("shuffle, routes in input 1", "shuffle", json!({"routes": [["1:A", "R"], ["1:G", "glow.G"], ["1:1", "A"]]}), (0.0, 0.0), false, false, false),
+        // Three inputs (A, B with a matte.hero pass, C): see `three` below.
+        ("shuffle, routes from 3 inputs", "shuffle", json!({"routes": [["2:A", "A"], ["2:matte.hero", "depth2"], ["3:R", "glow.R"]]}), (0.0, 0.0), true, false, false),
+        ("matte combine, 3 inputs", "matte_combine", json!({"operations": [0, 1, 2]}), (0.0, 0.0), true, false, false),
+        ("matte combine soft, luminance", "matte_combine", json!({"soft": true, "channels": ["luminance", "matte.hero", "red"], "operations": [0, 3, 1], "inverts": [0, 1, 0], "plane": "matte.out"}), POINT, true, false, false),
         ("blur r 8 x 3", "blur", json!({"radius": 8, "passes": 3}), FILTER, false, false, false),
         ("blur r 32 x 3", "blur", json!({"radius": 32, "passes": 3}), FILTER, false, false, false),
         ("blur r 100 x 3", "blur", json!({"radius": 100, "passes": 3}), FILTER, false, false, false),
@@ -443,13 +447,20 @@ fn op_rows(gpu: &super::Gpu, sizes: &[Sized]) -> Vec<CheckRow> {
         let soft = smooth(format, window, plane, 30 + i as u32);
         // B with a matte pass (its red), for masks by plane.
         let b_matte = Image { planes: vec![Plane { name: "matte.hero".into(), data: b.pixels.iter().map(|p| p[0]).collect() }], ..b.clone() };
+        // A third input, its own offset window, for the 3-input cases.
+        let c = noise(format, IRect::new(window.x0 - 9, window.y0 + 13, window.x1 + 7, window.y1 - 3), false, 40 + i as u32);
         for (case, op, params, (tol_abs, tol_rel), two, masked, smooth_input) in &cases {
             let params = crate::ops::params_with_defaults(op, params);
             let mut inputs: Vec<Option<&Image>> = vec![Some(if *smooth_input { &soft } else { &a })];
-            if *two {
+            // Matte Combine and multi-input routes: A, B (with its matte pass), C.
+            let reads_others = || crate::shuffle_route::inputs_read(&crate::shuffle_route::parse(&params["routes"]).unwrap_or_default()).iter().any(|&k| k > 0);
+            let three = *op == "matte_combine" || (*op == "shuffle" && reads_others());
+            if three {
+                inputs.extend([Some(&b_matte), Some(&c)]);
+            } else if *two {
                 inputs.push(Some(&b));
             }
-            if *masked || !matches!(*op, "merge" | "shuffle") {
+            if *masked || !matches!(*op, "merge" | "shuffle" | "matte_combine") {
                 let by_plane = params.get("mask_plane").and_then(serde_json::Value::as_str).is_some_and(|p| !p.is_empty());
                 inputs.push(masked.then_some(if by_plane { &b_matte } else { &b }));
             }

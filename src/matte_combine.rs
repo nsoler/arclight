@@ -91,14 +91,101 @@ pub fn combine(r: f32, m: f32, op: Op, soft: bool) -> f32 {
     }
 }
 
-/// One input's part: where its matte comes from, inverted or not, how it
-/// combines.
+/// Where an input's matte is read from: a color channel (0 red … 3
+/// alpha), luminance, or a plane by name.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Source {
+    Color(usize),
+    Luminance,
+    Plane(String),
+}
+
+/// One connected input's part of the fold.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Step {
+    /// The input (port, from 0).
+    pub input: usize,
+    pub source: Source,
+    pub invert: bool,
+    /// How it combines into the result so far (unused for the first).
+    pub op: Op,
+}
+
+/// A Matte Combine worked out from its params and which inputs are
+/// connected: what the CPU here and the GPU (`gpu::multi`) both run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Plan {
+    /// The connected inputs, in port order (input 1 first: it's required).
+    pub steps: Vec<Step>,
+    pub soft: bool,
+    /// Output "input 1 + alpha" (else the white matte).
+    pub keep_input: bool,
+    /// The pass the result also goes into ("": none).
+    pub plane: String,
+}
+
+fn list(params: &Value, name: &str) -> Vec<Value> {
+    params.get(name).and_then(Value::as_array).cloned().unwrap_or_default()
+}
+
+impl Plan {
+    /// From `params` (resolved at the frame) and which ports are
+    /// `connected`; an error naming what's wrong. Planes aren't checked
+    /// here (the images are needed for that).
+    pub fn new(params: &Value, connected: &[bool]) -> Result<Plan> {
+        if !connected.first().copied().unwrap_or(false) {
+            bail!("input 'matte' is not connected");
+        }
+        let (channels, inverts, operations) = (list(params, "channels"), list(params, "inverts"), list(params, "operations"));
+        let soft = params.get("soft").and_then(Value::as_bool).unwrap_or(false);
+        let keep_input = match params.get("output").and_then(Value::as_str).unwrap_or("matte") {
+            "matte" => false,
+            "input 1 + alpha" => true,
+            other => bail!("unknown output '{other}'"),
+        };
+        let plane = params.get("plane").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let steps = (0..connected.len())
+            .filter(|&k| connected[k])
+            .map(|k| {
+                let channel = channels.get(k).and_then(Value::as_str).map(str::trim).filter(|c| !c.is_empty()).unwrap_or("alpha");
+                let source = match CHANNELS.iter().position(|c| *c == channel) {
+                    Some(4) => Source::Luminance,
+                    Some(i) => Source::Color([3, 0, 1, 2][i]),
+                    None => Source::Plane(channel.to_string()),
+                };
+                let invert = inverts.get(k).and_then(Value::as_f64).is_some_and(|v| v >= 0.5);
+                let op = Op::from_code(operations.get(k).and_then(Value::as_f64).unwrap_or(0.0));
+                Step { input: k, source, invert, op }
+            })
+            .collect();
+        Ok(Plan { steps, soft, keep_input, plane })
+    }
+
+    /// The result of folding per-step mattes `m(k, step)` (k: the step's
+    /// place in [`Plan::steps`]).
+    #[inline]
+    pub fn fold(&self, m: impl Fn(usize, &Step) -> f32) -> f32 {
+        self.steps.iter().enumerate().skip(1).fold(m(0, &self.steps[0]), |r, (k, s)| combine(r, m(k, s), s.op, self.soft))
+    }
+
+    /// The output's data window, given each step's input window (in step
+    /// order) and input 1's: the union of the inputs' windows, the whole
+    /// frame too when the inputs' outsides (inverted: 1) combine to
+    /// anything but 0, and input 1's when its color is kept.
+    pub fn window(&self, format: Size, windows: &[IRect], base: IRect) -> IRect {
+        let union = windows.iter().fold(IRect::default(), |u, w| u.union(w));
+        let outside = self.fold(|_, s| if s.invert { 1.0 } else { 0.0 });
+        let window = if outside != 0.0 { union.union(&IRect::frame(format)) } else { union };
+        if self.keep_input { window.union(&base) } else { window }
+    }
+}
+
+/// One step's input, ready to read.
 struct Part<'a> {
     img: &'a Image,
     plane: Option<&'a Plane>,
     channel: usize,
     invert: bool,
-    op: Op,
 }
 
 impl Part<'_> {
@@ -115,53 +202,29 @@ impl Part<'_> {
         .clamp(0.0, 1.0);
         if self.invert { 1.0 - v } else { v }
     }
-
-    /// The matte where the input has no data.
-    fn outside(&self) -> f32 {
-        if self.invert { 1.0 } else { 0.0 }
-    }
-}
-
-fn list(params: &Value, name: &str) -> Vec<Value> {
-    params.get(name).and_then(Value::as_array).cloned().unwrap_or_default()
 }
 
 /// The combined matte of `inputs` (`params` resolved at the frame).
 pub fn eval(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
-    let base = inputs.first().copied().flatten().ok_or_else(|| anyhow!("input 'matte' is not connected"))?;
-    let (channels, inverts, operations) = (list(params, "channels"), list(params, "inverts"), list(params, "operations"));
-    let soft = params.get("soft").and_then(Value::as_bool).unwrap_or(false);
-    let keep_input = match params.get("output").and_then(Value::as_str).unwrap_or("matte") {
-        "matte" => false,
-        "input 1 + alpha" => true,
-        other => bail!("unknown output '{other}'"),
-    };
-    let plane = params.get("plane").and_then(Value::as_str).unwrap_or("").trim().to_string();
-    let parts: Vec<Part> = inputs
+    let connected: Vec<bool> = inputs.iter().map(Option::is_some).collect();
+    let plan = Plan::new(params, &connected)?;
+    let base = inputs[0].expect("input 1 is connected");
+    let parts: Vec<Part> = plan
+        .steps
         .iter()
-        .enumerate()
-        .filter_map(|(k, img)| img.map(|img| (k, img)))
-        .map(|(k, img)| {
-            let channel = channels.get(k).and_then(Value::as_str).map(str::trim).filter(|c| !c.is_empty()).unwrap_or("alpha");
-            let (channel, plane) = match CHANNELS.iter().position(|c| *c == channel) {
-                Some(i) => ([3, 0, 1, 2, 4][i], None),
-                None => (0, Some(img.plane(channel).ok_or_else(|| anyhow!("input {} has no channel '{channel}'", k + 1))?)),
+        .map(|s| {
+            let img = inputs[s.input].expect("a step's input is connected");
+            let (channel, plane) = match &s.source {
+                Source::Color(c) => (*c, None),
+                Source::Luminance => (4, None),
+                Source::Plane(name) => (0, Some(img.plane(name).ok_or_else(|| anyhow!("input {} has no channel '{name}'", s.input + 1))?)),
             };
-            let invert = inverts.get(k).and_then(Value::as_f64).is_some_and(|v| v >= 0.5);
-            let op = Op::from_code(operations.get(k).and_then(Value::as_f64).unwrap_or(0.0));
-            Ok(Part { img, plane, channel, invert, op })
+            Ok(Part { img, plane, channel, invert: s.invert })
         })
         .collect::<Result<_>>()?;
-    let run = |m: &dyn Fn(&Part) -> f32| parts.iter().skip(1).fold(m(&parts[0]), |r, p| combine(r, m(p), p.op, soft));
-    // Where no input has data the result is what their outsides combine
-    // to: anything but 0 there covers the whole frame.
     let format: Size = base.format;
-    let windows = parts.iter().fold(IRect::default(), |u, p| u.union(&p.img.window()));
-    let outside = run(&|p: &Part| p.outside());
-    let mut window = if outside != 0.0 { windows.union(&IRect::frame(format)) } else { windows };
-    if keep_input {
-        window = window.union(&base.window());
-    }
+    let windows: Vec<IRect> = parts.iter().map(|p| p.img.window()).collect();
+    let window = plan.window(format, &windows, base.window());
     let mut out = Image::blank(format, window);
     let w = out.width.max(1);
     let (x0, y0) = (out.x0, out.y0);
@@ -169,9 +232,10 @@ pub fn eval(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
         .into_par_iter()
         .map(|i| {
             let (x, y) = (x0 + (i % w) as i32, y0 + (i / w) as i32);
-            run(&|p: &Part| p.at(x, y))
+            plan.fold(|k, _| parts[k].at(x, y))
         })
         .collect();
+    let keep_input = plan.keep_input;
     out.pixels.par_iter_mut().enumerate().zip(values.par_iter()).for_each(|((i, px), &r)| {
         *px = if keep_input {
             let mut c = base.at(x0 + (i % w) as i32, y0 + (i / w) as i32);
@@ -184,8 +248,8 @@ pub fn eval(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
     if keep_input {
         out.keep_planes(base);
     }
-    if !plane.is_empty() {
-        *out.plane_mut(&plane) = values;
+    if !plan.plane.is_empty() {
+        *out.plane_mut(&plan.plane) = values;
     }
     Ok(out)
 }
