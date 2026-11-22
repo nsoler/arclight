@@ -18,6 +18,18 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.15.3 — 2026-11-21
+
+- Unit tests no longer crash now and then after every test passed on
+  NVIDIA / Linux: they end the way the programs already do (the GPU
+  waited for, output flushed, the process ended without the C
+  libraries' teardown that NVIDIA's driver threads crash under), keeping
+  their exit status. Nothing changes outside tests.
+- The GPU self-test unit test fails on wrong values, not on speed: a
+  case that misses only its speed bar (the color picker's "read one
+  pixel", which a busy machine can push past 1 ms) still shows as FAIL
+  in `arclight gpu --check`, marked slow.
+
 ## 0.15.2 — 2026-11-21
 
 - **Read Geo reads more of an Alembic cache** (Also read; all of it for

@@ -426,9 +426,31 @@ fn device() -> Result<Arc<Gpu>, String> {
     drop(slot);
     if let Ok(g) = &d {
         crate::crash::set_gpu(g.describe());
+        #[cfg(all(test, target_os = "linux", target_env = "gnu"))]
+        exit_tests_cleanly();
     }
     crate::crash::refresh_header();
     d
+}
+
+/// The unit tests' end through [`exit_process`] too, their exit status
+/// kept: the test harness ends with `exit`, whose teardown NVIDIA's
+/// driver threads can crash under (a SIGSEGV after every test passed,
+/// now and then). glibc's `on_exit` hands the status over; exit handlers
+/// run last registered first, before the libraries' destructors.
+#[cfg(all(test, feature = "gpu", target_os = "linux", target_env = "gnu"))]
+fn exit_tests_cleanly() {
+    extern "C" {
+        fn on_exit(f: extern "C" fn(libc::c_int, *mut libc::c_void), arg: *mut libc::c_void) -> libc::c_int;
+    }
+    extern "C" fn at_exit(status: libc::c_int, _: *mut libc::c_void) {
+        exit_process(status)
+    }
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    // SAFETY: registers a handler with no argument; it runs once, at exit.
+    ONCE.call_once(|| unsafe {
+        on_exit(at_exit, std::ptr::null_mut());
+    });
 }
 
 /// Before the process exits: wait (up to 5 s) for the GPU to finish what

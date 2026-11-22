@@ -468,7 +468,7 @@ fn instances_row(gpu: &Gpu, size: Size, shadows: bool) -> CheckRow {
 }
 
 fn judge(case: &str, size: String, cpu: &Image, out: anyhow::Result<Option<Image>>, cpu_ms: f64, gpu_ms: f64) -> CheckRow {
-    let mut r = CheckRow { case: case.into(), size, max_abs: 0.0, max_rel: 0.0, tol_abs: 1e-3, tol_rel: 0.005, pass: true, cpu_ms, gpu_kernel_ms: gpu_ms, gpu_total_ms: gpu_ms, note: String::new() };
+    let mut r = CheckRow { case: case.into(), size, max_abs: 0.0, max_rel: 0.0, tol_abs: 1e-3, tol_rel: 0.005, pass: true, cpu_ms, gpu_kernel_ms: gpu_ms, gpu_total_ms: gpu_ms, note: String::new(), slow: false };
     let out = match out {
         Ok(Some(img)) => img,
         Ok(None) => {

@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.15.2 (2026-11-21). Done items are removed
+What's still open, as of 0.15.3 (2026-11-21). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -8,6 +8,13 @@ them when they ship. `ROADMAP.md` is the public summary.
 ## To check by hand (user)
 
 On Linux and on the Macs (the DMG), from the release builds.
+
+**Phase 15 (0.15.3)**
+- [ ] `cargo test --release` on NVIDIA/Linux ends without a SIGSEGV
+      after the results, also right after a shader change (or with
+      `__GL_SHADER_DISK_CACHE=0`); a test failure still exits 101;
+      `arclight gpu --check` still lists a slow "read one pixel" as FAIL
+      while the unit self-test passes
 
 **Phase 15 (0.15.2)**
 - [ ] A Read Geo of an Alembic export with curves, a particle cache, two
@@ -155,18 +162,6 @@ On Linux and on the Macs (the DMG), from the release builds.
 
 ## Known gaps and follow-ups
 
-- [ ] **`gpu::check::tests::the_self_test_passes` flakes under GPU
-      load:** a timing row ("read one pixel" must be < 1 ms) fails the
-      unit test when other GPU work runs (12 ms seen 2026-11-21 while a
-      crash-repro loop ran); values were exact. Keep timing bars in
-      `gpu --check`, not as a unit-test failure
-- [ ] **NVIDIA/Linux: a process can SIGSEGV at exit** inside the
-      driver (libnvidia-gpucomp, a background shader compile racing the
-      ICD teardown), after its work is done; mostly with shaders cold in
-      the NVIDIA cache (first runs after a WGSL change). Pre-existing
-      (0.14.30: 1 / 8 lib-test runs with `__GL_SHADER_DISK_CACHE=0`).
-      Candidate: an atexit hook in `gpu/mod.rs` waiting on the device
-      before the ICD tears down (Dev1, measured with a fast repro)
 - [ ] Project 3D targets are node names fixed at the node: fine today
       (nothing renames or merges meshes under a new node); if such an op
       is added, carry projections on Card / Model as Instances do

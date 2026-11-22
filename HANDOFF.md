@@ -4,6 +4,25 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.15.3 (2026-11-21): test exit + self-test values** (Dev1). The
+  occasional SIGSEGV at the end of `cargo test` on NVIDIA/Linux (driver
+  615.78.08) was NVIDIA's compile thread crashing while libc's exit
+  teardown unloaded its ICD (main thread in libGLX_nvidia → glcore,
+  crashing thread in libnvidia-gpucomp, no Rust frames); mostly right
+  after a shader change (repro: `__GL_SHADER_DISK_CACHE=0`). Production
+  already avoided it (CLI / MCP / GUI end through `gpu::exit_process`);
+  lib unit tests now register a glibc `on_exit` handler at device
+  creation (`gpu::exit_tests_cleanly`, cfg(test) + gnu Linux) calling
+  `exit_process(status)`. 1/30 → 0/150 runs. Integration / bin tests
+  have no hook (none has crashed). Each lib run leaves intentional
+  cores (crash.rs ×4, plugin_isolation ×2). `CheckRow.slow` marks a
+  speed-bar-only failure; `CheckReport::correct()` ignores those,
+  `passed()` doesn't.
+- **Paused after v0.15.3 for the user's testing** (2026-11-21). Dev1 /
+  Dev2 idle, nothing in flight. Hand checks: TODO "To check by hand",
+  0.14.30–0.15.3 (Mac items: depth `gpu --check`, Pond timing, the GPU
+  multi-input rows).
+
 - **0.15.2 (2026-11-21): Alembic curves, points, cameras, face sets**
   (Dev2; the user's answers: all four on for a GUI-added Read Geo,
   groups + a split option, cameras by name now). `alembic/extra.rs` (a
