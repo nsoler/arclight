@@ -241,3 +241,33 @@ fn the_three_views_example_renders_each_named_camera() {
     }
     assert!(dark([720, 405]), "the fourth cell is free");
 }
+
+/// Geo-Info-Picking.json (the 0.14.36 hand check for picking points): a
+/// sphere with a few hundred points scattered on it and a cube, lit and
+/// rendered; a ~200k-point Scatter after them stays off (bypassed) until
+/// it's turned on for the speed check.
+#[test]
+fn the_geo_info_picking_example_has_a_few_points_and_a_heavy_set_off() {
+    let mut graph = example("Geo-Info-Picking.json");
+    let points = |g: &Graph| -> usize {
+        let scene = eval(g, "scene");
+        scene.scene.as_ref().expect("a scene").point_sets.iter().map(|s| s.positions.len()).sum()
+    };
+    let light = points(&graph);
+    assert!((200..=500).contains(&light), "{light} points to pick by hand");
+    let scene = eval(&graph, "scene");
+    assert_eq!(scene.scene.as_ref().unwrap().meshes.len(), 2, "the sphere and the cube");
+    // The render shows both, lit (not one flat color).
+    let img = eval(&graph, "render");
+    let lum = |[x, y]: [i32; 2]| img.at(x, y)[..3].iter().sum::<f32>();
+    assert!(lum([300, 270]) > 0.1 && lum([700, 290]) > 0.1, "the sphere and the cube are in frame");
+    assert!((lum([250, 230]) - lum([350, 330])).abs() > 0.02, "the sphere is shaded");
+    // Turned on, the heavy Scatter adds about 200k more, the few kept.
+    graph.nodes.iter_mut().find(|n| n.id == "points_heavy").unwrap().disabled = false;
+    let scene = eval(&graph, "scene");
+    let sets: Vec<usize> = scene.scene.as_ref().unwrap().point_sets.iter().map(|s| s.positions.len()).collect();
+    assert_eq!(sets.len(), 2, "the light set and the heavy one: {sets:?}");
+    assert!(sets.contains(&light), "the light points are still there: {sets:?}");
+    let heavy = sets.iter().sum::<usize>() - light;
+    assert!((150_000..=260_000).contains(&heavy), "{heavy} points for the speed check");
+}

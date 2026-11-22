@@ -593,7 +593,11 @@ selected object.
   the picks (Esc again then deselects as usual). Picked points show
   orange; under **Selected only** a point set or mesh with picks shows
   just those rows in **Points** / **Mesh points**. Picks aren't saved;
-  with Points off, clicks pick objects as before. MCP / Python:
+  with Points off, clicks pick objects as before. **Help ▸ Examples ▸
+  Geo Info: picking points and vertices** (`examples/Geo-Info-Picking.json`)
+  walks through it on its backdrops: a sphere with a few hundred points and
+  a cube to pick on, and a ~200k-point Scatter, points_heavy, saved off
+  (select it, **D**) to try picking at scale. MCP / Python:
   **geometry** (`node.geometry(frame, domain)`; no Cloud, values in each object's own space). **Transform Geo** moves, turns and scales
   what's in a scene about a pivot, everything or one node's (Group: a name
   or a pattern like rock*); cameras and lights stay put unless you tick

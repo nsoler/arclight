@@ -2315,6 +2315,7 @@ const EXAMPLES: &[(&str, &str)] = &[
     ("Projection: two cameras blended on one set", "multi-projection.json"),
     ("Projection: baked to a texture", "projection-bake.json"),
     ("Cameras: one set, three views", "cameras-three-views.json"),
+    ("Geo Info: picking points and vertices", "Geo-Info-Picking.json"),
 ];
 
 /// The project shown on a fresh launch: the bundled test clip, transformed

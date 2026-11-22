@@ -1,0 +1,383 @@
+{
+  "project": {
+    "folder": ".",
+    "format": {
+      "width": 960,
+      "height": 540
+    },
+    "fps": 24.0,
+    "first_frame": 1,
+    "last_frame": 1
+  },
+  "nodes": [
+    {
+      "id": "sphere",
+      "op": "sphere",
+      "params": {
+        "translate": [
+          -0.8,
+          0.0,
+          0.0
+        ],
+        "radius": 0.6,
+        "color": [
+          0.55,
+          0.62,
+          0.75
+        ]
+      },
+      "pos": [
+        40,
+        40
+      ],
+      "inputs": []
+    },
+    {
+      "id": "points_light",
+      "op": "scatter",
+      "inputs": [
+        "sphere"
+      ],
+      "params": {
+        "group": "sphere",
+        "density": 70.0,
+        "seed": 1
+      },
+      "pos": [
+        260,
+        40
+      ]
+    },
+    {
+      "id": "points_heavy",
+      "op": "scatter",
+      "inputs": [
+        "points_light"
+      ],
+      "params": {
+        "group": "sphere",
+        "density": 45000.0,
+        "seed": 2
+      },
+      "disabled": true,
+      "pos": [
+        480,
+        40
+      ]
+    },
+    {
+      "id": "cube",
+      "op": "cube",
+      "params": {
+        "translate": [
+          0.9,
+          0.0,
+          0.0
+        ],
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "segments": [
+          3.0,
+          3.0,
+          3.0
+        ],
+        "color": [
+          0.75,
+          0.6,
+          0.45
+        ]
+      },
+      "pos": [
+        480,
+        130
+      ],
+      "inputs": []
+    },
+    {
+      "id": "camera",
+      "op": "camera",
+      "params": {
+        "translate": [
+          0.0,
+          1.0,
+          4.2
+        ],
+        "rotate": [
+          -13.0,
+          0.0,
+          0.0
+        ]
+      },
+      "pos": [
+        480,
+        220
+      ],
+      "inputs": []
+    },
+    {
+      "id": "sun",
+      "op": "light_directional",
+      "params": {
+        "rotate": [
+          -45,
+          35,
+          0
+        ],
+        "intensity": 1.0
+      },
+      "pos": [
+        260,
+        310
+      ],
+      "inputs": []
+    },
+    {
+      "id": "fill",
+      "op": "light_ambient",
+      "params": {
+        "intensity": 0.35
+      },
+      "pos": [
+        260,
+        390
+      ],
+      "inputs": []
+    },
+    {
+      "id": "lights",
+      "op": "scene",
+      "inputs": [
+        "sun",
+        "fill"
+      ],
+      "pos": [
+        480,
+        350
+      ]
+    },
+    {
+      "id": "scene",
+      "op": "scene",
+      "inputs": [
+        "points_heavy",
+        "cube",
+        "camera",
+        "lights"
+      ],
+      "pos": [
+        700,
+        130
+      ]
+    },
+    {
+      "id": "render",
+      "op": "scanline_render",
+      "inputs": [
+        "scene"
+      ],
+      "params": {
+        "camera": "camera",
+        "width": 960,
+        "height": 540
+      },
+      "pos": [
+        920,
+        130
+      ]
+    },
+    {
+      "id": "viewer",
+      "op": "viewer",
+      "inputs": [
+        "render"
+      ],
+      "pos": [
+        1140,
+        130
+      ]
+    }
+  ],
+  "backdrops": [
+    {
+      "id": "bd_step0",
+      "title": "Geo Info picking: try it (Viewer on the render, then)",
+      "pos": [
+        20,
+        -560
+      ],
+      "size": [
+        1270,
+        60
+      ],
+      "color": [
+        0.25,
+        0.48,
+        0.47
+      ],
+      "font_size": 14.0
+    },
+    {
+      "id": "bd_step1",
+      "title": "1  Tab: the view switches to 3D, framed on the sphere and the cube",
+      "pos": [
+        20,
+        -498
+      ],
+      "size": [
+        1270,
+        60
+      ],
+      "color": [
+        0.26,
+        0.36,
+        0.58
+      ],
+      "font_size": 14.0
+    },
+    {
+      "id": "bd_step2",
+      "title": "2  3D toolbar: Points on (clicks now pick points and vertices, not objects)",
+      "pos": [
+        20,
+        -436
+      ],
+      "size": [
+        1270,
+        60
+      ],
+      "color": [
+        0.26,
+        0.36,
+        0.58
+      ],
+      "font_size": 14.0
+    },
+    {
+      "id": "bd_step3",
+      "title": "3  ▦ Sheet on, tick Selected only: tab Points for the sphere's dots, Mesh points for vertices",
+      "pos": [
+        20,
+        -374
+      ],
+      "size": [
+        1270,
+        60
+      ],
+      "color": [
+        0.26,
+        0.36,
+        0.58
+      ],
+      "font_size": 14.0
+    },
+    {
+      "id": "bd_step4",
+      "title": "4  Click a dot on the sphere: an orange dot marks it, the Sheet shows that one row",
+      "pos": [
+        20,
+        -312
+      ],
+      "size": [
+        1270,
+        60
+      ],
+      "color": [
+        0.26,
+        0.36,
+        0.58
+      ],
+      "font_size": 14.0
+    },
+    {
+      "id": "bd_step5",
+      "title": "5  ⇧-click more dots, or cube corners (rows under Mesh points); ⇧-click a picked one drops it",
+      "pos": [
+        20,
+        -250
+      ],
+      "size": [
+        1270,
+        60
+      ],
+      "color": [
+        0.26,
+        0.36,
+        0.58
+      ],
+      "font_size": 14.0
+    },
+    {
+      "id": "bd_step6",
+      "title": "6  Drag a box over the sphere: only the points and vertices facing you, none behind",
+      "pos": [
+        20,
+        -188
+      ],
+      "size": [
+        1270,
+        60
+      ],
+      "color": [
+        0.26,
+        0.36,
+        0.58
+      ],
+      "font_size": 14.0
+    },
+    {
+      "id": "bd_step7",
+      "title": "7  Esc clears the picks; Points off: clicks select whole objects again",
+      "pos": [
+        20,
+        -126
+      ],
+      "size": [
+        1270,
+        60
+      ],
+      "color": [
+        0.26,
+        0.36,
+        0.58
+      ],
+      "font_size": 14.0
+    },
+    {
+      "id": "bd_step8",
+      "title": "Speed: select points_heavy, D turns it on (~200k more points); box-drag again, it should stay quick",
+      "pos": [
+        20,
+        -64
+      ],
+      "size": [
+        1270,
+        60
+      ],
+      "color": [
+        0.58,
+        0.44,
+        0.2
+      ],
+      "font_size": 14.0
+    }
+  ],
+  "view": {
+    "viewport3d": {
+      "auto_ortho": false,
+      "center": [
+        0.05,
+        0.0,
+        0.0
+      ],
+      "distance": 4.6,
+      "ortho": false,
+      "pitch": 14.0,
+      "shadows": false,
+      "wireframe": false,
+      "yaw": 0.0
+    }
+  }
+}

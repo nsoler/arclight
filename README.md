@@ -466,6 +466,8 @@ applies everywhere and `mask_invert` does nothing.
 
 `examples/cameras-three-views.json` (**Help ▸ Examples ▸ Cameras: one set, three views**) renders one Scene through three of its cameras (wide and moving, close-up, orthographic top), each Scanline Render picking its camera by name with its Camera param, with a Viewer per view and a contact sheet of the three.
 
+`examples/Geo-Info-Picking.json` (**Help ▸ Examples ▸ Geo Info: picking points and vertices**) is a sphere with a few hundred scattered points and a cube, with the steps on its backdrops: Points on in the 3D toolbar, click, ⇧-click or box points and mesh vertices, and Geo Info's Selected only shows just those rows; points_heavy (saved off, D turns it on) adds ~200k points for a speed check.
+
 In the 3D view, emitters (shape and direction), attractors, vortices and bounce planes are drawn, picked and moved with the gizmos (forces move only); in 2D, an emitter feeding a viewed Particles 2D shows box or point handles in the viewer.
 
 3D nodes (Camera, Card, Scene) build a 3D scene: their blue wires carry
@@ -791,6 +793,7 @@ examples/
   multi-projection.json  Project 3D from two cameras onto a block and a wall, blended where they overlap
   projection-bake.json   that set's ground, wall and block baked to textures (Bake Projection), rendered beside the live one, written to a .glb
   cameras-three-views.json  one Scene, three cameras (wide, close-up, top), three Scanline Renders each naming its camera, a contact sheet
+  Geo-Info-Picking.json  a sphere with a few hundred points and a cube, with the steps on its backdrops, for picking points and vertices into Geo Info (Points toggle, Selected only); a ~200k-point Scatter saved off for a speed check
   media/testsrc.mp4 5 s test clip used by the GUI starter project
 ```
 

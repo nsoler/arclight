@@ -4,6 +4,15 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.15.5 (2026-11-21): Geo Info picking example** (Dev1; the user
+  asked for a sample for the 0.14.36 hand check).
+  `examples/Geo-Info-Picking.json` + `tests/examples.rs`; listed in
+  `EXAMPLES` (gui/main.rs) and the three packaging scripts. Example
+  backdrops serve as notes (no Note node); titles are single-line and
+  clipped to the box, so one backdrop per step. Switch takes images
+  only, so an optional heavy branch is a disabled (bypassed) node,
+  which isn't evaluated.
+
 - **0.15.4 (2026-11-21): 2D handles follow downstream** (Dev2; the
   user's "offset gizmo" on the Mac was the handles drawn in the selected
   node's own space over a downstream Viewer's image: never HiDPI / GPU).

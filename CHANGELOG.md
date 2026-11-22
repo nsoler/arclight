@@ -18,6 +18,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.15.5 — 2026-11-21
+
+- **Help ▸ Examples ▸ Geo Info: picking points and vertices**
+  (`examples/Geo-Info-Picking.json`): a sphere with a few hundred
+  points and a cube, the steps for picking points and mesh vertices
+  into Geo Info's Selected only on its backdrops, and a ~200k-point
+  Scatter saved off for a speed check.
+
 ## 0.15.4 — 2026-11-21
 
 - **Viewer: a selected node's handles follow it downstream:** through

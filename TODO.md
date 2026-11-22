@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.15.4 (2026-11-21). Done items are removed
+What's still open, as of 0.15.5 (2026-11-21). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -8,6 +8,14 @@ them when they ship. `ROADMAP.md` is the public summary.
 ## To check by hand (user)
 
 On Linux and on the Macs (the DMG), from the release builds.
+
+**Phase 15 (0.15.5)**
+- [ ] Help ▸ Examples ▸ Geo Info: picking (the 0.14.36 check below,
+      with the steps on its backdrops): Tab to 3D, Points on, click a
+      sphere dot (orange; one row under Points with Selected only),
+      ⇧-click cube corners (Mesh points rows), box over the sphere
+      (front only), Esc clears, Points off picks objects; then
+      points_heavy + D and box again: still responsive
 
 **Phase 15 (0.15.4)**
 - [ ] Pond-Martian-Comp, viewer1 on the render: select transform2 → its
@@ -45,7 +53,7 @@ On Linux and on the Macs (the DMG), from the release builds.
       Macs: the same, plus `gpu --check`
 
 **Phase 14 (0.14.36)**
-- [NEED SAMPLE] Geo Info picking: Scatter points (or a Cube), 3D toolbar Points
+- [ ] Geo Info picking (example: Help ▸ Examples ▸ Geo Info: picking, 0.15.5): Scatter points (or a Cube), 3D toolbar Points
       on: click a point → orange dot, Geo Info (Sheet) Selected only →
       just that row in Points (or Mesh points); ⇧-click two more; box
       over part of a sphere → front vertices only; Esc clears the picks,
