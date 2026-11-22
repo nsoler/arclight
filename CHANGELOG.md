@@ -18,6 +18,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.15.4 — 2026-11-21
+
+- **Viewer: a selected node's handles follow it downstream:** through
+  Transforms, Crops, Resizes and match-moving Trackers between it and
+  what the viewer shows (a Viewer node downstream), and drags edit its
+  own values. Past a 3D render, Corner Pin or Lens Distort the handles
+  are dimmed and take no clicks, and a note says why: press V to view
+  the node. (Before, they were drawn in the node's own space over the
+  downstream image, so they looked offset; reported on the Mac, but
+  never a HiDPI or GPU issue.)
+
 ## 0.15.3 — 2026-11-21
 
 - Unit tests no longer crash now and then after every test passed on

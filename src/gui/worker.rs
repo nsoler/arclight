@@ -41,6 +41,11 @@ pub struct Request {
     /// Render it on the CPU (its GPU result couldn't be read back), in
     /// place of what the frame cache holds.
     pub cpu_only: bool,
+    /// Nodes and their main inputs whose input's frame and data window
+    /// the selected node's handles need (`overlay_space::wanted`; empty,
+    /// and no extra work, unless a Transform / Crop / Resize lies between
+    /// the selected node and the viewed one).
+    pub shapes: Vec<(String, String)>,
 }
 
 pub struct Response {
@@ -59,6 +64,8 @@ pub struct Response {
     pub probe_more: Vec<Option<Layers>>,
     /// The layers of `probe_mask`'s image (None: not asked, or failed).
     pub mask_layers: Option<Layers>,
+    /// `shapes`' answers, by node (those whose input failed left out).
+    pub shapes: crate::overlay_space::Shapes,
 }
 
 /// An image's layers, as `Image::layers` lists them: each name with its
@@ -200,6 +207,8 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
     // Probed inputs by cache key, so frames served from the frame cache
     // needn't render the input again. Kept small: they're whole images.
     let mut probed: HashMap<u64, Arc<Image>> = HashMap::new();
+    // Input shapes by cache key (made lazily: a GPU result isn't read back).
+    let mut shaped: HashMap<u64, (arclight::image::Size, arclight::image::IRect)> = HashMap::new();
 
     while let Ok(mut req) = rx.recv() {
         while let Ok(newer) = rx.try_recv() {
@@ -257,6 +266,21 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
             // in the evaluator's cache from rendering the Shuffle).
             let mask_layers = req.probe_mask.as_deref().and_then(|input| evaluate(&req.graph, input, &ctx).ok().map(|img| img.layers()));
             let probe_more = req.probe_more.iter().map(|input| (!input.is_empty()).then(|| evaluate(&req.graph, input, &ctx).ok().map(|img| img.layers())).flatten()).collect();
+            let shapes = req
+                .shapes
+                .iter()
+                .filter_map(|(node, input)| {
+                    let key = Evaluator::key(&req.graph, input, &ctx).ok()?;
+                    if !shaped.contains_key(&key) {
+                        let made = ViewFrame::from_frame(evaluate_lazy(&req.graph, input, &ctx).ok()?);
+                        if shaped.len() >= 256 {
+                            shaped.clear();
+                        }
+                        shaped.insert(key, (made.format(), made.window()));
+                    }
+                    Some((node.clone(), shaped[&key]))
+                })
+                .collect();
 
             let p = &req.graph.project;
             let cached_frames = (p.first_frame..=p.last_frame.max(p.first_frame))
@@ -265,15 +289,16 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
                     Evaluator::key(&req.graph, &req.target, &c).is_ok_and(|k| frames.contains(k))
                 })
                 .collect();
-            (result, millis, probe, probe_more, mask_layers, cached_frames)
+            (result, millis, probe, probe_more, mask_layers, cached_frames, shapes)
         }));
-        let (result, millis, probe, probe_more, mask_layers, cached_frames) = match done {
+        let (result, millis, probe, probe_more, mask_layers, cached_frames, shapes) = match done {
             Ok(done) => done,
             Err(payload) => {
                 *eval.lock().unwrap_or_else(|e| e.into_inner()) = Evaluator::new();
                 frames = FrameCache::new();
                 probed.clear();
-                (Err(NodeError { node: None, message: arclight::crash::caught(&*payload) }), 0.0, None, Vec::new(), None, Vec::new())
+                shaped.clear();
+                (Err(NodeError { node: None, message: arclight::crash::caught(&*payload) }), 0.0, None, Vec::new(), None, Vec::new(), HashMap::new())
             }
         };
 
@@ -286,6 +311,7 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
             probe,
             probe_more,
             mask_layers,
+            shapes,
         };
         if tx.send(resp).is_err() {
             break;
@@ -620,7 +646,7 @@ mod tests {
         let eval = Arc::new(Mutex::new(Evaluator::new()));
         let worker = Worker::spawn(eframe::egui::Context::default(), eval);
         let ask = |w: &Worker| {
-            w.request(Request { graph: graph.clone(), target: "panicky_c".into(), frame: 1, probe: None, probe_more: Vec::new(), probe_mask: None, pick: None, cpu_only: false });
+            w.request(Request { graph: graph.clone(), target: "panicky_c".into(), frame: 1, probe: None, probe_more: Vec::new(), probe_mask: None, pick: None, cpu_only: false, shapes: Vec::new() });
             let t0 = Instant::now();
             loop {
                 if let Some(r) = w.poll() {
@@ -689,6 +715,34 @@ mod tests {
         assert!(c.contains(1) && c.contains(2) && c.contains(3));
     }
 
+    /// Asked for the input shapes the selected node's handles need, the
+    /// worker answers each node with its input's frame and data window;
+    /// asked for none, it answers none.
+    #[test]
+    fn the_worker_answers_the_input_shapes_asked_for() {
+        let graph = Arc::new(serde_json::from_value::<Graph>(serde_json::json!({ "nodes": [
+            { "id": "r", "op": "rectangle", "inputs": [""], "params": { "width": 200, "height": 100, "center": [50, 30], "size": [20, 10] } },
+            { "id": "t", "op": "transform", "inputs": ["r"], "params": { "translate": [5, 0] } },
+        ] })).unwrap());
+        let worker = Worker::spawn(eframe::egui::Context::default(), Arc::new(Mutex::new(Evaluator::new())));
+        let ask = |shapes: Vec<(String, String)>| {
+            worker.request(Request { graph: graph.clone(), target: "t".into(), frame: 1, probe: None, probe_more: Vec::new(), probe_mask: None, pick: None, cpu_only: false, shapes });
+            let t0 = Instant::now();
+            loop {
+                if let Some(r) = worker.poll() {
+                    break r.shapes;
+                }
+                assert!(t0.elapsed().as_secs() < 30, "no answer");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        let got = ask(vec![("t".into(), "r".into())]);
+        let (format, window) = got["t"];
+        assert_eq!((format.width, format.height), (200, 100));
+        assert!(window.x0 <= 40 && window.x1 >= 60 && window.y0 <= 25 && window.y1 >= 35 && window.width() < 40, "{window:?}");
+        assert!(ask(Vec::new()).is_empty());
+    }
+
     /// A frame the worker rendered on the GPU comes back without a
     /// read-back, and from the frame cache still on the GPU; the picker's
     /// pixel reads as the image's; asked on the CPU, it's made there.
@@ -705,7 +759,7 @@ mod tests {
         ] })).unwrap());
         let worker = Worker::spawn(eframe::egui::Context::default(), Arc::new(Mutex::new(Evaluator::new())));
         let ask = |target: &str, pick: Option<(i32, i32)>, cpu_only: bool| {
-            worker.request(Request { graph: graph.clone(), target: target.into(), frame: 1, probe: None, probe_more: Vec::new(), probe_mask: None, pick, cpu_only });
+            worker.request(Request { graph: graph.clone(), target: target.into(), frame: 1, probe: None, probe_more: Vec::new(), probe_mask: None, pick, cpu_only, shapes: Vec::new() });
             let t0 = Instant::now();
             loop {
                 if let Some(r) = worker.poll() {

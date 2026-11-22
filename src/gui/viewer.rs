@@ -7,6 +7,7 @@
 use crate::doc::Doc;
 use crate::gizmo3d::{self, Handle, Layout, Mode, Space, Tool, Transforming};
 use crate::overlay::{Overlays, Xf};
+use crate::overlay_space::{self, Space as ViewSpace};
 use crate::viewport3d::Shading;
 use crate::view_frame::ViewFrame;
 use arclight::color;
@@ -201,6 +202,9 @@ pub struct Display<'a> {
     pub millis: f32,
     /// A node and its input's image, for that node's overlay.
     pub input: Option<&'a (String, Arc<Image>)>,
+    /// The input shapes of the Transforms, Crops and Resizes between the
+    /// selected node and the viewed one (see `overlay_space::wanted`).
+    pub shapes: Option<&'a crate::overlay_space::Shapes>,
 }
 
 impl Viewer {
@@ -522,8 +526,21 @@ impl Viewer {
         }
 
         self.overlays.set_input(d.input.cloned());
+        // Where the viewed image shows the selected node's pixels: the
+        // handles follow Transforms downstream, and are dimmed (with a
+        // note) past what they can't follow.
+        let viewed = doc.viewed();
+        let space = match (doc.selected.as_deref(), viewed.as_deref()) {
+            (Some(sel), Some(viewed)) => overlay_space::space(doc, sel, viewed, frame, d.shapes.unwrap_or(&overlay_space::Shapes::new())),
+            _ => ViewSpace::Same,
+        };
+        let (down, blocked) = match &space {
+            ViewSpace::Same => (None, false),
+            ViewSpace::Affine(m) => (Some(*m), false),
+            ViewSpace::Other { .. } => (None, true),
+        };
         // Overlay handles take a drag before panning does.
-        let xf = |v: &Viewer| Xf::new(Rect::from_center_size(rect.center() + v.pan, size * v.zoom), v.zoom);
+        let xf = |v: &Viewer| Xf { down, blocked, ..Xf::new(Rect::from_center_size(rect.center() + v.pan, size * v.zoom), v.zoom) };
         // pivot: "." pivot mode takes the pointer from the handles.
         // Pen mode, when on, takes it from both (but not from pivot mode).
         let pen = !self.pivot.active() && self.pen.ui(ui, &resp, &xf(self), doc, frame);
@@ -587,6 +604,13 @@ impl Viewer {
         self.overlays.draw(ui, &painter, &xf(self), size, doc, frame);
         self.pivot.draw(ui, &painter, &xf(self), size, doc, frame, &self.overlays); // pivot
         self.pen.draw(ui, &painter, &xf(self), doc, frame);
+        if let (ViewSpace::Other { why, .. }, Some(sel), Some(viewed)) = (&space, doc.selected.as_deref(), viewed.as_deref()) {
+            let text = overlay_space::notice(sel, viewed, why);
+            let pos = rect.left_top() + Vec2::new(8.0, 8.0);
+            let galley = painter.layout(text, FontId::proportional(13.0), Color32::from_rgb(255, 190, 110), (rect.width() - 24.0).max(40.0));
+            painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand(4.0), 3.0, Color32::from_black_alpha(170));
+            painter.galley(pos, galley, Color32::from_rgb(255, 190, 110));
+        }
         // A 3D scene has no pixels: say what's in it instead.
         if let Some(scene) = img.scene() {
             let text = format!("3D scene: {}\nConnect it to a Scanline Render to see it.", scene.describe());
@@ -1452,7 +1476,7 @@ mod tests {
     fn the_toolbars_wrap_in_a_narrow_view() {
         use arclight::image::{IRect, Size};
         let img = Arc::new(ViewFrame::from_cpu(Arc::new(Image::blank(Size { width: 1920, height: 1080 }, IRect::new(0, 0, 1920, 1080)))));
-        let d = Display { image: Some(&img), error: None, target: Some("v"), returns_to: None, frame: 1, millis: 56.2, input: None };
+        let d = Display { image: Some(&img), error: None, target: Some("v"), returns_to: None, frame: 1, millis: 56.2, input: None, shapes: None };
         for mode3d in [false, true] {
             for width in [360.0, 520.0, 1400.0] {
                 let ctx = egui::Context::default();
@@ -1485,7 +1509,7 @@ mod tests {
     fn a_long_status_takes_its_own_row_when_it_does_not_fit() {
         use arclight::image::{IRect, Size};
         let img = Arc::new(ViewFrame::from_cpu(Arc::new(Image::blank(Size { width: 1920, height: 1080 }, IRect::new(0, -66, 1920, 1080)))));
-        let d = Display { image: Some(&img), error: None, target: Some("scanline_render1"), returns_to: Some("viewer1"), frame: 97, millis: 6.2, input: None };
+        let d = Display { image: Some(&img), error: None, target: Some("scanline_render1"), returns_to: Some("viewer1"), frame: 97, millis: 6.2, input: None, shapes: None };
         for (width, rows) in [(1150.0, 2), (2400.0, 1)] {
             let ctx = egui::Context::default();
             let mut v = Viewer::default();
@@ -1567,5 +1591,132 @@ mod tests {
             let worst = got.iter().zip(&want).map(|(g, w)| g.abs_diff(*w)).max().unwrap();
             assert!(worst <= 1 && off * 1000 <= want.len(), "{channel:?} {exposure} step {step}: {off} bytes off, by up to {worst}");
         }
+    }
+
+    /// The viewer, run headless at `ppp` (a 400 pt panel on its left, as
+    /// in the app) on a 1920×1080 frame, with `events` in the last of a few
+    /// settled frames; returns that frame's painted shapes.
+    fn run_view(v: &mut Viewer, doc: &mut Doc, ppp: f32, shapes: &crate::overlay_space::Shapes, events: Vec<Vec<egui::Event>>) -> Vec<egui::epaint::ClippedShape> {
+        let img = Arc::new(ViewFrame::from_cpu(Arc::new(Image::blank(Size { width: 1920, height: 1080 }, IRect::new(0, 0, 1920, 1080)))));
+        let ctx = egui::Context::default();
+        let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(1400.0, 900.0));
+        let mut out = Vec::new();
+        let frames = std::iter::repeat_n(Vec::new(), 3).chain(events);
+        for (i, events) in frames.enumerate() {
+            let mut raw = egui::RawInput { screen_rect: Some(screen), time: Some(10.0 + i as f64 * 0.1), events, ..Default::default() };
+            raw.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(ppp);
+            let target = doc.viewed();
+            let full = ctx.run_ui(raw, |ui| {
+                egui::Panel::left("side").exact_size(400.0).show(ui, |ui| ui.label("properties"));
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let d = Display { image: Some(&img), error: None, target: target.as_deref(), returns_to: None, frame: 1, millis: 0.0, input: None, shapes: Some(shapes) };
+                    v.ui(ui, d, doc, 1);
+                });
+            });
+            assert_eq!(ctx.pixels_per_point(), ppp);
+            out = full.shapes;
+        }
+        out
+    }
+
+    /// The image's painted rect, and the centers of filled handle dots of
+    /// radius `r` (a Transform's Move handle is 6).
+    fn painted(shapes: &[egui::epaint::ClippedShape], r: f32) -> (Rect, Vec<Pos2>) {
+        let mut image = None;
+        let mut dots = Vec::new();
+        for s in shapes {
+            match &s.shape {
+                egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default() => image = Some(Rect::from_points(&m.vertices.iter().map(|v| v.pos).collect::<Vec<_>>())),
+                egui::Shape::Circle(c) if (c.radius - r).abs() < 1e-3 && c.fill != Color32::TRANSPARENT => dots.push(c.center),
+                _ => {}
+            }
+        }
+        (image.expect("the image is drawn"), dots)
+    }
+
+    fn texts(shapes: &[egui::epaint::ClippedShape]) -> String {
+        shapes.iter().filter_map(|s| if let egui::Shape::Text(t) = &s.shape { Some(t.galley.job.text.clone()) } else { None }).collect::<Vec<_>>().join("\n")
+    }
+
+    fn press_drag(from: Pos2, to: Pos2) -> Vec<Vec<egui::Event>> {
+        let button = |pos: Pos2, pressed: bool| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let mid = from + (to - from) * 0.5;
+        vec![vec![egui::Event::PointerMoved(from)], vec![button(from, true)], vec![egui::Event::PointerMoved(mid)], vec![egui::Event::PointerMoved(to)], vec![button(to, false)], vec![]]
+    }
+
+    /// A selected Transform's Move handle sits on the drawn image where its
+    /// pivot is, at 1 and 2 pixels per point (Retina), beside a panel.
+    #[test]
+    fn handles_sit_on_the_drawn_image_at_ppp_1_and_2() {
+        let graph: Graph = serde_json::from_value(serde_json::json!({ "nodes": [
+            { "id": "t", "op": "transform", "inputs": [""], "params": { "translate": [100, 50] } },
+        ] })).unwrap();
+        for ppp in [1.0, 2.0] {
+            let mut doc = Doc::new(graph.clone(), None);
+            doc.select_only("t");
+            let shapes = run_view(&mut Viewer::default(), &mut doc, ppp, &Default::default(), Vec::new());
+            let (image, dots) = painted(&shapes, 6.0);
+            assert!(image.min.x > 400.0, "{image:?}: right of the panel");
+            let want = image.min + Vec2::new(1060.0, 590.0) * (image.width() / 1920.0);
+            assert!(dots.len() == 1 && dots[0].distance(want) < 0.01, "ppp {ppp}: {dots:?} vs {want:?}");
+        }
+    }
+
+    /// A Rectangle viewed through a Viewer downstream past a Transform
+    /// (scale 2 about its corner, then +200, +100): its handles show on the
+    /// transformed rectangle, and a drag moves its center by the screen
+    /// motion mapped back (half, through the scale). A 3D render in
+    /// between instead dims them, says why, and a press there pans.
+    #[test]
+    fn handles_follow_a_downstream_transform_or_say_why_not() {
+        let graph: Graph = serde_json::from_value(serde_json::json!({ "nodes": [
+            { "id": "r", "op": "rectangle", "inputs": [""], "params": { "center": [100, 50], "size": [80, 40] } },
+            { "id": "t", "op": "transform", "inputs": ["r"], "params": { "translate": [200, 100], "scale": [2, 2], "center": [0, 0] } },
+            { "id": "v", "op": "viewer", "inputs": ["t"] },
+        ] })).unwrap();
+        for ppp in [1.0, 2.0] {
+            let mut doc = Doc::new(graph.clone(), None);
+            doc.select_only("r");
+            let shapes = crate::overlay_space::Shapes::new();
+            let mut v = Viewer::default();
+            let drawn = run_view(&mut v, &mut doc, ppp, &shapes, Vec::new());
+            let (image, _) = painted(&drawn, 6.0);
+            let zoom = image.width() / 1920.0;
+            // (100, 50) → (400, 200) in the viewed image.
+            let shown = image.min + Vec2::new(400.0, 200.0) * zoom;
+            assert!(!texts(&drawn).contains("Press V"), "no note while it follows");
+            let pan = v.pan;
+            run_view(&mut v, &mut doc, ppp, &shapes, press_drag(shown, shown + Vec2::new(40.0, 20.0)));
+            let c = doc.param("r", "center");
+            let got = [c[0].as_f64().unwrap() as f32, c[1].as_f64().unwrap() as f32];
+            let want = [100.0 + 20.0 / zoom, 50.0 + 10.0 / zoom];
+            assert!((got[0] - want[0]).abs() < 0.05 && (got[1] - want[1]).abs() < 0.05, "ppp {ppp}: {got:?} vs {want:?}");
+            assert_eq!(v.pan, pan, "the handle took the drag, not the view");
+        }
+        // Through a card in a 3D render: dimmed, a note, and the press pans.
+        let graph: Graph = serde_json::from_value(serde_json::json!({ "nodes": [
+            { "id": "r", "op": "rectangle", "inputs": [""], "params": { "center": [100, 50], "size": [80, 40] } },
+            { "id": "card", "op": "card", "inputs": ["r"] },
+            { "id": "scene", "op": "scene", "inputs": ["card"] },
+            { "id": "cam", "op": "camera" },
+            { "id": "render", "op": "scanline_render", "inputs": ["scene", "cam"] },
+            { "id": "v", "op": "viewer", "inputs": ["render"] },
+        ] })).unwrap();
+        let mut doc = Doc::new(graph, None);
+        doc.select_only("r");
+        let mut v = Viewer::default();
+        let none = crate::overlay_space::Shapes::new();
+        let drawn = run_view(&mut v, &mut doc, 1.0, &none, Vec::new());
+        let note = texts(&drawn);
+        assert!(note.contains("r's handles are in its own space") && note.contains("card takes it into a 3D scene") && note.contains("Press V to view r"), "{note}");
+        let (image, _) = painted(&drawn, 6.0);
+        let at = image.min + Vec2::new(100.0, 50.0) * (image.width() / 1920.0);
+        let pan = v.pan;
+        run_view(&mut v, &mut doc, 1.0, &none, press_drag(at, at + Vec2::new(40.0, 20.0)));
+        assert_eq!(doc.param("r", "center"), serde_json::json!([100, 50]), "dimmed handles take nothing");
+        assert!(v.pan != pan, "the press panned the view");
+        // Viewing the node itself (V): its own space, no note.
+        doc.view_node("r");
+        assert!(!texts(&run_view(&mut v, &mut doc, 1.0, &none, Vec::new())).contains("Press V"));
     }
 }

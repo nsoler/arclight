@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.15.3 (2026-11-21). Done items are removed
+What's still open, as of 0.15.4 (2026-11-21). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -8,6 +8,13 @@ them when they ship. `ROADMAP.md` is the public summary.
 ## To check by hand (user)
 
 On Linux and on the Macs (the DMG), from the release builds.
+
+**Phase 15 (0.15.4)**
+- [ ] Pond-Martian-Comp, viewer1 on the render: select transform2 → its
+      gizmo is dimmed, the note says card2 takes it into a 3D scene,
+      press V; a press pans; V → the gizmo sits on the martian. A
+      Transform between a Rectangle and a Viewer: the Rectangle's
+      handles sit on the moved shape and drag normally. Mac and Linux
 
 **Phase 15 (0.15.3)**
 - [ ] `cargo test --release` on NVIDIA/Linux ends without a SIGSEGV
@@ -26,19 +33,19 @@ On Linux and on the Macs (the DMG), from the release builds.
       same; a Maya / Houdini export if one is at hand
 
 **Phase 15 (0.15.1)**
-- [ ] Open Pond-Martian-Comp (on a Mac, as its paths are) in 2D, wait
+- [X] Open Pond-Martian-Comp (on a Mac, as its paths are) in 2D, wait
       for the first frame, Tab: the cards come textured within a second
       or two, nothing selected; the same with GPU acceleration off; the
       LizardSplat example likewise
 
 **Phase 14 (0.14.37)**
-- [ ] A Shuffle with 3 inputs routing 2:A → A and 3:depth → depth, and a
+- [X] A Shuffle with 3 inputs routing 2:A → A and 3:depth → depth, and a
       Matte Combine of 4 mattes (one Soft, one inverted), with the GPU
       on and off (Preferences): identical; playback stays on the GPU;
       Macs: the same, plus `gpu --check`
 
 **Phase 14 (0.14.36)**
-- [ ] Geo Info picking: Scatter points (or a Cube), 3D toolbar Points
+- [NEED SAMPLE] Geo Info picking: Scatter points (or a Cube), 3D toolbar Points
       on: click a point → orange dot, Geo Info (Sheet) Selected only →
       just that row in Points (or Mesh points); ⇧-click two more; box
       over part of a sphere → front vertices only; Esc clears the picks,
@@ -47,7 +54,7 @@ On Linux and on the Macs (the DMG), from the release builds.
       a click picks without a hitch
 
 **Phase 14 (0.14.35)**
-- [ ] Merge an Ellipse (A) over a plate (B) with each of subtract /
+- [X] Merge an Ellipse (A) over a plate (B) with each of subtract /
       difference / stencil / mask, and Swap A / B on subtract → A − B; a
       Grade with a 3D render's matte.<node> pass as mask (picked from
       Mask channel's list; typing works too), Invert mask; a Camera
@@ -55,13 +62,13 @@ On Linux and on the Macs (the DMG), from the release builds.
       merges looks the same
 
 **Phase 14 (0.14.34)**
-- [ ] On a Mac (Apple M4, Metal): `examples/Pond-Martian-LizardSplat-Combo.json`
+- [X] On a Mac (Apple M4, Metal): `examples/Pond-Martian-LizardSplat-Combo.json`
       plays at least as fast with the GPU as with it off (was 1017 vs
       321 ms/frame), and `arclight gpu --check` passes 85/85 (new
       splats-over-a-card row)
 
 **Phase 14 (0.14.33)**
-- [ ] Matte Combine: an Ellipse into input 1, a Rectangle into 2 set to
+- [X] Matte Combine: an Ellipse into input 1, a Rectangle into 2 set to
       subtract, another Ellipse into 3 (union) → the ellipse with a
       hole, plus the circle; Invert on input 2; key input 2's operation
       at 1 (subtract) and 10 (union) → switches at 10, no blend at 5, the
@@ -69,6 +76,8 @@ On Linux and on the Macs (the DMG), from the release builds.
       a matte.<node> pass from a 3D render; selecting it in a saved
       project doesn't mark it modified; `arclt`:
       create_node("matte_combine", a, b, operations=["union", "subtract"])
+
+      NOTE: Gizmos are Offset to the left and not centered.
 
 **Phase 14 (0.14.32)**
 - [ ] On a Mac (Apple M4, Metal): `arclight gpu --check` passes 81/81+
@@ -149,11 +158,11 @@ On Linux and on the Macs (the DMG), from the release builds.
 - [ ] Area-light shadows at Quality 16: ~7 s a 4K frame with the GPU on
 
 **GPU and the Macs**
-- [ ] Transform / Corner Pin / Lens Distort / Keyer match with the GPU on
+- [X] Transform / Corner Pin / Lens Distort / Keyer match with the GPU on
       and off; quitting never leaves a crash report behind
-- [ ] Scanline Render with shadows and motion blur: about a second at 4K
+- [X] Scanline Render with shadows and motion blur: about a second at 4K
       with the GPU on, matching the CPU
-- [ ] A 2D chain with big blurs feels quicker with the GPU on
+- [X] A 2D chain with big blurs feels quicker with the GPU on
 
 **Older**
 - [X] Several Viewer nodes (the active one shows, eye icon); 3D view
@@ -162,6 +171,15 @@ On Linux and on the Macs (the DMG), from the release builds.
 
 ## Known gaps and follow-ups
 
+- [ ] 2D handles: pen mode and pivot mode don't check "blocked" yet (a
+      Roto pen-drawn while viewed through a 3D render places points in
+      its own space under the dimmed note); mapping through a Card +
+      Camera (homography) to drag on the rendered card
+- [ ] **Projects without a folder save media paths absolute, silently**
+      (user, 2026-11-21: a comp made on the Mac had `/Users/...` paths on
+      Linux). Warn when a project references files outside its folder
+      (or has none), and / or offer "Collect media into the project
+      folder" on save, so it opens on another machine
 - [ ] Project 3D targets are node names fixed at the node: fine today
       (nothing renames or merges meshes under a new node); if such an op
       is added, carry projections on Card / Model as Instances do

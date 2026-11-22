@@ -52,11 +52,19 @@ pub struct Xf {
     pub img_rect: Rect,
     pub zoom: f32,
     pub warp: Option<track::Affine>,
+    /// Where the viewed image shows the selected node's pixels, when it's
+    /// downstream past Transforms (see `overlay_space`): composed into
+    /// [`Xf::for_node`]'s warp for that node.
+    pub down: Option<track::Affine>,
+    /// The viewed image shows the selected node's pixels in a way the
+    /// handles can't follow (a 3D render, a warp): they're drawn dimmed
+    /// and don't take the pointer.
+    pub blocked: bool,
 }
 
 impl Xf {
     pub fn new(img_rect: Rect, zoom: f32) -> Xf {
-        Xf { img_rect, zoom, warp: None }
+        Xf { img_rect, zoom, warp: None, down: None, blocked: false }
     }
 
     pub(crate) fn screen(&self, p: Vec2) -> Pos2 {
@@ -89,7 +97,13 @@ impl Xf {
             let lookup = |id: &str| doc.node(id);
             arclight::shape_follow::from_value(&arclight::link::resolve(&lookup, &link, frame as f64, doc.graph.project.clock()))
         };
-        Xf { warp: tracker.or_else(follow), ..*self }
+        let warp = tracker.or_else(follow);
+        // Then on through what's downstream of the selected node.
+        let warp = match self.down.filter(|_| doc.selected.as_deref() == Some(id)) {
+            Some(down) => Some(crate::overlay_space::compose(&down, &warp.unwrap_or(crate::overlay_space::IDENTITY))),
+            None => warp,
+        };
+        Xf { warp, ..*self }
     }
 }
 
@@ -909,6 +923,11 @@ impl Overlays {
     /// or, on a point list, select / insert vertices.
     fn press(&mut self, doc: &mut Doc, frame: i64, size: Vec2, xf: &Xf, o: Pos2, mods: Mods) {
         self.drag = None;
+        // Dimmed handles (see `Xf::blocked`) take nothing: the press is
+        // the view's (a pan).
+        if xf.blocked {
+            return;
+        }
         let Some(id) = doc.selected.clone() else { return };
         let Some(g) = self.node_geo(doc, &id, frame, size) else { return };
         let xf = &xf.for_node(doc, &id, frame);
@@ -1069,7 +1088,14 @@ impl Overlays {
         let Some(id) = doc.selected.as_deref() else { return };
         let Some(g) = self.node_geo(doc, id, frame, size) else { return };
         let xf = &self.drag.as_ref().map_or_else(|| xf.for_node(doc, id, frame), |d| d.xf);
-        let hover = ui.input(|i| i.pointer.hover_pos()).filter(|p| painter.clip_rect().contains(*p));
+        // Handles the viewed image doesn't show where they are: dimmed,
+        // never hot.
+        let mut dim = painter.clone();
+        if xf.blocked {
+            dim.multiply_opacity(0.3);
+        }
+        let painter = &dim;
+        let hover = ui.input(|i| i.pointer.hover_pos()).filter(|p| painter.clip_rect().contains(*p) && !xf.blocked);
         let hot = match &self.drag {
             Some(d) => Some(d.part),
             None => hover.and_then(|p| hit(&g, xf, p, self.selection(doc))),
@@ -1777,7 +1803,7 @@ mod tests {
 
     const SIZE: Vec2 = Vec2::new(200.0, 100.0);
     /// 1:1 zoom with the image at the screen origin, so screen = image.
-    const XF: Xf = Xf { img_rect: Rect { min: Pos2::ZERO, max: Pos2::new(200.0, 100.0) }, zoom: 1.0, warp: None };
+    const XF: Xf = Xf { img_rect: Rect { min: Pos2::ZERO, max: Pos2::new(200.0, 100.0) }, zoom: 1.0, warp: None, down: None, blocked: false };
 
     fn doc(op: &str, params: Value) -> Doc {
         let g = Graph { nodes: vec![arclight::graph::NodeSpec {
@@ -1998,6 +2024,45 @@ mod tests {
         assert_eq!(warped(&mut ov, &mut d, shown, shown + Vec2::new(10.0, 0.0)), Some(Part::Vertex(2)));
         let p = points(&d, 2);
         assert!((p[12] - 150.0).abs() < 1e-3 && (p[13] - 65.0).abs() < 1e-3, "{:?}", &p[12..14]);
+    }
+
+    /// Viewed downstream past a Transform (scale 2, then +30, +10), a
+    /// shape following a Tracker shows its handles through both, and a
+    /// drag maps back through both into the shape's own space; another
+    /// node than the selected one isn't moved by the downstream map.
+    #[test]
+    fn a_downstream_map_composes_with_a_shape_s_tracker_follow() {
+        let mut d = doc("roto", json!({ "points": spline_square(), "follow": "t" }));
+        d.graph.nodes.push(arclight::graph::NodeSpec { id: "t".into(), op: "tracker".into(), inputs: vec![], params: json!({
+            "track1_on": true, "track1": [50, 50],
+            "track2_on": true, "track2": { "keys": [[1, [100, 50]], [2, [50, 100]]], "interp": "linear" },
+            "solve": "translate, rotate",
+        }), pos: None, disabled: false });
+        let down = [2.0, 0.0, 30.0, 0.0, 2.0, 10.0];
+        let base = Xf { down: Some(down), ..XF };
+        let xf = base.for_node(&d, "n", 2);
+        let turn = |p: Vec2| Vec2::new(50.0 - (p.y - 50.0), 50.0 + (p.x - 50.0));
+        let corner = Vec2::new(150.0, 75.0);
+        let want = Pos2::from(track::apply(&down, turn(corner).into()));
+        assert!(xf.screen(corner).distance(want) < 1e-3, "{:?} vs {want:?}", xf.screen(corner));
+        assert!(base.for_node(&d, "t", 2).warp.is_none(), "only the selected node's handles go through it");
+        // Grab the corner where it's shown and drag 20 px right on screen:
+        // 10 px before the Transform's scale, which the motion's turn makes
+        // 10 px along the shape's own −y.
+        let mut ov = Overlays::default();
+        ov.sync_selection(&d);
+        ov.press(&mut d, 2, SIZE, &base, want, Mods::default());
+        assert_eq!(ov.drag.as_ref().map(|dr| dr.part), Some(Part::Vertex(2)));
+        let frozen = ov.drag.as_ref().unwrap().xf;
+        ov.drag_to(&mut d, 2, frozen.image(want + Vec2::new(20.0, 0.0)), Mods::default());
+        ov.release(&mut d);
+        let p = points(&d, 2);
+        assert!((p[12] - 150.0).abs() < 1e-3 && (p[13] - 65.0).abs() < 1e-3, "{:?}", &p[12..14]);
+        // Blocked (a 3D render in between): nothing grabbed, nothing moved.
+        let blocked = Xf { blocked: true, ..XF };
+        let at = XF.for_node(&d, "n", 2).screen(Vec2::new(150.0, 65.0));
+        ov.press(&mut d, 2, SIZE, &blocked, at, Mods::default());
+        assert!(ov.drag.is_none());
     }
 
     #[test]

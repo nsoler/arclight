@@ -259,6 +259,12 @@ included.
   Transform's gizmo, shape boxes and vertices, tracker boxes, corner pins,
   a Light 2D's position, aim, cone and softness). A shape following a
   Tracker shows its handles where the track has moved it.
+  When the viewer shows a node downstream of the selected one (through a
+  Viewer node), its handles follow the Transforms, Crops, Resizes and
+  match-moving Trackers in between, and drags still edit the node's own
+  values; past something they can't follow (a 3D render, a Corner Pin, a
+  Lens Distort) they're dimmed and take no clicks, and a note names what's
+  in the way: press **V** to view the node itself.
   A selected Roto or Polygon point also shows a blue feather handle out
   from the curve: drag it to soften the edge near that point alone (**⇧**
   for every selected point); Feather stays as an overall amount on top.

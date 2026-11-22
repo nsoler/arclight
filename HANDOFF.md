@@ -4,6 +4,20 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.15.4 (2026-11-21): 2D handles follow downstream** (Dev2; the
+  user's "offset gizmo" on the Mac was the handles drawn in the selected
+  node's own space over a downstream Viewer's image: never HiDPI / GPU).
+  `gui/overlay_space.rs` decides how the viewed image shows the selected
+  node's pixels: walks every path, composes affines
+  (`ops::transform_affine` for transform / crop / resize,
+  `track::output_map`), any scene-category op or warp → Other (paths
+  that disagree → Other). `Xf.down` is composed only for the selected
+  node; `Xf.blocked` dims the handles and drops presses, with a note
+  ("press V"). Auto pivot / crop shrink / resize need input shapes: the
+  worker answers `Request.shapes` (only when `overlay_space::wanted` is
+  non-empty; evaluate_lazy, no read-back, cached). Pen / pivot modes
+  don't check `blocked` yet (TODO).
+
 - **0.15.3 (2026-11-21): test exit + self-test values** (Dev1). The
   occasional SIGSEGV at the end of `cargo test` on NVIDIA/Linux (driver
   615.78.08) was NVIDIA's compile thread crashing while libc's exit

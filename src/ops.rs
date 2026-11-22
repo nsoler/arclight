@@ -3253,6 +3253,38 @@ fn transform_map(p: &Transform, format: Size, src: IRect) -> (WarpMap, IRect) {
     (WarpMap::Turn { translate: p.translate, center: [cx, cy], sin: s, cos: c, scale: [sx, sy] }, window)
 }
 
+/// Where `op`'s output shows each point of its input, for the ops that
+/// move pixels by a plain affine map (Transform, Crop, Resize); None for
+/// any other op. Positions count pixel i as spanning i..i+1, as shapes and
+/// the viewer's handles do. `format` and `window` are the input's frame
+/// and data window (a Transform's auto pivot, a shrunk Crop's corner, a
+/// Resize's scale).
+pub fn transform_affine(op: &str, params: &Value, format: Size, window: IRect) -> Result<Option<track::Affine>> {
+    Ok(Some(match op {
+        "transform" => {
+            let p: Transform = parse(params, op)?;
+            let [cx, cy] = p.center.unwrap_or_else(|| pivot(format, window));
+            let (s, c) = p.rotate.to_radians().sin_cos();
+            let sx = if p.scale[0] == 0.0 { 1e-6 } else { p.scale[0] };
+            let sy = if p.scale[1] == 0.0 { 1e-6 } else { p.scale[1] };
+            // x' = R S (x − pivot) + pivot + translate.
+            let (a, b, d, e) = (c * sx, -s * sy, s * sx, c * sy);
+            [a, b, cx + p.translate[0] - a * cx - b * cy, d, e, cy + p.translate[1] - d * cx - e * cy]
+        }
+        "crop" => {
+            let p: Crop = parse(params, op)?;
+            let (dx, dy) = if p.mode == "shrink canvas" { (p.left.min(format.width) as f32, p.top.min(format.height) as f32) } else { (0.0, 0.0) };
+            [1.0, 0.0, -dx, 0.0, 1.0, -dy]
+        }
+        "resize" => {
+            let (to, sx, sy) = resize_target(params, format)?;
+            let l = resample_layout(format, window, to, sx, sy, false);
+            [sx, 0.0, l.ox, 0.0, sy, l.oy]
+        }
+        _ => return Ok(None),
+    }))
+}
+
 /// Where a warp's output pixels read the source (frame positions, pixel
 /// centers on integers), shared by the CPU ops and their GPU paths.
 #[derive(Clone, Copy, Debug)]
@@ -5675,6 +5707,44 @@ mod tests {
         let framed = eval("transform", &json!({ "scale": [2, 2], "center": [50, 25] }), &[Some(&red), None], &CTX).unwrap();
         assert_eq!(framed.at(12, 12)[3], 0.0);
         assert_eq!(framed.at(-24, 1), [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    /// `transform_affine` puts a point where the op's output shows it:
+    /// a small patch's centroid, through each op.
+    #[test]
+    fn transform_affine_places_points_as_the_ops_move_pixels() {
+        // A 4×4 patch at (30, 20): its middle at (32, 22), counting pixel
+        // i as i..i+1.
+        let src = patch(100, 50, 30, 20, 4, 4, [1.0, 0.0, 0.0, 1.0]);
+        let centroid = |img: &Image| {
+            let w = img.window();
+            let (mut sum, mut at) = (0.0, [0.0f32; 2]);
+            for y in w.y0..w.y1 {
+                for x in w.x0..w.x1 {
+                    let a = img.at(x, y)[3];
+                    sum += a;
+                    at[0] += a * (x as f32 + 0.5);
+                    at[1] += a * (y as f32 + 0.5);
+                }
+            }
+            [at[0] / sum, at[1] / sum]
+        };
+        let cases = [
+            ("transform", json!({ "translate": [7, -3], "rotate": 30, "scale": [1.5, 0.8] })),
+            ("transform", json!({ "translate": [-4, 6], "rotate": -75, "scale": [0.7, 1.2], "center": [50, 25] })),
+            ("crop", json!({ "left": 12, "top": 9, "mode": "shrink canvas" })),
+            ("crop", json!({ "left": 12, "top": 9 })),
+            ("resize", json!({ "width": 64, "height": 64, "fit": "fit" })),
+            ("resize", json!({ "width": 40, "height": 90, "fit": "stretch" })),
+        ];
+        for (op, params) in cases {
+            let out = eval(op, &params, &[Some(&src), None], &CTX).unwrap();
+            let m = transform_affine(op, &params, src.format, src.window()).unwrap().unwrap();
+            let want = track::apply(&m, [32.0, 22.0]);
+            let got = centroid(&out);
+            assert!((got[0] - want[0]).abs() < 0.1 && (got[1] - want[1]).abs() < 0.1, "{op} {params}: {got:?} vs {want:?}");
+        }
+        assert!(transform_affine("blur", &json!({}), src.format, src.window()).unwrap().is_none());
     }
 
     #[test]
