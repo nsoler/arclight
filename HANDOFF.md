@@ -4,10 +4,20 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.15.1 (2026-11-21): 3D view's first shaded render** (Dev2).
+  `viewport3d::sync`'s first request after switching to 3D goes out
+  before the scene is known, so it carries no render; the scene's
+  arrival left the request key (`Ask`) unchanged, so the textured cards
+  never came until a selection (ghosts) or orbit (view) changed it.
+  `Ask.render` now records whether a render was asked for. Anything new
+  that decides what's asked belongs in `Ask`, or the request is skipped.
+  Test `the_first_shaded_render_comes_without_a_selection_or_view_change`
+  drives sync at a settled egui time (a still clock keeps the view at
+  reduced resolution, which re-asks by accident and hid the bug).
+
 - **Phase 15: gap fixes, 0.15.x on `wip-ns-gapfixes`** (from 0.14.37
   `c9268c7`, the user's call 2026-11-21); `main` follows it. `wip-ns-ui`
-  is frozen at 0.14.37. First: the 3D view's textured cards not drawing
-  until a selection (TODO top; Dev2), then Dev1's test-exit fix
+  is frozen at 0.14.37. First: the 3D view's textured cards (0.15.1), then Dev1's test-exit fix
   (`gpu::exit_tests_cleanly`, glibc `on_exit` → `exit_process` in unit
   tests only; `CheckRow.slow` / `CheckReport::correct` for the
   self-test's timing bar), then the TODO gaps.

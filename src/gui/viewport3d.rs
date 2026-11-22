@@ -984,6 +984,10 @@ struct Ask {
     preview: Preview,
     /// The selection (shown as ghosts where it isn't in the scene).
     ghosts: Vec<String>,
+    /// Whether it asked for a render: not until the scene is known, so the
+    /// scene's arrival asks again, this time for the render (else a view
+    /// with nothing else changing never got its shaded cards).
+    render: bool,
 }
 
 /// What the view looks through instead of the free camera.
@@ -1587,7 +1591,7 @@ impl Viewport3d {
         // Asked again when the scene's lights change what Lit is.
         let preview = self.preview(scale == 1.0);
         let ghosts = doc.selection();
-        let ask = Ask { node: node.clone(), frame, revision: doc.revision, view: self.view, look_through: self.look_through.clone(), through: through.clone(), pixels, preview, ghosts: ghosts.clone() };
+        let ask = Ask { node: node.clone(), frame, revision: doc.revision, view: self.view, look_through: self.look_through.clone(), through: through.clone(), pixels, preview, ghosts: ghosts.clone(), render: self.scene.is_some() };
         if self.asked.as_ref() == Some(&ask) {
             return;
         }
@@ -4012,4 +4016,37 @@ mod tests {
         let off = got.iter().zip(&want).filter(|(g, w)| g != w).count();
         assert!(worst <= 1 && off * 1000 <= want.len(), "{off} bytes off, by up to {worst}");
     }
+
+    /// Switched to 3D with nothing else changing (a saved view, nothing
+    /// selected), the shaded render still comes once the scene is known:
+    /// the first request (before the scene) can't ask for it, so the
+    /// scene's arrival must ask again. No GPU needed; generous timeout.
+    #[test]
+    fn the_first_shaded_render_comes_without_a_selection_or_view_change() {
+        let graph: arclight::graph::Graph = serde_json::from_value(serde_json::json!({ "nodes": [
+            { "id": "plate", "op": "constant", "params": { "width": 64, "height": 36, "color": [0.8, 0.3, 0.1, 1.0] } },
+            { "id": "card", "op": "card", "inputs": ["plate"] },
+        ] }))
+        .unwrap();
+        let mut doc = Doc::new(graph, None);
+        doc.view_node("card");
+        assert!(doc.selection().is_empty());
+        let ctx = egui::Context::default();
+        let mut v = Viewport3d::default();
+        let p = ViewCam::default().projector(Rect::from_min_size(Pos2::ZERO, Vec2::new(320.0, 180.0)));
+        let view = v.view;
+        let start = std::time::Instant::now();
+        // Frames at a settled time (the view hasn't moved for long), as in
+        // the app: full resolution, so only the scene's arrival can change
+        // what's asked.
+        while v.texture.is_none() && start.elapsed().as_secs() < 60 {
+            let raw = egui::RawInput { time: Some(100.0 + start.elapsed().as_secs_f64()), ..Default::default() };
+            let _ = ctx.run_ui(raw, |ui| v.sync(ui.ctx(), &doc, 1, &p));
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(v.scene.is_some(), "the scene came");
+        assert!(v.texture.is_some(), "the shaded render came, with nothing selected and the view as it was");
+        assert!(v.view == view && v.asked.as_ref().is_some_and(|a| a.render));
+    }
+
 }

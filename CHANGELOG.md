@@ -18,6 +18,12 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.15.1 — 2026-11-21
+
+- **3D view:** textured cards and solid meshes now draw as soon as you
+  switch to 3D, without selecting something or moving the view first
+  (a project with a saved 3D view showed only their outlines).
+
 ## 0.15.0 — 2026-11-21
 
 - **Phase 15 starts: gap fixes**, on branch `wip-ns-gapfixes` (from
