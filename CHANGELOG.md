@@ -18,6 +18,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.15.6 — 2026-11-21
+
+- **Viewer: pen and pivot modes work in the selected node's own space**
+  when it's viewed downstream past Transforms: pen points, tangents and
+  pivots land where they're clicked. Seen through a 3D render, Corner
+  Pin or Lens Distort, pen mode stays on but takes no clicks (they pan)
+  with the viewer's "press V" note, and "." refuses with a note.
+- **Fix:** pivot mode placed and drew a shape's selection pivot in the
+  viewed image's coordinates, ignoring a Tracker the shape follows, so
+  away from the reference frame the pivot landed off the shape.
+
 ## 0.15.5 — 2026-11-21
 
 - **Help ▸ Examples ▸ Geo Info: picking points and vertices**

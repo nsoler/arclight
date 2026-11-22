@@ -36,8 +36,10 @@ pub struct PenMode {
     /// The open Roto pen mode was left on (Esc, P): it isn't taken up again
     /// until something else is selected.
     dismissed: Option<String>,
-    /// A first click, in image pixels, waiting for its new Roto.
-    pending: Option<Vec2>,
+    /// A first click (screen), waiting for its new Roto: placed in that
+    /// Roto's own space once it exists (it may be seen through what's
+    /// downstream of it).
+    pending: Option<Pos2>,
     /// The app should add a Roto (see [`PenMode::take_new_shape`]).
     want_shape: bool,
     /// Pulling the tangents of (node, vertex) out from where it was pressed
@@ -197,14 +199,26 @@ impl PenMode {
         }
         let open = open_roto(doc);
         let (pressed, down, alt, origin, latest) = ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down(), i.modifiers.alt, i.pointer.press_origin(), i.pointer.latest_pos()));
-        // A new Roto appeared for the waiting first click.
-        if let (Some(at), Some(id)) = (self.pending, &open) {
+        // A new Roto appeared for the waiting first click (dropped if it's
+        // seen through what its handles can't follow).
+        if let (Some(o), Some(id)) = (self.pending, &open) {
             self.pending = None;
-            let n = flat(doc, id, frame).len() / 6;
-            edit(doc, id, |v| push_vertex(v, [at.x as f64, at.y as f64]));
-            if down {
-                self.pull = Some((id.clone(), n, origin.unwrap_or_default()));
+            if !xf.blocked {
+                let at = xf.for_node(doc, id, frame).image(o);
+                let n = flat(doc, id, frame).len() / 6;
+                edit(doc, id, |v| push_vertex(v, [at.x as f64, at.y as f64]));
+                if down {
+                    self.pull = Some((id.clone(), n, origin.unwrap_or_default()));
+                }
             }
+        }
+        // Seen through what the handles can't follow (a 3D render, a
+        // warp): pen mode stays on but takes no clicks (they pan), and the
+        // viewer says why.
+        if xf.blocked {
+            self.pull = None;
+            self.passthrough = false;
+            return false;
         }
         if pressed {
             if let Some(o) = origin.filter(|o| resp.rect.contains(*o)) {
@@ -238,7 +252,7 @@ impl PenMode {
     fn press(&mut self, doc: &mut Doc, frame: i64, xf: &Xf, o: Pos2, open: Option<&str>) {
         let Some(id) = open else {
             // No Roto to add to: one is made, the click its first point.
-            self.pending = Some(xf.image(o));
+            self.pending = Some(o);
             self.want_shape = true;
             return;
         };
@@ -262,7 +276,8 @@ impl PenMode {
     /// first point ringed when a click would close the shape, and the last
     /// point's tangents.
     pub fn draw(&self, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, doc: &Doc, frame: i64) {
-        if !self.on {
+        // (Blocked: the viewer's note says why nothing can be drawn.)
+        if !self.on || xf.blocked {
             return;
         }
         let rect = painter.clip_rect();
@@ -418,6 +433,63 @@ mod tests {
         }
         assert_eq!((n(&d), d.param(&id, "closed")), (3, json!(true)));
         assert!(!pen.active());
+    }
+
+    /// Seen downstream past a Transform (scale 2, then +30, +10): points
+    /// land in the Roto's own space, the first click of a new Roto too,
+    /// and a tangent pull is measured there. Seen through what the handles
+    /// can't follow: pen mode stays on, and clicks add nothing.
+    #[test]
+    fn drawing_through_a_downstream_map_or_not_at_all() {
+        use egui::{Event, Modifiers, PointerButton, Rect};
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(512.0, 512.0));
+        let down = Xf { down: Some([2.0, 0.0, 30.0, 0.0, 2.0, 10.0]), ..Xf::new(rect, 1.0) };
+        let ctx = egui::Context::default();
+        let frame = |pen: &mut PenMode, d: &mut Doc, xf: &Xf, events: Vec<Event>| {
+            let raw = egui::RawInput { screen_rect: Some(rect), events, ..Default::default() };
+            let mut took = false;
+            ctx.run_ui(raw, |ui| {
+                let resp = ui.allocate_rect(rect, egui::Sense::click_and_drag());
+                took = pen.ui(ui, &resp, xf, d, 1);
+            })
+            .drop_without_applying_deltas();
+            took
+        };
+        let button = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        let click = |at: Pos2| vec![vec![Event::PointerMoved(at), button(at, true)], vec![button(at, false)]];
+        let pts = |d: &Doc, id: &str| anim::sample(&d.param(id, "points"), 1.0);
+        // No Roto yet: the first click waits for the new one (as the app
+        // adds it: selected, open), then lands in its space.
+        let mut d = Doc::blank(Default::default());
+        let mut pen = PenMode { on: true, ..Default::default() };
+        let mut events = click(Pos2::new(130.0, 110.0)).into_iter();
+        frame(&mut pen, &mut d, &down, events.next().unwrap());
+        assert!(pen.take_new_shape());
+        let id = d.add_node("roto", [0.0, 0.0]);
+        d.set_param(&id, "points", json!([]));
+        d.set_param(&id, "closed", json!(false));
+        d.selected = Some(id.clone());
+        frame(&mut pen, &mut d, &down, events.next().unwrap());
+        assert_eq!(pts(&d, &id), vec![50.0, 50.0, 0.0, 0.0, 0.0, 0.0]);
+        // Then a click and a 40 px pull: (70, 45) with 20 px tangents.
+        let (a, b) = (Pos2::new(170.0, 100.0), Pos2::new(210.0, 100.0));
+        frame(&mut pen, &mut d, &down, vec![Event::PointerMoved(a), button(a, true)]);
+        frame(&mut pen, &mut d, &down, vec![Event::PointerMoved(b)]);
+        frame(&mut pen, &mut d, &down, vec![button(b, false)]);
+        assert_eq!(&pts(&d, &id)[6..12], &[70.0, 45.0, -20.0, 0.0, 20.0, 0.0]);
+        // Blocked: on, but a click adds nothing and is left to the view.
+        let blocked = Xf { blocked: true, ..Xf::new(rect, 1.0) };
+        let at = Pos2::new(300.0, 300.0);
+        frame(&mut pen, &mut d, &blocked, vec![Event::PointerMoved(at)]);
+        assert!(!frame(&mut pen, &mut d, &blocked, vec![button(at, true)]), "the press isn't the pen's");
+        frame(&mut pen, &mut d, &blocked, vec![button(at, false)]);
+        assert_eq!(pts(&d, &id).len(), 12);
+        assert!(pen.active(), "still on");
+        // Viewed so it can follow again: clicks add points.
+        for e in click(Pos2::new(330.0, 210.0)) {
+            frame(&mut pen, &mut d, &down, e);
+        }
+        assert_eq!(&pts(&d, &id)[12..14], &[150.0, 100.0]);
     }
 
     #[test]

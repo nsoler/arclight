@@ -18,6 +18,12 @@ const NOTHING: &str = "Select a Transform, or 2+ points of a Roto or Polygon, to
 /// How long a note stays (seconds).
 const NOTE_FOR: f64 = 3.0;
 
+/// Why "." won't set `id`'s pivot here: the viewer shows it through
+/// something its handles can't follow (see `Xf::blocked`).
+fn blocked_note(id: &str) -> String {
+    format!("{id}'s pivot can't be placed here: the viewer shows it through something its handles can't follow. Press V to view {id}.")
+}
+
 #[derive(Default)]
 pub struct PivotMode {
     /// The node it's setting the pivot of, while on.
@@ -236,6 +242,8 @@ impl PivotMode {
                 if self.active() {
                     self.node = None;
                     self.dragging = false;
+                } else if let (true, Some(t), true) = (plain, &t, xf.blocked) {
+                    self.say(now, blocked_note(t.id()));
                 } else if let (true, Some(t)) = (plain, &t) {
                     self.node = Some(t.id().to_string());
                 } else if plain {
@@ -254,12 +262,21 @@ impl PivotMode {
             }
         }
         let Some(t) = t.filter(|_| self.active()) else { return false };
+        // Seen through what the handles can't follow: no pivot moves (the
+        // press is the view's), and the viewer says why.
+        if xf.blocked {
+            self.dragging = false;
+            return false;
+        }
         if ui.input(|i| i.pointer.primary_pressed()) && ui.input(|i| i.pointer.press_origin()).is_some_and(|o| resp.rect.contains(o)) {
             self.dragging = true;
         }
         if self.dragging {
             if let Some(p) = ui.input(|i| i.pointer.latest_pos()) {
-                if let Err(e) = self.place(doc, &t, frame, size, xf.image(p), overlays) {
+                // In the node's own space (through a Tracker it follows, and
+                // what's downstream of it), where its handles are.
+                let q = xf.for_node(doc, t.id(), frame).image(p);
+                if let Err(e) = self.place(doc, &t, frame, size, q, overlays) {
                     self.say(now, e);
                     self.dragging = false;
                 }
@@ -288,8 +305,8 @@ impl PivotMode {
             Some(Target::Points(_)) => overlays.selection_pivot(doc, frame, size, xf).filter(|(_, placed)| *placed || on.is_some()).map(|(p, _)| p),
             _ => None,
         };
-        if let Some(p) = pivot {
-            crosshair(painter, xf.screen(p), on.is_some());
+        if let (Some(p), Some(t), false) = (pivot, &t, xf.blocked) {
+            crosshair(painter, xf.for_node(doc, t.id(), frame).screen(p), on.is_some());
         }
         let mut lines = Vec::new();
         if let Some(t) = on {
@@ -442,8 +459,13 @@ mod tests {
 
     /// Run one viewer frame over a 64 × 48 image shown at 1:1 from (0, 0).
     fn run(ctx: &egui::Context, pm: &mut PivotMode, ov: &mut Overlays, d: &mut Doc, events: Vec<egui::Event>, typing: bool) -> (bool, bool) {
+        run_with(ctx, pm, ov, d, events, typing, &Xf::new(egui::Rect::from_min_size(Pos2::ZERO, SIZE), 1.0), 1)
+    }
+
+    /// [`run`] through `xf` at `frame`.
+    #[allow(clippy::too_many_arguments)]
+    fn run_with(ctx: &egui::Context, pm: &mut PivotMode, ov: &mut Overlays, d: &mut Doc, events: Vec<egui::Event>, typing: bool, xf: &Xf, frame: i64) -> (bool, bool) {
         let rect = egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(200.0, 150.0));
-        let xf = Xf::new(egui::Rect::from_min_size(Pos2::ZERO, SIZE), 1.0);
         let mut events = events;
         if !events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. })) {
             events.insert(0, egui::Event::PointerMoved(Pos2::new(30.0, 20.0)));
@@ -457,7 +479,7 @@ mod tests {
                 r.request_focus();
             }
             let resp = ui.allocate_rect(rect, egui::Sense::click_and_drag());
-            on = pm.ui(ui, &resp, &xf, SIZE, d, 1, ov);
+            on = pm.ui(ui, &resp, xf, SIZE, d, frame, ov);
             esc_left = ui.input(|i| i.key_pressed(Key::Escape));
         });
         (on, esc_left)
@@ -511,5 +533,76 @@ mod tests {
         run(&ctx, &mut pm, &mut ov, &mut d, vec![period(true)], false);
         assert!(d.param("t", "center").is_null());
         assert!(pm.active(), "⇧. stays in the mode");
+    }
+
+    fn press_release(p: Pos2) -> [Vec<egui::Event>; 2] {
+        [
+            vec![egui::Event::PointerMoved(p), egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }],
+            vec![egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
+        ]
+    }
+
+    /// A Transform viewed downstream past another (scale 2, then +30,
+    /// +10): a click places its pivot where its handles show it, in its
+    /// own space. Seen through what the handles can't follow: "." says why
+    /// and stays off, and when already on, a click moves nothing.
+    #[test]
+    fn the_pivot_goes_through_a_downstream_map_or_not_at_all() {
+        let ctx = egui::Context::default();
+        let (mut pm, mut ov) = (PivotMode::default(), Overlays::default());
+        let mut d = doc_with(json!({ "rotate": 45, "scale": [2, 2] }));
+        let plain = Xf::new(egui::Rect::from_min_size(Pos2::ZERO, SIZE), 1.0);
+        let down = Xf { down: Some([2.0, 0.0, 30.0, 0.0, 2.0, 10.0]), ..plain };
+        let blocked = Xf { blocked: true, ..plain };
+        run_with(&ctx, &mut pm, &mut ov, &mut d, vec![], false, &blocked, 1);
+        assert!(!run_with(&ctx, &mut pm, &mut ov, &mut d, vec![period(false)], false, &blocked, 1).0);
+        assert!(!pm.active());
+        assert!(pm.note.as_ref().is_some_and(|n| n.0.contains("Press V to view t")), "{:?}", pm.note);
+        assert!(run_with(&ctx, &mut pm, &mut ov, &mut d, vec![period(false)], false, &down, 1).0);
+        for e in press_release(Pos2::new(110.0, 50.0)) {
+            run_with(&ctx, &mut pm, &mut ov, &mut d, e, false, &down, 1);
+        }
+        let tf = read(&d, "t", 1, None, SIZE);
+        assert!((shown(&tf)[0] - 40.0).abs() < 1e-4 && (shown(&tf)[1] - 20.0).abs() < 1e-4, "{tf:?}");
+        // On, then seen through a 3D render: the press is the view's.
+        let before = (d.param("t", "center"), d.param("t", "translate"));
+        let mut took = false;
+        for e in press_release(Pos2::new(20.0, 20.0)) {
+            took |= run_with(&ctx, &mut pm, &mut ov, &mut d, e, false, &blocked, 1).0;
+        }
+        assert!(!took && (d.param("t", "center"), d.param("t", "translate")) == before);
+    }
+
+    /// The pivot of a shape's selected points, the shape following a
+    /// Tracker (turned 90° about (20, 20) by frame 2): placed where it's
+    /// clicked on screen, kept in the shape's own (reference) space.
+    #[test]
+    fn a_shape_following_a_tracker_gets_its_pivot_where_it_is_clicked() {
+        let roto = NodeSpec { id: "r".into(), op: "roto".into(), inputs: vec![String::new()], params: json!({
+            "points": [10, 10, 0, 0, 0, 0, 30, 10, 0, 0, 0, 0, 30, 30, 0, 0, 0, 0],
+            "follow": "tk",
+        }), pos: Some([0.0, 0.0]), disabled: false };
+        let tracker = NodeSpec { id: "tk".into(), op: "tracker".into(), inputs: vec![], params: json!({
+            "track1_on": true, "track1": [20, 20],
+            "track2_on": true, "track2": { "keys": [[1, [40, 20]], [2, [20, 40]]], "interp": "linear" },
+            "solve": "translate, rotate",
+        }), pos: Some([0.0, 0.0]), disabled: false };
+        let mut d = Doc::new(Graph { nodes: vec![roto, tracker], ..Default::default() }, None);
+        d.select_only("r");
+        let ctx = egui::Context::default();
+        let (mut pm, mut ov) = (PivotMode::default(), Overlays::default());
+        assert!(ov.select_all_points(&d));
+        let plain = Xf::new(egui::Rect::from_min_size(Pos2::ZERO, SIZE), 1.0);
+        run_with(&ctx, &mut pm, &mut ov, &mut d, vec![], false, &plain, 2);
+        assert!(run_with(&ctx, &mut pm, &mut ov, &mut d, vec![period(false)], false, &plain, 2).0);
+        let at = Pos2::new(12.0, 36.0);
+        for e in press_release(at) {
+            run_with(&ctx, &mut pm, &mut ov, &mut d, e, false, &plain, 2);
+        }
+        let (p, placed) = ov.selection_pivot(&d, 2, SIZE, &plain).unwrap();
+        assert!(placed);
+        // Turned back: screen (12, 36) is (36, 28) in the shape's space.
+        assert!((p - Vec2::new(36.0, 28.0)).length() < 1e-3, "{p:?}");
+        assert!(plain.for_node(&d, "r", 2).screen(p).distance(at) < 1e-3);
     }
 }

@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.15.5 (2026-11-21). Done items are removed
+What's still open, as of 0.15.6 (2026-11-21). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -9,23 +9,30 @@ them when they ship. `ROADMAP.md` is the public summary.
 
 On Linux and on the Macs (the DMG), from the release builds.
 
+**Phase 15 (0.15.6)**
+- [ ] Pen-draw a Roto that a Transform feeds into a Viewer: the points
+      land under the pointer; through a 3D render, pen and "." refuse
+      (note shown, clicks pan); a Roto following a Tracker, away from
+      its reference frame: select 2+ points, ".", click → the crosshair
+      sits where clicked
+
 **Phase 15 (0.15.5)**
-- [ ] Help ▸ Examples ▸ Geo Info: picking (the 0.14.36 check below,
+- [X] Help ▸ Examples ▸ Geo Info: picking (the 0.14.36 check below,
       with the steps on its backdrops): Tab to 3D, Points on, click a
       sphere dot (orange; one row under Points with Selected only),
       ⇧-click cube corners (Mesh points rows), box over the sphere
-      (front only), Esc clears, Points off picks objects; then
+      (front only), Esc clears, Points https://www.google.com/search?q=xfree.ocm&oq=xfree.ocm&gs_lcrp=EgZjaHJvbWUyBggAEEUYOdIBCDI3NDhqMGo3qAIAsAIB&sourceid=chrome&source=chrome.ob&ie=UTF-8&sei=IpECa4iII8ug0PEP8oqnoQkoff picks objects; then
       points_heavy + D and box again: still responsive
 
 **Phase 15 (0.15.4)**
-- [ ] Pond-Martian-Comp, viewer1 on the render: select transform2 → its
+- [X] Pond-Martian-Comp, viewer1 on the render: select transform2 → its
       gizmo is dimmed, the note says card2 takes it into a 3D scene,
       press V; a press pans; V → the gizmo sits on the martian. A
       Transform between a Rectangle and a Viewer: the Rectangle's
       handles sit on the moved shape and drag normally. Mac and Linux
 
 **Phase 15 (0.15.3)**
-- [ ] `cargo test --release` on NVIDIA/Linux ends without a SIGSEGV
+- [X] `cargo test --release` on NVIDIA/Linux ends without a SIGSEGV
       after the results, also right after a shader change (or with
       `__GL_SHADER_DISK_CACHE=0`); a test failure still exits 101;
       `arclight gpu --check` still lists a slow "read one pixel" as FAIL
@@ -96,7 +103,7 @@ On Linux and on the Macs (the DMG), from the release builds.
 - [ ] Shuffle routing: wire a plate into a Shuffle, an Ellipse into its
       port 2 (a spare port 3 appears); Properties ▸ Routes ▸ + Add route
       → 2:A → A: the plate takes the ellipse's alpha; 3:depth from a
-      Scanline Render into depth; a 0.14.30 project's Shuffles look the
+      Scanline Render ihttps://www.google.com/search?q=xfree.ocm&oq=xfree.ocm&gs_lcrp=EgZjaHJvbWUyBggAEEUYOdIBCDI3NDhqMGo3qAIAsAIB&sourceid=chrome&source=chrome.ob&ie=UTF-8&sei=IpECa4iII8ug0PEP8oqnoQknto depth; a 0.14.30 project's Shuffles look the
       same; `arclt`: create_node("shuffle", a, b, routes=[["2:A","A"]])
 
 **Phase 14 (0.14.30)**
@@ -179,10 +186,17 @@ On Linux and on the Macs (the DMG), from the release builds.
 
 ## Known gaps and follow-ups
 
-- [ ] 2D handles: pen mode and pivot mode don't check "blocked" yet (a
-      Roto pen-drawn while viewed through a 3D render places points in
-      its own space under the dimmed note); mapping through a Card +
-      Camera (homography) to drag on the rendered card
+- [ ] **Bend points on wires** (user, 2026-11-21): with Preferences ▸
+      wire style Straight, Ctrl/⌘-click a connector to add a bend point
+      there, so wires can turn at angles for cleaner layouts; drag a
+      bend to move it; a way to remove one (Ctrl-click it again or
+      Delete). Saved with the project (per connection); old projects
+      unchanged; decide how curved wires treat bends. Queued for Dev2
+      after the pen / pivot fix
+- [ ] 2D handles: mapping through a Card + Camera (homography) to drag
+      on the rendered card; a first pen click for a new Roto fed by an
+      auto-pivot Transform can be off until the worker reports that
+      Transform's input shape (one render later)
 - [ ] **Projects without a folder save media paths absolute, silently**
       (user, 2026-11-21: a comp made on the Mac had `/Users/...` paths on
       Linux). Warn when a project references files outside its folder

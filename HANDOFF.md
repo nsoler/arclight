@@ -4,6 +4,12 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.15.6 (2026-11-21): pen / pivot through downstream maps** (Dev2).
+  Pen and pivot map the pointer through `Xf::for_node`, as the overlay's
+  handles do, and obey `Xf::blocked`. Pen's first click for a new Roto
+  is kept in screen coordinates until the Roto exists. Fixed: the pivot
+  ignored a shape's Tracker follow.
+
 - **0.15.5 (2026-11-21): Geo Info picking example** (Dev1; the user
   asked for a sample for the 0.14.36 hand check).
   `examples/Geo-Info-Picking.json` + `tests/examples.rs`; listed in
