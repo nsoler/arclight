@@ -1,8 +1,37 @@
 # Arclight — handoff notes
 
-Last updated 2026-11-21.
+Last updated 2026-11-22.
 
 ## Status
+
+- **Paused after v0.16.3 (2026-11-22), released with Linux tarball,
+  Windows zip, `arclt` wheel + sdist and the user's macOS DMG (Latest).**
+  Dev1 / Dev2 idle, nothing in flight, tree clean (only the user's
+  untracked `examples/Pond-Martian-Comp.json` + `pond-vid.mp4`: never
+  commit them). Releases this session: v0.15.3, v0.15.5 (no DMG; its
+  notes point to v0.15.8), v0.15.8, v0.16.3. Next: the user's hand
+  checks for 0.16.1–0.16.3 (TODO "To check by hand"), then the user
+  picks: more polish (TODO "Known gaps"), or production readiness
+  (`docs/production-plan.md`, Q1–Q5 unanswered). The user kept the
+  Nuke-import rule (no .nk import / translator).
+- **Session lessons (2026-11-21/22):**
+  - When two Devs touch one file, stage per Dev from a blob built on
+    HEAD (`git hash-object -w` + `update-index --cacheinfo`), and save a
+    copy of a shared doc (README / help) before granting it to the
+    second Dev. Check the combined live tree builds before the second
+    version lands (a moved-value error showed up only combined).
+  - Never run GPU test loops in parallel: 4 at once exhausted memory
+    and pushed timing rows over their bars. The lib test process was
+    once SIGKILLed mid-run with Devs building at the same time: rerun
+    before suspecting the change.
+  - The 2D "offset gizmo" was the handles drawn in the selected node's
+    space over a downstream Viewer (fixed 0.15.4 / 0.16.3); press V is
+    the quick check.
+  - Release: pass zig as an absolute path (`ZIG=$(cd
+    ../.verify/venv-rel/lib/python3.14/site-packages/ziglang && pwd)/zig`):
+    a relative one breaks the Windows build's dlltool.
+  - `arclight render` has no `-o`; it writes through Write nodes
+    (`-v` lists what it evaluated).
 
 - **0.16.3 (2026-11-22): handles onto a rendered card** (Dev2). The
   overlay map is projective: `card_map::Proj` in `Xf.down` / `Xf.proj`
@@ -104,11 +133,6 @@ Last updated 2026-11-21.
   cores (crash.rs ×4, plugin_isolation ×2). `CheckRow.slow` marks a
   speed-bar-only failure; `CheckReport::correct()` ignores those,
   `passed()` doesn't.
-- **Paused after v0.15.3 for the user's testing** (2026-11-21). Dev1 /
-  Dev2 idle, nothing in flight. Hand checks: TODO "To check by hand",
-  0.14.30–0.15.3 (Mac items: depth `gpu --check`, Pond timing, the GPU
-  multi-input rows).
-
 - **0.15.2 (2026-11-21): Alembic curves, points, cameras, face sets**
   (Dev2; the user's answers: all four on for a GUI-added Read Geo,
   groups + a split option, cameras by name now). `alembic/extra.rs` (a
@@ -391,7 +415,7 @@ everything but the DMG is built here.
 2. In a **clean worktree at the tag**:
    - Linux: `env -u CARGO_TARGET_DIR packaging/linux/build-tarball.sh`
      (it installs from `./target`) → `dist/arclightvfx-<ver>-linux-x86_64.tar.gz`.
-   - Windows: `ZIG=$(ls ../.verify/venv-rel/lib/python3*/site-packages/ziglang/zig)
+   - Windows: `ZIG=$(cd ../.verify/venv-rel/lib/python3.14/site-packages/ziglang && pwd)/zig` (absolute)
      env -u CARGO_TARGET_DIR packaging/windows/build-zip.sh` (zig from the release venv's
      `ziglang`) → `dist/arclightvfx-<ver>-windows-x86_64.zip`.
    - With the release venv `../.verify/venv-rel` (maturin + ziglang):

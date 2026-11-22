@@ -31,6 +31,12 @@ which role you have if it isn't clear.
 - Releases only when the user says so (procedure in HANDOFF.md). Keeps
   the user posted; the user's decisions (phases, licensing, what next)
   go to the user, not the Devs.
+- Before granting a shared doc (README / help) to the second Dev, save
+  the first Dev's version so the two commits stay separable; check the
+  combined live tree builds before the second Dev's version lands.
+- Never run GPU test loops in parallel (memory, timing bars); a lib
+  test run killed mid-way with Devs building is rerun before blaming
+  the change.
 
 **Dev1 / Dev2**
 - No git writes at all: no commit, push, tag, add, stash, reset,
