@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.15.8 (2026-11-22). Done items are removed
+What's still open, as of 0.16.0 (2026-11-22). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -10,7 +10,7 @@ them when they ship. `ROADMAP.md` is the public summary.
 On Linux and on the Macs (the DMG), from the release builds.
 
 **Phase 15 (0.15.8)**
-- [ ] Straight wires: ⌘-click a wire twice, drag the bends into a
+- [X] Straight wires: ⌘-click a wire twice, drag the bends into a
       right-angle route; switch to curved: it flows through the same
       points; move both nodes → the route follows, one → bends stay;
       drop a free Blur onto the bent wire → each side keeps its bends;
@@ -18,14 +18,14 @@ On Linux and on the Macs (the DMG), from the release builds.
       bend drag; an old project saves byte-identical
 
 **Phase 15 (0.15.7)**
-- [ ] Open a project with media outside its folder (the Pond comp),
+- [X] Open a project with media outside its folder (the Pond comp),
       save: the menu-bar warning; File ▸ Collect Media…: sizes and free
       space, Collect with progress, the nodes point into media/, it
       saves, Undo reverts; copy the folder to another machine or path
       and reopen
 
 **Phase 15 (0.15.6)**
-- [ ] Pen-draw a Roto that a Transform feeds into a Viewer: the points
+- [X] Pen-draw a Roto that a Transform feeds into a Viewer: the points
       land under the pointer; through a 3D render, pen and "." refuse
       (note shown, clicks pan); a Roto following a Tracker, away from
       its reference frame: select 2+ points, ".", click → the crosshair
@@ -54,7 +54,7 @@ On Linux and on the Macs (the DMG), from the release builds.
       while the unit self-test passes
 
 **Phase 15 (0.15.2)**
-- [ ] A Read Geo of an Alembic export with curves, a particle cache, two
+- [X] A Read Geo of an Alembic export with curves, a particle cache, two
       cameras and a multi-material mesh: the 3D view shows the curves
       and points; Scanline Render's Camera picker lists both cameras
       (read_geo/<name>) and renders through each; Geo Info shows
@@ -75,7 +75,7 @@ On Linux and on the Macs (the DMG), from the release builds.
       Macs: the same, plus `gpu --check`
 
 **Phase 14 (0.14.36)**
-- [ ] Geo Info picking (example: Help ▸ Examples ▸ Geo Info: picking, 0.15.5): Scatter points (or a Cube), 3D toolbar Points
+- [X] Geo Info picking (example: Help ▸ Examples ▸ Geo Info: picking, 0.15.5): Scatter points (or a Cube), 3D toolbar Points
       on: click a point → orange dot, Geo Info (Sheet) Selected only →
       just that row in Points (or Mesh points); ⇧-click two more; box
       over part of a sphere → front vertices only; Esc clears the picks,
@@ -110,19 +110,19 @@ On Linux and on the Macs (the DMG), from the release builds.
       NOTE: Gizmos are Offset to the left and not centered.
 
 **Phase 14 (0.14.32)**
-- [ ] On a Mac (Apple M4, Metal): `arclight gpu --check` passes 81/81+
+- [X] On a Mac (Apple M4, Metal): `arclight gpu --check` passes 81/81+
       (the 13 depth-plane failures of 2026-11-13 gone); the Pond
       example's still Media In no longer redraws the splat every frame
 
 **Phase 14 (0.14.31)**
-- [ ] Shuffle routing: wire a plate into a Shuffle, an Ellipse into its
+- [X] Shuffle routing: wire a plate into a Shuffle, an Ellipse into its
       port 2 (a spare port 3 appears); Properties ▸ Routes ▸ + Add route
       → 2:A → A: the plate takes the ellipse's alpha; 3:depth from a
       Scanline Render ihttps://www.google.com/search?q=xfree.ocm&oq=xfree.ocm&gs_lcrp=EgZjaHJvbWUyBggAEEUYOdIBCDI3NDhqMGo3qAIAsAIB&sourceid=chrome&source=chrome.ob&ie=UTF-8&sei=IpECa4iII8ug0PEP8oqnoQknto depth; a 0.14.30 project's Shuffles look the
       same; `arclt`: create_node("shuffle", a, b, routes=[["2:A","A"]])
 
 **Phase 14 (0.14.30)**
-- [ ] Roto pen: add a Roto from the menu → pen on; click 4 points, drag
+- [X] Roto pen: add a Roto from the menu → pen on; click 4 points, drag
       one for tangents, Alt-drag breaks; Esc / ⌫ removes the last; click
       the first point → closes, renders, and Feather / falloff / strength
       / cut-off enable; P with a Read selected → the new Roto takes it as
@@ -171,7 +171,7 @@ On Linux and on the Macs (the DMG), from the release builds.
 - [X] Curves in the 3D view: pick (⇧), drag, G / R / S, Bezier handles
       (Alt breaks), Ctrl/⌘-click adds or inserts, Delete; a Curve from a
       solved camera's path
-- [ ] Curve to Mesh (tube, ribbon, profile, pscale taper); Points on Curve
+- [X] Curve to Mesh (tube, ribbon, profile, pscale taper); Points on Curve
       with Instance on Points
 - [ ] Particles to Points driving Instance on Points; an emitter on a
       Scatter's point set
@@ -180,12 +180,12 @@ On Linux and on the Macs (the DMG), from the release builds.
       stacked Over; GPU on and off match. Help ▸ Examples ▸ Projection
       (multi-projection): Blend softens the seam, Fade start / end,
       Frames fills what one frame misses
-- [ ] Points from Geo / Grid / Line Points; Normals by angle; Subdivide
+- [X] Points from Geo / Grid / Line Points; Normals by angle; Subdivide
       (Loop on a cube); Extrude (individual with Inset, region from
       Attribute Set, walls by `side`)
-- [ ] Write Geo: render a scene to .obj / .gltf / .glb (textured card,
+- [X] Write Geo: render a scene to .obj / .gltf / .glb (textured card,
       instances), open in Blender; Read Geo reads the glTF back
-- [ ] Area-light shadows at Quality 16: ~7 s a 4K frame with the GPU on
+- [X] Area-light shadows at Quality 16: ~7 s a 4K frame with the GPU on
 
 **GPU and the Macs**
 - [X] Transform / Corner Pin / Lens Distort / Keyer match with the GPU on
@@ -226,15 +226,17 @@ On Linux and on the Macs (the DMG), from the release builds.
       (SmartScreen warning)
 - [ ] RLE / 1-bit DPX (needs a sample file first)
 
-## Now: phase 15, gap fixes (0.15.x, `wip-ns-gapfixes`)
+## Now: phase 16, polish (0.16.x, `wip-ns-polish`)
 
-The user's call (2026-11-21): the 3D textured-card bug first, then the
-"Known gaps and follow-ups" above.
+The user's call (2026-11-22): wire bends snapping to exact right angles
+(and the merge-into-wire split), Collect Media from MCP, dragging
+handles on a rendered card through Card + Camera. Phase 15 (gap fixes)
+ran 0.15.0–0.15.8 on `wip-ns-gapfixes`.
 
 ## Later: production readiness (proposed)
 
 Planned in `docs/production-plan.md`, waiting for the user's answers (Q1–Q5
-there); after phase 15 (gap fixes). P1 color management (OCIO /
+there); after phase 16 (polish). P1 color management (OCIO /
 ACES), P2 node groups and gizmos, P3 regions / disk cache / proxies, P4 the
 farm, P5 EXR; alongside STMap, Defocus / ZDefocus, vector tools, Denoise.
 On hold in `ROADMAP.md` "Later": Paint, a 3D pivot.

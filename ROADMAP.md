@@ -43,10 +43,11 @@ examples on Linux and macOS. Bug reports from real shots are the most
 useful thing right now (Help ▸ Report a problem in the app gathers
 what's needed).
 
-## Now: phase 15, gap fixes
+## Now: phase 16, polish
 
-Finishing the open items from phase 14 and fixing what hands-on
-testing turns up (the 3D view's textured cards first).
+Refining what hands-on testing turned up: node-graph wires that bend at
+exact right angles, collecting a project's media from scripts, and
+editing a layer's handles where it appears on a rendered card.
 
 ## Next: production readiness
 

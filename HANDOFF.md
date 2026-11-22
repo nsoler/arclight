@@ -4,6 +4,15 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **Phase 16: polish, 0.16.x on `wip-ns-polish`** (from 0.15.8
+  `5733539`, the user's call 2026-11-22); `main` follows it;
+  `wip-ns-gapfixes` frozen at 0.15.8 (released v0.15.8 with DMG).
+  Scope: wire bends snapping to exact right angles + merge-into-wire
+  split, Collect Media from MCP, handles dragged on a rendered card
+  (Card + Camera homography). "Read Nuke scripts" asked about: it
+  conflicts with CLAUDE.md's originality rule and TODO "Not planned";
+  waiting for the user.
+
 - **0.15.8 (2026-11-22): wire bend points** (Dev2; the user chose
   "smooth through" for curved wires). Bends live in `Graph.bends`
   (graph coordinates, keyed by src / dst / port; `bends_of` ignores

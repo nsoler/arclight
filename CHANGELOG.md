@@ -2,7 +2,8 @@
 
 ArclightVFX Compositor (Arclight until 0.11.2) is **beta** software since
 0.11.3 (alpha before): versions are `0.<phase>.<increment>`. The
-middle number is the development phase the project is in (15 now: gap fixes, on branch `wip-ns-gapfixes`;
+middle number is the development phase the project is in (16 now: polish, on branch `wip-ns-polish`;
+phase 15, gap fixes, ran 0.15.0–0.15.8 on `wip-ns-gapfixes`;
 phase 14, workspace and UI, ran 0.14.0–0.14.37 on `wip-ns-ui`;
 phase 13, procedural geometry (`docs/geo-plan.md`), ran 0.13.0–0.13.41
 on `wip-ns-geo`; phase 12, GPU acceleration, ran 0.12.0–0.12.19 on `wip-ns-gpu`; phase 11,
@@ -17,6 +18,13 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 `plugins/example/Cargo.toml`, kept in step) and shows in the GUI's Help
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
+
+## 0.16.0 — 2026-11-22
+
+- **Phase 16 starts: polish**, on branch `wip-ns-polish` (from 0.15.8):
+  wire bends that snap to exact right angles, Collect Media from MCP,
+  and dragging a node's handles on a rendered card through its Card and
+  Camera. Nothing else changed.
 
 ## 0.15.8 — 2026-11-22
 
