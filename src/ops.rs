@@ -2090,6 +2090,9 @@ pub static OPS: &[OpInfo] = &[
                 256.0, 376.0, 66.3, 0.0, -66.3, 0.0,
                 136.0, 256.0, 0.0, 66.3, 0.0, -66.3,
             ]),
+            // Off while it's being drawn with the viewer's pen: an open path,
+            // rendering nothing (old projects and scripts: a closed shape).
+            fixed!("closed", "Closed", ParamKind::Bool, true),
             fixed!("fill_rule", "Fill rule", ParamKind::Choice(FILL_RULES), "non-zero"),
             p!("color", "Color", ParamKind::Color, [1.0, 1.0, 1.0, 1.0]),
             p!("opacity", "Opacity", OPACITY, 1.0),
@@ -2097,6 +2100,11 @@ pub static OPS: &[OpInfo] = &[
             // Per vertex, in the order of `points`: added to Feather there, blended
             // along the outline (missing entries are 0).
             p!("point_feather", "Point feather", ParamKind::Points { stride: 1 }, Vec::<f64>::new()),
+            // How coverage runs across the soft edge (`shape_falloff`); the
+            // defaults are the plain smoothstep every shape had before.
+            fixed!("feather_falloff", "Feather falloff", ParamKind::Choice(crate::shape_falloff::CURVES), "smooth"),
+            p!("feather_strength", "Feather strength", ParamKind::Float { min: 0.1, max: 10.0 }, 1.0),
+            p!("feather_cutoff", "Feather cut-off", ParamKind::Float { min: 0.0, max: 0.99 }, 0.0),
             fixed!("invert", "Invert", ParamKind::Bool, false),
             fixed!("operation", "Operation", ParamKind::Choice(SHAPE_OPS), "over"),
             fixed!("motion_blur", "Motion blur", MOTION_SAMPLES, 0),
@@ -2113,7 +2121,13 @@ pub static OPS: &[OpInfo] = &[
                all, drag points or the curve between them to reshape it, click the curve to add a point, Ctrl+click to add after the selected point (drag to pull out \
                its tangents), Shift+click to select several, ⌫ to delete. Selected points show \
                their tangent handles: dragging one keeps the curve smooth, Alt breaks it; \
-               Alt+drag a point to pull new tangents out of it."),
+               Alt+drag a point to pull new tangents out of it. A Roto added from the node menu \
+               starts in pen mode (P, or the viewer's Pen button, starts one too): click to place \
+               each point, drag to pull out its tangents (Alt breaks them), click the first point \
+               or press Enter to close it, Esc or ⌫ to remove the last point. Until it's closed \
+               it's an open path that renders nothing, and its feather controls are off. Feather \
+               falloff, strength and cut-off shape the soft edge: the curve across it, how far \
+               it carries (above 1 further out), and a level below which it's cut to nothing."),
     },
     OpInfo {
         name: "tracker",
@@ -4624,9 +4638,18 @@ fn outline_bounds(outline: &[Pt], feather: f32) -> IRect {
 }
 
 fn shape_op(op: &str, params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
-    let style: ShapeStyle = parse(params, op)?;
+    let mut style: ShapeStyle = parse(params, op)?;
     let bg = inputs.first().copied().flatten();
     let format = bg.map_or(source_size(style.width, style.height), |b| b.format);
+    // A Roto still being drawn (an open path) covers nothing, inverted or
+    // not: the background passes through.
+    if params.get("closed").and_then(Value::as_bool) == Some(false) {
+        style.invert = false;
+        return shade(|_, _| 0.0, IRect::default(), format, &style, bg);
+    }
+    // Roto's feather falloff; the default (every other shape, old projects)
+    // is the plain smoothstep.
+    let falloff = crate::shape_falloff::Falloff::from_params(params);
     // One outline (with its feather), or with motion blur one per sample
     // across the shutter, averaged.
     let samples: Vec<ShapeSample> = match params.get("_motion").and_then(Value::as_array) {
@@ -4653,9 +4676,9 @@ fn shape_op(op: &str, params: &Value, inputs: &[Option<&Image>]) -> Result<Image
     for s in &samples {
         let shifted: Vec<Pt> = s.outline.iter().map(|p| [p[0] - reach.x0 as f32, p[1] - reach.y0 as f32]).collect();
         let c = if s.widths.is_empty() {
-            shape::coverage(&[shifted], reach.width(), reach.height(), s.feather, s.rule)
+            shape::coverage_with(&[shifted], reach.width(), reach.height(), s.feather, s.rule, &falloff)
         } else {
-            crate::shape_feather::coverage(&shifted, &s.widths, s.feather, reach.width(), reach.height(), s.rule)
+            crate::shape_feather::coverage_with(&shifted, &s.widths, s.feather, reach.width(), reach.height(), s.rule, &falloff)
         };
         cov.iter_mut().zip(c).for_each(|(a, b)| *a += b * weight);
     }
@@ -5541,6 +5564,68 @@ mod tests {
         let area: f32 = out.pixels.iter().map(|p| p[3]).sum();
         let exact = std::f32::consts::PI * 120.0 * 120.0;
         assert!((area - exact).abs() / exact < 0.003, "{area} vs {exact}");
+    }
+
+    /// Rotos saved before pen mode and feather falloff (no `closed`, no
+    /// `feather_*`) render exactly as with those params at their defaults,
+    /// on the plain and the per-point feather paths, motion blurred too.
+    #[test]
+    fn rotos_from_before_pen_mode_render_the_same() {
+        let pts = json!([48, 10, -20, 0, 20, 0, 85, 40, 0, -15, 0, 15, 48, 70, 20, 0, -20, 0, 10, 40, 0, 15, 0, -15]);
+        let olds = [
+            json!({"width": 96, "height": 80, "feather": 9, "fill_rule": "even-odd", "points": pts}),
+            json!({"width": 96, "height": 80, "feather": 3, "points": pts, "point_feather": [0, 12, 0, 4]}),
+            json!({"width": 96, "height": 80, "feather": 6, "invert": true, "motion_blur": 3,
+                "points": {"keys": [[1, pts], [3, [58, 10, -20, 0, 20, 0, 95, 40, 0, -15, 0, 15, 58, 70, 20, 0, -20, 0, 20, 40, 0, 15, 0, -15]]], "interp": "linear"}}),
+        ];
+        for old in olds {
+            let before = eval("roto", &resolve_params("roto", &old, 2), &[None], &CTX).unwrap();
+            let mut p = old.clone();
+            for (k, v) in [("closed", json!(true)), ("feather_falloff", json!("smooth")), ("feather_strength", json!(1)), ("feather_cutoff", json!(0))] {
+                p[k] = v;
+            }
+            let after = eval("roto", &resolve_params("roto", &p, 2), &[None], &CTX).unwrap();
+            assert!(before.window() == after.window() && before.pixels == after.pixels, "{old}");
+            // And a falloff does change it, on either path.
+            p["feather_falloff"] = json!("linear");
+            p["feather_cutoff"] = json!(0.3);
+            let shaped = eval("roto", &resolve_params("roto", &p, 2), &[None], &CTX).unwrap();
+            assert!(shaped.pixels != before.pixels, "{old}");
+        }
+    }
+
+    /// An open Roto (being drawn) renders nothing: the background passes
+    /// through, inverted or not, with either operation.
+    #[test]
+    fn an_open_roto_renders_nothing() {
+        let bg = eval("constant", &json!({"width": 64, "height": 48, "color": [0.2, 0.4, 0.6, 1.0]}), &[], &CTX).unwrap();
+        let pts = json!([10, 10, 0, 0, 0, 0, 50, 10, 0, 0, 0, 0, 30, 40, 0, 0, 0, 0]);
+        for (invert, operation) in [(false, "over"), (true, "over"), (false, "subtract")] {
+            let p = json!({"points": pts, "closed": false, "invert": invert, "operation": operation, "feather": 5});
+            let out = eval("roto", &resolve_params("roto", &p, 1), &[Some(&bg)], &CTX).unwrap();
+            assert!(out.window() == bg.window() && out.pixels == bg.pixels, "{invert} {operation}");
+        }
+        let alone = eval("roto", &resolve_params("roto", &json!({"width": 64, "height": 48, "points": [], "closed": false}), 1), &[None], &CTX).unwrap();
+        assert!(alone.pixels.iter().all(|p| p[3] == 0.0));
+    }
+
+    /// A cut-off trims the outside of the feather; strength carries it out.
+    #[test]
+    fn roto_feather_cutoff_and_strength_shape_the_edge() {
+        let square = json!([20, 20, 0, 0, 0, 0, 80, 20, 0, 0, 0, 0, 80, 80, 0, 0, 0, 0, 20, 80, 0, 0, 0, 0]);
+        let render = |extra: Value| {
+            let mut p = json!({"width": 100, "height": 100, "points": square, "feather": 20});
+            p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            eval("roto", &resolve_params("roto", &p, 1), &[None], &CTX).unwrap()
+        };
+        let plain = render(json!({}));
+        let cut = render(json!({"feather_cutoff": 0.5}));
+        let strong = render(json!({"feather_strength": 3}));
+        // 6 px outside the left edge: soft normally, cut off, stronger with strength.
+        let a = |img: &Image| img.at(14, 50)[3];
+        assert!(a(&plain) > 0.0 && a(&cut) == 0.0 && a(&strong) > a(&plain), "{} {} {}", a(&plain), a(&cut), a(&strong));
+        // Well inside: solid regardless.
+        assert_eq!((plain.at(50, 50)[3], cut.at(50, 50)[3], strong.at(50, 50)[3]), (1.0, 1.0, 1.0));
     }
 
     #[test]

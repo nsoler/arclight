@@ -7,6 +7,7 @@
 //! flattened to polygons first, finely enough that the error is far below a
 //! pixel.
 
+use crate::shape_falloff::Falloff;
 use rayon::prelude::*;
 
 /// A point in image pixels, y down.
@@ -41,6 +42,12 @@ fn segment_distance(p: Pt, a: Pt, b: Pt) -> f32 {
 /// `feather` is the width in pixels of the soft edge, centered on the
 /// outline; below 1 it is a 1 px anti-aliasing ramp.
 pub fn coverage(polys: &[Vec<Pt>], width: usize, height: usize, feather: f32, rule: FillRule) -> Vec<f32> {
+    coverage_with(polys, width, height, feather, rule, &Falloff::default())
+}
+
+/// [`coverage`] with the soft edge shaped by `falloff` (see
+/// [`crate::shape_falloff`]); the default falloff is exactly [`coverage`].
+pub fn coverage_with(polys: &[Vec<Pt>], width: usize, height: usize, feather: f32, rule: FillRule, falloff: &Falloff) -> Vec<f32> {
     let mut out = vec![0.0; width * height];
     let edges: Vec<Edge> = polys
         .iter()
@@ -98,7 +105,7 @@ pub fn coverage(polys: &[Vec<Pt>], width: usize, height: usize, feather: f32, ru
                 inside as u8 as f32
             } else {
                 let t = (0.5 + if inside { d } else { -d } / ramp).clamp(0.0, 1.0);
-                t * t * (3.0 - 2.0 * t)
+                falloff.ramp(t, ramp)
             };
         }
     });

@@ -18,6 +18,7 @@ mod graph_thumbs;
 mod help;
 mod node_editor;
 mod overlay;
+mod pen;
 mod pivot;
 mod panels;
 mod preferences;
@@ -1131,7 +1132,8 @@ impl App {
         // Esc clears the node graph's selection (text fields returned above;
         // the node browser handles its own).
         // (pivot: not while the viewer's pivot mode is on: Esc leaves that.)
-        if !self.editor.browser_open() && !self.viewer.pivot_active() && ctx.input(|i| i.key_pressed(Key::Escape)) {
+        // (Nor in pen mode: Esc removes the last point there, or leaves.)
+        if !self.editor.browser_open() && !self.viewer.pivot_active() && !self.viewer.pen_active() && ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.doc.clear_selection();
         }
         // Shift+E before any plain-E binding: shortcut matching ignores Shift.
@@ -2220,6 +2222,11 @@ impl eframe::App for App {
             self.pane_window(&ctx, pane);
         }
         self.save_panels(&ctx);
+        // Pen mode's first click with no Roto to draw into: a new one, added
+        // as the node menu adds one (after the selected node).
+        if self.viewer.take_new_shape() {
+            self.editor.add_at_view(&mut self.doc, "roto");
+        }
         // One undo step per finished gesture (drag, typing, click).
         let gesture = ctx.input(|i| i.pointer.any_down()) || ctx.text_edit_focused() || self.props.is_tracking() || self.viewer.is_transforming() || std::mem::take(&mut self.gesture_out);
         self.doc.commit(gesture);

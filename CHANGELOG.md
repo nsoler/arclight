@@ -18,6 +18,20 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.30 — 2026-11-21
+
+- **Roto pen mode:** a Roto added from the node menu (or with P / the
+  viewer's Pen button) is drawn point by point in the viewer: click to
+  add a point, drag for its tangents (Alt breaks them), click the first
+  point or press Enter to close, Esc / ⌫ removes the last point. Until
+  it's closed it's an open path that renders nothing, and its feather
+  controls are grayed out. Rotos made by scripts, MCP or Python still
+  start as the default circle.
+- **Roto feather falloff, strength and cut-off:** the curve across the
+  soft edge (smooth / linear / ease in / ease out), how far it carries,
+  and a level below which it's cut to nothing. The defaults render
+  existing projects unchanged.
+
 ## 0.14.29 — 2026-11-13
 
 - **GPU playback about 5× faster:** frames rendered on the GPU are shown

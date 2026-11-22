@@ -14,6 +14,7 @@
 //! whose per-point values are all 0 keep using that.
 
 use crate::shape::{self, FillRule, Pt};
+use crate::shape_falloff::Falloff;
 use rayon::prelude::*;
 
 /// Vertex `i`'s own feather (0 when missing, never negative).
@@ -84,6 +85,13 @@ struct Edge {
 /// `outline`, its soft edge `global + local[i]` wide at vertex `i` (see
 /// the module notes), filled by `rule`.
 pub fn coverage(outline: &[Pt], local: &[f32], global: f32, width: usize, height: usize, rule: FillRule) -> Vec<f32> {
+    coverage_with(outline, local, global, width, height, rule, &Falloff::default())
+}
+
+/// [`coverage`] with the soft edge shaped by `falloff` (see
+/// [`crate::shape_falloff`]), by the width of the edge a pixel takes its
+/// ramp from; the default falloff is exactly [`coverage`].
+pub fn coverage_with(outline: &[Pt], local: &[f32], global: f32, width: usize, height: usize, rule: FillRule, falloff: &Falloff) -> Vec<f32> {
     let mut out = vec![0.0; width * height];
     let n = outline.len();
     if n < 3 || width == 0 {
@@ -132,18 +140,22 @@ pub fn coverage(outline: &[Pt], local: &[f32], global: f32, width: usize, height
                 FillRule::EvenOdd => winding % 2 != 0,
             };
             // How far across its edge's ramp the pixel is (0.5: the ramp's end).
-            let mut across = 0.5f32;
+            let (mut across, mut wide) = (0.5f32, 1.0f32);
             for e in &near {
                 if xc >= e.lo[0] - e.half && xc <= e.hi[0] + e.half {
                     let (d, t) = closest([xc, yc], e.a, e.b);
-                    across = across.min(d / (e.wa + (e.wb - e.wa) * t));
+                    let w = e.wa + (e.wb - e.wa) * t;
+                    let n = d / w;
+                    if n < across {
+                        (across, wide) = (n, w);
+                    }
                 }
             }
             *px = if across >= 0.5 {
                 inside as u8 as f32
             } else {
                 let t = (0.5 + if inside { across } else { -across }).clamp(0.0, 1.0);
-                t * t * (3.0 - 2.0 * t)
+                falloff.ramp(t, wide)
             };
         }
     });
@@ -170,6 +182,18 @@ mod tests {
             let plain = shape::coverage(std::slice::from_ref(&outline), 100, 100, global + local, FillRule::NonZero);
             let worst = mine.iter().zip(&plain).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
             assert!(worst < 1e-5, "global {global} local {local}: {worst}");
+        }
+    }
+
+    #[test]
+    fn falloff_applies_the_same_on_both_paths() {
+        use crate::shape_falloff::{Curve, Falloff};
+        let (outline, _) = polygon(&square(), &[]);
+        for f in [Falloff { curve: Curve::Linear, strength: 2.0, cutoff: 0.1 }, Falloff { curve: Curve::EaseIn, strength: 0.5, cutoff: 0.0 }] {
+            let mine = coverage_with(&outline, &[4.0; 4], 8.0, 100, 100, FillRule::NonZero, &f);
+            let plain = shape::coverage_with(std::slice::from_ref(&outline), 100, 100, 12.0, FillRule::NonZero, &f);
+            let worst = mine.iter().zip(&plain).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+            assert!(worst < 1e-5, "{f:?}: {worst}");
         }
     }
 

@@ -80,7 +80,7 @@ impl Xf {
     /// output shows them; a shape following a Tracker draws its handles
     /// where the followed motion puts them (and drags map back through
     /// it, so edits stay in the shape's own space).
-    fn for_node(&self, doc: &Doc, id: &str, frame: i64) -> Xf {
+    pub(crate) fn for_node(&self, doc: &Doc, id: &str, frame: i64) -> Xf {
         let n = doc.node(id);
         let tracker = n.filter(|n| n.op == "tracker" && doc.viewed().as_deref() == Some(id)).and_then(|n| track::output_map(&n.params, frame));
         let follow = || {
@@ -206,7 +206,9 @@ enum Geo {
     /// in `tan`; other point lists leave it empty.
     /// `feather`: each vertex's own feather (padded to `pts`), when the op
     /// has a `point_feather` param; `global` its overall Feather.
-    Points { param: &'static str, stride: usize, pts: Vec<Vec2>, tan: Vec<[Vec2; 2]>, feather: Option<Vec<f32>>, global: f32 },
+    /// `closed` is off for a Roto still being drawn (`gui/pen.rs`): an
+    /// open path, without feather handles.
+    Points { param: &'static str, stride: usize, pts: Vec<Vec2>, tan: Vec<[Vec2; 2]>, feather: Option<Vec<f32>>, global: f32, closed: bool },
     /// Tracker boxes: each track's position (`None` when it is off) and its
     /// `[pattern, search]` box sizes and its boxes' offset from its point,
     /// in image pixels.
@@ -370,12 +372,13 @@ fn geo(doc: &Doc, id: &str, frame: i64, size: Vec2) -> Option<Geo> {
             } else {
                 Vec::new()
             };
-            let feather = has_point_feather(op).then(|| {
+            let closed = at("closed").as_bool() != Some(false);
+            let feather = (has_point_feather(op) && closed).then(|| {
                 let f: Vec<f32> = at(POINT_FEATHER).as_array().map(|a| a.iter().map(num).collect()).unwrap_or_default();
                 (0..flat.len() / stride).map(|i| f.get(i).copied().filter(|v| v.is_finite()).unwrap_or(0.0).max(0.0)).collect()
             });
             let global = at("feather").as_f64().unwrap_or(0.0) as f32;
-            Geo::Points { param, stride, pts, tan, feather, global }
+            Geo::Points { param, stride, pts, tan, feather, global, closed }
         }
         Overlay::Tracker { pattern, search } => Geo::Tracker {
             names: [pattern, search],
@@ -682,7 +685,7 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
             }
             None
         }
-        Geo::Points { ref pts, ref tan, ref feather, global, .. } => {
+        Geo::Points { ref pts, ref tan, ref feather, global, closed, .. } => {
             let s: Vec<Pos2> = pts.iter().map(|&v| xf.screen(v)).collect();
             // Tangent tips first, so one lying over another vertex stays
             // grabbable; a collapsed handle leaves the vertex to its own hit.
@@ -722,7 +725,9 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
             // Each edge as chords: a straight line, or the sampled curve.
             let line = points_outline(xf, pts, tan);
             let per = if tan.is_empty() { 1 } else { SAMPLES };
-            (0..line.len())
+            // An open path has no edge back from its last point to its first.
+            let chords = if closed { line.len() } else { (s.len() - 1) * per };
+            (0..chords)
                 .map(|j| {
                     let (a, b) = (line[j], line[(j + 1) % line.len()]);
                     let t = along(p, a, b);
@@ -734,7 +739,7 @@ fn hit(g: &Geo, xf: &Xf, p: Pos2, sel: &[usize]) -> Option<Part> {
                 // Anywhere else inside the transform box moves the selection…
                 .or_else(|| sbox.filter(|r| r.contains(xf.image(p).to_pos2())).map(|_| Part::SelBox(BoxHandle::Move)))
                 // …and inside the shape, the whole shape.
-                .or_else(|| (s.len() >= 3 && in_polygon(p, &line)).then_some(Part::Body))
+                .or_else(|| (closed && s.len() >= 3 && in_polygon(p, &line)).then_some(Part::Body))
         }
     }
 }
@@ -1288,9 +1293,18 @@ impl Overlays {
                     painter.text(label, egui::Align2::LEFT_BOTTOM, format!("{}", i + 1), egui::FontId::proportional(12.0), col);
                 }
             }
-            Geo::Points { pts, tan, feather, global, .. } => {
+            Geo::Points { pts, tan, feather, global, closed, .. } => {
                 let s: Vec<Pos2> = pts.iter().map(|&v| xf.screen(v)).collect();
-                outline_path(painter, points_outline(xf, &pts, &tan), HANDLE);
+                if closed {
+                    outline_path(painter, points_outline(xf, &pts, &tan), HANDLE);
+                } else if s.len() >= 2 {
+                    // An open path: up to its last point, not back to the first.
+                    let mut line = points_outline(xf, &pts, &tan);
+                    line.truncate((s.len() - 1) * if tan.is_empty() { 1 } else { SAMPLES });
+                    line.push(s[s.len() - 1]);
+                    painter.add(Shape::line(line.clone(), Stroke::new(3.0, Color32::from_black_alpha(140))));
+                    painter.add(Shape::line(line, Stroke::new(1.5, HANDLE)));
+                }
                 // The selected vertices' feather handles: a diamond out along
                 // the normal at the soft edge's outer end, dashed to the vertex.
                 if let Some(f) = &feather {
@@ -2384,6 +2398,25 @@ mod tests {
             let h = if i < 2 { 20.0 } else { -20.0 };
             [x, y, -h, 0.0, h, 0.0]
         }).collect()
+    }
+
+    /// A Roto still being drawn is an open path: no edge back to its first
+    /// point, no inside to drag, no feather handles; closed, all three.
+    #[test]
+    fn an_open_roto_has_no_closing_edge_body_or_feather() {
+        for closed in [false, true] {
+            // Straight sides: no tangents.
+            let pts: Vec<f32> = SQUARE.as_chunks::<2>().0.iter().flat_map(|&[x, y]| [x, y, 0.0, 0.0, 0.0, 0.0]).collect();
+            let d = doc("roto", json!({ "points": pts, "closed": closed, "point_feather": [5, 5, 5, 5] }));
+            let g = geo(&d, "n", 1, SIZE).unwrap();
+            let Geo::Points { ref feather, .. } = g else { panic!() };
+            assert_eq!(feather.is_some(), closed);
+            // The left side runs from the last point back to the first.
+            assert_eq!(matches!(hit(&g, &XF, Pos2::new(50.0, 50.0), &[]), Some(Part::Edge(3, _))), closed);
+            assert_eq!(hit(&g, &XF, Pos2::new(100.0, 50.0), &[]) == Some(Part::Body), closed);
+            // The top side is an edge either way.
+            assert!(matches!(hit(&g, &XF, Pos2::new(100.0, 25.0), &[]), Some(Part::Edge(0, _))));
+        }
     }
 
     fn select(ov: &mut Overlays, d: &mut Doc, at: Pos2) {

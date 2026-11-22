@@ -83,6 +83,8 @@ pub struct Viewer {
     overlays: Overlays,
     // pivot: "." pivot mode (see `pivot`).
     pivot: crate::pivot::PivotMode,
+    /// Pen mode: drawing a Roto point by point (see `pen`).
+    pen: crate::pen::PenMode,
     /// The toolbar's status text width last frame, to tell whether it fits
     /// beside the controls or needs a row of its own.
     status_w: f32,
@@ -164,6 +166,7 @@ impl Default for Viewer {
             fit_pending: true,
             overlays: Overlays::default(),
             pivot: Default::default(),
+            pen: Default::default(),
             mode3d: false,
             sheet: false,
             viewport3d: Default::default(),
@@ -222,6 +225,10 @@ impl Viewer {
         if self.mode3d && self.viewport3d.delete_curve_points(doc) {
             return true;
         }
+        // While drawing a Roto: its last point.
+        if !self.mode3d && self.pen.delete_last(doc) {
+            return true;
+        }
         self.overlays.delete_points(doc)
     }
 
@@ -229,6 +236,16 @@ impl Viewer {
     // pivot: whether "." pivot mode is on (Esc is then its own).
     pub fn pivot_active(&self) -> bool {
         !self.mode3d && self.pivot.active()
+    }
+
+    /// Whether pen mode is on (Esc is then its own).
+    pub fn pen_active(&self) -> bool {
+        !self.mode3d && self.pen.active()
+    }
+
+    /// Pen mode wants a new Roto added (once): see `PenMode::take_new_shape`.
+    pub fn take_new_shape(&mut self) -> bool {
+        self.pen.take_new_shape()
     }
 
     pub fn toggle_3d(&mut self) {
@@ -508,12 +525,14 @@ impl Viewer {
         // Overlay handles take a drag before panning does.
         let xf = |v: &Viewer| Xf::new(Rect::from_center_size(rect.center() + v.pan, size * v.zoom), v.zoom);
         // pivot: "." pivot mode takes the pointer from the handles.
-        if !self.pivot.ui(ui, &resp, &xf(self), size, doc, frame, &mut self.overlays) {
+        // Pen mode, when on, takes it from both (but not from pivot mode).
+        let pen = !self.pivot.active() && self.pen.ui(ui, &resp, &xf(self), doc, frame);
+        if !pen && !self.pivot.ui(ui, &resp, &xf(self), size, doc, frame, &mut self.overlays) {
             self.overlays.interact(ui, &resp, &xf(self), size, doc, frame);
         }
 
         // Interaction: drag to pan, scroll / pinch to zoom about the cursor.
-        if resp.dragged() && !self.overlays.dragging() && !self.pivot.active() {
+        if resp.dragged() && !self.overlays.dragging() && !self.pivot.active() && !self.pen.active() {
             self.pan += resp.drag_delta();
         }
         if resp.double_clicked() {
@@ -567,6 +586,7 @@ impl Viewer {
         }
         self.overlays.draw(ui, &painter, &xf(self), size, doc, frame);
         self.pivot.draw(ui, &painter, &xf(self), size, doc, frame, &self.overlays); // pivot
+        self.pen.draw(ui, &painter, &xf(self), doc, frame);
         // A 3D scene has no pixels: say what's in it instead.
         if let Some(scene) = img.scene() {
             let text = format!("3D scene: {}\nConnect it to a Scanline Render to see it.", scene.describe());
@@ -754,6 +774,11 @@ impl Viewer {
                 self.pan = Vec2::ZERO;
             }
             ui.label(format!("{:.0}%", self.zoom * 100.0));
+            ui.separator();
+            let tip = "Pen (P): draw a Roto point by point: click to add, drag for tangents, click the first point or Enter to close";
+            if ui.selectable_label(self.pen.active(), "Pen").on_hover_text(tip).clicked() {
+                self.pen.press_button();
+            }
             // What is left on this row: `available_width` in a wrapping
             // layout is the whole row's.
             room = ui.available_size_before_wrap().x;

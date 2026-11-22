@@ -261,6 +261,23 @@ included.
   for every selected point); Feather stays as an overall amount on top.
   **⌘**-click (or **⌘**-drag) in a Keyer or Color Difference Key picks
   the screen color.
+- **Pen mode** draws a **Roto** point by point. A Roto added from the
+  node menu starts in it; **P** (pointer over the 2D viewer) or the
+  viewer's **Pen** button turns it on to start another (added as the menu
+  adds one, after the selected node). Click to place each point; drag on
+  to pull out its tangents (**Alt** moves only the outgoing one, breaking
+  them). Click the first point (with 3 or more), or press **Enter**, to
+  close the shape; **Esc** or **⌫** removes the last point, and **Esc**
+  with none left leaves pen mode (undo removes the empty Roto). Points
+  already placed can be dragged meanwhile. Until it's closed the Roto is
+  an open path: it renders nothing, and Feather, Point feather and the
+  feather falloff controls are grayed out (in Properties and the viewer).
+  Ticking **Closed** in Properties closes it too.
+- A Roto's **Feather falloff** (smooth, linear, ease in, ease out),
+  **Feather strength** (above 1 the soft edge carries further out, below 1
+  it pulls in) and **Feather cut-off** (coverage below it becomes none, a
+  hard outer limit) shape its soft edge, per-point feather included; the
+  defaults are the edge Rotos always had.
 - **.** (period, pointer over the 2D viewer, not in a text field) sets a
   pivot: with a **Transform** selected, or two or more **Roto** /
   **Polygon** points, it turns on pivot mode (an orange crosshair; the

@@ -356,7 +356,11 @@ impl Properties {
                             label.context_menu(|ui| self.formula_menu(ui, doc, id, spec.name));
                         }
                     });
-                    if linked {
+                    // A Roto still being drawn: no feather until it's closed.
+                    let off = roto_open_off(doc, id, &op, spec.name, self.frame);
+                    if let Some(why) = off {
+                        ui.add_enabled_ui(false, |ui| self.param_widget(ui, doc, id, &op, spec)).response.on_disabled_hover_text(why);
+                    } else if linked {
                         self.linked_widget(ui, doc, id, spec);
                     } else {
                         self.param_widget(ui, doc, id, &op, spec);
@@ -1330,6 +1334,20 @@ fn key_tracks(doc: &mut Doc, id: &str, frame: i64, pos: &[Option<track::Pt>], wa
                 key(format!("track{}_score", i + 1), json!((*s as f64 * 1e4).round() / 1e4));
             }
         }
+    }
+}
+
+/// Why `name` is grayed out on a Roto still being drawn (`closed` off):
+/// its feather controls until it's closed, and Closed itself with fewer
+/// than 3 points. None when it's live.
+fn roto_open_off(doc: &Doc, id: &str, op: &str, name: &str, frame: i64) -> Option<&'static str> {
+    if op != "roto" || doc.param(id, "closed") != Value::Bool(false) {
+        return None;
+    }
+    match name {
+        "feather" | "point_feather" | "feather_falloff" | "feather_strength" | "feather_cutoff" => Some("Close the shape to feather it (click its first point in the viewer, or Enter)"),
+        "closed" if doc.param_at(id, "points", frame).as_array().map_or(0, |a| a.len() / 6) < 3 => Some("A closed shape needs 3 or more points"),
+        _ => None,
     }
 }
 

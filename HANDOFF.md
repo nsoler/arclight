@@ -1,8 +1,24 @@
 # Arclight — handoff notes
 
-Last updated 2026-11-13.
+Last updated 2026-11-21.
 
 ## Status
+
+- **0.14.30 (2026-11-21): Roto pen + feather falloff** (Dev2). Roto
+  `closed` (default true; false = open path: `shape_op` returns the
+  background, invert ignored; the overlay drops the closing chord, Body
+  and feather handles). Pen state is UI-only (`gui/pen.rs`): on while an
+  open Roto is selected unless dismissed; a new-shape request goes
+  through `NodeEditor::add_at_view`, so it chains like a menu add; only
+  `NodeEditor::place` starts a Roto empty (scripts / bridge / Python keep
+  the circle). `shape_falloff.rs` acts on the ramp t inside
+  `coverage_with` on both coverage paths; defaults and ≤1 px edges use
+  the identical smoothstep (tests `rotos_from_before_pen_mode_render_the_same`,
+  `defaults_are_the_plain_smoothstep_bit_for_bit`). In flight: Dev1 on
+  the TODO splat / depth items (one-frame Media In static, the Metal
+  depth race in raster/blur.wgsl, the GPU splat/surface merge, ~2.4×
+  slower than the CPU on Linux too). User's decision: the channel
+  combine node = Shuffle grows inputs.
 
 - **0.14.26–0.14.27 (2026-11-13, in v0.14.29).** 0.14.26: gizmo-only 3D
   transforms. `Viewer::transform_keys` no longer starts object
@@ -373,6 +389,8 @@ Workspace: `.`, `python/` (crate `arclt`, pyo3 abi3-py310; public API in
   6 Roto / 2 Polygon) alone. Vertex insert / delete: `anim::edit_all`.
 - `_follow` is injected per motion sample by `ops::resolve_at`; following
   shapes bypass resolve_linked's no-animation fast path.
+- `closed` / feather falloff: see 0.14.30 in Status; pen logic and its
+  tests (`drawing_with_events`, real egui events) in `gui/pen.rs`.
 - Test gotcha: overlay tests' `gesture()` uses the unwarped `Xf`; for
   warped nodes drive `press` / `drag_to` with the drag's frozen xf.
 

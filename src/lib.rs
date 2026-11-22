@@ -58,6 +58,7 @@ pub mod session;
 pub mod shade;
 pub mod sfm;
 pub mod shape;
+pub mod shape_falloff;
 pub mod shape_feather;
 pub mod shape_follow;
 pub mod splat;

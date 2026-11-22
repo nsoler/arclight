@@ -422,6 +422,12 @@ impl NodeEditor {
     fn place(&mut self, doc: &mut Doc, op: &OpInfo, at: Pos2) {
         let upstream = doc.selected.clone();
         let id = doc.add_node(op.name, [at.x, at.y]);
+        // A Roto starts empty and open, drawn point by point in the viewer
+        // (`gui/pen.rs`); scripts and the bridge still get the default circle.
+        if op.name == "roto" {
+            doc.set_param(&id, "points", serde_json::json!([]));
+            doc.set_param(&id, "closed", serde_json::json!(false));
+        }
         if op.name == "camera" {
             self.target_wire = None;
             let into = upstream.as_deref().and_then(|u| doc.node(u)).and_then(|n| match n.op.as_str() {

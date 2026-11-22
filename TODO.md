@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.14.24 (2026-11-02). Done items are removed
+What's still open, as of 0.14.30 (2026-11-21). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -8,6 +8,14 @@ them when they ship. `ROADMAP.md` is the public summary.
 ## To check by hand (user)
 
 On Linux and on the Macs (the DMG), from the release builds.
+
+**Phase 14 (0.14.30)**
+- [ ] Roto pen: add a Roto from the menu → pen on; click 4 points, drag
+      one for tangents, Alt-drag breaks; Esc / ⌫ removes the last; click
+      the first point → closes, renders, and Feather / falloff / strength
+      / cut-off enable; P with a Read selected → the new Roto takes it as
+      background; undo steps one point at a time; a 0.14.29 project with
+      Rotos looks the same
 
 **Phase 14 (0.14.27)**
 - [X] Node graph: a Read of a still, a Read of a #### sequence and a
@@ -27,7 +35,7 @@ On Linux and on the Macs (the DMG), from the release builds.
       `gpu --check`
 
 **Phase 14 (0.14.28)**
-- [ ] Geo Info: World on a moved / scaled mesh changes P and N
+- [X] Geo Info: World on a moved / scaled mesh changes P and N
       (instances don't); a Camera Tracker's Cloud tab numbers match the
       tracker's; pick cloud points in 3D + Selected only: just those
       rows; a Scanline Render with a background shows the size note in
@@ -122,29 +130,15 @@ On Linux and on the Macs (the DMG), from the release builds.
       like background / far-plane pixels (inf vs a far value, or a
       depth-format / clear difference on Metal). The 0.14.29 hand check
       above, "Macs: … plus `gpu --check`", doesn't hold yet
-- [ ] **Roto pen: draw a shape point by point** (user, 2026-11-13).
-      Today a new Roto starts as a default circle that has to be dragged
-      and reshaped into place. Instead: a pen mode in the 2D viewer where
-      each click places a Bezier point (click-drag pulls out its handles,
-      Alt breaks them), starting wherever the user clicks; clicking the
-      first point (or Enter / a Close button) closes the curve; Esc or
-      Backspace removes the last point while drawing. Until it's closed
-      it's an open path: Feather, feather strength / falloff, cut-off
-      (and per-point feather handles) are grayed out in Properties and
-      in the viewer, and enable once the curve is closed. A draw mode on
-      today's Roto, not a new node (user's decision, 2026-11-13): Roto
-      already has Bezier points, Feather and Point feather, and existing
-      projects' Rotos must load and render unchanged. Adds
-      falloff controls Roto doesn't have yet (strength / curve of the
-      feather, a cut-off)
 - [ ] **Channel combine / routing node** (user, 2026-11-13): several
       inputs, each listing its available channels (rgba and every plane:
       depth, N, specular, matte.*, …), and a routing table that sends any
       input channel to any output channel or pass: input 1's red → out
       green, input 2's alpha → out specular, etc. Today's Shuffle has one
       input; this generalises it (likely Shuffle growing inputs, or a new
-      node). Fold into P5b's Shuffle or do ahead of phase 15: the user's
-      call
+      node). **User's decision (2026-11-21): grow Shuffle with more
+      inputs** (not a new node); old Shuffles must load and render
+      unchanged
 - [ ] Geo Info: picking individual point-set / mesh points in the 3D
       view (to narrow Points / Mesh points like Cloud picks) isn't
       supported; only Camera Tracker cloud points are pickable
