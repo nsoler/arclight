@@ -804,6 +804,16 @@ color).
   `1`), set **Out** to write the color back into a pass instead, and list
   passes in **Remove** (`*` for all) to drop them once used. The ▾ beside
   each field offers the usual names.
+- **Shuffle** also combines channels from several images: connect more
+  inputs (a spare port always waits below the last, labeled **2**, **3**,
+  …, up to 32 in all). Properties lists each input's channels (R G B A and
+  every pass it carries), and **Routes** is a routing table: each row sends
+  one input's channel (`2:A`, `3:depth`, `1:N.x`, or `0` / `1`) to an
+  output channel or pass (**R**, **G**, **B**, **A**, `depth`,
+  `specular.R`, a new name), with **+ Add route** and ✕ to remove. Routes
+  read the inputs as they come in, run after the fields above and before
+  **Remove**; the output keeps input 1's frame. Shuffles reading other
+  inputs run on the CPU.
 - **Merge** with **zmerge** combines two renders by their depth: the nearer
   is in front at each pixel, its soft edges blended over what's behind.
 - Writing **EXR** keeps every pass as a layer (`P.x`, `N.x`, `depth.Z`,

@@ -18,6 +18,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.31 — 2026-11-21
+
+- **Shuffle combines channels from several images:** connect more
+  inputs (2, 3, … up to 32) and use the routing table in Properties
+  (each input's channels listed) to send any input's channel (R, G, B,
+  A, any pass, 0 / 1) to any output channel or pass (`routes`:
+  `["2:A", "A"]`, `["3:depth", "depth"]`, …; also from MCP / Python).
+  One-input Shuffles are unchanged; routes reading input 2+ run on the
+  CPU.
+
 ## 0.14.30 — 2026-11-21
 
 - **Roto pen mode:** a Roto added from the node menu (or with P / the

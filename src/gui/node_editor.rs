@@ -449,7 +449,9 @@ impl NodeEditor {
         }
         // Added with a Scanline Render selected, a scene or particles go
         // into its spare input.
-        if let Some(render) = upstream.as_deref().and_then(|u| doc.node(u)).filter(|n| ops::growable(&n.op).is_some()) {
+        // (Scene inputs only: a Shuffle's extra inputs are wired by hand, so a
+        // node added with a Shuffle selected still follows it.)
+        if let Some(render) = upstream.as_deref().and_then(|u| doc.node(u)).filter(|n| ops::growable(&n.op).is_some() && ops::port(&n.op, n.inputs.len().saturating_sub(1)).is_some_and(|p| p.kind == ops::Kind::Scene)) {
             let (render, spare) = (render.id.clone(), render.inputs.len() - 1);
             if fits(doc, &id, &render, spare) && doc.connect(&id, &render, spare) {
                 doc.selected = Some(id);

@@ -24,6 +24,7 @@ mod panels;
 mod preferences;
 mod project_settings;
 mod properties;
+mod shuffle_routes;
 mod script_jobs;
 mod sound;
 mod templates;
@@ -283,6 +284,8 @@ struct App {
     cpu_retry: bool,
     /// The selected Transform and its input's data window, for its overlay.
     probe: Option<(String, Arc<Image>)>,
+    /// The probed Shuffle's further inputs' layers (ports 2, 3, …).
+    probe_more: Vec<Option<worker::Layers>>,
     error: Option<NodeError>,
     shown_frame: i64,
     millis: f32,
@@ -413,6 +416,7 @@ impl App {
             image: None,
             cpu_retry: false,
             probe: None,
+            probe_more: Vec::new(),
             error: None,
             shown_frame: 0,
             millis: 0.0,
@@ -1328,6 +1332,9 @@ impl App {
                     use arclight::ops::Overlay;
                     n.op == "shuffle" || arclight::ops::info(&n.op).is_some_and(|i| matches!(i.overlay, Overlay::Transform { .. } | Overlay::Pick(_) | Overlay::CornerPin { .. }))
                 });
+                // A Shuffle's further inputs too, for its routing table
+                // (only a selected Shuffle's: nothing more for other nodes).
+                let probe_more = probe.filter(|n| n.op == "shuffle").map(|n| n.inputs.iter().skip(1).cloned().collect::<Vec<_>>()).unwrap_or_default();
                 let probe = probe.and_then(|n| n.inputs.first().filter(|i| !i.is_empty()).map(|i| (n.id.clone(), i.clone())));
                 let key = (self.doc.revision, t.clone(), self.transport.frame, probe.clone());
                 if self.requested.as_ref() != Some(&key) {
@@ -1336,6 +1343,7 @@ impl App {
                         target: t.clone(),
                         frame: self.transport.frame,
                         probe,
+                        probe_more,
                         pick: self.viewer.pick_at(),
                         cpu_only: false,
                     });
@@ -1370,6 +1378,7 @@ impl App {
                 self.millis = resp.millis;
                 self.cached = resp.cached_frames;
                 self.probe = resp.probe;
+                self.probe_more = resp.probe_more;
                 self.doc.view_format = self.image.as_ref().map(|img| img.format());
             }
         }
@@ -1383,6 +1392,7 @@ impl App {
                     target: t.clone(),
                     frame: self.shown_frame,
                     probe: self.requested.as_ref().and_then(|k| k.3.clone()),
+                    probe_more: self.doc.selected.as_ref().and_then(|id| self.doc.node(id)).filter(|n| n.op == "shuffle").map(|n| n.inputs.iter().skip(1).cloned().collect()).unwrap_or_default(),
                     pick: None,
                     cpu_only: true,
                 });
@@ -1603,6 +1613,7 @@ impl App {
     fn properties_ui(&mut self, ui: &mut egui::Ui) {
         self.props.layer = self.probe.as_ref().map(|(n, img)| (n.clone(), img.window(), img.format));
         self.props.input_layers = self.probe.as_ref().map(|(n, img)| (n.clone(), img.layers()));
+        self.props.more_layers = self.probe.as_ref().map(|(n, _)| (n.clone(), self.probe_more.clone()));
         self.props.looking_through = self.viewer.viewport3d.looking_through().filter(|_| self.viewer.mode3d);
         if let Some(f) = self.props.ui(ui, &mut self.doc, self.transport.frame) {
             self.transport.set_play(Play::Stopped);

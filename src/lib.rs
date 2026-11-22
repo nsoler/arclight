@@ -61,6 +61,7 @@ pub mod shape;
 pub mod shape_falloff;
 pub mod shape_feather;
 pub mod shape_follow;
+pub mod shuffle_route;
 pub mod splat;
 pub mod solve;
 pub mod templates;

@@ -122,6 +122,9 @@ pub struct Properties {
     /// The selected node (a Shuffle) and its input's layers, for the names
     /// its fields offer.
     pub input_layers: Option<(String, Vec<Layer>)>,
+    /// The selected Shuffle and its further inputs' layers (ports 2, 3, …;
+    /// None where unknown), for its routing table.
+    pub more_layers: Option<(String, Vec<Option<Vec<Layer>>>)>,
     /// The Tracker panel's exports copy the keys instead of linking.
     copy_exports: bool,
     /// Formulas being typed, by node and param (applied on Enter or when
@@ -791,6 +794,13 @@ impl Properties {
                 });
                 // In the list's own order.
                 changed.then(|| json!(names.iter().filter(|n| chosen.contains(n)).collect::<Vec<_>>()))
+            }
+            // A Shuffle's routing table (`shuffle_routes`).
+            ParamKind::Text if op == "shuffle" && spec.name == "routes" => {
+                let mut layers: Vec<Option<Vec<Layer>>> = vec![self.input_layers.as_ref().filter(|(n, _)| n == id).map(|(_, l)| l.clone())];
+                layers.extend(self.more_layers.as_ref().filter(|(n, _)| n == id).map_or(Vec::new(), |(_, m)| m.clone()));
+                let connected: Vec<bool> = doc.node(id).map_or(Vec::new(), |n| n.inputs.iter().map(|i| !i.is_empty()).collect());
+                crate::shuffle_routes::edit(ui, id, &value, &layers, &connected)
             }
             ParamKind::Text => {
                 let key = (id.to_string(), spec.name.to_string());

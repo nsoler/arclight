@@ -150,18 +150,31 @@ pub fn article(k: Kind) -> &'static str {
 
 /// How many fixed inputs `op` has before any number more of the same
 /// kind, if it grows that way: a Scanline Render's scene, camera and
-/// background, then more scenes or particle streams, rendered together.
-/// The node editor keeps one spare empty input after the connected ones.
+/// background, then more scenes or particle streams, rendered together; a
+/// Shuffle's input, then more images its routes read channels from
+/// (`shuffle_route`). The node editor keeps one spare empty input after the
+/// connected ones.
 pub fn growable(op: &str) -> Option<usize> {
-    (op == "scanline_render").then_some(3)
+    match op {
+        "scanline_render" => Some(3),
+        "shuffle" => Some(1),
+        _ => None,
+    }
 }
 
-/// `op`'s input `i`: a fixed one, or a growable op's extra.
+/// A Shuffle's extra inputs' labels: its routes name them by number.
+const SHUFFLE_PORTS: [&str; 31] = [
+    "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30",
+    "31", "32",
+];
+
+/// `op`'s input `i`: a fixed one, or a growable op's extra (a Scanline
+/// Render's are scenes; a Shuffle's, optional images "2", "3", …).
 pub fn port(op: &str, i: usize) -> Option<Port> {
     let fixed = info(op)?.inputs;
     match fixed.get(i) {
         Some(p) => Some(*p),
-        None => growable(op).filter(|&n| i >= n).map(|_| scene_in("scene")),
+        None => growable(op).filter(|&n| i >= n).map(|n| if op == "shuffle" { opt(SHUFFLE_PORTS.get(i - n).copied().unwrap_or("+")) } else { scene_in("scene") }),
     }
 }
 
@@ -830,6 +843,10 @@ pub static OPS: &[OpInfo] = &[
             fixed!("alpha", "Alpha from", ParamKind::Text, "A"),
             fixed!("out", "Out", ParamKind::Text, "rgba"),
             fixed!("remove", "Remove", ParamKind::Text, ""),
+            // More channels copied in, in order, from any input: a list of
+            // ["<input>:<channel>", "<dest>"] (`shuffle_route`); old
+            // projects have none.
+            fixed!("routes", "Routes", ParamKind::Text, Value::Array(Vec::new())),
         ],
         overlay: Overlay::None,
         mask_base: None,
@@ -837,7 +854,12 @@ pub static OPS: &[OpInfo] = &[
                into the color, to grade, blur or key it with any node; Red, Green, Blue and Alpha from take \
                each channel from R, G, B, A, any plane (N.y, matte.Cube1) or 0 / 1. Out writes the result \
                into a named pass instead, leaving the color as it was; Remove drops passes once used \
-               (names separated by commas or spaces, * for all). Values are copied as stored.",
+               (names separated by commas or spaces, * for all). Values are copied as stored. \
+               Connect more inputs (2, 3, …) to combine channels from several images: the routing \
+               table sends any input's channel (R, G, B, A, any pass, 0 / 1) to any output channel or \
+               pass, e.g. input 2's alpha into the alpha, input 3's depth into depth, input 1's N.x \
+               into specular.R. Routes read the inputs as they come in and run after the fields above, \
+               before Remove.",
     },
     OpInfo {
         name: "switch",
@@ -3687,6 +3709,9 @@ fn shuffle(params: &Value, inputs: &[Option<&Image>]) -> Result<Image> {
         out.rgba_to_layer(p.out.trim(), if existing > 0 { existing } else { count })?;
         out.pixels.clone_from(&a.pixels);
     }
+    // The routing table: channels from any input (none in old projects).
+    let routes = crate::shuffle_route::parse(params.get("routes").unwrap_or(&Value::Null))?;
+    let mut out = crate::shuffle_route::apply(out, inputs, &routes)?;
     let drop: Vec<&str> = p.remove.split([',', ' ']).filter(|s| !s.is_empty()).collect();
     out.remove_layers(&drop);
     Ok(out)
@@ -5812,6 +5837,57 @@ mod tests {
         // Missing layers and channels are named.
         assert!(run(json!({ "in": "motion" })).err().unwrap().to_string().contains("motion"));
         assert!(run(json!({ "blue": "N.q" })).err().unwrap().to_string().contains("N.q"));
+    }
+
+    /// Shuffles from before routing (one input, no `routes`) render exactly
+    /// as with an empty routing table, or a spare unconnected input.
+    #[test]
+    fn shuffles_from_before_routing_render_the_same() {
+        let mut img = solid(3, 2, [0.1, 0.2, 0.3, 0.9]);
+        *img.plane_mut("depth") = vec![4.0; 6];
+        *img.plane_mut("N.x") = vec![0.5; 6];
+        for old in [json!({}), json!({"in": "depth"}), json!({"green": "N.x", "out": "glow", "remove": "depth"})] {
+            let before = eval("shuffle", &old, &[Some(&img)], &CTX).unwrap();
+            let mut p = old.clone();
+            p["routes"] = json!([]);
+            for inputs in [vec![Some(&img)], vec![Some(&img), None]] {
+                let after = eval("shuffle", &p, &inputs, &CTX).unwrap();
+                assert!(before.window() == after.window() && before.pixels == after.pixels && before.planes == after.planes, "{old}");
+            }
+        }
+    }
+
+    /// Channels from three inputs combined by the routing table; Remove
+    /// runs after the routes.
+    #[test]
+    fn shuffle_routes_combine_inputs() {
+        let a = solid(2, 2, [0.1, 0.2, 0.3, 1.0]);
+        let b = solid(2, 2, [0.0, 0.0, 0.0, 0.25]);
+        let mut c = solid(2, 2, [0.0; 4]);
+        *c.plane_mut("depth") = vec![6.0; 4];
+        *c.plane_mut("matte.hero") = vec![1.0; 4];
+        let p = json!({"routes": [["2:A", "A"], ["3:depth", "depth"], ["3:matte.hero", "R"], ["1:B", "specular.R"]], "remove": "depth"});
+        let out = eval("shuffle", &p, &[Some(&a), Some(&b), Some(&c)], &CTX).unwrap();
+        assert_eq!(out.get(1, 1), [1.0, 0.2, 0.3, 0.25]);
+        assert_eq!(out.plane_at("specular.R", 1, 1), 0.3);
+        assert!(out.plane("depth").is_none(), "removed after routing");
+        let e = eval("shuffle", &json!({"routes": [["4:A", "A"]]}), &[Some(&a)], &CTX).err().unwrap().to_string();
+        assert!(e.contains("input 4 is not connected"), "{e}");
+    }
+
+    /// A Shuffle grows image inputs "2", "3", …; a Scanline Render's extra
+    /// inputs are still scenes, after its three fixed ones; others don't grow.
+    #[test]
+    fn growable_inputs_and_their_ports() {
+        assert_eq!((growable("scanline_render"), growable("shuffle"), growable("merge")), (Some(3), Some(1), None));
+        assert_eq!(port("shuffle", 0).map(|p| (p.label, p.kind, p.optional)), Some(("input", Kind::Image, false)));
+        assert_eq!(port("shuffle", 1).map(|p| (p.label, p.kind, p.optional)), Some(("2", Kind::Image, true)));
+        assert_eq!(port("shuffle", 3).map(|p| p.label), Some("4"));
+        for i in 0..3 {
+            assert_eq!(port("scanline_render", i).map(|p| p.label), info("scanline_render").unwrap().inputs.get(i).map(|p| p.label));
+        }
+        assert_eq!(port("scanline_render", 5).map(|p| (p.label, p.kind, p.optional)), Some(("scene", Kind::Scene, true)));
+        assert!(port("merge", 7).is_none());
     }
 
     #[test]

@@ -4,6 +4,24 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.14.31 (2026-11-21): Shuffle routing** (Dev2; the user's channel
+  combine request, decided as "grow Shuffle"). `routes` (Shuffle only,
+  default []) = [["<input>:<channel>", "<dest>"]], inputs numbered from
+  1; they run after in / channels / out and before remove, each reading
+  the unshuffled inputs (`shuffle_route.rs`). Output window = input 1's
+  ∪ the windows of the inputs read. `ops::growable` is a match: shuffle
+  (1 fixed, image ports "2".."32" via SHUFFLE_PORTS), scanline_render
+  unchanged; the node editor's "spare input" add only goes to scene
+  ports. Scripts: `session::input_cap` (Shuffle 32, others fixed);
+  describe_node lists the extra ports. GUI: the worker's `probe_more`
+  probes a selected Shuffle's ports 2+ only (`gui/shuffle_routes.rs`).
+  GPU: routes reading input 2+ run on the CPU; within input 1 they stay
+  on the GPU. In flight: Dev1's static one-frame Media In + Metal depth
+  race (`raster.wgsl` / `blur.wgsl` word-addressed hits), held: the
+  lib test process intermittently SIGSEGVs at the end inside NVIDIA's
+  shader compiler (libnvidia-gpucomp) with those shaders; Dev2 next:
+  Matte Combine (TODO).
+
 - **0.14.30 (2026-11-21): Roto pen + feather falloff** (Dev2). Roto
   `closed` (default true; false = open path: `shape_op` returns the
   background, invert ignored; the overlay drops the closing chord, Body

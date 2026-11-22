@@ -410,6 +410,7 @@ fn op_rows(gpu: &super::Gpu, sizes: &[Sized]) -> Vec<CheckRow> {
         ("merge screen", "merge", json!({"operation": "screen"}), POINT, true, false, false),
         ("merge zmerge", "merge", json!({"operation": "zmerge"}), POINT, true, false, false),
         ("shuffle", "shuffle", json!({"red": "G", "green": "R", "blue": "0", "alpha": "1"}), (0.0, 0.0), false, false, false),
+        ("shuffle, routes in input 1", "shuffle", json!({"routes": [["1:A", "R"], ["1:G", "glow.G"], ["1:1", "A"]]}), (0.0, 0.0), false, false, false),
         ("blur r 8 x 3", "blur", json!({"radius": 8, "passes": 3}), FILTER, false, false, false),
         ("blur r 32 x 3", "blur", json!({"radius": 32, "passes": 3}), FILTER, false, false, false),
         ("blur r 100 x 3", "blur", json!({"radius": 100, "passes": 3}), FILTER, false, false, false),

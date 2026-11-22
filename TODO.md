@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.14.30 (2026-11-21). Done items are removed
+What's still open, as of 0.14.31 (2026-11-21). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -8,6 +8,13 @@ them when they ship. `ROADMAP.md` is the public summary.
 ## To check by hand (user)
 
 On Linux and on the Macs (the DMG), from the release builds.
+
+**Phase 14 (0.14.31)**
+- [ ] Shuffle routing: wire a plate into a Shuffle, an Ellipse into its
+      port 2 (a spare port 3 appears); Properties ▸ Routes ▸ + Add route
+      → 2:A → A: the plate takes the ellipse's alpha; 3:depth from a
+      Scanline Render into depth; a 0.14.30 project's Shuffles look the
+      same; `arclt`: create_node("shuffle", a, b, routes=[["2:A","A"]])
 
 **Phase 14 (0.14.30)**
 - [ ] Roto pen: add a Roto from the menu → pen on; click 4 points, drag
@@ -130,15 +137,15 @@ On Linux and on the Macs (the DMG), from the release builds.
       like background / far-plane pixels (inf vs a far value, or a
       depth-format / clear difference on Metal). The 0.14.29 hand check
       above, "Macs: … plus `gpu --check`", doesn't hold yet
-- [ ] **Channel combine / routing node** (user, 2026-11-13): several
-      inputs, each listing its available channels (rgba and every plane:
-      depth, N, specular, matte.*, …), and a routing table that sends any
-      input channel to any output channel or pass: input 1's red → out
-      green, input 2's alpha → out specular, etc. Today's Shuffle has one
-      input; this generalises it (likely Shuffle growing inputs, or a new
-      node). **User's decision (2026-11-21): grow Shuffle with more
-      inputs** (not a new node); old Shuffles must load and render
-      unchanged
+- [ ] **Matte combine node** (user, 2026-11-21; plan approved, Dev2):
+      "Matte Combine" (`matte_combine`), inputs growing like Shuffle's;
+      per input a matte channel (alpha / r / g / b / luminance or a
+      plane), invert and operation (union / subtract / intersect /
+      difference), invert and operation keyable (stepped); min/max math
+      with a node-wide Soft switch (multiplicative); output a white
+      matte by default (or input 1 + alpha), optionally into a plane
+- [ ] Shuffle: a multi-source GPU kernel (routes reading input 2+ run
+      on the CPU today)
 - [ ] Geo Info: picking individual point-set / mesh points in the 3D
       view (to narrow Points / Mesh points like Cloud picks) isn't
       supported; only Camera Tracker cloud points are pickable

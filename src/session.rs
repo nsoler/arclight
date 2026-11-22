@@ -155,10 +155,9 @@ impl Session {
     pub fn describe_node(&self, id: &str) -> Result<Value> {
         let n = &self.graph.nodes[self.node_index(id)?];
         let info = op_info(&n.op)?;
-        let inputs: Vec<Value> = info
-            .inputs
-            .iter()
-            .enumerate()
+        // The fixed ports, then a Shuffle's further ones as far as it has them.
+        let inputs: Vec<Value> = (0..info.inputs.len().max(n.inputs.len().min(input_cap(&n.op))))
+            .filter_map(|i| ops::port(&n.op, i).map(|p| (i, p)))
             .map(|(i, p)| {
                 let src = n.inputs.get(i).filter(|s| !s.is_empty());
                 json!({"port": i, "label": p.label, "optional": p.optional, "kind": p.kind.name(), "source": src})
@@ -228,7 +227,11 @@ impl Session {
         if let Some(values) = values.as_object_mut() {
             self.graph.project.resolve_paths(self.path.as_deref(), op, values);
         }
-        if inputs.len() > info.inputs.len() {
+        let cap = input_cap(op);
+        if inputs.len() > cap {
+            if cap > info.inputs.len() {
+                bail!("'{op}' takes at most {cap} inputs, got {}", inputs.len());
+            }
             bail!("'{op}' has {} input(s), got {}", info.inputs.len(), inputs.len());
         }
         for src in inputs.iter().filter(|s| !s.is_empty()) {
@@ -237,7 +240,7 @@ impl Session {
             }
         }
         let mut node_inputs = inputs.to_vec();
-        node_inputs.resize(info.inputs.len(), String::new());
+        node_inputs.resize(info.inputs.len().max(inputs.len()), String::new());
         self.checkpoint();
         self.graph.nodes.push(NodeSpec { id: id.clone(), op: op.to_string(), inputs: node_inputs, params: values, pos, disabled: false });
         Ok(id)
@@ -482,7 +485,7 @@ impl Session {
     pub fn connect(&mut self, from: &str, to: &str, port: usize) -> Result<()> {
         self.node_index(from)?;
         let i = self.node_index(to)?;
-        let n_ports = self.graph.nodes[i].inputs.len();
+        let n_ports = self.graph.nodes[i].inputs.len().max(input_cap(&self.graph.nodes[i].op));
         if port >= n_ports {
             bail!("'{to}' has no input {port} (it has {n_ports})");
         }
@@ -494,6 +497,10 @@ impl Session {
             bail!("can't connect '{from}' to '{to}': {e}");
         }
         self.checkpoint();
+        // A Shuffle's further inputs come into being as they're connected.
+        if self.graph.nodes[i].inputs.len() <= port {
+            self.graph.nodes[i].inputs.resize(port + 1, String::new());
+        }
         self.graph.nodes[i].inputs[port] = from.to_string();
         Ok(())
     }
@@ -519,6 +526,8 @@ impl Session {
         info.inputs
             .iter()
             .position(|p| p.label.eq_ignore_ascii_case(label))
+            // A Shuffle's further inputs by their labels ("2", "3", …).
+            .or_else(|| (info.inputs.len()..input_cap(&n.op)).find(|&i| ops::port(&n.op, i).is_some_and(|p| p.label == label)))
             .ok_or_else(|| anyhow!("'{id}' has no input '{label}'"))
     }
 
@@ -1105,6 +1114,11 @@ pub fn validate_param(info: &OpInfo, name: &str, value: &Value) -> Result<Value>
         let arr = value.as_array().filter(|a| a.len() == n).ok_or_else(|| anyhow!("'{name}' needs {n} numbers"))?;
         arr.iter().map(|v| v.as_f64().ok_or_else(|| anyhow!("'{name}' needs {n} numbers"))).collect()
     };
+    // A Shuffle's routing table: a list of [source, dest] pairs.
+    if info.name == "shuffle" && name == "routes" {
+        crate::shuffle_route::parse(value).map_err(|e| anyhow!("'routes': {e}"))?;
+        return Ok(if value.is_null() { json!([]) } else { value.clone() });
+    }
     Ok(match spec.kind {
         ParamKind::Float { .. } => json!(value.as_f64().ok_or_else(|| anyhow!("'{name}' needs a number"))?),
         ParamKind::Int { min, max } => {
@@ -1155,6 +1169,18 @@ pub fn validate_param(info: &OpInfo, name: &str, value: &Value) -> Result<Value>
     })
 }
 
+/// How many inputs a script may give `op`: a Shuffle as many as its ports
+/// are labeled for (`ops::port`: "input", "2" … "32"); every other op, its
+/// fixed ones (scripts don't grow a Scanline Render).
+fn input_cap(op: &str) -> usize {
+    let fixed = ops::info(op).map_or(0, |i| i.inputs.len());
+    if op == "shuffle" {
+        (0..64).take_while(|&i| ops::port(op, i).is_some_and(|p| p.label != "+")).count()
+    } else {
+        fixed
+    }
+}
+
 /// A JSON description of an op: ports, params (kind, range, default) and help.
 pub fn op_schema(info: &OpInfo) -> Value {
     let params: Vec<Value> = info
@@ -1179,6 +1205,10 @@ pub fn op_schema(info: &OpInfo) -> Value {
             if let Value::Object(m) = extra {
                 v.as_object_mut().unwrap().extend(m);
             }
+            if info.name == "shuffle" && p.name == "routes" {
+                v["kind"] = json!("routes");
+                v["note"] = json!("a list of [\"<input>:<channel>\", \"<dest>\"], inputs numbered from 1 (\"2:A\", \"3:N.y\", \"2:1\"), dest R / G / B / A or a pass name (\"depth\", \"specular.R\")");
+            }
             v
         })
         .collect();
@@ -1191,6 +1221,10 @@ pub fn op_schema(info: &OpInfo) -> Value {
         "params": params,
         "help": info.help,
     });
+    // A Shuffle takes more inputs, "2", "3", … (see `input_cap`).
+    if input_cap(info.name) > info.inputs.len() {
+        v["more_inputs"] = json!({"labels_from": "2", "max_inputs": input_cap(info.name), "kind": "image", "optional": true});
+    }
     if let Some(lib) = crate::plugin::library(info.name) {
         v["plugin"] = json!(lib);
     }
@@ -1295,6 +1329,32 @@ mod tests {
         assert!((s.render(&m, 1).unwrap().get(0, 0)[0] - 1.0).abs() < 1e-6);
         assert!(s.redo());
         assert!((s.render(&m, 1).unwrap().get(0, 0)[1] - 1.0).abs() < 1e-6);
+    }
+
+    /// Scripts make and wire a Shuffle with several inputs (up to 32) and
+    /// set its routes; bad routes are refused with what's wrong.
+    #[test]
+    fn shuffles_take_more_inputs_and_routes_from_scripts() {
+        let mut s = Session::default();
+        let a = s.create_node("constant", None, &map(json!({"color": [0.1, 0.2, 0.3, 1.0]})), &[]).unwrap();
+        let b = s.create_node("constant", None, &map(json!({"color": [0.0, 0.0, 0.0, 0.5]})), &[]).unwrap();
+        let sh = s.create_node("shuffle", None, &map(json!({"routes": [["2:A", "A"]]})), &[a.clone(), b.clone()]).unwrap();
+        let px = s.render(&sh, 1).unwrap().get(0, 0);
+        assert!((px[3] - 0.5).abs() < 1e-6 && (px[0] - 0.1).abs() < 1e-6, "{px:?}");
+        // Connect a third by its label; past 32 is refused.
+        let port = s.port_index(&sh, &json!("3")).unwrap();
+        assert_eq!(port, 2);
+        s.connect(&a, &sh, port).unwrap();
+        assert!(s.create_node("shuffle", None, &Map::new(), &vec![a.clone(); 33]).unwrap_err().to_string().contains("at most 32"));
+        assert!(s.connect(&a, &sh, 32).is_err());
+        let ports = s.describe_node(&sh).unwrap()["inputs"].as_array().unwrap().iter().map(|p| (p["label"].as_str().unwrap().to_string(), p["source"].clone())).collect::<Vec<_>>();
+        assert_eq!(ports, [("input".to_string(), json!(a)), ("2".to_string(), json!(b)), ("3".to_string(), json!(a))]);
+        // Other ops keep their fixed inputs.
+        assert!(s.create_node("blur", None, &Map::new(), &[a.clone(), b.clone(), a.clone()]).is_err());
+        assert!(s.set_params(&sh, &map(json!({"routes": [["A", "A"]]}))).unwrap_err().to_string().contains("routes"));
+        let schema = op_schema(ops::info("shuffle").unwrap());
+        assert_eq!((schema["more_inputs"]["max_inputs"].as_u64(), schema["params"].as_array().unwrap().iter().any(|p| p["kind"] == "routes")), (Some(32), true));
+        assert!(op_schema(ops::info("blur").unwrap()).get("more_inputs").is_none());
     }
 
     #[test]
