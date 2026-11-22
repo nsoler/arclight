@@ -183,7 +183,10 @@ apply only where the mask lets them; elsewhere their input shows through. Connec
 choose in Properties:
 
 - **Mask channel**: what masks: its **alpha** (the default), **red**,
-  **green**, **blue** or **luminance**.
+  **green**, **blue** or **luminance**, or one of the mask's passes
+  (`matte.hero`, `depth`, …): the picker lists the passes of whatever is
+  connected to the mask, and the field beside it takes any pass by name
+  (picking a channel again clears it). Values are read clamped to 0–1.
 - **Invert mask**: the opposite (everywhere but the mask). With nothing
   connected the node applies everywhere and Invert does nothing.
 - **Mix**: how much of the result shows, on top of the mask.
@@ -826,6 +829,10 @@ color).
   switches to multiplicative ones, smoother where soft edges overlap.
   **Output** gives a white matte, or input 1 with the result as its alpha;
   **Also into pass** writes the result into a pass as well.
+- **Merge** also has **subtract** (B − A, B's alpha kept; **Swap A / B**
+  for A − B), **difference** (|A − B|), **stencil** (B only where A is
+  transparent) and **mask** (B only inside A); stencil and mask keep B's
+  passes, A only lending its alpha.
 - **Merge** with **zmerge** combines two renders by their depth: the nearer
   is in front at each pixel, its soft edges blended over what's behind.
 - Writing **EXR** keeps every pass as a layer (`P.x`, `N.x`, `depth.Z`,

@@ -125,6 +125,8 @@ pub struct Properties {
     /// The selected Shuffle and its further inputs' layers (ports 2, 3, …;
     /// None where unknown), for its routing table.
     pub more_layers: Option<(String, Vec<Option<Vec<Layer>>>)>,
+    /// The selected node and its mask input's layers, for Mask channel.
+    pub mask_layers: Option<(String, Vec<Layer>)>,
     /// The Tracker panel's exports copy the keys instead of linking.
     copy_exports: bool,
     /// Formulas being typed, by node and param (applied on Enter or when
@@ -334,6 +336,10 @@ impl Properties {
                 ui.end_row();
 
                 for spec in info.params {
+                    // Picked with Mask channel (`mask_picker`).
+                    if spec.name == "mask_plane" {
+                        continue;
+                    }
                     // Drawn beside the Operation dropdown.
                     if op == "merge" && spec.name == "swap" {
                         continue;
@@ -758,6 +764,12 @@ impl Properties {
                 // Points are edited in the viewer; show how many there are.
                 let n = value.as_array().map_or(0, |a| a.len() / stride.max(1));
                 ui.weak(format!("{n} points · edit in the viewer"));
+                None
+            }
+            // Mask channel: a channel, or one of the mask's planes.
+            ParamKind::Choice(_) if spec.name == "mask_channel" && ops::info(op).is_some_and(|i| i.params.iter().any(|p| p.name == "mask_plane")) => {
+                let layers = self.mask_layers.as_ref().filter(|(n, _)| n == id).map(|(_, l)| l.as_slice());
+                crate::mask_picker::edit(ui, doc, id, layers);
                 None
             }
             ParamKind::Choice(options) => {

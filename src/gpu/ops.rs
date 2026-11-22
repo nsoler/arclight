@@ -71,7 +71,7 @@ pub fn supports(op: &str, params: &Value) -> bool {
 }
 
 fn merge_mode(op: &str) -> Option<u32> {
-    ["over", "under", "add", "multiply", "screen", "max", "min"].iter().position(|m| *m == op).map(|i| i as u32)
+    ["over", "under", "add", "multiply", "screen", "max", "min", "subtract", "difference", "stencil", "mask"].iter().position(|m| *m == op).map(|i| i as u32)
 }
 
 /// What an op on the GPU may ask for on the CPU: input `n`'s image (read
@@ -119,10 +119,23 @@ pub fn eval(gpu: &Gpu, op: &str, params: &Value, inputs: &[Option<&GpuImage>], c
         Some((base, mask)) => {
             let Some(base) = inputs.get(base).copied().flatten() else { return Ok(None) };
             let mix = params.get("mix").and_then(Value::as_f64).unwrap_or(1.0) as f32;
-            let channel = params.get("mask_channel").and_then(Value::as_str).unwrap_or("alpha");
-            let invert = params.get("mask_invert").and_then(Value::as_bool).unwrap_or(false);
+            let source = crate::mask_source::MaskSource::from_params(params);
             let mask = inputs.get(mask).copied().flatten();
-            Ok(Some(mask_mix(gpu, base, out, mask, channel, invert, mix)?))
+            // A plane of the mask: moved into a mask's alpha (a plain copy),
+            // then read as alpha; a plane it lacks is the CPU's to report.
+            let from_plane = match (source.plane, mask) {
+                (Some(name), Some(m)) => {
+                    let Some(k) = m.planes.iter().position(|(n, _)| n == name) else { return Ok(None) };
+                    let plan = ShufflePlan { color: [Channel::Value(0.0), Channel::Value(0.0), Channel::Value(0.0), Channel::Plane(k)], planes: Vec::new() };
+                    Some(shuffle(gpu, m, &plan)?)
+                }
+                _ => None,
+            };
+            let (mask, channel) = match &from_plane {
+                Some(m) => (Some(m), "alpha"),
+                None => (mask, source.channel),
+            };
+            Ok(Some(mask_mix(gpu, base, out, mask, channel, source.invert, mix)?))
         }
         None => Ok(Some(out)),
     }
@@ -202,7 +215,12 @@ fn eval_op(gpu: &Gpu, op: &str, params: &Value, inputs: &[Option<&GpuImage>], cp
             let window = ops::pointwise_window(bg.format, &[fg.window, bg.window], blank);
             (k.op, k.mode) = (MERGE, mode);
             let mut out = k.run(gpu, bg.format, window, [Some(fg), Some(bg), None])?;
-            out.planes = merge_planes(gpu, &out, fg, bg, p.operation == "under")?;
+            if ops::holds_out(&p.operation) {
+                // Stencil / mask: A only contributes its alpha, B's passes.
+                out.keep_planes(gpu, bg)?;
+            } else {
+                out.planes = merge_planes(gpu, &out, fg, bg, p.operation == "under")?;
+            }
             out
         }
         "dissolve" => {
@@ -954,7 +972,7 @@ mod tests {
         for (op, params) in [("merge", json!({"operation": "over"})), ("dissolve", json!({"amount": 0.3})), ("keymix", json!({}))] {
             agree(&gpu, op, params, &[Some(&a), Some(&b), Some(&m)], POINT);
         }
-        for operation in ["over", "under", "add", "multiply", "screen", "max", "min"] {
+        for operation in ["over", "under", "add", "multiply", "screen", "max", "min", "subtract", "difference", "stencil", "mask"] {
             agree(&gpu, "merge", json!({"operation": operation}), &[Some(&a), Some(&b), None], POINT);
             agree(&gpu, "merge", json!({"operation": operation, "swap": true, "mix": 0.4}), &[Some(&a), Some(&b), Some(&m)], POINT);
         }
@@ -973,10 +991,29 @@ mod tests {
         let Some(gpu) = crate::gpu::test_device() else { return eprintln!("skipped: no GPU adapter") };
         let (a, _, _) = images();
         let b = noise(a.format, IRect::new(12, 8, 90, 70), true, 4);
-        for operation in ["over", "under", "screen"] {
+        for operation in ["over", "under", "screen", "difference", "stencil", "mask"] {
             agree(&gpu, "merge", json!({"operation": operation}), &[Some(&a), Some(&b), None], POINT);
             agree(&gpu, "merge", json!({"operation": operation}), &[Some(&b), Some(&a), None], POINT);
         }
+    }
+
+    /// A mask's plane (Mask plane) masks on the GPU as on the CPU, inverted
+    /// or not, for a pointwise op and a merge; a plane the mask lacks is
+    /// left to the CPU.
+    #[test]
+    fn mask_planes_match_the_cpu() {
+        let Some(gpu) = crate::gpu::test_device() else { return eprintln!("skipped: no GPU adapter") };
+        let (a, b, m) = images();
+        let m = with_planes(m, 7);
+        for invert in [false, true] {
+            let p = json!({"stops": 1.2, "mix": 0.8, "mask_plane": "matte.hero", "mask_channel": "red", "mask_invert": invert});
+            agree(&gpu, "exposure", p, &[Some(&a), Some(&m)], POINT);
+            agree(&gpu, "merge", json!({"operation": "over", "mask_plane": "P.y", "mask_invert": invert}), &[Some(&a), Some(&b), Some(&m)], POINT);
+        }
+        let (up, upm) = (GpuImage::upload(&gpu, &a).unwrap(), GpuImage::upload(&gpu, &m).unwrap());
+        let none = |_| anyhow::bail!("not needed");
+        let p = ops::params_with_defaults("exposure", &json!({"stops": 1.0, "mask_plane": "nope"}));
+        assert!(eval(&gpu, "exposure", &p, &[Some(&up), Some(&upm)], &none).unwrap().is_none());
     }
 
     #[test]

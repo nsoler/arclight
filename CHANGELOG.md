@@ -18,6 +18,17 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.14.35 — 2026-11-21
+
+- **Merge gains subtract, difference, stencil and mask:** subtract
+  (B − A, B's alpha kept; Swap A / B for A − B), difference (|A − B|),
+  stencil (B where A is transparent) and mask (B only inside A), on the
+  GPU too.
+- **Any pass as a mask:** every masked node (and the Camera Tracker)
+  can mask by a pass of its mask image (`matte.hero`, depth, …); Mask
+  channel's picker lists the mask's passes. Old projects render the
+  same.
+
 ## 0.14.34 — 2026-11-21
 
 - **GPU 3D renders mixing Gaussian splats with surfaces (cards, meshes)

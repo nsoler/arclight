@@ -84,6 +84,8 @@ pub struct Settings {
     /// flipped.
     pub mask_channel: String,
     pub mask_invert: bool,
+    /// A plane of the mask to read instead of the channel ("": none).
+    pub mask_plane: String,
 }
 
 impl Settings {
@@ -104,6 +106,7 @@ impl Settings {
             distance: num("distance", 10.0).max(1e-3),
             mask_channel: p["mask_channel"].as_str().unwrap_or("alpha").to_string(),
             mask_invert: p["mask_invert"].as_bool().unwrap_or(false),
+            mask_plane: p["mask_plane"].as_str().unwrap_or("").trim().to_string(),
         }
     }
 }
@@ -345,9 +348,12 @@ pub fn input_frames(graph: &Graph, node: &str) -> Result<impl FnMut(i64) -> Resu
     })
 }
 
-/// The pixels of a `format` frame that `mask` covers (more than half).
-fn blocked(mask: &Image, format: Size, s: &Settings) -> Blocked {
-    Blocked::new(format.width, format.height, |x, y| crate::ops::mask_coverage(mask, &s.mask_channel, s.mask_invert, x as i32, y as i32) > 0.5)
+/// The pixels of a `format` frame that `mask` covers (more than half); an
+/// error when it lacks the plane asked for.
+fn blocked(mask: &Image, format: Size, s: &Settings) -> Result<Blocked> {
+    let source = crate::mask_source::MaskSource { channel: &s.mask_channel, plane: Some(s.mask_plane.as_str()).filter(|p| !p.is_empty()), invert: s.mask_invert };
+    let m = source.on(mask)?;
+    Ok(Blocked::new(format.width, format.height, |x, y| m.at(x as i32, y as i32) > 0.5))
 }
 
 /// Track the features of frames `s.first..=s.last` (from `frames`; none
@@ -375,7 +381,8 @@ pub fn run_tracked(frames: &mut dyn FnMut(i64) -> Result<Frame>, s: &Settings, p
         }
         let (img, mask) = frames(f).with_context(|| format!("frame {f}"))?;
         format.get_or_insert(img.format);
-        tracker.push_masked(f, &img, mask.map(|m| blocked(&m, img.format, s)).as_ref());
+        let blocked = mask.map(|m| blocked(&m, img.format, s)).transpose().with_context(|| format!("frame {f}"))?;
+        tracker.push_masked(f, &img, blocked.as_ref());
         progress.done.fetch_add(1, Ordering::Relaxed);
     }
     let format = format.unwrap();
@@ -751,7 +758,7 @@ mod tests {
         let mut covered = 0;
         for f in 1..=24 {
             let (img, mask) = frames(f).unwrap();
-            let b = blocked(mask.as_ref().unwrap(), img.format, &settings);
+            let b = blocked(mask.as_ref().unwrap(), img.format, &settings).unwrap();
             covered += (0..img.format.height).filter(|&y| (0..img.format.width).any(|x| b.near([x as f32, y as f32], 0))).count();
             tracker.push_masked(f, &img, Some(&b));
             assert!(tracker.live().all(|t| !b.near(*t.points.last().unwrap(), 0)), "frame {f}: a feature on the card");

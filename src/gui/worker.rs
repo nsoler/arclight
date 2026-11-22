@@ -32,6 +32,9 @@ pub struct Request {
     /// unconnected), whose channels its routing table lists; empty for
     /// every other node.
     pub probe_more: Vec<String>,
+    /// The selected node's connected mask input, whose planes its Mask
+    /// channel picker lists; None for every other case.
+    pub probe_mask: Option<String>,
     /// The color picker's pixel, read as the frame is made (so the UI
     /// needn't wait on the GPU for it while frames play).
     pub pick: Option<(i32, i32)>,
@@ -54,6 +57,8 @@ pub struct Response {
     /// The layers (as `Image::layers`) of `probe_more`'s inputs, in port
     /// order (None: unconnected or failed).
     pub probe_more: Vec<Option<Layers>>,
+    /// The layers of `probe_mask`'s image (None: not asked, or failed).
+    pub mask_layers: Option<Layers>,
 }
 
 /// An image's layers, as `Image::layers` lists them: each name with its
@@ -250,6 +255,7 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
             });
             // A Shuffle's further inputs: their layers only (the images are
             // in the evaluator's cache from rendering the Shuffle).
+            let mask_layers = req.probe_mask.as_deref().and_then(|input| evaluate(&req.graph, input, &ctx).ok().map(|img| img.layers()));
             let probe_more = req.probe_more.iter().map(|input| (!input.is_empty()).then(|| evaluate(&req.graph, input, &ctx).ok().map(|img| img.layers())).flatten()).collect();
 
             let p = &req.graph.project;
@@ -259,15 +265,15 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
                     Evaluator::key(&req.graph, &req.target, &c).is_ok_and(|k| frames.contains(k))
                 })
                 .collect();
-            (result, millis, probe, probe_more, cached_frames)
+            (result, millis, probe, probe_more, mask_layers, cached_frames)
         }));
-        let (result, millis, probe, probe_more, cached_frames) = match done {
+        let (result, millis, probe, probe_more, mask_layers, cached_frames) = match done {
             Ok(done) => done,
             Err(payload) => {
                 *eval.lock().unwrap_or_else(|e| e.into_inner()) = Evaluator::new();
                 frames = FrameCache::new();
                 probed.clear();
-                (Err(NodeError { node: None, message: arclight::crash::caught(&*payload) }), 0.0, None, Vec::new(), Vec::new())
+                (Err(NodeError { node: None, message: arclight::crash::caught(&*payload) }), 0.0, None, Vec::new(), None, Vec::new())
             }
         };
 
@@ -279,6 +285,7 @@ fn run(rx: Receiver<Request>, tx: Sender<Response>, repaint: eframe::egui::Conte
             cached_frames,
             probe,
             probe_more,
+            mask_layers,
         };
         if tx.send(resp).is_err() {
             break;
@@ -613,7 +620,7 @@ mod tests {
         let eval = Arc::new(Mutex::new(Evaluator::new()));
         let worker = Worker::spawn(eframe::egui::Context::default(), eval);
         let ask = |w: &Worker| {
-            w.request(Request { graph: graph.clone(), target: "panicky_c".into(), frame: 1, probe: None, probe_more: Vec::new(), pick: None, cpu_only: false });
+            w.request(Request { graph: graph.clone(), target: "panicky_c".into(), frame: 1, probe: None, probe_more: Vec::new(), probe_mask: None, pick: None, cpu_only: false });
             let t0 = Instant::now();
             loop {
                 if let Some(r) = w.poll() {
@@ -698,7 +705,7 @@ mod tests {
         ] })).unwrap());
         let worker = Worker::spawn(eframe::egui::Context::default(), Arc::new(Mutex::new(Evaluator::new())));
         let ask = |target: &str, pick: Option<(i32, i32)>, cpu_only: bool| {
-            worker.request(Request { graph: graph.clone(), target: target.into(), frame: 1, probe: None, probe_more: Vec::new(), pick, cpu_only });
+            worker.request(Request { graph: graph.clone(), target: target.into(), frame: 1, probe: None, probe_more: Vec::new(), probe_mask: None, pick, cpu_only });
             let t0 = Instant::now();
             loop {
                 if let Some(r) = worker.poll() {

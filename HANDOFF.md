@@ -4,6 +4,18 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.14.35 (2026-11-21): Merge modes + any pass as a mask** (Dev2).
+  New modes in `ops::blend` plus GPU codes 7–10 (`gpu/ops.rs`
+  merge_mode order = the `pointwise.wgsl` switch; min is `case 6u`,
+  default still min); stencil / mask (`ops::holds_out`) carry B's passes
+  only. Masks: `mask_plane` (fixed text, "" = none) on the 15 mask ops;
+  `mask_source.rs` reads channel or plane (missing plane = error); the
+  GPU moves the plane into alpha with the shuffle kernel, then
+  mask_mix(alpha). Edge Extend's matte_channel unchanged on purpose.
+  GUI: `gui/mask_picker.rs`; the worker's `probe_mask` runs only for the
+  selected node with a connected mask. CLI byte-identity: 29 old merge /
+  mask outputs, 0 differ (CPU and GPU).
+
 - **0.14.34 (2026-11-21): GPU splats over surfaces** (Dev1). The Mac
   slowness was general: with AA, each sample re-walked its tile's splat
   list wherever it met a surface (9 walks a pixel at samples 3).

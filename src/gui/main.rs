@@ -17,6 +17,7 @@ mod gpu_check;
 mod graph_thumbs;
 mod help;
 mod node_editor;
+mod mask_picker;
 mod matte_combine_panel;
 mod overlay;
 mod pen;
@@ -287,6 +288,8 @@ struct App {
     probe: Option<(String, Arc<Image>)>,
     /// The probed Shuffle's further inputs' layers (ports 2, 3, …).
     probe_more: Vec<Option<worker::Layers>>,
+    /// The selected node's mask input's layers, for its Mask channel picker.
+    mask_layers: Option<(String, worker::Layers)>,
     error: Option<NodeError>,
     shown_frame: i64,
     millis: f32,
@@ -418,6 +421,7 @@ impl App {
             cpu_retry: false,
             probe: None,
             probe_more: Vec::new(),
+            mask_layers: None,
             error: None,
             shown_frame: 0,
             millis: 0.0,
@@ -1322,6 +1326,24 @@ impl App {
         }
     }
 
+    /// The selected node, when it has a Mask channel and its mask input is
+    /// connected (only then is the mask probed for its planes).
+    fn mask_probe_node(&self) -> Option<String> {
+        self.mask_probe().and(self.doc.selected.clone())
+    }
+
+    /// The selected node's connected mask input, if it reads a mask by
+    /// channel (Mask channel): its planes fill the picker.
+    fn mask_probe(&self) -> Option<String> {
+        let n = self.doc.selected.as_ref().and_then(|id| self.doc.node(id))?;
+        let info = arclight::ops::info(&n.op)?;
+        if !info.params.iter().any(|p| p.name == "mask_channel") {
+            return None;
+        }
+        let port = info.inputs.iter().position(|p| p.label == "mask")?;
+        n.inputs.get(port).filter(|i| !i.is_empty()).cloned()
+    }
+
     fn sync_render(&mut self) {
         let target = self.doc.view_target();
         match &target {
@@ -1345,6 +1367,7 @@ impl App {
                         frame: self.transport.frame,
                         probe,
                         probe_more,
+                        probe_mask: self.mask_probe(),
                         pick: self.viewer.pick_at(),
                         cpu_only: false,
                     });
@@ -1380,6 +1403,7 @@ impl App {
                 self.cached = resp.cached_frames;
                 self.probe = resp.probe;
                 self.probe_more = resp.probe_more;
+                self.mask_layers = resp.mask_layers.and_then(|l| self.mask_probe_node().map(|n| (n, l)));
                 self.doc.view_format = self.image.as_ref().map(|img| img.format());
             }
         }
@@ -1394,6 +1418,7 @@ impl App {
                     frame: self.shown_frame,
                     probe: self.requested.as_ref().and_then(|k| k.3.clone()),
                     probe_more: self.doc.selected.as_ref().and_then(|id| self.doc.node(id)).filter(|n| matches!(n.op.as_str(), "shuffle" | "matte_combine")).map(|n| n.inputs.iter().skip(1).cloned().collect()).unwrap_or_default(),
+                    probe_mask: self.mask_probe(),
                     pick: None,
                     cpu_only: true,
                 });
@@ -1615,6 +1640,7 @@ impl App {
         self.props.layer = self.probe.as_ref().map(|(n, img)| (n.clone(), img.window(), img.format));
         self.props.input_layers = self.probe.as_ref().map(|(n, img)| (n.clone(), img.layers()));
         self.props.more_layers = self.probe.as_ref().map(|(n, _)| (n.clone(), self.probe_more.clone()));
+        self.props.mask_layers = self.mask_layers.clone();
         self.props.looking_through = self.viewer.viewport3d.looking_through().filter(|_| self.viewer.mode3d);
         if let Some(f) = self.props.ui(ui, &mut self.doc, self.transport.frame) {
             self.transport.set_play(Play::Stopped);

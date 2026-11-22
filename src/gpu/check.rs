@@ -407,8 +407,13 @@ fn op_rows(gpu: &super::Gpu, sizes: &[Sized]) -> Vec<CheckRow> {
     let cases = [
         ("grade", "grade", json!({"multiply": [1.1, 0.9, 1.0], "offset": [0.01, 0.0, -0.01], "gamma": [2.2, 1.0, 0.8]}), POINT, false, false, false),
         ("grade + mask, mix 0.5", "grade", json!({"gamma": [1.6, 1.6, 1.6], "mix": 0.5, "mask_channel": "luminance"}), POINT, false, true, false),
+        ("grade + mask plane, inverted", "grade", json!({"gamma": [1.6, 1.6, 1.6], "mask_plane": "matte.hero", "mask_invert": true}), POINT, false, true, false),
         ("merge screen", "merge", json!({"operation": "screen"}), POINT, true, false, false),
         ("merge zmerge", "merge", json!({"operation": "zmerge"}), POINT, true, false, false),
+        ("merge subtract", "merge", json!({"operation": "subtract"}), POINT, true, false, false),
+        ("merge difference", "merge", json!({"operation": "difference"}), POINT, true, false, false),
+        ("merge stencil", "merge", json!({"operation": "stencil"}), POINT, true, false, false),
+        ("merge mask", "merge", json!({"operation": "mask"}), POINT, true, false, false),
         ("shuffle", "shuffle", json!({"red": "G", "green": "R", "blue": "0", "alpha": "1"}), (0.0, 0.0), false, false, false),
         ("shuffle, routes in input 1", "shuffle", json!({"routes": [["1:A", "R"], ["1:G", "glow.G"], ["1:1", "A"]]}), (0.0, 0.0), false, false, false),
         ("blur r 8 x 3", "blur", json!({"radius": 8, "passes": 3}), FILTER, false, false, false),
@@ -436,6 +441,8 @@ fn op_rows(gpu: &super::Gpu, sizes: &[Sized]) -> Vec<CheckRow> {
         let a = noise(format, window, plane, 10 + i as u32);
         let b = noise(format, IRect::new(window.x0 + 31, window.y0 - 17, window.x1 - 5, window.y1 + 9), false, 20 + i as u32);
         let soft = smooth(format, window, plane, 30 + i as u32);
+        // B with a matte pass (its red), for masks by plane.
+        let b_matte = Image { planes: vec![Plane { name: "matte.hero".into(), data: b.pixels.iter().map(|p| p[0]).collect() }], ..b.clone() };
         for (case, op, params, (tol_abs, tol_rel), two, masked, smooth_input) in &cases {
             let params = crate::ops::params_with_defaults(op, params);
             let mut inputs: Vec<Option<&Image>> = vec![Some(if *smooth_input { &soft } else { &a })];
@@ -443,7 +450,8 @@ fn op_rows(gpu: &super::Gpu, sizes: &[Sized]) -> Vec<CheckRow> {
                 inputs.push(Some(&b));
             }
             if *masked || !matches!(*op, "merge" | "shuffle") {
-                inputs.push(masked.then_some(&b));
+                let by_plane = params.get("mask_plane").and_then(serde_json::Value::as_str).is_some_and(|p| !p.is_empty());
+                inputs.push(masked.then_some(if by_plane { &b_matte } else { &b }));
             }
             let (want, cpu_ms) = timed(|| crate::ops::eval(op, &params, &inputs, &ctx));
             let run = || -> anyhow::Result<CheckRow> {

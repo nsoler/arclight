@@ -173,6 +173,25 @@ fn blend(f: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
             return max(f, b);
         }
         // min
+        case 6u: {
+            return min(f, b);
+        }
+        // subtract: B − A, B's alpha kept
+        case 7u: {
+            return vec4<f32>(b.rgb - f.rgb, b.a);
+        }
+        // difference: |A − B|, alpha the union
+        case 8u: {
+            return vec4<f32>(abs(f.rgb - b.rgb), f.a + b.a - f.a * b.a);
+        }
+        // stencil: B · (1 − A's alpha)
+        case 9u: {
+            return b * (1.0 - f.a);
+        }
+        // mask: B · A's alpha
+        case 10u: {
+            return b * f.a;
+        }
         default: {
             return min(f, b);
         }

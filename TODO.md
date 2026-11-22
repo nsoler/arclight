@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.14.34 (2026-11-21). Done items are removed
+What's still open, as of 0.14.35 (2026-11-21). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -8,6 +8,14 @@ them when they ship. `ROADMAP.md` is the public summary.
 ## To check by hand (user)
 
 On Linux and on the Macs (the DMG), from the release builds.
+
+**Phase 14 (0.14.35)**
+- [ ] Merge an Ellipse (A) over a plate (B) with each of subtract /
+      difference / stencil / mask, and Swap A / B on subtract → A − B; a
+      Grade with a 3D render's matte.<node> pass as mask (picked from
+      Mask channel's list; typing works too), Invert mask; a Camera
+      Tracker masked by a pass; a 0.14.34 project with masked nodes and
+      merges looks the same
 
 **Phase 14 (0.14.34)**
 - [ ] On a Mac (Apple M4, Metal): `examples/Pond-Martian-LizardSplat-Combo.json`
