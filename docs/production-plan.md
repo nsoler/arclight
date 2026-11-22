@@ -2,7 +2,8 @@
 
 Status: **proposed** (2026-11-01, the Supervisor, at the user's request),
 waiting for the user's answers to the questions at the end. When
-approved, phase 15 is **0.15.x** on a new branch **`wip-ns-prod`**,
+approved, it is the phase after 15 (phase 15 became the gap fixes,
+2026-11-21) on a new branch **`wip-ns-prod`**,
 `main` following it, as in earlier phases. The work goes one milestone
 at a time per owner; Dev1 and Dev2 run in parallel and never edit the
 same file at once (see "Owners and files").

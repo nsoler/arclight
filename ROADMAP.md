@@ -43,7 +43,12 @@ examples on Linux and macOS. Bug reports from real shots are the most
 useful thing right now (Help ▸ Report a problem in the app gathers
 what's needed).
 
-## Next: phase 15, production readiness
+## Now: phase 15, gap fixes
+
+Finishing the open items from phase 14 and fixing what hands-on
+testing turns up (the 3D view's textured cards first).
+
+## Next: production readiness
 
 What a film pipeline needs before a facility can adopt it, planned in
 `docs/production-plan.md` (proposed, awaiting approval):

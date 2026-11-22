@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.14.37 (2026-11-21). Done items are removed
+What's still open, as of 0.15.0 (2026-11-21). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -178,10 +178,15 @@ On Linux and on the Macs (the DMG), from the release builds.
       (SmartScreen warning)
 - [ ] RLE / 1-bit DPX (needs a sample file first)
 
-## Next: phase 15, production readiness (proposed)
+## Now: phase 15, gap fixes (0.15.x, `wip-ns-gapfixes`)
+
+The user's call (2026-11-21): the 3D textured-card bug first, then the
+"Known gaps and follow-ups" above.
+
+## Later: production readiness (proposed)
 
 Planned in `docs/production-plan.md`, waiting for the user's answers (Q1–Q5
-there); the user said stay on 0.14.x for now. P1 color management (OCIO /
+there); after phase 15 (gap fixes). P1 color management (OCIO /
 ACES), P2 node groups and gizmos, P3 regions / disk cache / proxies, P4 the
 farm, P5 EXR; alongside STMap, Defocus / ZDefocus, vector tools, Denoise.
 On hold in `ROADMAP.md` "Later": Paint, a 3D pivot.

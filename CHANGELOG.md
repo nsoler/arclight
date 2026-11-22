@@ -2,8 +2,8 @@
 
 ArclightVFX Compositor (Arclight until 0.11.2) is **beta** software since
 0.11.3 (alpha before): versions are `0.<phase>.<increment>`. The
-middle number is the development phase the project is in (14 now:
-workspace and UI, detachable panels first, on branch `wip-ns-ui`;
+middle number is the development phase the project is in (15 now: gap fixes, on branch `wip-ns-gapfixes`;
+phase 14, workspace and UI, ran 0.14.0–0.14.37 on `wip-ns-ui`;
 phase 13, procedural geometry (`docs/geo-plan.md`), ran 0.13.0–0.13.41
 on `wip-ns-geo`; phase 12, GPU acceleration, ran 0.12.0–0.12.19 on `wip-ns-gpu`; phase 11,
 engine and platform (crash reporting, plugin process isolation), ran
@@ -17,6 +17,14 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 `plugins/example/Cargo.toml`, kept in step) and shows in the GUI's Help
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
+
+## 0.15.0 — 2026-11-21
+
+- **Phase 15 starts: gap fixes**, on branch `wip-ns-gapfixes` (from
+  0.14.37): the 3D view's textured-card bug and the open items in
+  `TODO.md` "Known gaps and follow-ups". Production readiness (the plan
+  in `docs/production-plan.md`) moves to a later phase. Nothing else
+  changed.
 
 ## 0.14.37 — 2026-11-21
 

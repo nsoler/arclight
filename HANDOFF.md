@@ -4,6 +4,14 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **Phase 15: gap fixes, 0.15.x on `wip-ns-gapfixes`** (from 0.14.37
+  `c9268c7`, the user's call 2026-11-21); `main` follows it. `wip-ns-ui`
+  is frozen at 0.14.37. First: the 3D view's textured cards not drawing
+  until a selection (TODO top; Dev2), then Dev1's test-exit fix
+  (`gpu::exit_tests_cleanly`, glibc `on_exit` → `exit_process` in unit
+  tests only; `CheckRow.slow` / `CheckReport::correct` for the
+  self-test's timing bar), then the TODO gaps.
+
 - **0.14.37 (2026-11-21): multi-input Shuffle routes + Matte Combine
   on the GPU** (Dev2). `gpu/multi.rs` + `multi.wgsl`: each pass reads
   one source (one input's rgba or one plane) and writes the output
@@ -13,7 +21,7 @@ Last updated 2026-11-21.
   `matte_combine::Plan` (settings + window rule) is shared by CPU and
   GPU; Remove uses the CPU's `remove_layers` on a probe of the names.
   32 inputs at 4K: ~0.35 ms a pass, linear. Last version on
-  `wip-ns-ui`; phase 15 (gap fixes) continues on `wip-ns-gapfixes`.
+  `wip-ns-ui`.
 
 - **0.14.36 (2026-11-21): Geo Info per-point picking** (Dev2). Element
   picks live in `viewport3d.elements` (UI state: domain, node, index
@@ -190,10 +198,9 @@ Last updated 2026-11-21.
   2026-11-02; left: the Cube UV atlas, the phase 13 list, the GPU / Mac
   checks and the older ones). Then the user picks what's next (TODO.md
   "Known gaps and follow-ups", phase 15, ROADMAP).
-- **Phase 15 (production readiness)** is proposed in
-  `docs/production-plan.md` (OCIO, groups / gizmos, regions / disk cache
-  / proxies, farm, EXR), awaiting the user's Q1–Q5. **The user said stay
-  on 0.14.x for now.**
+- **Production readiness** is proposed in `docs/production-plan.md`
+  (OCIO, groups / gizmos, regions / disk cache / proxies, farm, EXR),
+  awaiting the user's Q1–Q5; now after phase 15 (gap fixes).
 - **On hold** (ROADMAP.md "Later"): Paint, and a 3D pivot ("." frames the
   selection in 3D; a 3D pivot is a "maybe").
 
