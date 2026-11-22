@@ -4,6 +4,22 @@ Last updated 2026-11-21.
 
 ## Status
 
+- **0.15.2 (2026-11-21): Alembic curves, points, cameras, face sets**
+  (Dev2; the user's answers: all four on for a GUI-added Read Geo,
+  groups + a split option, cameras by name now). `alembic/extra.rs` (a
+  child module, using the reader's private Prop / Kind / values) reads
+  Curve_v2, Points_v1, Camera_v1 and FaceSet_v1 with its own walk (same
+  visible / xform rules as `collect`, which is untouched). Read Geo
+  `also_read` gates it all (default [], so old projects and scripts are
+  byte-identical); `split_face_sets` splits meshes per face set; the
+  archive is shared via `ops::alembic_archive`. Cameras:
+  `Scene.camera_names` parallel to `camera_nodes` (Alembic names, else
+  ""); `render_scene` tries the exact node name first (as before), then
+  "node/name"; the picker caches names per file / mtime. Fixture
+  `examples/geo/extras.abc` (15 KB, Blender 5.2.2, make-script in the
+  test doc). Not read: Hermite / power bases, film offset / squeeze /
+  overscan, indexed arbGeomParams (TODO).
+
 - **0.15.1 (2026-11-21): 3D view's first shaded render** (Dev2).
   `viewport3d::sync`'s first request after switching to 3D goes out
   before the scene is known, so it carries no render; the scene's

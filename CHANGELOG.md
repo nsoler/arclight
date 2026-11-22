@@ -18,6 +18,16 @@ set in `Cargo.toml` (also `python/Cargo.toml` and
 menu, `arclight --version`, the MCP server info and Python's
 `arclt.__version__`.
 
+## 0.15.2 — 2026-11-21
+
+- **Read Geo reads more of an Alembic cache** (Also read; all of it for
+  a Read Geo you add, meshes only in older projects and scripts):
+  curves (cubic and NURBS as smooth lines), points with their
+  attributes, animated cameras (a Scanline Render's Camera picker lists
+  each as node/name; the node's name alone still means its first
+  camera), and face sets as `faceset.<name>` face values or, with Split
+  by face set, separate meshes named after them.
+
 ## 0.15.1 — 2026-11-21
 
 - **3D view:** textured cards and solid meshes now draw as soon as you

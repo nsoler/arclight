@@ -1,6 +1,6 @@
 # Arclight — TODO
 
-What's still open, as of 0.15.1 (2026-11-21). Done items are removed
+What's still open, as of 0.15.2 (2026-11-21). Done items are removed
 (`CHANGELOG.md` has what shipped; the long list before this cleanup is in
 git: `git show 106707a:TODO.md`). Add items as they come up and delete
 them when they ship. `ROADMAP.md` is the public summary.
@@ -8,6 +8,15 @@ them when they ship. `ROADMAP.md` is the public summary.
 ## To check by hand (user)
 
 On Linux and on the Macs (the DMG), from the release builds.
+
+**Phase 15 (0.15.2)**
+- [ ] A Read Geo of an Alembic export with curves, a particle cache, two
+      cameras and a multi-material mesh: the 3D view shows the curves
+      and points; Scanline Render's Camera picker lists both cameras
+      (read_geo/<name>) and renders through each; Geo Info shows
+      faceset.<name> on Faces; Split by face set gives a mesh per
+      material; an older project with an Alembic Read Geo renders the
+      same; a Maya / Houdini export if one is at hand
 
 **Phase 15 (0.15.1)**
 - [ ] Open Pond-Martian-Comp (on a Mac, as its paths are) in 2D, wait
@@ -165,7 +174,8 @@ On Linux and on the Macs (the DMG), from the release builds.
       bits): past ~16.7 M births ids wrap (only Instance on Points'
       random pick cares)
 - [ ] Splats: SOG / compressed PLY if asked
-- [ ] Alembic: curves, points, cameras, face sets as materials
+- [ ] Alembic: Hermite / power curve bases (read as linear), camera
+      film offset / squeeze / overscan, indexed arbGeomParams
 - [ ] A new logo: `assets/arclight.png` and the full logo still say
       ARCLIGHT
 - [ ] Windows: the zip ships (since 0.13.34) but is untested on a real

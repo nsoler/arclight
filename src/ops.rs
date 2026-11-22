@@ -1131,6 +1131,10 @@ pub static OPS: &[OpInfo] = &[
             fixed!("file", "File", ParamKind::Path { save: false }, ""),
             fixed!("frame_rate", "Frame rate (Alembic)", ParamKind::Float { min: 1.0, max: 240.0 }, 24.0),
             p!("frame_offset", "Frame offset (Alembic)", ParamKind::Float { min: -100000.0, max: 100000.0 }, 0.0),
+            // An Alembic cache's other objects (none in old projects and
+            // scripts: meshes only); a Read Geo added in the app reads all.
+            fixed!("also_read", "Also read (Alembic)", ParamKind::Flags(ALEMBIC_EXTRAS), Value::Array(Vec::new())),
+            fixed!("split_face_sets", "Split by face set (Alembic)", ParamKind::Bool, false),
             PLACE_T,
             PLACE_R,
             PLACE_S,
@@ -1152,7 +1156,11 @@ pub static OPS: &[OpInfo] = &[
                An Alembic cache is read at the frame's time: (frame + Frame offset) ÷ Frame rate seconds, the rate \
                starting as the project's. Opacity fades them all (each material's own \
                opacity times it, their shadows too), with or without Override material. Outputs a scene holding one mesh \
-               per object and material in the file.",
+               per object and material in the file. Also read takes more from an Alembic cache: its curves (cubic ones as \
+               smooth lines), points (with ids, velocities, widths and their other values), cameras (moving and \
+               zooming; a Scanline Render picks one as <this node>/<camera name>, the node's name alone meaning its \
+               first) and face sets (each a faceset.<name> value on the mesh's faces, or with Split by face set a \
+               mesh of its own named after it, its material too).",
     },
     OpInfo {
         name: "read_splat",
@@ -4293,10 +4301,20 @@ fn render_scene(inputs: &[Option<&Image>], name: &str) -> Result<(Option<std::sy
     }
     let places: Vec<&Scene> = port(1).and_then(|img| img.scene.as_deref()).into_iter().chain(scene.as_deref()).collect();
     let found = places.iter().find_map(|s| (0..s.cameras.len()).find(|&i| s.camera_node(i) == name).map(|i| s.cameras[i].clone()));
+    // "<node>/<camera>": one of a node's named cameras (an Alembic file's),
+    // when no node is called that.
+    let found = found.or_else(|| {
+        let (node, camera) = name.rsplit_once('/')?;
+        places.iter().find_map(|s| (0..s.cameras.len()).find(|&i| s.camera_node(i) == node && s.camera_name(i) == camera).map(|i| s.cameras[i].clone()))
+    });
     match found {
         Some(c) => Ok((scene, Some(c))),
         None => {
-            let mut there: Vec<&str> = places.iter().flat_map(|s| (0..s.cameras.len()).map(|i| s.camera_node(i))).filter(|n| !n.is_empty()).collect();
+            let mut there: Vec<String> = places
+                .iter()
+                .flat_map(|s| (0..s.cameras.len()).map(|i| if s.camera_name(i).is_empty() { s.camera_node(i).to_string() } else { format!("{}/{}", s.camera_node(i), s.camera_name(i)) }))
+                .filter(|n| !n.is_empty())
+                .collect();
             there.dedup();
             if there.is_empty() {
                 bail!("no camera named {name}: there are no cameras on the camera input or in the scene");
@@ -4351,7 +4369,7 @@ fn read_geo(params: &Value, frame: i64) -> Result<Image> {
     let alembic = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("abc"));
     let cached = CACHE.lock().unwrap().as_ref().filter(|c| c.0 == path && c.1 == modified).map(|c| c.2.clone());
     let parts = match cached {
-        _ if alembic => alembic_parts(path, modified, params, frame)?,
+        _ if alembic => alembic_parts(path.clone(), modified, params, frame)?,
         Some(p) => p,
         None => {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
@@ -4369,7 +4387,7 @@ fn read_geo(params: &Value, frame: i64) -> Result<Image> {
                     })
                     .collect(),
             );
-            *CACHE.lock().unwrap() = Some((path, modified, loaded.clone()));
+            *CACHE.lock().unwrap() = Some((path.clone(), modified, loaded.clone()));
             loaded
         }
     };
@@ -4383,40 +4401,86 @@ fn read_geo(params: &Value, frame: i64) -> Result<Image> {
             scene::Model { texture: tex.clone(), name: part.name.clone(), ..m }
         })
         .collect();
-    Ok(scene_output(DEFAULT_FORMAT, Scene { meshes, ..Scene::default() }))
+    let mut out = Scene { meshes, ..Scene::default() };
+    // An Alembic cache's curves, points and cameras, placed as the meshes are.
+    let (want, _) = also_read(params);
+    if alembic && want != crate::alembic::Want::default() {
+        let extras = alembic_archive(&path, modified)?.extras(alembic_time(params, frame), want)?;
+        out.curves = extras.curves.into_iter().map(|c| crate::geo::Curves { world: world * c.world, ..c }).collect();
+        out.point_sets = extras.points.into_iter().map(|p| crate::geo::PointSet { world: world * p.world, ..p }).collect();
+        for (name, camera) in extras.cameras {
+            out.cameras.push(geom::Camera { world: world * camera.world, ..camera });
+            out.camera_names.push(name);
+        }
+    }
+    Ok(scene_output(DEFAULT_FORMAT, out))
+}
+
+/// What a Read Geo's Also read can take from an Alembic cache.
+pub const ALEMBIC_EXTRAS: &[&str] = &["curves", "points", "cameras", "face sets"];
+
+/// The Alembic archive at `path` (as `modified`), opened once per file and
+/// change and shared (Read Geo, its camera list in the app).
+fn alembic_archive(path: &std::path::Path, modified: Option<std::time::SystemTime>) -> Result<std::sync::Arc<crate::alembic::Archive>> {
+    use std::sync::{Arc, Mutex};
+    type Key = (std::path::PathBuf, Option<std::time::SystemTime>);
+    static ARCHIVE: Mutex<Option<(Key, Arc<crate::alembic::Archive>)>> = Mutex::new(None);
+    let key = (path.to_path_buf(), modified);
+    let mut a = ARCHIVE.lock().unwrap();
+    if let Some(found) = a.as_ref().filter(|a| a.0 == key) {
+        return Ok(found.1.clone());
+    }
+    let opened = Arc::new(crate::alembic::Archive::open(path)?);
+    *a = Some((key, opened.clone()));
+    Ok(opened)
+}
+
+/// The names of the cameras in the Alembic cache `file` (for picking one
+/// in a Scanline Render); empty when it can't be read.
+pub fn alembic_camera_names(file: &str) -> Vec<String> {
+    let path = std::path::Path::new(file);
+    let modified = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
+    alembic_archive(path, modified).map(|a| a.camera_names()).unwrap_or_default()
+}
+
+/// A Read Geo's Also read, from its params.
+fn also_read(params: &Value) -> (crate::alembic::Want, bool) {
+    let on = |name: &str| params["also_read"].as_array().is_some_and(|a| a.iter().any(|v| v.as_str() == Some(name)));
+    (crate::alembic::Want { curves: on("curves"), points: on("points"), cameras: on("cameras") }, on("face sets"))
 }
 
 /// A Read Geo's meshes, each with its texture.
 type GeoParts = std::sync::Arc<Vec<(crate::mesh::Part, Option<std::sync::Arc<Image>>)>>;
 
-/// A Read Geo's Alembic meshes at `frame`'s time ((frame + Frame offset) ÷
-/// Frame rate): the archive read once per file and change, and its meshes
-/// at the last few times asked kept.
+/// The time (seconds) a Read Geo reads its Alembic cache at for `frame`:
+/// (frame + Frame offset) ÷ Frame rate.
+fn alembic_time(params: &Value, frame: i64) -> f64 {
+    let fps = params["frame_rate"].as_f64().unwrap_or(24.0).max(1e-3);
+    (frame as f64 + params["frame_offset"].as_f64().unwrap_or(0.0)) / fps
+}
+
+/// A Read Geo's Alembic meshes at `frame`'s time ([`alembic_time`]): the
+/// archive read once per file and change, and its meshes at the last few
+/// times asked kept.
 fn alembic_parts(path: std::path::PathBuf, modified: Option<std::time::SystemTime>, params: &Value, frame: i64) -> Result<GeoParts> {
-    use crate::alembic::Archive;
     use std::sync::{Arc, Mutex};
-    type Key = (std::path::PathBuf, Option<std::time::SystemTime>);
-    static ARCHIVE: Mutex<Option<(Key, Arc<Archive>)>> = Mutex::new(None);
+    // (File, change, face sets read and split.)
+    type Key = (std::path::PathBuf, Option<std::time::SystemTime>, bool, bool);
     static TIMES: Mutex<Vec<(Key, u64, GeoParts)>> = Mutex::new(Vec::new());
     const KEPT: usize = 8;
-    let fps = params["frame_rate"].as_f64().unwrap_or(24.0).max(1e-3);
-    let t = (frame as f64 + params["frame_offset"].as_f64().unwrap_or(0.0)) / fps;
-    let key = (path, modified);
+    let t = alembic_time(params, frame);
+    let face_sets = also_read(params).1;
+    let split = face_sets && params["split_face_sets"].as_bool().unwrap_or(false);
+    let key = (path, modified, face_sets, split);
     if let Some(p) = TIMES.lock().unwrap().iter().find(|c| c.0 == key && c.1 == t.to_bits()).map(|c| c.2.clone()) {
         return Ok(p);
     }
-    let archive = {
-        let mut a = ARCHIVE.lock().unwrap();
-        match a.as_ref().filter(|a| a.0 == key) {
-            Some(a) => a.1.clone(),
-            None => {
-                let opened = Arc::new(Archive::open(&key.0)?);
-                *a = Some((key.clone(), opened.clone()));
-                opened
-            }
-        }
-    };
-    let parts: GeoParts = Arc::new(archive.parts(t)?.into_iter().map(|p| (p, None)).collect());
+    let archive = alembic_archive(&key.0, key.1)?;
+    let mut read = archive.parts(t)?;
+    if face_sets {
+        read = archive.with_face_sets(read, t, split)?;
+    }
+    let parts: GeoParts = Arc::new(read.into_iter().map(|p| (p, None)).collect());
     let mut times = TIMES.lock().unwrap();
     times.retain(|c| c.0 == key);
     if times.len() >= KEPT {
@@ -5028,6 +5092,67 @@ mod tests {
     /// a rig moving from x 0 to 3 over frames 1–10 at 24 fps): read at the
     /// frame's time, shifted by Frame offset and scaled by Frame rate, which
     /// starts as the project's; placed like any Read Geo.
+    /// Read Geo's Also read: nothing by default (old projects and scripts:
+    /// the meshes exactly as before); curves, points and cameras placed with
+    /// the meshes; face sets as attributes or split meshes.
+    #[test]
+    fn read_geo_also_reads_alembic_curves_points_cameras_and_face_sets() {
+        let ctx = EvalContext { frame: 1, write_outputs: false };
+        let read = |p: Value| eval("read_geo", &p, &[], &ctx).unwrap().scene.clone().unwrap();
+        for file in ["anim.abc", "extras.abc"] {
+            let file = format!("{}/examples/geo/{file}", env!("CARGO_MANIFEST_DIR"));
+            let plain = read(json!({ "file": file }));
+            assert!(plain.curves.is_empty() && plain.point_sets.is_empty() && plain.cameras.is_empty(), "{file}: meshes only by default");
+            // The meshes as the archive gives them (today's reading).
+            let parts = crate::alembic::Archive::open(std::path::Path::new(&file)).unwrap().parts(1.0 / 24.0).unwrap();
+            assert_eq!(plain.meshes.len(), parts.len());
+            for (m, p) in plain.meshes.iter().zip(&parts) {
+                assert!(m.name == p.name && m.mesh.positions == p.mesh.positions && m.mesh.triangles == p.mesh.triangles && m.mesh.normals == p.mesh.normals && m.mesh.face_attrs.is_empty(), "{file}: {}", m.name);
+            }
+            // Curves, points and cameras don't touch the meshes.
+            let more = read(json!({ "file": file, "also_read": ["curves", "points", "cameras"] }));
+            assert!(more.meshes.iter().zip(&plain.meshes).all(|(a, b)| a.mesh.positions == b.mesh.positions && a.mesh.triangles == b.mesh.triangles), "{file}");
+        }
+        let file = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/geo/extras.abc");
+        let all = read(json!({ "file": file, "also_read": ["curves", "points", "cameras", "face sets"], "translate": [0, 0, 5] }));
+        assert_eq!((all.curves.len(), all.point_sets.len(), all.cameras.len()), (2, 1, 2));
+        assert_eq!(all.camera_names, ["shot", "side"]);
+        let eye = crate::geom::transform_point(&all.cameras[0].world, &crate::geom::Vec3::zeros());
+        assert!((eye - crate::geom::Vec3::new(0.0, 1.0, 15.0)).norm() < 1e-5, "placed with the meshes: {eye}");
+        let cube = all.meshes.iter().find(|m| m.name == "box/Cube").unwrap();
+        assert!(cube.mesh.face_attrs.int("faceset.Top").is_some());
+        let split = read(json!({ "file": file, "also_read": ["face sets"], "split_face_sets": true }));
+        assert!(split.meshes.iter().any(|m| m.name == "box/Cube/Top" && m.material.name == "Top"));
+        assert!(!split.meshes.iter().any(|m| m.name == "box/Cube"), "every face in a set");
+        // Split without face sets read: as before.
+        let off = read(json!({ "file": file, "split_face_sets": true }));
+        assert!(off.meshes.iter().any(|m| m.name == "box/Cube"));
+    }
+
+    /// A Scanline Render's Camera: "" and a bare node name resolve as they
+    /// always have (the first camera, that node's first); "<node>/<name>"
+    /// picks one of a node's named (Alembic) cameras.
+    #[test]
+    fn render_cameras_by_node_and_by_name() {
+        let ctx = EvalContext { frame: 1, write_outputs: false };
+        let file = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/geo/extras.abc");
+        let mut abc = eval("read_geo", &json!({ "file": file, "also_read": ["cameras"] }), &[], &ctx).unwrap().scene.clone().unwrap();
+        std::sync::Arc::make_mut(&mut abc).tag("geo");
+        let mut cam = eval("camera", &json!({ "focal": 70 }), &[], &ctx).unwrap().scene.clone().unwrap();
+        std::sync::Arc::make_mut(&mut cam).tag("cam1");
+        let mut both = (*cam).clone();
+        both.extend(&abc);
+        let scene_img = Image { scene: Some(std::sync::Arc::new(both)), ..Image::new(1, 1) };
+        let pick = |name: &str| render_scene(&[Some(&scene_img), None], name).map(|(_, c)| c.unwrap().focal);
+        assert_eq!(pick("").unwrap(), 70.0, "the first camera, as before");
+        assert_eq!(pick("cam1").unwrap(), 70.0);
+        assert_eq!(pick("geo").unwrap(), 35.0, "a node's first camera, as before");
+        assert_eq!(pick("geo/side").unwrap(), 24.0);
+        assert_eq!(pick("geo/shot").unwrap(), 35.0);
+        let e = pick("geo/nope").unwrap_err().to_string();
+        assert!(e.contains("geo/shot") && e.contains("geo/side") && e.contains("cam1"), "{e}");
+    }
+
     #[test]
     fn read_geo_reads_alembic_at_the_frames_time() {
         let file = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/geo/anim.abc");

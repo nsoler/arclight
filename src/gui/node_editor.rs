@@ -428,6 +428,11 @@ impl NodeEditor {
             doc.set_param(&id, "points", serde_json::json!([]));
             doc.set_param(&id, "closed", serde_json::json!(false));
         }
+        // A Read Geo added here reads all of an Alembic cache (scripts and
+        // old projects: meshes only).
+        if op.name == "read_geo" {
+            doc.set_param(&id, "also_read", serde_json::json!(ops::ALEMBIC_EXTRAS));
+        }
         if op.name == "camera" {
             self.target_wire = None;
             let into = upstream.as_deref().and_then(|u| doc.node(u)).and_then(|n| match n.op.as_str() {
@@ -2540,4 +2545,15 @@ mod tests {
         doc.undo();
         assert!(!off(&doc, &a));
     }
+
+    /// A Read Geo added from the menu reads all of an Alembic cache.
+    #[test]
+    fn a_new_read_geo_reads_all_of_an_alembic_cache() {
+        let mut doc = Doc::new(arclight::graph::Graph::default(), None);
+        let mut ed = NodeEditor::default();
+        ed.add_at_view(&mut doc, "read_geo");
+        let id = doc.selected.clone().unwrap();
+        assert_eq!(doc.param(&id, "also_read"), serde_json::json!(["curves", "points", "cameras", "face sets"]));
+    }
+
 }

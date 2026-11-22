@@ -1462,7 +1462,33 @@ fn follow_reference_edit(ui: &mut egui::Ui, doc: &Doc, id: &str, value: &Value, 
 
 fn camera_suggestions(doc: &Doc, id: &str) -> Vec<String> {
     let cameras = doc.graph.nodes.iter().filter(|n| n.op == "camera" && doc.is_upstream(&n.id, id));
-    std::iter::once(String::new()).chain(cameras.map(|n| n.id.clone())).collect()
+    let mut out: Vec<String> = std::iter::once(String::new()).chain(cameras.map(|n| n.id.clone())).collect();
+    // An upstream Read Geo reading an Alembic cache's cameras: each by name.
+    for n in doc.graph.nodes.iter().filter(|n| n.op == "read_geo" && doc.is_upstream(&n.id, id)) {
+        let reads = n.params["also_read"].as_array().is_some_and(|a| a.iter().any(|v| v.as_str() == Some("cameras")));
+        let file = n.params["file"].as_str().unwrap_or("");
+        if reads && file.to_ascii_lowercase().ends_with(".abc") {
+            out.extend(alembic_cameras(file).into_iter().map(|c| format!("{}/{c}", n.id)));
+        }
+    }
+    out
+}
+
+/// The camera names in Alembic cache `file`, read once per file and
+/// change (the picker is drawn every frame).
+fn alembic_cameras(file: &str) -> Vec<String> {
+    use std::sync::Mutex;
+    type Key = (String, Option<std::time::SystemTime>);
+    static NAMES: Mutex<Vec<(Key, Vec<String>)>> = Mutex::new(Vec::new());
+    let key = (file.to_string(), std::fs::metadata(file).ok().and_then(|m| m.modified().ok()));
+    let mut names = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, found)) = names.iter().find(|(k, _)| *k == key) {
+        return found.clone();
+    }
+    let found = arclight::ops::alembic_camera_names(file);
+    names.retain(|(k, _)| k.0 != key.0);
+    names.push((key, found.clone()));
+    found
 }
 
 /// Whether a Media Out writing `path` shows param `name`: the codec and
@@ -2097,4 +2123,25 @@ mod tests {
         clear_track_keys(&mut doc, "t", 2, false);
         assert_eq!(anim::key_frames(&doc.param("t", "track1")), [2]);
     }
+
+    /// A Scanline Render's Camera picker lists upstream Camera nodes and,
+    /// for a Read Geo reading an Alembic cache's cameras, each by name.
+    #[test]
+    fn the_camera_picker_lists_alembic_cameras_by_name() {
+        let file = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/geo/extras.abc");
+        let g: arclight::graph::Graph = serde_json::from_value(json!({ "nodes": [
+            { "id": "cam1", "op": "camera" },
+            { "id": "geo", "op": "read_geo", "params": { "file": file, "also_read": ["cameras"] } },
+            { "id": "set", "op": "scene", "inputs": ["cam1", "geo"] },
+            { "id": "render", "op": "scanline_render", "inputs": ["set"] },
+        ] }))
+        .unwrap();
+        let doc = Doc::new(g, None);
+        assert_eq!(camera_suggestions(&doc, "render"), ["", "cam1", "geo/shot", "geo/side"]);
+        // Not asked to read cameras: none listed.
+        let mut doc = doc;
+        doc.set_param("geo", "also_read", json!([]));
+        assert_eq!(camera_suggestions(&doc, "render"), ["", "cam1"]);
+    }
+
 }

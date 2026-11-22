@@ -816,7 +816,19 @@ impl Session {
             _ => "unlit",
         };
         let facing = |m: &crate::geom::Mat4| -> [f64; 3] { (m.fixed_view::<3, 3>(0, 0) * -crate::geom::Vec3::z()).try_normalize(1e-12).unwrap_or_else(|| -crate::geom::Vec3::z()).into() };
-        let cameras: Vec<Value> = scene.cameras.iter().enumerate().map(|(i, c)| json!({"node": scene.camera_node(i), "position": origin(&c.world), "direction": facing(&c.world), "focal": c.focal})).collect();
+        let cameras: Vec<Value> = scene
+            .cameras
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let mut v = json!({"node": scene.camera_node(i), "position": origin(&c.world), "direction": facing(&c.world), "focal": c.focal});
+                // An Alembic camera's own name (pick it as "<node>/<name>").
+                if !scene.camera_name(i).is_empty() {
+                    v["name"] = json!(scene.camera_name(i));
+                }
+                v
+            })
+            .collect();
         let cards: Vec<Value> = scene.cards.iter().map(|c| json!({"node": c.node, "position": origin(&c.world), "size": c.size, "shading": card_shading(c), "casts_shadows": c.casts_shadows, "receives_shadows": c.receives_shadows})).collect();
         let meshes: Vec<Value> = scene
             .meshes

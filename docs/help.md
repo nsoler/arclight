@@ -692,6 +692,17 @@ selected object.
   materials, so its meshes come in white; turn on **Override material**
   to shade them. Only Ogawa .abc files are read (Alembic 1.5 and later
   write them; an old HDF5 one says to re-export).
+  **Also read** takes more from an Alembic cache (a Read Geo you add
+  reads all of it; older projects keep reading meshes only):
+  **curves** (cubic Bezier, B-spline and Catmull-Rom curves and NURBS
+  come in as smooth lines), **points** (with their ids, velocities,
+  widths and other per-point values), **cameras** (moving and zooming as
+  in the file; a Scanline Render's **Camera** picker lists each as
+  *node/name*, and the node's name alone still means its first camera)
+  and **face sets** (each a `faceset.<name>` value on the mesh's faces;
+  with **Split by face set**, a mesh of its own named *mesh/set*, its
+  material named after the set, and the faces in none keep the mesh's
+  name). Camera film offsets, squeeze and overscan aren't used.
 - **Write Geo** hands a scene's geometry to other 3D tools: an OBJ (with
   its MTL) or a glTF file (.gltf with a .bin beside it, or one .glb), by
   the file's extension, written when the graph is rendered (as Write does

@@ -23,8 +23,9 @@
 //!   triangles, turned counter-clockwise (Alembic's are clockwise); `N` and
 //!   `uv`, per vertex or per face corner, plain or indexed, when there.
 //! - Objects whose `visible` is 0 are left out, with what's under them.
-//!   Curves, points, cameras, lights and materials aren't read; meshes get
-//!   a plain white Lambert material, as an OBJ without one does.
+//!   Curves, points, cameras and face sets are read by [`extra`] when asked
+//!   for; lights and materials aren't read: meshes get a plain white
+//!   Lambert material, as an OBJ without one does.
 //!
 //! Times are seconds; a property's sample for a time is its nearest.
 
@@ -34,6 +35,10 @@ use crate::ogawa::{Child, Ogawa};
 use anyhow::{anyhow, bail, Context, Result};
 use nalgebra::{Rotation3, Unit};
 use std::path::Path;
+
+// Curves, points, cameras and face sets.
+mod extra;
+pub use extra::{cubic, nurbs, Extras, Want, STEPS};
 
 /// When a property's samples are: every `per_cycle` seconds from the
 /// first of `times` (one time), the same times every cycle (several), or

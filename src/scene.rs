@@ -28,6 +28,10 @@ pub struct Scene {
     /// in by the graph after each node renders, see [`Scene::tag`]): the
     /// 3D viewport selects objects by node.
     pub camera_nodes: Vec<String>,
+    /// Each camera's own name within its node, where it has one (an
+    /// Alembic file's cameras, read by Read Geo); "" otherwise. A Scanline
+    /// Render picks such a camera as "<node>/<name>".
+    pub camera_names: Vec<String>,
     pub point_nodes: Vec<String>,
     /// Each point's reprojection error in pixels, when a solve gave one
     /// (else negative), for coloring the cloud.
@@ -165,6 +169,7 @@ impl Scene {
         let mut other = other.clone();
         other.fill_nodes();
         self.camera_nodes.extend(other.camera_nodes);
+        self.camera_names.extend(other.camera_names);
         self.point_nodes.extend(other.point_nodes);
         self.point_errors.extend(other.point_errors);
     }
@@ -172,6 +177,7 @@ impl Scene {
     /// Pad the node lists to the cameras and points ("" for unknown).
     fn fill_nodes(&mut self) {
         self.camera_nodes.resize(self.cameras.len(), String::new());
+        self.camera_names.resize(self.cameras.len(), String::new());
         self.point_nodes.resize(self.points.len(), String::new());
         self.point_errors.resize(self.points.len(), -1.0);
     }
@@ -204,6 +210,11 @@ impl Scene {
     /// The node camera `i` came from ("" when unknown).
     pub fn camera_node(&self, i: usize) -> &str {
         self.camera_nodes.get(i).map_or("", String::as_str)
+    }
+
+    /// Camera `i`'s own name within its node ("" when it has none).
+    pub fn camera_name(&self, i: usize) -> &str {
+        self.camera_names.get(i).map_or("", String::as_str)
     }
 
     /// The node point `i` came from ("" when unknown).
